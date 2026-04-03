@@ -379,7 +379,7 @@ You may obtain a copy of the License at
 
 <div align="center">
 
-**[anubis.watch](https://anubis.watch)** · **[Documentation](https://docs.anubis.watch)** · **[Discord](https://discord.gg/anubiswatch)**
+**[anubis.watch](https://anubis.watch)** · **[anubiswatch.com](https://anubiswatch.com)**
 
 *The Judgment Never Sleeps* ⚖️
 
