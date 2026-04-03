@@ -1,0 +1,125 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8080,
+    "tls": {
+      "enabled": false,
+      "cert": "",
+      "key": "",
+      "auto_cert": false
+    }
+  },
+  "storage": {
+    "path": "./data",
+    "sync": true,
+    "encryption": {
+      "enabled": false,
+      "key": ""
+    },
+    "time_series": {
+      "retention": {
+        "raw": "48h",
+        "minute": "30d",
+        "five_min": "90d",
+        "hour": "365d",
+        "day": "unlimited"
+      },
+      "compaction": {
+        "raw_to_minute": "48h",
+        "minute_to_five": "7d",
+        "five_to_hour": "30d",
+        "hour_to_day": "365d"
+      }
+    }
+  },
+  "necropolis": {
+    "enabled": false,
+    "bind_addr": "0.0.0.0:7946",
+    "peers": [],
+    "cluster_secret": "",
+    "discovery": {
+      "mode": "mdns",
+      "interval": "30s"
+    },
+    "raft": {
+      "election_timeout": "1000ms",
+      "heartbeat_timeout": "300ms",
+      "snapshot_interval": "300s",
+      "snapshot_threshold": 8192
+    },
+    "distribution": {
+      "strategy": "round-robin",
+      "redundancy": 1,
+      "rebalance_interval": "60s"
+    }
+  },
+  "tenants": {
+    "enabled": false,
+    "isolation": "strict",
+    "default_quotas": {
+      "max_souls": 100,
+      "max_journeys": 20,
+      "max_alert_channels": 10,
+      "max_team_members": 25,
+      "retention_days": 90,
+      "check_interval_min": "30s"
+    }
+  },
+  "auth": {
+    "type": "local",
+    "local": {
+      "admin_password": "changeme"
+    },
+    "jwt": {
+      "secret": "",
+      "expiry": "24h"
+    },
+    "api_keys": {
+      "enabled": true
+    },
+    "session": {
+      "duration": "24h"
+    }
+  },
+  "dashboard": {
+    "enabled": true,
+    "branding": {
+      "title": "AnubisWatch",
+      "logo_url": "",
+      "favicon_url": "",
+      "theme": "auto",
+      "primary_color": "#fbbf24",
+      "accent_color": "#14b8a6"
+    }
+  },
+  "souls": [],
+  "channels": [],
+  "verdicts": {
+    "rules": [],
+    "rate_limits": {
+      "enabled": true,
+      "max_alerts": 10,
+      "window": "1h",
+      "grouping_key": "soul_id"
+    },
+    "escalation": {
+      "enabled": true,
+      "ack_timeout": "15m",
+      "escalation_channels": []
+    }
+  },
+  "feathers": [],
+  "journeys": [],
+  "logging": {
+    "level": "info",
+    "format": "json",
+    "output": "stdout",
+    "file": {
+      "enabled": false,
+      "path": "./logs/anubis.log",
+      "max_size": 100,
+      "max_backups": 3,
+      "max_age": 7
+    }
+  }
+}

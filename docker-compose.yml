@@ -1,0 +1,192 @@
+# AnubisWatch Docker Compose Configuration
+# ═══════════════════════════════════════════════════════════
+#
+# Quick start:
+#   docker-compose up -d
+#
+# Scale to 3 nodes:
+#   docker-compose up -d --scale anubis=3
+#
+# View logs:
+#   docker-compose logs -f
+
+version: '3.8'
+
+services:
+  # Single-node AnubisWatch instance
+  anubis:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: anubiswatch/anubis:latest
+    container_name: anubis
+    hostname: anubis
+    restart: unless-stopped
+    ports:
+      - "8080:8080"      # HTTP API
+      - "8443:8443"      # HTTPS API
+      - "7946:7946"      # Raft
+      - "7946:7946/udp"  # Gossip
+      - "9090:9090"      # gRPC
+    volumes:
+      - anubis-data:/data
+      - ./config/anubis.json:/etc/anubis/anubis.json:ro
+    environment:
+      - ANUBIS_LOG_LEVEL=info
+      - ANUBIS_DATA_DIR=/data
+    networks:
+      - anubis-net
+    healthcheck:
+      test: ["CMD", "/anubis", "health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Cluster node 1 (Pharaoh/Leader)
+  anubis-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: anubiswatch/anubis:latest
+    container_name: anubis-1
+    hostname: anubis-1
+    restart: unless-stopped
+    profiles:
+      - cluster
+    ports:
+      - "8081:8443"
+      - "7947:7946"
+    volumes:
+      - anubis-data-1:/data
+    environment:
+      - ANUBIS_NODE_ID=anubis-1
+      - ANUBIS_BIND_ADDR=0.0.0.0:7946
+      - ANUBIS_RAFT_PORT=7946
+      - ANUBIS_HTTP_PORT=8443
+      - ANUBIS_LOG_LEVEL=info
+      - ANUBIS_DATA_DIR=/data
+    networks:
+      - anubis-net
+    command: ["serve", "--cluster", "--bind", "0.0.0.0:7946"]
+
+  # Cluster node 2
+  anubis-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: anubiswatch/anubis:latest
+    container_name: anubis-2
+    hostname: anubis-2
+    restart: unless-stopped
+    profiles:
+      - cluster
+    ports:
+      - "8082:8443"
+      - "7948:7946"
+    volumes:
+      - anubis-data-2:/data
+    environment:
+      - ANUBIS_NODE_ID=anubis-2
+      - ANUBIS_BIND_ADDR=0.0.0.0:7946
+      - ANUBIS_RAFT_PORT=7946
+      - ANUBIS_HTTP_PORT=8443
+      - ANUBIS_LOG_LEVEL=info
+      - ANUBIS_DATA_DIR=/data
+    networks:
+      - anubis-net
+    command: ["serve", "--cluster", "--join", "anubis-1:7946"]
+    depends_on:
+      - anubis-1
+
+  # Cluster node 3
+  anubis-3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: anubiswatch/anubis:latest
+    container_name: anubis-3
+    hostname: anubis-3
+    restart: unless-stopped
+    profiles:
+      - cluster
+    ports:
+      - "8083:8443"
+      - "7949:7946"
+    volumes:
+      - anubis-data-3:/data
+    environment:
+      - ANUBIS_NODE_ID=anubis-3
+      - ANUBIS_BIND_ADDR=0.0.0.0:7946
+      - ANUBIS_RAFT_PORT=7946
+      - ANUBIS_HTTP_PORT=8443
+      - ANUBIS_LOG_LEVEL=info
+      - ANUBIS_DATA_DIR=/data
+    networks:
+      - anubis-net
+    command: ["serve", "--cluster", "--join", "anubis-1:7946"]
+    depends_on:
+      - anubis-1
+
+  # Prometheus for metrics (optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: anubis-prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    networks:
+      - anubis-net
+
+  # Grafana for dashboards (optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: anubis-grafana
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./config/grafana:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=anubis
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - anubis-net
+    depends_on:
+      - prometheus
+
+volumes:
+  anubis-data:
+    driver: local
+  anubis-data-1:
+    driver: local
+  anubis-data-2:
+    driver: local
+  anubis-data-3:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+networks:
+  anubis-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

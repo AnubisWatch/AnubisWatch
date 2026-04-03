@@ -1,0 +1,410 @@
+# AnubisWatch Configuration Example
+# ═══════════════════════════════════════════════════════════
+# This is a complete example configuration. Save as anubis.yaml
+
+# Server settings
+server:
+  host: "0.0.0.0"
+  port: 8443
+  tls:
+    enabled: true
+    # Option 1: Use existing certificates
+    # cert: "/etc/anubis/tls/cert.pem"
+    # key: "/etc/anubis/tls/key.pem"
+    # Option 2: Auto-generate Let's Encrypt certificates
+    auto_cert: true
+    acme_email: "admin@example.com"
+    acme_domains: ["anubis.example.com"]
+
+# Storage (CobaltDB)
+storage:
+  path: "/var/lib/anubis/data"
+  encryption:
+    enabled: true
+    key: "${ANUBIS_ENCRYPTION_KEY}"  # 32-byte AES-256 key from env
+  timeseries:
+    compaction:
+      raw_to_minute: 48h
+      minute_to_five: 7d
+      five_to_hour: 30d
+      hour_to_day: 365d
+    retention:
+      raw: 48h
+      minute: 30d
+      five: 90d
+      hour: 365d
+      day: unlimited
+
+# Cluster (Necropolis) — Single-node mode by default
+# Uncomment to enable cluster mode
+# necropolis:
+#   enabled: true
+#   node_name: "jackal-eu-01"
+#   region: "eu-west"
+#   bind_addr: "0.0.0.0:7946"
+#   advertise_addr: "203.0.113.10:7946"
+#   cluster_secret: "${ANUBIS_CLUSTER_SECRET}"
+#   discovery:
+#     mode: "gossip"  # mdns | gossip | manual
+#     seeds:
+#       - "jackal-us-01.example.com:7946"
+#       - "jackal-apac-01.example.com:7946"
+#   raft:
+#     election_timeout: 1000ms
+#     heartbeat_timeout: 300ms
+
+# Multi-tenant (SaaS mode)
+# tenants:
+#   enabled: true
+#   isolation: "strict"
+#   default_quotas:
+#     max_souls: 100
+#     max_journeys: 20
+#     max_alert_channels: 10
+#     max_team_members: 25
+
+# Authentication
+auth:
+  type: "local"  # local | oidc | ldap
+  local:
+    admin_email: "admin@example.com"
+    admin_password: "${ANUBIS_ADMIN_PASSWORD}"
+  # oidc:
+  #   issuer: "https://auth.example.com"
+  #   client_id: "${OIDC_CLIENT_ID}"
+  #   client_secret: "${OIDC_CLIENT_SECRET}"
+
+# Dashboard settings
+dashboard:
+  enabled: true
+  branding:
+    title: "AnubisWatch"
+    logo: ""  # Custom logo URL
+    theme: "auto"  # auto | dark | light
+
+# Souls (monitored targets)
+souls:
+  # HTTP/HTTPS monitoring
+  - name: "Production API"
+    type: http
+    target: "https://api.example.com/health"
+    weight: 30s        # Check every 30 seconds
+    timeout: 10s
+    enabled: true
+    tags: ["production", "api", "critical"]
+    regions: ["eu-west", "us-east"]  # Run checks from these regions
+    http:
+      method: GET
+      headers:
+        Authorization: "Bearer ${API_TOKEN}"
+        User-Agent: "AnubisWatch/1.0"
+      valid_status: [200, 201]
+      body_contains: '"status":"ok"'
+      json_path:
+        "$.status": "ok"
+        "$.services.db": "connected"
+      feather: 500ms    # Max acceptable latency
+      follow_redirects: true
+      max_redirects: 5
+
+  # Another HTTP check with JSON schema validation
+  - name: "User Service"
+    type: http
+    target: "https://users.example.com/api/v1/health"
+    weight: 60s
+    timeout: 5s
+    tags: ["production", "users"]
+    http:
+      method: GET
+      valid_status: [200]
+      json_schema: |
+        {
+          "type": "object",
+          "required": ["status", "version"],
+          "properties": {
+            "status": { "type": "string", "enum": ["ok", "degraded"] },
+            "version": { "type": "string" }
+          }
+        }
+
+  # TCP port check
+  - name: "PostgreSQL Primary"
+    type: tcp
+    target: "db-primary.example.com:5432"
+    weight: 15s
+    timeout: 5s
+    tags: ["database", "critical"]
+    tcp:
+      banner_match: "PostgreSQL"
+
+  # ICMP ping check
+  - name: "Gateway Router"
+    type: icmp
+    target: "10.0.0.1"
+    weight: 15s
+    timeout: 5s
+    tags: ["network", "infrastructure"]
+    icmp:
+      count: 5
+      interval: 200ms
+      max_loss_percent: 20
+      feather: 100ms
+      privileged: true  # Requires CAP_NET_RAW
+
+  # DNS check with propagation monitoring
+  - name: "Primary DNS"
+    type: dns
+    target: "example.com"
+    weight: 60s
+    timeout: 10s
+    tags: ["dns", "critical"]
+    dns:
+      record_type: A
+      expected: ["93.184.216.34"]
+      nameservers:
+        - "8.8.8.8:53"
+        - "1.1.1.1:53"
+        - "9.9.9.9:53"
+      propagation_check: true
+      propagation_threshold: 100
+      dnssec_validate: true
+
+  # SMTP check
+  - name: "Mail Server SMTP"
+    type: smtp
+    target: "mail.example.com:587"
+    weight: 120s
+    timeout: 10s
+    tags: ["email", "production"]
+    smtp:
+      ehlo_domain: "monitor.example.com"
+      starttls: true
+      auth:
+        username: "${SMTP_USER}"
+        password: "${SMTP_PASS}"
+      banner_contains: "ESMTP"
+
+  # TLS certificate monitoring
+  - name: "API Certificate"
+    type: tls
+    target: "api.example.com:443"
+    weight: 3600s  # Check every hour
+    timeout: 10s
+    tags: ["security", "certificate"]
+    tls:
+      expiry_warn_days: 30
+      expiry_critical_days: 7
+      min_protocol: "TLS1.2"
+      expected_issuer: "Let's Encrypt"
+      check_ocsp: true
+      min_key_bits: 2048
+
+  # gRPC health check
+  - name: "Payment Service gRPC"
+    type: grpc
+    target: "grpc.example.com:9090"
+    weight: 30s
+    timeout: 5s
+    tags: ["production", "grpc", "payments"]
+    grpc:
+      service: "payment.PaymentService"
+      tls: true
+      metadata:
+        x-api-key: "${GRPC_API_KEY}"
+      feather: 200ms
+
+  # WebSocket check
+  - name: "Realtime Feed"
+    type: websocket
+    target: "wss://ws.example.com/feed"
+    weight: 60s
+    timeout: 10s
+    tags: ["websocket", "realtime"]
+    websocket:
+      headers:
+        Authorization: "Bearer ${WS_TOKEN}"
+      subprotocols: ["graphql-ws"]
+      send: '{"type":"connection_init"}'
+      expect_contains: "connection_ack"
+      ping_check: true
+
+# Alert Channels
+channels:
+  - name: "ops-slack"
+    type: slack
+    slack:
+      webhook_url: "${SLACK_WEBHOOK_URL}"
+      channel: "#ops-alerts"
+      username: "AnubisWatch"
+      icon_emoji: ":anubis:"
+      mention_on_critical: ["@oncall-team"]
+
+  - name: "dev-discord"
+    type: discord
+    discord:
+      webhook_url: "${DISCORD_WEBHOOK_URL}"
+      username: "AnubisWatch"
+
+  - name: "ops-email"
+    type: email
+    email:
+      smtp_host: "smtp.example.com"
+      smtp_port: 587
+      starttls: true
+      username: "${SMTP_USER}"
+      password: "${SMTP_PASS}"
+      from: "anubis@example.com"
+      to: ["ops@example.com", "cto@example.com"]
+      subject_template: "[{{ .Severity }}] {{ .Soul.Name }} — {{ .Judgment.Status }}"
+
+  - name: "pagerduty-oncall"
+    type: pagerduty
+    pagerduty:
+      integration_key: "${PAGERDUTY_INTEGRATION_KEY}"
+      severity_map:
+        critical: "critical"
+        warning: "warning"
+        info: "info"
+      auto_resolve: true
+
+  - name: "ntfy-push"
+    type: ntfy
+    ntfy:
+      server: "https://ntfy.sh"
+      topic: "anubis-alerts"
+      priority_map:
+        critical: "urgent"
+        warning: "high"
+        info: "default"
+
+# Alert Rules (Verdicts)
+verdicts:
+  rules:
+    - name: "Service Down - Critical"
+      scope: "all"
+      condition:
+        type: consecutive_failures
+        threshold: 3
+      severity: critical
+      channels: ["ops-slack", "pagerduty-oncall", "ntfy-push"]
+      cooldown: 5m
+
+    - name: "Service Degraded"
+      scope: "all"
+      condition:
+        type: threshold
+        metric: latency_p95
+        operator: ">"
+        value: "500ms"
+        window: 5m
+      severity: warning
+      channels: ["ops-slack", "dev-discord"]
+      cooldown: 15m
+
+    - name: "Certificate Expiring"
+      scope: "tag:security"
+      condition:
+        type: threshold
+        metric: tls_days_until_expiry
+        operator: "<"
+        value: 14
+      severity: warning
+      channels: ["ops-email", "ops-slack"]
+      cooldown: 24h
+
+    - name: "DNS Propagation Issues"
+      scope: "type:dns"
+      condition:
+        type: threshold
+        metric: propagation_percent
+        operator: "<"
+        value: 100
+        window: 5m
+      severity: warning
+      channels: ["ops-slack"]
+      cooldown: 30m
+
+  escalation:
+    - name: "production-escalation"
+      stages:
+        - wait: 0s
+          channels: ["ops-slack", "ntfy-push"]
+        - wait: 5m
+          channels: ["pagerduty-oncall"]
+          condition: "not_acknowledged"
+        - wait: 15m
+          channels: ["ops-email"]
+          condition: "not_resolved"
+
+# Performance Budgets (Feathers of Ma'at)
+feathers:
+  - name: "API Latency Budget"
+    scope: "tag:api"
+    rules:
+      p50: 200ms
+      p95: 500ms
+      p99: 1s
+      max: 3s
+    window: 5m
+    violation_threshold: 3
+
+  - name: "Homepage Speed Budget"
+    scope: "soul:Homepage"
+    rules:
+      p95: 800ms
+    window: 15m
+
+# Synthetic Monitoring (Duat Journeys)
+journeys:
+  - name: "User Login Flow"
+    weight: 300s  # Every 5 minutes
+    timeout: 30s
+    continue_on_failure: false
+    variables:
+      base_url: "https://app.example.com"
+      test_email: "${TEST_EMAIL}"
+      test_password: "${TEST_PASSWORD}"
+    steps:
+      - name: "Get CSRF Token"
+        type: http
+        target: "${base_url}/login"
+        http:
+          method: GET
+          valid_status: [200]
+        extract:
+          csrf_token:
+            from: body
+            json_path: "$.csrf_token"
+
+      - name: "Perform Login"
+        type: http
+        target: "${base_url}/api/auth/login"
+        http:
+          method: POST
+          headers:
+            Content-Type: "application/json"
+            X-CSRF-Token: "${csrf_token}"
+          body: |
+            {"email": "${test_email}", "password": "${test_password}"}
+          valid_status: [200]
+        extract:
+          auth_token:
+            from: body
+            json_path: "$.token"
+
+      - name: "Fetch Dashboard"
+        type: http
+        target: "${base_url}/api/dashboard"
+        http:
+          method: GET
+          headers:
+            Authorization: "Bearer ${auth_token}"
+          valid_status: [200]
+          feather: 2s
+
+# Logging configuration
+logging:
+  level: "info"      # debug | info | warn | error
+  format: "json"     # json | text
+  output: "stdout"   # stdout | file
+  file: "/var/log/anubis/anubis.log"

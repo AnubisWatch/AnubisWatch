@@ -1,0 +1,236 @@
+@import "tailwindcss";
+
+/* AnubisWatch Egyptian Theme */
+:root {
+  /* Primary - Gold/Amber (The Pharaoh's Gold) */
+  --color-primary-50: #fffbeb;
+  --color-primary-100: #fef3c7;
+  --color-primary-200: #fde68a;
+  --color-primary-300: #fcd34d;
+  --color-primary-400: #fbbf24;
+  --color-primary-500: #f59e0b;
+  --color-primary-600: #d97706;
+  --color-primary-700: #b45309;
+  --color-primary-800: #92400e;
+  --color-primary-900: #78350f;
+
+  /* Status Colors */
+  --status-alive: #22c55e;
+  --status-degraded: #f59e0b;
+  --status-dead: #ef4444;
+  --status-unknown: #6b7280;
+
+  /* Egyptian Dark Theme */
+  --bg-primary: #0f172a;
+  --bg-secondary: #1e293b;
+  --bg-tertiary: #334155;
+  --text-primary: #f8fafc;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  --border-color: #334155;
+  --accent-gold: #fbbf24;
+  --accent-lapis: #3b82f6;
+  --accent-turquoise: #14b8a6;
+}
+
+/* Tailwind v4 Theme Configuration */
+@theme {
+  /* Colors */
+  --color-anubis-50: var(--color-primary-50);
+  --color-anubis-100: var(--color-primary-100);
+  --color-anubis-200: var(--color-primary-200);
+  --color-anubis-300: var(--color-primary-300);
+  --color-anubis-400: var(--color-primary-400);
+  --color-anubis-500: var(--color-primary-500);
+  --color-anubis-600: var(--color-primary-600);
+  --color-anubis-700: var(--color-primary-700);
+  --color-anubis-800: var(--color-primary-800);
+  --color-anubis-900: var(--color-primary-900);
+
+  /* Status */
+  --color-status-alive: var(--status-alive);
+  --color-status-degraded: var(--status-degraded);
+  --color-status-dead: var(--status-dead);
+  --color-status-unknown: var(--status-unknown);
+
+  /* Egyptian Accents */
+  --color-gold: #fbbf24;
+  --color-lapis: #3b82f6;
+  --color-turquoise: #14b8a6;
+  --color-papyrus: #fef3c7;
+
+  /* Typography */
+  --font-display: 'Cinzel', serif;
+  --font-body: 'Inter', sans-serif;
+}
+
+/* Base Styles */
+html {
+  font-family: var(--font-body);
+  scroll-behavior: smooth;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* Egyptian Card Style */
+.card-egyptian {
+  background: linear-gradient(145deg, var(--bg-secondary) 0%, rgba(30, 41, 59, 0.8) 100%);
+  border: 1px solid var(--border-color);
+  border-radius: 0.75rem;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+  transition: all 0.2s ease;
+}
+
+.card-egyptian:hover {
+  border-color: var(--accent-gold);
+  box-shadow: 0 10px 15px -3px rgba(251, 191, 36, 0.1);
+}
+
+/* Status Indicators */
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-alive { background-color: var(--status-alive); box-shadow: 0 0 8px var(--status-alive); }
+.status-degraded { background-color: var(--status-degraded); box-shadow: 0 0 8px var(--status-degraded); }
+.status-dead { background-color: var(--status-dead); box-shadow: 0 0 8px var(--status-dead); }
+.status-unknown { background-color: var(--status-unknown); }
+
+/* Egyptian Button Style */
+.btn-egyptian {
+  background: linear-gradient(135deg, var(--accent-gold) 0%, var(--color-primary-600) 100%);
+  color: var(--bg-primary);
+  font-weight: 600;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-family: var(--font-display);
+  font-size: 0.875rem;
+}
+
+.btn-egyptian:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(251, 191, 36, 0.3);
+}
+
+.btn-egyptian:active {
+  transform: translateY(0);
+}
+
+/* Table Styles */
+.table-egyptian {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table-egyptian th {
+  background: var(--bg-tertiary);
+  color: var(--accent-gold);
+  font-family: var(--font-display);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  padding: 1rem;
+  text-align: left;
+}
+
+.table-egyptian td {
+  padding: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.table-egyptian tr:hover td {
+  background: rgba(251, 191, 36, 0.05);
+}
+
+/* Loading Animation */
+@keyframes pulse-gold {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.loading-gold {
+  animation: pulse-gold 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Egyptian Decorative Elements */
+.egyptian-border {
+  position: relative;
+}
+
+.egyptian-border::before,
+.egyptian-border::after {
+  content: '𓃥';
+  position: absolute;
+  color: var(--accent-gold);
+  opacity: 0.3;
+  font-size: 1.5rem;
+}
+
+.egyptian-border::before {
+  left: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.egyptian-border::after {
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.animate-slide-in {
+  animation: slideIn 0.2s ease-out;
+}
+
+/* Focus States */
+*:focus-visible {
+  outline: 2px solid var(--accent-gold);
+  outline-offset: 2px;
+}
+
+/* Selection */
+::selection {
+  background: var(--accent-gold);
+  color: var(--bg-primary);
+}

@@ -1,0 +1,107 @@
+# Binaries
+/anubis
+/bin/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage
+coverage.out
+coverage.html
+*.cover
+
+# Go vendor directory
+/vendor/
+
+# Go workspace file
+go.work
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Data directories
+/data/
+/var/
+/var/lib/anubis/
+/logs/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.wal
+*.snapshot
+
+# Config files (keep examples)
+/anubis.json
+/anubis.yaml
+!/config/anubis.json
+
+# Dashboard build
+/web/dist/
+/web/node_modules/
+/web/.cache/
+/web/build/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Dashboard environment
+/web/.env
+/web/.env.local
+/web/.env.development.local
+/web/.env.test.local
+/web/.env.production.local
+
+# Temporary files
+/tmp/
+/temp/
+*.tmp
+*.temp
+*.pid
+*.seed
+*.pid.lock
+
+# OS files
+Thumbs.db
+.DS_Store
+*.stackdump
+
+# Debug files
+__debug_bin
+*.debug
+
+# Release artifacts
+/release/
+*.tar.gz
+*.zip
+*.deb
+*.rpm
+*.pkg
+
+# Documentation build
+/site/
+/docs/_build/
+
+# Local development
+*.local
+.local/
+
+# Test data
+/testdata/*.db
+/testdata/*.log
