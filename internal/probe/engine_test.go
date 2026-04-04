@@ -932,3 +932,96 @@ func TestDNSChecker_Judge_WithExpectedRecords(t *testing.T) {
 		t.Errorf("Expected status alive or dead, got %s", judgment.Status)
 	}
 }
+
+// Helper function to create test engine
+func newTestEngine(t *testing.T) *Engine {
+	opts := EngineOptions{
+		NodeID:     "test-node",
+		Region:     "test-region",
+		Store:      &mockProbeStorage{},
+		Alerter:    &mockProbeAlerter{},
+		Logger:     newTestProbeLogger(),
+		Registry:   NewCheckerRegistry(),
+	}
+	return NewEngine(opts)
+}
+
+// Test TriggerImmediate - soul not found
+func TestEngine_TriggerImmediate_NotFound(t *testing.T) {
+	engine := newTestEngine(t)
+
+	ctx := context.Background()
+	_, err := engine.TriggerImmediate(ctx, "nonexistent-soul")
+
+	if err == nil {
+		t.Error("Expected error for nonexistent soul")
+	}
+}
+
+// Test GetStatus - empty status
+func TestEngine_GetStatus_NoArgs(t *testing.T) {
+	engine := newTestEngine(t)
+
+	// GetStatus takes no arguments in current implementation
+	status := engine.GetStatus()
+	// Should not panic
+	_ = status
+}
+
+// Test ListActiveSouls - empty
+func TestEngine_ListActiveSouls_Empty(t *testing.T) {
+	engine := newTestEngine(t)
+
+	souls := engine.ListActiveSouls()
+	if len(souls) != 0 {
+		t.Errorf("Expected 0 souls, got %d", len(souls))
+	}
+}
+
+// Test Stats
+func TestEngine_Stats_Empty(t *testing.T) {
+	engine := newTestEngine(t)
+
+	stats := engine.Stats()
+	if stats["active_souls"] != 0 {
+		t.Errorf("Expected 0 active souls, got %d", stats["active_souls"])
+	}
+}
+
+// Test judgeSoul with unknown checker type
+func TestEngine_judgeSoul_UnknownType(t *testing.T) {
+	engine := newTestEngine(t)
+
+	soul := &core.Soul{
+		ID:     "test-unknown-judge",
+		Name:   "Test Unknown Judge",
+		Type:   "unknown-type",
+		Target: "localhost:80",
+	}
+
+	runner := &soulRunner{soul: soul}
+	ctx := context.Background()
+
+	// Should not panic, just log error
+	engine.judgeSoul(ctx, runner)
+	// Test passes if no panic
+}
+
+// Test judgeSoul with validation error
+func TestEngine_judgeSoul_ValidationError(t *testing.T) {
+	engine := newTestEngine(t)
+
+	soul := &core.Soul{
+		ID:     "test-invalid-judge",
+		Name:   "Test Invalid Judge",
+		Type:   core.CheckHTTP,
+		Target: "", // Empty target should fail validation
+	}
+
+	runner := &soulRunner{soul: soul}
+	ctx := context.Background()
+
+	// Should not panic, just log error
+	engine.judgeSoul(ctx, runner)
+	// Test passes if no panic
+}

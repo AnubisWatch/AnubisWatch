@@ -5,8 +5,10 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1430,5 +1432,309 @@ func TestDecodeCertificate_ValidFormat(t *testing.T) {
 	// Will fail due to invalid PEM, but tests the format parsing
 	if err == nil {
 		t.Log("decodeCertificate succeeded")
+	}
+}
+
+// Test ObtainCertificate - tests error path due to ACME protocol not being fully implemented
+func TestManager_ObtainCertificate_ErrorPath(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	cfg := Config{
+		Enabled:   true,
+		Provider:  ProviderLetsEncryptStaging,
+		Email:     "test@example.com",
+		AcceptTOS: true,
+	}
+
+	m, err := NewManager(db, cfg)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	// ObtainCertificate will fail due to ACME protocol not being fully implemented
+	// but should return proper error message
+	_, err = m.ObtainCertificate("example.com")
+	if err == nil {
+		t.Error("Expected error from ObtainCertificate (ACME not fully implemented)")
+	}
+}
+
+// Test GetCertificate - tests cache miss path
+func TestManager_GetCertificate_CacheMiss(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	cfg := Config{
+		Enabled:   true,
+		Provider:  ProviderLetsEncryptStaging,
+		Email:     "test@example.com",
+		AcceptTOS: true,
+	}
+
+	m, err := NewManager(db, cfg)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	// GetCertificate for nonexistent domain should trigger obtain attempt
+	// which will fail due to ACME not being fully implemented
+	_, err = m.GetCertificate("nonexistent.com")
+	if err == nil {
+		t.Error("Expected error for nonexistent certificate")
+	}
+}
+
+// Test GetCertificate - tests cached certificate retrieval
+func TestManager_GetCertificate_Cached(t *testing.T) {
+	m := &Manager{
+		certCache: map[string]*CachedCertificate{
+			"cached.com": {
+				Domain:      "cached.com",
+				Certificate: []byte("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"),
+				PrivateKey:  []byte("-----BEGIN EC PRIVATE KEY-----\nkey\n-----END EC PRIVATE KEY-----"),
+				ExpiresAt:   time.Now().Add(90 * 24 * time.Hour),
+			},
+		},
+	}
+
+	cert, err := m.GetCertificate("cached.com")
+	if err != nil {
+		t.Errorf("GetCertificate failed: %v", err)
+	}
+	if cert.Domain != "cached.com" {
+		t.Errorf("Expected domain cached.com, got %s", cert.Domain)
+	}
+}
+
+// Test GetCertificate - tests expired certificate path
+func TestManager_GetCertificate_Expired(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	// Create manager with expired cert in cache
+	cfg := Config{
+		Enabled:   true,
+		Provider:  ProviderLetsEncryptStaging,
+		Email:     "test@example.com",
+		AcceptTOS: true,
+	}
+
+	m, err := NewManager(db, cfg)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	// Add expired certificate to cache
+	m.certCache["expired.com"] = &CachedCertificate{
+		Domain:      "expired.com",
+		Certificate: []byte("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"),
+		PrivateKey:  []byte("-----BEGIN EC PRIVATE KEY-----\nkey\n-----END EC PRIVATE KEY-----"),
+		ExpiresAt:   time.Now().Add(-24 * time.Hour), // Expired
+	}
+
+	// GetCertificate should try to renew/obtain new cert
+	_, err = m.GetCertificate("expired.com")
+	if err == nil {
+		t.Error("Expected error for expired certificate (ACME not fully implemented)")
+	}
+}
+
+// Test ServeHTTP - tests HTTP challenge handler
+func TestChallengeHandler_ServeHTTP_GetRequest(t *testing.T) {
+	handler := &ChallengeHandler{
+		tokens: map[string]string{
+			"test-token": "test-key-auth",
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/acme-challenge/test-token", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+	if w.Body.String() != "test-key-auth" {
+		t.Errorf("Expected key-auth, got %s", w.Body.String())
+	}
+}
+
+// Test ServeHTTP - tests token not found
+func TestChallengeHandler_ServeHTTP_TokenNotFound(t *testing.T) {
+	handler := &ChallengeHandler{
+		tokens: make(map[string]string),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/acme-challenge/missing-token", nil)
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404, got %d", w.Code)
+	}
+}
+
+// Test parseTLSCertificate - tests invalid certificate
+func TestParseTLSCertificate_InvalidCert(t *testing.T) {
+	cert := &CachedCertificate{
+		Domain:      "invalid.com",
+		Certificate: []byte("invalid-cert-data"),
+		PrivateKey:  []byte("invalid-key-data"),
+	}
+
+	_, err := parseTLSCertificate(cert)
+	if err == nil {
+		t.Error("Expected error for invalid certificate")
+	}
+}
+
+// Test parseTLSCertificate - tests missing key
+func TestParseTLSCertificate_MissingKey(t *testing.T) {
+	cert := &CachedCertificate{
+		Domain:      "nokey.com",
+		Certificate: []byte("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"),
+		PrivateKey:  nil,
+	}
+
+	_, err := parseTLSCertificate(cert)
+	if err == nil {
+		t.Error("Expected error for missing private key")
+	}
+}
+
+// Test ObtainCertificate - CSR creation error path (theoretical)
+func TestManager_ObtainCertificate_CSRPath(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	cfg := Config{
+		Enabled:   true,
+		Provider:  ProviderLetsEncryptStaging,
+		Email:     "test@example.com",
+		AcceptTOS: true,
+	}
+
+	m, err := NewManager(db, cfg)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	// This tests the key generation and CSR creation paths
+	// Will fail at ACME protocol but exercises earlier code
+	_, err = m.ObtainCertificate("csr-test.com")
+	// Expected to fail at ACME protocol
+	if err == nil {
+		t.Log("ObtainCertificate succeeded (unexpected)")
+	}
+}
+
+// Test GetCertificate - error path after ObtainCertificate fails
+func TestManager_GetCertificate_ObtainError(t *testing.T) {
+	m := &Manager{
+		certCache: make(map[string]*CachedCertificate),
+	}
+
+	// Cache miss triggers ObtainCertificate which fails
+	_, err := m.GetCertificate("obtain-error.com")
+	if err == nil {
+		t.Error("Expected error when ObtainCertificate fails")
+	}
+}
+
+// Test encodeCertificate and decodeCertificate roundtrip
+func TestEncodeDecodeCertificate_Roundtrip(t *testing.T) {
+	// Generate a real EC key for testing
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("Failed to generate key: %v", err)
+	}
+
+	keyBytes, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("Failed to marshal key: %v", err)
+	}
+
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "EC PRIVATE KEY",
+		Bytes: keyBytes,
+	})
+
+	// Create a self-signed certificate for testing
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			CommonName: "roundtrip.com",
+		},
+		DNSNames:     []string{"roundtrip.com"},
+		NotBefore:    time.Now(),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("Failed to create certificate: %v", err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: certBytes,
+	})
+
+	original := &CachedCertificate{
+		Domain:      "roundtrip.com",
+		Certificate: certPEM,
+		PrivateKey:  keyPEM,
+		IssuedAt:    template.NotBefore,
+		ExpiresAt:   template.NotAfter,
+		Issuer:      "Test CA",
+	}
+
+	encoded := encodeCertificate(original)
+	decoded, err := decodeCertificate(encoded)
+	if err != nil {
+		t.Fatalf("decodeCertificate failed: %v", err)
+	}
+
+	if decoded.Domain != original.Domain {
+		t.Errorf("Domain mismatch: %s vs %s", decoded.Domain, original.Domain)
+	}
+	if string(decoded.Certificate) != string(original.Certificate) {
+		t.Error("Certificate data mismatch")
+	}
+	if string(decoded.PrivateKey) != string(original.PrivateKey) {
+		t.Error("Private key data mismatch")
+	}
+}
+
+// Test loadCertificates with invalid certificate data (continue path)
+func TestManager_loadCertificates_InvalidCertData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	// Write invalid certificate data
+	err := db.Put("acme/cert/invalid.com", []byte("invalid-data"))
+	if err != nil {
+		t.Fatalf("Failed to write test data: %v", err)
+	}
+
+	cfg := Config{
+		Enabled:   true,
+		Provider:  ProviderLetsEncryptStaging,
+		Email:     "test@example.com",
+		AcceptTOS: true,
+	}
+
+	m, err := NewManager(db, cfg)
+	if err != nil {
+		t.Fatalf("NewManager failed: %v", err)
+	}
+
+	// Should skip invalid cert and continue (no error)
+	err = m.loadCertificates()
+	if err != nil {
+		t.Errorf("loadCertificates should skip invalid certs: %v", err)
 	}
 }
