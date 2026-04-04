@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/auth"
+	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
 func TestPrintUsage(t *testing.T) {
@@ -982,5 +983,43 @@ func TestVerdictAck_NoToken(t *testing.T) {
 
 	if !strings.Contains(output, "Acknowledging incident") {
 		t.Error("Expected verdictAck to show 'Acknowledging incident' message")
+	}
+}
+
+// Test initACMEManager with TLS disabled
+func TestInitACMEManager_TLSDisabled(t *testing.T) {
+	cfg := &core.Config{
+		Server: core.ServerConfig{
+			TLS: core.TLSServerConfig{
+				Enabled:  false,
+				AutoCert: false,
+			},
+		},
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	result := initACMEManager(cfg, nil, logger)
+
+	if result != nil {
+		t.Error("Expected nil result when TLS is disabled")
+	}
+}
+
+// Test initACMEManager with TLS enabled but no AutoCert
+func TestInitACMEManager_NoAutoCert(t *testing.T) {
+	cfg := &core.Config{
+		Server: core.ServerConfig{
+			TLS: core.TLSServerConfig{
+				Enabled:  true,
+				AutoCert: false,
+			},
+		},
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	result := initACMEManager(cfg, nil, logger)
+
+	if result != nil {
+		t.Error("Expected nil result when AutoCert is disabled")
 	}
 }
