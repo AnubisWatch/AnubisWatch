@@ -223,3 +223,55 @@ func TestIsReservedSlug(t *testing.T) {
 		t.Error("IsReservedSlug(my-page) expected false")
 	}
 }
+
+// Test AlertChannel.Validate
+func TestAlertChannel_Validate(t *testing.T) {
+	tests := []struct {
+		name      string
+		channel   *AlertChannel
+		wantError bool
+	}{
+		{
+			name: "valid channel",
+			channel: &AlertChannel{
+				ID:   "ch1",
+				Name: "Test Channel",
+				Type: ChannelWebHook,
+			},
+			wantError: false,
+		},
+		{
+			name: "missing ID",
+			channel: &AlertChannel{
+				Name: "Test Channel",
+				Type: ChannelWebHook,
+			},
+			wantError: true,
+		},
+		{
+			name: "missing name",
+			channel: &AlertChannel{
+				ID:   "ch1",
+				Type: ChannelWebHook,
+			},
+			wantError: true,
+		},
+		{
+			name: "missing type",
+			channel: &AlertChannel{
+				ID:   "ch1",
+				Name: "Test Channel",
+			},
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.channel.Validate()
+			if (err != nil) != tt.wantError {
+				t.Errorf("AlertChannel.Validate() error = %v, wantError %v", err, tt.wantError)
+			}
+		})
+	}
+}

@@ -215,3 +215,52 @@ func TestGetDefaultTheme(t *testing.T) {
 		t.Error("Expected primary color to be set")
 	}
 }
+
+// Test RaftState methods
+func TestRaftState_IsLeader(t *testing.T) {
+	if !StateLeader.IsLeader() {
+		t.Error("Expected StateLeader.IsLeader() to return true")
+	}
+	if StateFollower.IsLeader() {
+		t.Error("Expected StateFollower.IsLeader() to return false")
+	}
+	if StateCandidate.IsLeader() {
+		t.Error("Expected StateCandidate.IsLeader() to return false")
+	}
+}
+
+func TestRaftState_IsFollower(t *testing.T) {
+	if StateLeader.IsFollower() {
+		t.Error("Expected StateLeader.IsFollower() to return false")
+	}
+	if !StateFollower.IsFollower() {
+		t.Error("Expected StateFollower.IsFollower() to return true")
+	}
+	if StateCandidate.IsFollower() {
+		t.Error("Expected StateCandidate.IsFollower() to return false")
+	}
+}
+
+func TestRaftState_IsCandidate(t *testing.T) {
+	if StateLeader.IsCandidate() {
+		t.Error("Expected StateLeader.IsCandidate() to return false")
+	}
+	if StateFollower.IsCandidate() {
+		t.Error("Expected StateFollower.IsCandidate() to return false")
+	}
+	if !StateCandidate.IsCandidate() {
+		t.Error("Expected StateCandidate.IsCandidate() to return true")
+	}
+}
+
+func TestRaftState_String(t *testing.T) {
+	if StateLeader.String() != "leader" {
+		t.Errorf("Expected StateLeader.String() = 'leader', got '%s'", StateLeader.String())
+	}
+	if StateFollower.String() != "follower" {
+		t.Errorf("Expected StateFollower.String() = 'follower', got '%s'", StateFollower.String())
+	}
+	if StateCandidate.String() != "candidate" {
+		t.Errorf("Expected StateCandidate.String() = 'candidate', got '%s'", StateCandidate.String())
+	}
+}
