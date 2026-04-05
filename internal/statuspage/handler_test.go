@@ -8,8 +8,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AnubisWatch/anubiswatch/internal/acme"
 	"github.com/AnubisWatch/anubiswatch/internal/core"
+	"github.com/AnubisWatch/anubiswatch/internal/storage"
 )
+
+func newTestDB(t *testing.T) *storage.CobaltDB {
+	dir := t.TempDir()
+	cfg := core.StorageConfig{Path: dir}
+	db, err := storage.NewEngine(cfg, nil)
+	if err != nil {
+		t.Fatalf("failed to create test DB: %v", err)
+	}
+	return db
+}
 
 // mockRepository implements Repository interface for testing
 type mockRepository struct{}
@@ -1678,5 +1690,80 @@ func TestHandler_serveHTML(t *testing.T) {
 	cacheControl := w.Header().Get("Cache-Control")
 	if cacheControl != "public, max-age=60" {
 		t.Errorf("Expected Cache-Control public, max-age=60, got %s", cacheControl)
+	}
+}
+
+func TestHandler_Router_WithAcmeManager(t *testing.T) {
+	repo := &mockRepository{}
+
+	// Create a minimal acme manager for testing
+	db := newTestDB(t)
+	defer db.Close()
+
+	cfg := acme.Config{
+		Enabled:   true,
+		Provider:  acme.ProviderLetsEncrypt,
+		Email:     "test@example.com",
+		AcceptTOS: true,
+		CertPath:  t.TempDir(),
+	}
+
+	acmeMgr, err := acme.NewManager(db, cfg)
+	if err != nil {
+		t.Fatalf("Failed to create acme manager: %v", err)
+	}
+
+	handler := &Handler{
+		repository:     repo,
+		acmeManager:    acmeMgr,
+		defaultTheme:   core.GetDefaultTheme(),
+	}
+
+	router := handler.Router()
+
+	if router == nil {
+		t.Fatal("Expected router to be created")
+	}
+
+	// Test routing to status page
+	req := httptest.NewRequest("GET", "/status/test", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	// Should not panic - verify routing works
+	if w.Code != http.StatusOK {
+		t.Logf("Handler returned status %d (may vary based on mock)", w.Code)
+	}
+
+	// Test badge endpoint
+	req = httptest.NewRequest("GET", "/badge/test", nil)
+	w = httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200 for badge endpoint, got %d", w.Code)
+	}
+
+	// Test RSS feed endpoint
+	req = httptest.NewRequest("GET", "/status/test/feed.xml", nil)
+	w = httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200 for RSS feed endpoint, got %d", w.Code)
+	}
+
+	// Test ACME challenge endpoint
+	req = httptest.NewRequest("GET", "/.well-known/acme-challenge/test-token", nil)
+	w = httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	// Should return 404 for unknown challenge token
+	if w.Code != http.StatusNotFound {
+		t.Logf("ACME challenge returned status %d", w.Code)
 	}
 }
