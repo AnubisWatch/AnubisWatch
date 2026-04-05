@@ -171,7 +171,7 @@ func ValidateSlug(slug string) error {
 		isLower := c >= 'a' && c <= 'z'
 		isDigit := c >= '0' && c <= '9'
 		isHyphen := c == '-'
-		if !(isLower || isDigit || isHyphen) {
+		if !isLower && !isDigit && !isHyphen {
 			return &ValidationError{Field: "slug", Message: "slug must contain only lowercase letters, numbers, and hyphens"}
 		}
 	}

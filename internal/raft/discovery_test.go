@@ -274,11 +274,11 @@ func TestMDNSClient_StartStop(t *testing.T) {
 	defer cancel()
 
 	client := &MDNSClient{
-		service:  "_anubiswatch._udp",
-		domain:   "local",
-		results:  make(chan *MDNSService, 10),
-		ctx:      ctx,
-		cancel:   cancel,
+		service: "_anubiswatch._udp",
+		domain:  "local",
+		results: make(chan *MDNSService, 10),
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 
 	// Start
@@ -296,11 +296,11 @@ func TestMDNSClient_ParseResponse(t *testing.T) {
 	defer cancel()
 
 	client := &MDNSClient{
-		service:  "_anubiswatch._tcp",
-		domain:   "local",
-		results:  make(chan *MDNSService, 10),
-		ctx:      ctx,
-		cancel:   cancel,
+		service: "_anubiswatch._tcp",
+		domain:  "local",
+		results: make(chan *MDNSService, 10),
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 
 	// Test parsing an mDNS response
@@ -770,21 +770,19 @@ func TestDiscovery_Query(t *testing.T) {
 	defer cancel()
 
 	client := &MDNSClient{
-		service:  "_anubiswatch._tcp",
-		domain:   "local",
-		results:  make(chan *MDNSService, 10),
-		ctx:      ctx,
-		cancel:   cancel,
-		conn:     nil, // No actual connection
+		service: "_anubiswatch._tcp",
+		domain:  "local",
+		results: make(chan *MDNSService, 10),
+		ctx:     ctx,
+		cancel:  cancel,
+		conn:    nil, // No actual connection
 	}
 
 	// Should not crash - returns nil or empty slice depending on implementation
 	// Query sends to nil conn then waits for timeout
 	services := client.Query("_anubiswatch._tcp")
-	// Accept either nil or empty slice
-	if services == nil {
-		// This is acceptable - no connection means no services
-	}
+	// Accept either nil or empty slice - both are valid for no connection
+	_ = services
 }
 
 func TestDecodeGossip_Valid(t *testing.T) {
@@ -829,11 +827,11 @@ func TestDiscovery_queryPeriodically(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	client := &MDNSClient{
-		service:  "_anubiswatch._tcp",
-		domain:   "local",
-		results:  make(chan *MDNSService, 10),
-		ctx:      ctx,
-		cancel:   cancel,
+		service: "_anubiswatch._tcp",
+		domain:  "local",
+		results: make(chan *MDNSService, 10),
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 
 	// Start the periodic query
@@ -971,4 +969,3 @@ func TestDiscovery_handleMDNSDiscovery_PartialTXT(t *testing.T) {
 	}
 	mu.Unlock()
 }
-

@@ -13,10 +13,10 @@ func TestDistributor_Recompute_NoHealthyNodes(t *testing.T) {
 
 	// Add a node but mark it unhealthy
 	d.AddNode(&core.NodeInfo{
-		ID:        "node-1",
-		Region:    "us-east",
-		MaxSouls:  100,
-		CanProbe:  false, // Unhealthy
+		ID:       "node-1",
+		Region:   "us-east",
+		MaxSouls: 100,
+		CanProbe: false, // Unhealthy
 	})
 
 	d.AddSoul(&core.Soul{ID: "soul-1", WorkspaceID: "default", Name: "Test", Type: core.CheckHTTP})
@@ -32,19 +32,19 @@ func TestDistributor_Recompute_RegionAware(t *testing.T) {
 
 	// Add healthy nodes in different regions
 	d.AddNode(&core.NodeInfo{
-		ID:        "node-1",
-		Region:    "us-east",
-		MaxSouls:  100,
-		CanProbe:  true,
-		LoadAvg:   0.5,
+		ID:          "node-1",
+		Region:      "us-east",
+		MaxSouls:    100,
+		CanProbe:    true,
+		LoadAvg:     0.5,
 		MemoryUsage: 0.5,
 	})
 	d.AddNode(&core.NodeInfo{
-		ID:        "node-2",
-		Region:    "us-west",
-		MaxSouls:  100,
-		CanProbe:  true,
-		LoadAvg:   0.5,
+		ID:          "node-2",
+		Region:      "us-west",
+		MaxSouls:    100,
+		CanProbe:    true,
+		LoadAvg:     0.5,
 		MemoryUsage: 0.5,
 	})
 
@@ -65,19 +65,19 @@ func TestDistributor_Recompute_Redundant(t *testing.T) {
 
 	// Add healthy nodes
 	d.AddNode(&core.NodeInfo{
-		ID:        "node-1",
-		Region:    "us-east",
-		MaxSouls:  100,
-		CanProbe:  true,
-		LoadAvg:   0.5,
+		ID:          "node-1",
+		Region:      "us-east",
+		MaxSouls:    100,
+		CanProbe:    true,
+		LoadAvg:     0.5,
 		MemoryUsage: 0.5,
 	})
 	d.AddNode(&core.NodeInfo{
-		ID:        "node-2",
-		Region:    "us-west",
-		MaxSouls:  100,
-		CanProbe:  true,
-		LoadAvg:   0.5,
+		ID:          "node-2",
+		Region:      "us-west",
+		MaxSouls:    100,
+		CanProbe:    true,
+		LoadAvg:     0.5,
 		MemoryUsage: 0.5,
 	})
 
@@ -99,19 +99,19 @@ func TestDistributor_Recompute_Weighted(t *testing.T) {
 
 	// Add healthy nodes with different capacities
 	d.AddNode(&core.NodeInfo{
-		ID:        "node-1",
-		Region:    "us-east",
-		MaxSouls:  100,
-		CanProbe:  true,
-		LoadAvg:   0.5,
+		ID:          "node-1",
+		Region:      "us-east",
+		MaxSouls:    100,
+		CanProbe:    true,
+		LoadAvg:     0.5,
 		MemoryUsage: 0.5,
 	})
 	d.AddNode(&core.NodeInfo{
-		ID:        "node-2",
-		Region:    "us-west",
-		MaxSouls:  50,
-		CanProbe:  true,
-		LoadAvg:   0.5,
+		ID:          "node-2",
+		Region:      "us-west",
+		MaxSouls:    50,
+		CanProbe:    true,
+		LoadAvg:     0.5,
 		MemoryUsage: 0.5,
 	})
 
@@ -133,11 +133,11 @@ func TestDistributor_Recompute_UnknownStrategy(t *testing.T) {
 
 	// Add healthy node
 	d.AddNode(&core.NodeInfo{
-		ID:        "node-1",
-		Region:    "us-east",
-		MaxSouls:  100,
-		CanProbe:  true,
-		LoadAvg:   0.5,
+		ID:          "node-1",
+		Region:      "us-east",
+		MaxSouls:    100,
+		CanProbe:    true,
+		LoadAvg:     0.5,
 		MemoryUsage: 0.5,
 	})
 
@@ -167,11 +167,11 @@ func TestDistributor_Recompute_WithCallback(t *testing.T) {
 
 	// Add healthy node
 	d.AddNode(&core.NodeInfo{
-		ID:        "node-1",
-		Region:    "us-east",
-		MaxSouls:  100,
-		CanProbe:  true,
-		LoadAvg:   0.5,
+		ID:          "node-1",
+		Region:      "us-east",
+		MaxSouls:    100,
+		CanProbe:    true,
+		LoadAvg:     0.5,
 		MemoryUsage: 0.5,
 	})
 

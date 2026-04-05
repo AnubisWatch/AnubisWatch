@@ -74,7 +74,7 @@ func TestStorageFSM_Apply_DeleteCommand(t *testing.T) {
 	store.Set("test-key", []byte("test-value"))
 
 	cmd := core.FSMCommand{
-		Op: core.FSMDelete,
+		Op:  core.FSMDelete,
 		Key: "test-key",
 	}
 
@@ -110,7 +110,7 @@ func TestStorageFSM_Apply_DeletePrefixCommand(t *testing.T) {
 	store.Set("other/key", []byte("other-value"))
 
 	cmd := core.FSMCommand{
-		Op: core.FSMDeletePrefix,
+		Op:  core.FSMDeletePrefix,
 		Key: "prefix/",
 	}
 

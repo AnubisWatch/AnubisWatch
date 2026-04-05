@@ -387,9 +387,7 @@ func (h *Handler) buildUptimeData(page *core.StatusPage, souls []core.SoulStatus
 		if err != nil {
 			continue
 		}
-		for _, day := range history {
-			days = append(days, day)
-		}
+		days = append(days, history...)
 	}
 
 	// Calculate overall uptime percentage
@@ -896,7 +894,7 @@ func (h *Handler) BadgeHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	badgeText := "AnubisWatch"
-	statusText := strings.Title(overallStatus.Status)
+	statusText := strings.ToTitle(string(overallStatus.Status[0])) + overallStatus.Status[1:]
 
 	svg := fmt.Sprintf(`<svg xmlns="http://www.w3.org/2000/svg" width="140" height="20">
   <linearGradient id="b" x2="0" y2="100%%">
