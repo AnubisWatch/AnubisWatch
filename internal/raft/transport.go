@@ -25,7 +25,9 @@ type TCPTransport struct {
 	handlers     map[string]RPCHandler
 	handlerMu    sync.RWMutex
 
+	// Connection pool with peer addresses
 	connections  map[string]net.Conn
+	peerAddrs    map[string]string // peerID -> address mapping
 	connMu       sync.Mutex
 
 	logger       *slog.Logger
@@ -48,6 +50,7 @@ func NewTCPTransport(bindAddr, advertiseAddr string, tlsConfig *tls.Config, logg
 		tlsConfig:     tlsConfig,
 		handlers:      make(map[string]RPCHandler),
 		connections:   make(map[string]net.Conn),
+		peerAddrs:     make(map[string]string),
 		logger:        logger.With("component", "raft_transport"),
 		doneCh:        make(chan struct{}),
 	}
@@ -129,6 +132,15 @@ func (t *TCPTransport) SendRequestVote(peerID string, req *core.RequestVoteReque
 		return nil, err
 	}
 	return resp.(*core.RequestVoteResponse), nil
+}
+
+// SendPreVote sends a PreVote RPC
+func (t *TCPTransport) SendPreVote(peerID string, req *core.PreVoteRequest) (*core.PreVoteResponse, error) {
+	resp, err := t.sendRPC(peerID, "PreVote", req)
+	if err != nil {
+		return nil, err
+	}
+	return resp.(*core.PreVoteResponse), nil
 }
 
 // SendInstallSnapshot sends an InstallSnapshot RPC
@@ -245,6 +257,8 @@ func (t *TCPTransport) handleRPC(method string, payload []byte) (interface{}, er
 		cmd = &core.AppendEntriesRequest{}
 	case "RequestVote":
 		cmd = &core.RequestVoteRequest{}
+	case "PreVote":
+		cmd = &core.PreVoteRequest{}
 	case "InstallSnapshot":
 		cmd = &core.InstallSnapshotRequest{}
 	case "Heartbeat":
@@ -327,6 +341,12 @@ func (t *TCPTransport) sendRPC(peerID string, method string, req interface{}) (i
 			return nil, err
 		}
 		resp = r
+	case "PreVote":
+		r := &core.PreVoteResponse{}
+		if err := json.Unmarshal(respData, r); err != nil {
+			return nil, err
+		}
+		resp = r
 	case "InstallSnapshot":
 		r := &core.InstallSnapshotResponse{}
 		if err := json.Unmarshal(respData, r); err != nil {
@@ -349,32 +369,71 @@ func (t *TCPTransport) getConnection(peerID string) (net.Conn, error) {
 	t.connMu.Lock()
 	defer t.connMu.Unlock()
 
+	// Check existing connection
 	if conn, ok := t.connections[peerID]; ok {
+		// Connection exists, assume it's healthy
+		// The actual RPC will reveal if it's stale
 		return conn, nil
 	}
 
-	// Need to create new connection - we need the peer's address
-	// For now, use a placeholder - the actual address should come from peer config
-	return nil, fmt.Errorf("connection not found for peer %s", peerID)
+	// Get peer address
+	addr, ok := t.peerAddrs[peerID]
+	if !ok {
+		return nil, fmt.Errorf("unknown peer %s", peerID)
+	}
+
+	// Create new connection
+	var conn net.Conn
+	var err error
+	if t.tlsConfig != nil {
+		conn, err = tls.Dial("tcp", addr, t.tlsConfig)
+	} else {
+		conn, err = net.Dial("tcp", addr)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to %s (%s): %w", peerID, addr, err)
+	}
+
+	t.connections[peerID] = conn
+	t.logger.Debug("Created connection to peer", "peer_id", peerID, "address", addr)
+
+	return conn, nil
 }
 
-// releaseConnection returns a connection to the pool
+// releaseConnection returns a connection to the pool (keeps it open for reuse)
 func (t *TCPTransport) releaseConnection(peerID string, conn net.Conn) {
-	// Keep connection open for reuse
+	// Clear any deadlines
+	conn.SetDeadline(time.Time{})
+	// Connection stays open in the pool
 }
 
 // removeConnection removes a connection from the pool
 func (t *TCPTransport) removeConnection(peerID string) {
 	t.connMu.Lock()
+	defer t.connMu.Unlock()
+
 	if conn, ok := t.connections[peerID]; ok {
 		conn.Close()
 		delete(t.connections, peerID)
+		t.logger.Debug("Removed connection to peer", "peer_id", peerID)
 	}
-	t.connMu.Unlock()
 }
 
-// AddPeerConnection adds a connection to a peer
+// AddPeerConnection adds or updates a connection to a peer
 func (t *TCPTransport) AddPeerConnection(peerID string, address string) error {
+	// Store peer address for future reconnection
+	t.connMu.Lock()
+	t.peerAddrs[peerID] = address
+	existingConn, hasExisting := t.connections[peerID]
+	t.connMu.Unlock()
+
+	// Close existing connection if any (will be recreated)
+	if hasExisting {
+		existingConn.Close()
+	}
+
+	// Create new connection
 	var conn net.Conn
 	var err error
 
@@ -392,5 +451,25 @@ func (t *TCPTransport) AddPeerConnection(peerID string, address string) error {
 	t.connections[peerID] = conn
 	t.connMu.Unlock()
 
+	t.logger.Debug("Added peer connection", "peer_id", peerID, "address", address)
 	return nil
+}
+
+// RegisterPeer registers a peer address for future connections
+func (t *TCPTransport) RegisterPeer(peerID, address string) {
+	t.connMu.Lock()
+	t.peerAddrs[peerID] = address
+	t.connMu.Unlock()
+}
+
+// UnregisterPeer removes a peer and closes its connection
+func (t *TCPTransport) UnregisterPeer(peerID string) {
+	t.connMu.Lock()
+	defer t.connMu.Unlock()
+
+	if conn, ok := t.connections[peerID]; ok {
+		conn.Close()
+		delete(t.connections, peerID)
+	}
+	delete(t.peerAddrs, peerID)
 }

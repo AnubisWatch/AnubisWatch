@@ -5,6 +5,47 @@ All notable changes to AnubisWatch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- MCP server integration at `/api/v1/mcp` endpoint for AI agent integration
+- 8 built-in MCP tools: list_souls, get_soul, force_check, get_judgments, list_incidents, get_stats, acknowledge_incident, create_soul
+- 3 MCP resources: getting-started, api-reference, status/current
+- 3 MCP prompts: analyze-soul, incident-summary, create-monitor-guide
+- Duat Journey executor for multi-step synthetic monitoring
+- Variable extraction from HTTP responses (JSON path, regex, headers, cookies)
+- Status page generator with HTML/JSON serving
+- Status page custom domain support
+- Status page password protection (protected visibility)
+- Status page custom themes
+- Status page RSS feed support
+- Status page SVG badge generation for embedding
+- Workspace-based multi-tenancy with namespace isolation
+- RBAC with 5 roles: Owner, Admin, Editor, Viewer, API
+- Quota management per workspace
+- API pagination for all list endpoints
+- API rate limiting (100 requests/minute per IP)
+- Request validation middleware
+- Alert deduplication with configurable cooldown
+- Alert escalation policies with multi-stage escalation
+- Alert acknowledgment workflow
+- Circuit breaker pattern for probe engine (per-soul failure tracking)
+- Concurrency limiting for probe checks (default: 100 concurrent)
+- Region-based probe filtering
+
+### Changed
+- Updated Go version to 1.26
+- Updated CI/CD pipelines with security scanning (gosec)
+
+### Documentation
+- API.md with complete REST API reference
+- TROUBLESHOOTING.md with deployment troubleshooting guide
+- docs/adr/ with 8 Architecture Decision Records
+- Updated CONTRIBUTING.md with current project structure
+
+### Fixed
+- REST server test compatibility with MCP server integration
+
 ## [0.0.1] - 2026-04-04
 
 ### Added

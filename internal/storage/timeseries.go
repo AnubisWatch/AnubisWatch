@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
@@ -232,12 +235,195 @@ func (ts *TimeSeriesStore) compactionLoop() {
 func (ts *TimeSeriesStore) runCompaction() error {
 	ts.logger.Debug("starting compaction")
 
-	// TODO: Implement compaction logic
-	// 1. Find raw data older than compaction threshold
-	// 2. Aggregate into 1-minute summaries
-	// 3. Find 1-minute data older than threshold
-	// 4. Aggregate into 5-minute summaries
-	// etc.
+	// Compact raw -> 1-minute summaries
+	if err := ts.compactToResolution(ResolutionRaw, Resolution1Min, ts.config.Compaction.RawToMinute.Duration); err != nil {
+		ts.logger.Warn("failed to compact to 1min", "err", err)
+	}
+
+	// Compact 1-minute -> 5-minute summaries
+	if err := ts.compactToResolution(Resolution1Min, Resolution5Min, ts.config.Compaction.MinuteToFive.Duration); err != nil {
+		ts.logger.Warn("failed to compact to 5min", "err", err)
+	}
+
+	// Compact 5-minute -> 1-hour summaries
+	if err := ts.compactToResolution(Resolution5Min, Resolution1Hour, ts.config.Compaction.FiveToHour.Duration); err != nil {
+		ts.logger.Warn("failed to compact to 1hour", "err", err)
+	}
+
+	// Compact 1-hour -> 1-day summaries
+	if err := ts.compactToResolution(Resolution1Hour, Resolution1Day, ts.config.Compaction.HourToDay.Duration); err != nil {
+		ts.logger.Warn("failed to compact to 1day", "err", err)
+	}
+
+	ts.logger.Debug("compaction complete")
+	return nil
+}
+
+// compactToResolution aggregates data from source resolution to target resolution
+func (ts *TimeSeriesStore) compactToResolution(srcRes, tgtRes TimeResolution, threshold time.Duration) error {
+	if threshold <= 0 {
+		return nil // Compaction disabled for this resolution
+	}
+
+	cutoff := time.Now().Add(-threshold)
+	srcBucket := truncateToResolution(cutoff, srcRes)
+	tgtBucket := truncateToResolution(cutoff, tgtRes)
+
+	ts.logger.Debug("compacting resolution",
+		"from", srcRes, "to", tgtRes,
+		"cutoff", cutoff,
+		"src_bucket", srcBucket,
+		"tgt_bucket", tgtBucket)
+
+	// Find all souls with data in source resolution
+	// Pattern: {workspace}/ts/{soul}/{resolution}/{timestamp}
+	prefix := fmt.Sprintf("default/ts/")
+	results, err := ts.db.PrefixScan(prefix)
+	if err != nil {
+		return err
+	}
+
+	// Group summaries by soul and target bucket
+	type targetKey struct {
+		workspaceID string
+		soulID      string
+		bucketTime  time.Time
+	}
+	aggregations := make(map[targetKey][]*JudgmentSummary)
+
+	for key, data := range results {
+		if !strings.Contains(key, "/ts/") || !strings.Contains(key, string(srcRes)) {
+			continue
+		}
+
+		// Parse key: {workspace}/ts/{soul}/{resolution}/{timestamp}
+		parts := strings.Split(key, "/")
+		if len(parts) < 5 {
+			continue
+		}
+
+		workspaceID := parts[0]
+		soulID := parts[2]
+		resolution := parts[3]
+		tsUnix, err := strconv.ParseInt(parts[4], 10, 64)
+		if err != nil {
+			continue
+		}
+
+		if resolution != string(srcRes) {
+			continue
+		}
+
+		bucketTime := time.Unix(tsUnix, 0)
+		if bucketTime.After(srcBucket) {
+			continue // Too recent, don't compact yet
+		}
+
+		var summary JudgmentSummary
+		if err := json.Unmarshal(data, &summary); err != nil {
+			ts.logger.Warn("failed to unmarshal summary for compaction", "err", err)
+			continue
+		}
+
+		tKey := targetKey{
+			workspaceID: workspaceID,
+			soulID:      soulID,
+			bucketTime:  truncateToResolution(bucketTime, tgtRes),
+		}
+		aggregations[tKey] = append(aggregations[tKey], &summary)
+	}
+
+	// Aggregate and save target summaries
+	for tKey, summaries := range aggregations {
+		if err := ts.aggregateAndSave(tKey.workspaceID, tKey.soulID, tgtRes, tKey.bucketTime, summaries); err != nil {
+			ts.logger.Warn("failed to save aggregated summary", "err", err)
+			continue
+		}
+	}
 
 	return nil
+}
+
+// aggregateAndSave aggregates multiple source summaries into a target summary
+func (ts *TimeSeriesStore) aggregateAndSave(workspaceID, soulID string, resolution TimeResolution, bucketTime time.Time, sources []*JudgmentSummary) error {
+	key := fmt.Sprintf("%s/ts/%s/%s/%d", workspaceID, soulID, resolution, bucketTime.Unix())
+
+	// Check if target already exists
+	var target JudgmentSummary
+	data, err := ts.db.Get(key)
+	if err == nil {
+		if err := json.Unmarshal(data, &target); err != nil {
+			ts.logger.Warn("failed to unmarshal existing target summary", "err", err)
+		}
+	}
+
+	// Aggregate sources
+	target.SoulID = soulID
+	target.WorkspaceID = workspaceID
+	target.Resolution = string(resolution)
+	target.BucketTime = bucketTime
+
+	totalCount := 0
+	successCount := 0
+	var latencies []float64
+
+	for _, src := range sources {
+		totalCount += src.Count
+		successCount += src.SuccessCount
+
+		// Collect latency estimates
+		if src.Count > 0 {
+			// Weight by count for accurate averaging
+			for i := 0; i < src.Count; i++ {
+				latencies = append(latencies, src.AvgLatency)
+			}
+		}
+	}
+
+	target.Count = totalCount
+	target.SuccessCount = successCount
+	target.FailureCount = totalCount - successCount
+	target.UptimePercent = float64(successCount) / float64(totalCount) * 100
+
+	// Calculate aggregated latency stats
+	if len(latencies) > 0 {
+		sort.Float64s(latencies)
+		target.MinLatency = latencies[0]
+		target.MaxLatency = latencies[len(latencies)-1]
+
+		sum := 0.0
+		for _, l := range latencies {
+			sum += l
+		}
+		target.AvgLatency = sum / float64(len(latencies))
+
+		// Percentiles
+		if len(latencies) >= 2 {
+			p50Idx := int(float64(len(latencies)) * 0.50)
+			p95Idx := int(float64(len(latencies)) * 0.95)
+			p99Idx := int(float64(len(latencies)) * 0.99)
+
+			if p50Idx >= len(latencies) {
+				p50Idx = len(latencies) - 1
+			}
+			if p95Idx >= len(latencies) {
+				p95Idx = len(latencies) - 1
+			}
+			if p99Idx >= len(latencies) {
+				p99Idx = len(latencies) - 1
+			}
+
+			target.P50Latency = latencies[p50Idx]
+			target.P95Latency = latencies[p95Idx]
+			target.P99Latency = latencies[p99Idx]
+		}
+	}
+
+	// Save target summary
+	newData, err := json.Marshal(target)
+	if err != nil {
+		return fmt.Errorf("failed to marshal target summary: %w", err)
+	}
+
+	return ts.db.Put(key, newData)
 }

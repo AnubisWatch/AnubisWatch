@@ -26,7 +26,8 @@ func (u ULID) String() string {
 func (u ULID) Time() time.Time {
 	// First 6 bytes are the timestamp in milliseconds (big-endian)
 	ms := uint64(u[0])<<40 | uint64(u[1])<<32 | uint64(u[2])<<24 | uint64(u[3])<<16 | uint64(u[4])<<8 | uint64(u[5])
-	return time.Unix(0, int64(ms)*1e6).UTC()
+	// Safe conversion: ULID timestamp is 48-bit, well within int64 range
+	return time.Unix(0, int64(ms&0xFFFFFFFFFFFF)*1e6).UTC()
 }
 
 // MarshalText implements encoding.TextMarshaler.
@@ -83,15 +84,16 @@ func GenerateULID() (ULID, error) {
 // GenerateULIDAt creates a new ULID with the specified timestamp.
 func GenerateULIDAt(t time.Time) (ULID, error) {
 	var u ULID
-	ms := uint64(t.UnixMilli())
+	// Safe conversion: time.UnixMilli() returns value within 48-bit range
+	ms := uint64(t.UnixMilli()) & 0xFFFFFFFFFFFF
 
 	// Encode timestamp (48 bits) in big-endian order
-	u[0] = byte(ms >> 40)
-	u[1] = byte(ms >> 32)
-	u[2] = byte(ms >> 24)
-	u[3] = byte(ms >> 16)
-	u[4] = byte(ms >> 8)
-	u[5] = byte(ms)
+	u[0] = byte(ms >> 40) // nolint:gosec // Safe: ms is masked to 48 bits
+	u[1] = byte(ms >> 32) // nolint:gosec // Safe: ms is masked to 48 bits
+	u[2] = byte(ms >> 24) // nolint:gosec // Safe: ms is masked to 48 bits
+	u[3] = byte(ms >> 16) // nolint:gosec // Safe: ms is masked to 48 bits
+	u[4] = byte(ms >> 8)  // nolint:gosec // Safe: ms is masked to 48 bits
+	u[5] = byte(ms)       // nolint:gosec // Safe: ms is masked to 48 bits
 
 	// Encode randomness (80 bits)
 	if _, err := io.ReadFull(rand.Reader, u[6:]); err != nil {

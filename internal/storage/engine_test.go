@@ -28,6 +28,113 @@ func newTestDB(t *testing.T) *CobaltDB {
 	return db
 }
 
+func TestCobaltDB_BTreeOrder_Default(t *testing.T) {
+	dir := t.TempDir()
+	cfg := core.StorageConfig{Path: dir}
+	db, err := NewEngine(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("failed to create test DB: %v", err)
+	}
+	defer db.Close()
+
+	if db.btreeOrder != defaultBTreeOrder {
+		t.Errorf("Expected default B+Tree order %d, got %d", defaultBTreeOrder, db.btreeOrder)
+	}
+	if db.data.btreeOrder != defaultBTreeOrder {
+		t.Errorf("Expected index B+Tree order %d, got %d", defaultBTreeOrder, db.data.btreeOrder)
+	}
+}
+
+func TestCobaltDB_BTreeOrder_Custom(t *testing.T) {
+	dir := t.TempDir()
+	cfg := core.StorageConfig{
+		Path:       dir,
+		BTreeOrder: 64, // Custom order
+	}
+	db, err := NewEngine(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("failed to create test DB: %v", err)
+	}
+	defer db.Close()
+
+	if db.btreeOrder != 64 {
+		t.Errorf("Expected B+Tree order 64, got %d", db.btreeOrder)
+	}
+	if db.data.btreeOrder != 64 {
+		t.Errorf("Expected index B+Tree order 64, got %d", db.data.btreeOrder)
+	}
+}
+
+func TestCobaltDB_BTreeOrder_TooLow(t *testing.T) {
+	dir := t.TempDir()
+	cfg := core.StorageConfig{
+		Path:       dir,
+		BTreeOrder: 2, // Below minimum
+	}
+	db, err := NewEngine(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("failed to create test DB: %v", err)
+	}
+	defer db.Close()
+
+	if db.btreeOrder != minBTreeOrder {
+		t.Errorf("Expected B+Tree order %d (minimum), got %d", minBTreeOrder, db.btreeOrder)
+	}
+}
+
+func TestCobaltDB_BTreeOrder_TooHigh(t *testing.T) {
+	dir := t.TempDir()
+	cfg := core.StorageConfig{
+		Path:       dir,
+		BTreeOrder: 512, // Above maximum
+	}
+	db, err := NewEngine(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("failed to create test DB: %v", err)
+	}
+	defer db.Close()
+
+	if db.btreeOrder != maxBTreeOrder {
+		t.Errorf("Expected B+Tree order %d (maximum), got %d", maxBTreeOrder, db.btreeOrder)
+	}
+}
+
+func TestCobaltDB_BTreeOrder_Functional(t *testing.T) {
+	dir := t.TempDir()
+	cfg := core.StorageConfig{
+		Path:       dir,
+		BTreeOrder: 16, // Smaller order for testing
+	}
+	db, err := NewEngine(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("failed to create test DB: %v", err)
+	}
+	defer db.Close()
+
+	// Test basic operations with custom order
+	ctx := context.Background()
+	soul := &core.Soul{
+		ID:          "test-soul-1",
+		WorkspaceID: "default",
+		Name:        "Test Soul",
+		Type:        core.CheckHTTP,
+		Target:      "https://example.com",
+	}
+
+	if err := db.SaveSoul(ctx, soul); err != nil {
+		t.Fatalf("SaveSoul failed: %v", err)
+	}
+
+	retrieved, err := db.GetSoul(ctx, "default", "test-soul-1")
+	if err != nil {
+		t.Fatalf("GetSoul failed: %v", err)
+	}
+
+	if retrieved.ID != soul.ID {
+		t.Errorf("Expected soul ID %s, got %s", soul.ID, retrieved.ID)
+	}
+}
+
 func TestCobaltDB_SaveAndGetSoul(t *testing.T) {
 	db := newTestDB(t)
 	defer db.Close()

@@ -105,3 +105,5 @@ __debug_bin
 # Test data
 /testdata/*.db
 /testdata/*.log
+
+*.out

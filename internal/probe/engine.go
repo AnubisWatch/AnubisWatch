@@ -4,10 +4,40 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
+
+// EngineConfig configures probe engine behavior
+type EngineConfig struct {
+	MaxConcurrentChecks int           // Maximum concurrent checks (default: 100)
+	CircuitBreaker      CircuitBreakerConfig
+	NodeID              string
+	Region              string
+}
+
+// CircuitBreakerConfig configures circuit breaker behavior
+type CircuitBreakerConfig struct {
+	Enabled         bool          // Enable circuit breaker
+	FailureThreshold int           // Failures before opening (default: 5)
+	SuccessThreshold int           // Successes before closing (default: 3)
+	Timeout         time.Duration // Time before attempting again (default: 30s)
+}
+
+// DefaultEngineConfig returns default engine configuration
+func DefaultEngineConfig() EngineConfig {
+	return EngineConfig{
+		MaxConcurrentChecks: 100,
+		CircuitBreaker: CircuitBreakerConfig{
+			Enabled:         true,
+			FailureThreshold: 5,
+			SuccessThreshold: 3,
+			Timeout:         30 * time.Second,
+		},
+	}
+}
 
 // Engine is the probe scheduling and execution engine.
 // It manages the lifecycle of all soul checks on this Jackal.
@@ -17,6 +47,7 @@ type Engine struct {
 	alerter   AlertDispatcher
 	nodeID    string
 	region    string
+	config    EngineConfig
 
 	souls  map[string]*soulRunner
 	mu     sync.RWMutex
@@ -27,6 +58,18 @@ type Engine struct {
 
 	// Callbacks for Raft integration
 	onJudgment func(*core.Judgment)
+
+	// Concurrency limiting
+	semaphore chan struct{}
+
+	// Circuit breaker state
+	circuitBreakers map[string]*circuitBreaker
+	cbMu            sync.RWMutex
+
+	// Stats
+	checksRunning atomic.Int64
+	totalChecks   atomic.Int64
+	failedChecks  atomic.Int64
 }
 
 // Storage is the interface the probe engine uses to persist judgments
@@ -42,7 +85,7 @@ type AlertDispatcher interface {
 }
 
 // EngineOptions configures the probe engine
- type EngineOptions struct {
+type EngineOptions struct {
 	Registry   *CheckerRegistry
 	Store      Storage
 	Alerter    AlertDispatcher
@@ -50,6 +93,17 @@ type AlertDispatcher interface {
 	Region     string
 	Logger     *slog.Logger
 	OnJudgment func(*core.Judgment)
+	Config     EngineConfig
+}
+
+// circuitBreaker tracks failure/success counts for a soul
+type circuitBreaker struct {
+	mu              sync.RWMutex
+	state           string // "closed", "open", "half-open"
+	failures        int
+	successes       int
+	lastFailureTime time.Time
+	lastStateChange time.Time
 }
 
 // soulRunner manages the ticker for a single soul
@@ -68,22 +122,34 @@ func NewEngine(opts EngineOptions) *Engine {
 		opts.Logger = slog.Default()
 	}
 
+	// Apply defaults
+	if opts.Config.MaxConcurrentChecks <= 0 {
+		opts.Config.MaxConcurrentChecks = 100
+	}
+	if !opts.Config.CircuitBreaker.Enabled {
+		opts.Config.CircuitBreaker.FailureThreshold = 0 // Disabled
+	}
+
 	return &Engine{
-		registry:   opts.Registry,
-		store:      opts.Store,
-		alerter:    opts.Alerter,
-		nodeID:     opts.NodeID,
-		region:     opts.Region,
-		souls:      make(map[string]*soulRunner),
-		ctx:        ctx,
-		cancel:     cancel,
-		logger:     opts.Logger.With("component", "probe-engine"),
-		onJudgment: opts.OnJudgment,
+		registry:        opts.Registry,
+		store:           opts.Store,
+		alerter:         opts.Alerter,
+		nodeID:          opts.NodeID,
+		region:          opts.Region,
+		config:          opts.Config,
+		souls:           make(map[string]*soulRunner),
+		ctx:             ctx,
+		cancel:          cancel,
+		logger:          opts.Logger.With("component", "probe-engine"),
+		onJudgment:      opts.OnJudgment,
+		semaphore:       make(chan struct{}, opts.Config.MaxConcurrentChecks),
+		circuitBreakers: make(map[string]*circuitBreaker),
 	}
 }
 
 // AssignSouls sets the souls this Jackal is responsible for checking.
 // Called by the Raft leader when distributing checks.
+// Souls with region restrictions are filtered to only run on matching probes.
 func (e *Engine) AssignSouls(souls []*core.Soul) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -91,6 +157,15 @@ func (e *Engine) AssignSouls(souls []*core.Soul) {
 	// Determine which souls are new, removed, or updated
 	newMap := make(map[string]*core.Soul, len(souls))
 	for _, s := range souls {
+		// Skip souls that have region restrictions and don't match this probe
+		if len(s.Regions) > 0 && !e.regionMatches(s.Regions) {
+			e.logger.Debug("soul skipped - region mismatch",
+				"soul", s.Name,
+				"id", s.ID,
+				"soul_regions", s.Regions,
+				"probe_region", e.region)
+			continue
+		}
 		newMap[s.ID] = s
 	}
 
@@ -106,6 +181,11 @@ func (e *Engine) AssignSouls(souls []*core.Soul) {
 
 	// Start new or updated souls
 	for _, soul := range souls {
+		// Skip souls that have region restrictions and don't match this probe
+		if len(soul.Regions) > 0 && !e.regionMatches(soul.Regions) {
+			continue
+		}
+
 		if existing, exists := e.souls[soul.ID]; exists {
 			// Update soul config without restart if only config changed
 			existing.soul = soul
@@ -113,6 +193,19 @@ func (e *Engine) AssignSouls(souls []*core.Soul) {
 		}
 		e.startSoul(soul)
 	}
+}
+
+// regionMatches returns true if the probe's region is in the list of regions
+func (e *Engine) regionMatches(regions []string) bool {
+	if len(regions) == 0 {
+		return true
+	}
+	for _, r := range regions {
+		if r == e.region {
+			return true
+		}
+	}
+	return false
 }
 
 // startSoul starts a goroutine for checking a soul
@@ -157,9 +250,30 @@ func (e *Engine) startSoul(soul *core.Soul) {
 	)
 }
 
-// judgeSoul executes a single check
+// judgeSoul executes a single check with concurrency limiting and circuit breaker
 func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 	soul := runner.soul
+
+	// Check circuit breaker first
+	if cb := e.getCircuitBreaker(soul.ID); cb != nil && cb.isOpen(e.Config().CircuitBreaker) {
+		e.logger.Debug("circuit breaker open, skipping check",
+			"soul", soul.Name, "id", soul.ID)
+		return
+	}
+
+	// Acquire semaphore (concurrency limiting)
+	select {
+	case e.semaphore <- struct{}{}:
+		// Acquired
+	case <-ctx.Done():
+		return
+	}
+	defer func() { <-e.semaphore }()
+
+	// Increment stats
+	e.checksRunning.Add(1)
+	e.totalChecks.Add(1)
+	defer e.checksRunning.Add(-1)
 
 	checker, ok := e.registry.Get(soul.Type)
 	if !ok {
@@ -170,6 +284,7 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 	// Validate config
 	if err := checker.Validate(soul); err != nil {
 		e.logger.Error("invalid soul config", "soul", soul.Name, "err", err)
+		e.recordFailure(soul.ID)
 		return
 	}
 
@@ -185,6 +300,11 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 	judgment, err := checker.Judge(checkCtx, soul)
 	if err != nil {
 		judgment = failJudgment(soul, err)
+		e.recordFailure(soul.ID)
+	} else if judgment.Status == core.SoulDead {
+		e.recordFailure(soul.ID)
+	} else {
+		e.recordSuccess(soul.ID)
 	}
 
 	// Enrich judgment with node info
@@ -259,6 +379,11 @@ func (e *Engine) GetStatus() *core.ProbeStatus {
 	return &core.ProbeStatus{
 		Running:      true,
 		ActiveChecks: len(e.souls),
+		ChecksRunning: int(e.checksRunning.Load()),
+		FailedChecks: e.failedChecks.Load(),
+		TotalChecks:  e.totalChecks.Load(),
+		NodeID:       e.nodeID,
+		Region:       e.region,
 	}
 }
 
@@ -302,8 +427,118 @@ func (e *Engine) Stats() map[string]interface{} {
 	defer e.mu.RUnlock()
 
 	return map[string]interface{}{
-		"active_souls": len(e.souls),
-		"node_id":      e.nodeID,
-		"region":       e.region,
+		"active_souls":    len(e.souls),
+		"node_id":         e.nodeID,
+		"region":          e.region,
+		"checks_running":  e.checksRunning.Load(),
+		"total_checks":    e.totalChecks.Load(),
+		"failed_checks":   e.failedChecks.Load(),
+		"semaphore_usage": len(e.semaphore),
+		"semaphore_max":   cap(e.semaphore),
 	}
+}
+
+// Config returns the engine configuration
+func (e *Engine) Config() EngineConfig {
+	return e.config
+}
+
+// getCircuitBreaker returns or creates a circuit breaker for a soul
+func (e *Engine) getCircuitBreaker(soulID string) *circuitBreaker {
+	e.cbMu.RLock()
+	cb, exists := e.circuitBreakers[soulID]
+	e.cbMu.RUnlock()
+
+	if exists {
+		return cb
+	}
+
+	// Create new circuit breaker
+	e.cbMu.Lock()
+	defer e.cbMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if cb, exists = e.circuitBreakers[soulID]; exists {
+		return cb
+	}
+
+	cb = &circuitBreaker{
+		state:           "closed",
+		failures:        0,
+		successes:       0,
+		lastStateChange: time.Now(),
+	}
+	e.circuitBreakers[soulID] = cb
+	return cb
+}
+
+// recordSuccess records a successful check for circuit breaker
+func (e *Engine) recordSuccess(soulID string) {
+	cb := e.getCircuitBreaker(soulID)
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	if cb.state == "closed" {
+		return // Already healthy
+	}
+
+	cb.successes++
+	cb.failures = 0
+
+	// Transition from half-open to closed
+	cfg := e.Config().CircuitBreaker
+	if cb.state == "half-open" && cb.successes >= cfg.SuccessThreshold {
+		cb.state = "closed"
+		cb.lastStateChange = time.Now()
+	}
+}
+
+// recordFailure records a failed check for circuit breaker
+func (e *Engine) recordFailure(soulID string) {
+	e.failedChecks.Add(1)
+
+	cb := e.getCircuitBreaker(soulID)
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+
+	cb.failures++
+	cb.successes = 0
+	cb.lastFailureTime = time.Now()
+
+	// Transition from closed to open
+	cfg := e.Config().CircuitBreaker
+	if cb.state == "closed" && cb.failures >= cfg.FailureThreshold {
+		cb.state = "open"
+		cb.lastStateChange = time.Now()
+	}
+}
+
+// isOpen returns true if the circuit breaker should block checks
+func (cb *circuitBreaker) isOpen(cfg CircuitBreakerConfig) bool {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+
+	if cb.state == "closed" {
+		return false
+	}
+
+	if cb.state == "open" {
+		// Check if timeout has elapsed to transition to half-open
+		if time.Since(cb.lastStateChange) >= cfg.Timeout {
+			cb.mu.RUnlock()
+			cb.mu.Lock()
+			if cb.state == "open" {
+				cb.state = "half-open"
+				cb.successes = 0
+				cb.lastStateChange = time.Now()
+			}
+			cb.mu.Unlock()
+			cb.mu.RLock()
+			return false
+		}
+		return true
+	}
+
+	// half-open: allow checks but monitor results
+	return false
 }

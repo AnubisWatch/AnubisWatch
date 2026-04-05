@@ -124,8 +124,8 @@ func (c *HTTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	}
 	defer resp.Body.Close()
 
-	// Read body (limited to 1MB)
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	// Read body (limited to maxReadSize)
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxReadSize))
 	if err != nil {
 		return failJudgment(soul, fmt.Errorf("failed to read body: %w", err)), nil
 	}

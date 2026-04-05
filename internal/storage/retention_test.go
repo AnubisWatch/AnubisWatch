@@ -22,7 +22,7 @@ func TestNewRetentionManager(t *testing.T) {
 	}
 
 	logger := newTestLogger()
-	rm := NewRetentionManager(db, config, logger)
+	rm := NewRetentionManager(db, config, t.TempDir(), logger)
 
 	if rm == nil {
 		t.Fatal("Expected retention manager to be created")
@@ -42,7 +42,7 @@ func TestRetentionManager_Start(t *testing.T) {
 	}
 
 	logger := newTestLogger()
-	rm := NewRetentionManager(db, config, logger)
+	rm := NewRetentionManager(db, config, t.TempDir(), logger)
 
 	// Start should not panic
 	rm.Start()
@@ -64,7 +64,7 @@ func TestRetentionManager_runCleanup(t *testing.T) {
 	}
 
 	logger := newTestLogger()
-	rm := NewRetentionManager(db, config, logger)
+	rm := NewRetentionManager(db, config, t.TempDir(), logger)
 
 	// Run cleanup - should not panic
 	rm.runCleanup()
@@ -80,7 +80,7 @@ func TestRetentionManager_runCleanup_UnlimitedDay(t *testing.T) {
 	}
 
 	logger := newTestLogger()
-	rm := NewRetentionManager(db, config, logger)
+	rm := NewRetentionManager(db, config, t.TempDir(), logger)
 
 	rm.runCleanup()
 	// Should skip day cleanup when unlimited
@@ -96,7 +96,7 @@ func TestRetentionManager_runCleanup_ZeroDuration(t *testing.T) {
 	}
 
 	logger := newTestLogger()
-	rm := NewRetentionManager(db, config, logger)
+	rm := NewRetentionManager(db, config, t.TempDir(), logger)
 
 	rm.runCleanup()
 	// Should skip raw cleanup when duration is 0
@@ -108,7 +108,7 @@ func TestRetentionManager_purgeRawData(t *testing.T) {
 
 	config := core.RetentionConfig{}
 	logger := newTestLogger()
-	rm := NewRetentionManager(db, config, logger)
+	rm := NewRetentionManager(db, config, t.TempDir(), logger)
 
 	// Purge with cutoff in future - should delete nothing
 	cutoff := time.Now().Add(1 * time.Hour)
@@ -124,7 +124,7 @@ func TestRetentionManager_purgeRawData_WithOldData(t *testing.T) {
 
 	config := core.RetentionConfig{}
 	logger := newTestLogger()
-	rm := NewRetentionManager(db, config, logger)
+	rm := NewRetentionManager(db, config, t.TempDir(), logger)
 
 	ctx := context.Background()
 	soul := &core.Soul{
@@ -174,7 +174,7 @@ func TestRetentionManager_purgeSummaries(t *testing.T) {
 
 	config := core.RetentionConfig{}
 	logger := newTestLogger()
-	rm := NewRetentionManager(db, config, logger)
+	rm := NewRetentionManager(db, config, t.TempDir(), logger)
 
 	// Purge with cutoff in future - should delete nothing
 	cutoff := time.Now().Add(1 * time.Hour)
@@ -190,7 +190,7 @@ func TestRetentionManager_purgeSummaries_WithOldData(t *testing.T) {
 
 	config := core.RetentionConfig{}
 	logger := newTestLogger()
-	rm := NewRetentionManager(db, config, logger)
+	rm := NewRetentionManager(db, config, t.TempDir(), logger)
 
 	now := time.Now().UTC()
 	oldTs := now.Add(-48 * time.Hour).Unix()
@@ -239,7 +239,7 @@ func TestRetentionManager_GetStorageStats(t *testing.T) {
 
 	config := core.RetentionConfig{}
 	logger := newTestLogger()
-	rm := NewRetentionManager(db, config, logger)
+	rm := NewRetentionManager(db, config, t.TempDir(), logger)
 
 	ctx := context.Background()
 	stats, err := rm.GetStorageStats(ctx)
@@ -316,7 +316,7 @@ func TestRetentionManager_retentionLoop(t *testing.T) {
 	}
 
 	logger := newTestLogger()
-	rm := NewRetentionManager(db, config, logger)
+	rm := NewRetentionManager(db, config, t.TempDir(), logger)
 
 	// Start the retention loop
 	go rm.retentionLoop()
@@ -336,7 +336,7 @@ func TestNewRetentionManager_InvalidDayConfig(t *testing.T) {
 	}
 
 	logger := newTestLogger()
-	rm := NewRetentionManager(db, config, logger)
+	rm := NewRetentionManager(db, config, t.TempDir(), logger)
 
 	// runCleanup should handle invalid duration gracefully
 	rm.runCleanup()

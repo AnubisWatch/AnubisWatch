@@ -42,15 +42,16 @@ const (
 
 // AlertRule defines when and how to fire a verdict
 type AlertRule struct {
-	ID          string         `json:"id" yaml:"id"`
-	Name        string         `json:"name" yaml:"name"`
-	Enabled     bool           `json:"enabled" yaml:"enabled"`
-	Scope       RuleScope      `json:"scope" yaml:"scope"`
-	Conditions  []AlertCondition `json:"conditions" yaml:"conditions"`
-	Channels    []string       `json:"channels" yaml:"channels"`
-	Cooldown    Duration       `json:"cooldown" yaml:"cooldown"`
-	AutoResolve bool           `json:"auto_resolve" yaml:"auto_resolve"`
-	CreatedAt   time.Time      `json:"created_at" yaml:"-"`
+	ID          string            `json:"id" yaml:"id"`
+	Name        string            `json:"name" yaml:"name"`
+	Enabled     bool              `json:"enabled" yaml:"enabled"`
+	Scope       RuleScope         `json:"scope" yaml:"scope"`
+	Conditions  []AlertCondition  `json:"conditions" yaml:"conditions"`
+	Channels    []string          `json:"channels" yaml:"channels"`
+	Cooldown    Duration          `json:"cooldown" yaml:"cooldown"`
+	AutoResolve bool              `json:"auto_resolve" yaml:"auto_resolve"`
+	Escalation  *EscalationPolicy `json:"escalation,omitempty" yaml:"escalation,omitempty"`
+	CreatedAt   time.Time         `json:"created_at" yaml:"-"`
 }
 
 // RuleScope defines what souls the rule applies to
@@ -288,19 +289,21 @@ type AlertManagerStats struct {
 
 // Incident represents an active or resolved alert incident
 type Incident struct {
-	ID          string         `json:"id"`
-	RuleID      string         `json:"rule_id"`
-	SoulID      string         `json:"soul_id"`
-	WorkspaceID string         `json:"workspace_id"`
-	Status      IncidentStatus `json:"status"`
-	Severity    Severity       `json:"severity"`
-	StartedAt   time.Time      `json:"started_at"`
-	AckedAt     *time.Time     `json:"acked_at,omitempty"`
-	ResolvedAt  *time.Time     `json:"resolved_at,omitempty"`
-	AckedBy     string         `json:"acked_by,omitempty"`
-	ResolvedBy  string         `json:"resolved_by,omitempty"`
-	Notes       []IncidentNote `json:"notes"`
-	Events      []AlertEvent   `json:"events"`
+	ID              string         `json:"id"`
+	RuleID          string         `json:"rule_id"`
+	SoulID          string         `json:"soul_id"`
+	WorkspaceID     string         `json:"workspace_id"`
+	Status          IncidentStatus `json:"status"`
+	Severity        Severity       `json:"severity"`
+	StartedAt       time.Time      `json:"started_at"`
+	AckedAt         *time.Time     `json:"acked_at,omitempty"`
+	ResolvedAt      *time.Time     `json:"resolved_at,omitempty"`
+	AckedBy         string         `json:"acked_by,omitempty"`
+	ResolvedBy      string         `json:"resolved_by,omitempty"`
+	Notes           []IncidentNote `json:"notes"`
+	Events          []AlertEvent   `json:"events"`
+	EscalationLevel int            `json:"escalation_level"`
+	LastEscalatedAt *time.Time     `json:"last_escalated_at,omitempty"`
 }
 
 // IncidentNote is a user annotation on an incident

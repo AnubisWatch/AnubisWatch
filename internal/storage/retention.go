@@ -3,7 +3,9 @@ package storage
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -13,17 +15,23 @@ import (
 
 // RetentionManager handles data retention and cleanup
 type RetentionManager struct {
-	db     *CobaltDB
-	config core.RetentionConfig
-	logger *slog.Logger
+	db         *CobaltDB
+	config     core.RetentionConfig
+	logger     *slog.Logger
+	dataPath   string
+	stopCh     chan struct{}
+ stoppedCh   chan struct{}
 }
 
 // NewRetentionManager creates a retention manager
-func NewRetentionManager(db *CobaltDB, config core.RetentionConfig, logger *slog.Logger) *RetentionManager {
+func NewRetentionManager(db *CobaltDB, config core.RetentionConfig, dataPath string, logger *slog.Logger) *RetentionManager {
 	return &RetentionManager{
-		db:     db,
-		config: config,
-		logger: logger.With("component", "retention"),
+		db:       db,
+		config:   config,
+		dataPath: dataPath,
+		logger:   logger.With("component", "retention"),
+		stopCh:   make(chan struct{}),
+		stoppedCh: make(chan struct{}),
 	}
 }
 
@@ -32,8 +40,17 @@ func (rm *RetentionManager) Start() {
 	go rm.retentionLoop()
 }
 
+// Stop gracefully stops the retention manager
+func (rm *RetentionManager) Stop() {
+	close(rm.stopCh)
+	<-rm.stoppedCh
+	rm.logger.Info("retention manager stopped")
+}
+
 // retentionLoop runs retention cleanup at regular intervals
 func (rm *RetentionManager) retentionLoop() {
+	defer close(rm.stoppedCh)
+
 	// Run immediately on start
 	rm.runCleanup()
 
@@ -45,6 +62,8 @@ func (rm *RetentionManager) retentionLoop() {
 		select {
 		case <-ticker.C:
 			rm.runCleanup()
+		case <-rm.stopCh:
+			return
 		}
 	}
 }
@@ -180,7 +199,7 @@ func (rm *RetentionManager) purgeSummaries(resolution string, cutoff time.Time) 
 	return nil
 }
 
-// GetStorageStats returns storage statistics
+// GetStorageStats returns storage statistics including disk usage
 func (rm *RetentionManager) GetStorageStats(ctx context.Context) (*StorageStats, error) {
 	// Scan all keys
 	results, err := rm.db.PrefixScan("")
@@ -202,13 +221,54 @@ func (rm *RetentionManager) GetStorageStats(ctx context.Context) (*StorageStats,
 		stats.TotalSize += int64(len(data))
 	}
 
+	// Add disk usage stats if data path is available
+	if rm.dataPath != "" {
+		diskStats, err := rm.getDiskUsage()
+		if err != nil {
+			rm.logger.Warn("failed to get disk usage", "err", err)
+		} else {
+			stats.DiskSize = diskStats.TotalBytes
+			stats.DiskFiles = diskStats.FileCount
+		}
+	}
+
 	return stats, nil
+}
+
+// diskUsageStats holds disk usage statistics
+type diskUsageStats struct {
+	TotalBytes int64
+	FileCount  int64
+}
+
+// getDiskUsage calculates actual disk usage for the data directory
+func (rm *RetentionManager) getDiskUsage() (*diskUsageStats, error) {
+	stats := &diskUsageStats{}
+
+	err := filepath.WalkDir(rm.dataPath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() {
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			stats.TotalBytes += info.Size()
+			stats.FileCount++
+		}
+		return nil
+	})
+
+	return stats, err
 }
 
 // StorageStats holds storage statistics
 type StorageStats struct {
 	TotalKeys    int                 `json:"total_keys"`
 	TotalSize    int64               `json:"total_size"`
+	DiskSize     int64               `json:"disk_size,omitempty"`  // Actual disk usage
+	DiskFiles    int64               `json:"disk_files,omitempty"` // Number of files on disk
 	KeyCounts    map[string]int      `json:"key_counts"`
 	TypeSizes    map[string]int64    `json:"type_sizes"`
 }

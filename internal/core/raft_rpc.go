@@ -3,12 +3,30 @@ package core
 // Raft RPC Request/Response types
 // These messages flow between the Jackals (nodes) in the Necropolis (cluster)
 
+// PreVoteRequest is sent by candidates to check if they would win an election
+// This prevents disruptive elections from candidates with stale logs
+type PreVoteRequest struct {
+	Term         uint64 `json:"term"`
+	CandidateID  string `json:"candidate_id"`
+	LastLogIndex uint64 `json:"last_log_index"`
+	LastLogTerm  uint64 `json:"last_log_term"`
+}
+
+// PreVoteResponse is the response to a PreVote RPC
+type PreVoteResponse struct {
+	Term        uint64 `json:"term"`
+	VoteGranted bool   `json:"vote_granted"`
+	Reason      string `json:"reason,omitempty"`
+}
+
 // RequestVoteRequest is sent by candidates to gather votes
 type RequestVoteRequest struct {
 	Term         uint64 `json:"term"`
 	CandidateID  string `json:"candidate_id"`
 	LastLogIndex uint64 `json:"last_log_index"`
 	LastLogTerm  uint64 `json:"last_log_term"`
+	// Pre-vote extension: carry over pre-vote term
+	PreVoteTerm  uint64 `json:"pre_vote_term,omitempty"`
 }
 
 // RequestVoteResponse is the response to a RequestVote RPC

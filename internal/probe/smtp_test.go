@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -869,7 +870,28 @@ func TestSMTPChecker_Judge_AUTHAvailable(t *testing.T) {
 		conn.Write([]byte("250-AUTH LOGIN PLAIN\r\n"))
 		conn.Write([]byte("250 SIZE 1024\r\n"))
 
-		reader.ReadString('\n') // Read rest
+		// Read AUTH LOGIN command
+		authCmd, _ := reader.ReadString('\n')
+		if strings.HasPrefix(authCmd, "AUTH LOGIN") {
+			// Send 334 username prompt
+			conn.Write([]byte("334 VXNlcm5hbWU6\r\n")) // "Username:" base64
+
+			// Read username
+			usernameB64, _ := reader.ReadString('\n')
+			_ = usernameB64
+
+			// Send 334 password prompt
+			conn.Write([]byte("334 UGFzc3dvcmQ6\r\n")) // "Password:" base64
+
+			// Read password
+			passwordB64, _ := reader.ReadString('\n')
+			_ = passwordB64
+
+			// Send 235 success
+			conn.Write([]byte("235 2.7.0 Authentication successful\r\n"))
+		}
+
+		reader.ReadString('\n') // Read QUIT
 	})
 	defer server.Close()
 
@@ -893,7 +915,7 @@ func TestSMTPChecker_Judge_AUTHAvailable(t *testing.T) {
 	ctx := context.Background()
 	judgment, _ := checker.Judge(ctx, soul)
 
-	// AUTH is available, should pass (we don't actually auth, just check capability)
+	// AUTH is available and should succeed
 	if judgment.Status != core.SoulAlive {
 		t.Errorf("Expected status Alive, got %s", judgment.Status)
 	}

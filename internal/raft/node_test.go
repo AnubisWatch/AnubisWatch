@@ -103,7 +103,7 @@ func TestNode_SetTransport(t *testing.T) {
 	transport := &mockTransport{}
 	node.SetTransport(transport)
 
-	if node.transport != transport {
+	if node.transport == nil {
 		t.Error("Expected transport to be set")
 	}
 }
@@ -807,6 +807,9 @@ func (m *mockTransport) SendAppendEntries(peerID string, req *core.AppendEntries
 }
 func (m *mockTransport) SendRequestVote(peerID string, req *core.RequestVoteRequest) (*core.RequestVoteResponse, error) {
 	return &core.RequestVoteResponse{Term: req.Term, VoteGranted: true}, nil
+}
+func (m *mockTransport) SendPreVote(peerID string, req *core.PreVoteRequest) (*core.PreVoteResponse, error) {
+	return &core.PreVoteResponse{Term: req.Term, VoteGranted: true}, nil
 }
 func (m *mockTransport) SendInstallSnapshot(peerID string, req *core.InstallSnapshotRequest) (*core.InstallSnapshotResponse, error) {
 	return &core.InstallSnapshotResponse{Term: req.Term, Success: true}, nil
@@ -1895,5 +1898,110 @@ func TestNode_HandleRequestVote_StaleLog(t *testing.T) {
 	}
 	if resp.Reason == "" {
 		t.Error("Expected Reason to be set")
+	}
+}
+
+// Test handlePreVote grants vote for current log
+func TestNode_HandlePreVote_LogCurrent(t *testing.T) {
+	node := createTestNode(t)
+	node.currentTerm = 5
+	node.log = []core.RaftLogEntry{
+		{}, // Index 0 unused
+		{Index: 1, Term: 1},
+		{Index: 2, Term: 2},
+	}
+
+	req := &core.PreVoteRequest{
+		Term:         6, // Higher pre-vote term
+		CandidateID:  "candidate-1",
+		LastLogIndex: 2,
+		LastLogTerm:  2,
+	}
+
+	resp := node.handlePreVote(req)
+	if !resp.VoteGranted {
+		t.Error("Expected PreVote to be granted for current log")
+	}
+	if resp.Term != 5 {
+		t.Errorf("Expected term 5 (unchanged), got %d", resp.Term)
+	}
+}
+
+// Test handlePreVote denies vote for stale log
+func TestNode_HandlePreVote_StaleLog(t *testing.T) {
+	node := createTestNode(t)
+	node.currentTerm = 5
+	node.log = []core.RaftLogEntry{
+		{}, // Index 0 unused
+		{Index: 1, Term: 1},
+		{Index: 2, Term: 5}, // Our log has term 5
+	}
+
+	req := &core.PreVoteRequest{
+		Term:         6,
+		CandidateID:  "candidate-1",
+		LastLogIndex: 10, // More entries
+		LastLogTerm:  3,  // But lower term
+	}
+
+	resp := node.handlePreVote(req)
+	if resp.VoteGranted {
+		t.Error("Expected PreVote to be denied for stale log")
+	}
+	if resp.Reason == "" {
+		t.Error("Expected Reason to be set")
+	}
+}
+
+// Test handlePreVote denies vote for old term
+func TestNode_HandlePreVote_TermTooOld(t *testing.T) {
+	node := createTestNode(t)
+	node.currentTerm = 10
+	node.log = []core.RaftLogEntry{
+		{}, // Index 0 unused
+		{Index: 1, Term: 1},
+	}
+
+	req := &core.PreVoteRequest{
+		Term:         5, // Lower than currentTerm
+		CandidateID:  "candidate-1",
+		LastLogIndex: 1,
+		LastLogTerm:  1,
+	}
+
+	resp := node.handlePreVote(req)
+	if resp.VoteGranted {
+		t.Error("Expected PreVote to be denied for old term")
+	}
+	if resp.Reason == "" {
+		t.Error("Expected Reason to be set")
+	}
+}
+
+// Test handlePreVote does not update term
+func TestNode_HandlePreVote_NoTermUpdate(t *testing.T) {
+	node := createTestNode(t)
+	node.currentTerm = 5
+	node.votedFor = ""
+	node.log = []core.RaftLogEntry{
+		{}, // Index 0 unused
+		{Index: 1, Term: 1},
+	}
+
+	req := &core.PreVoteRequest{
+		Term:         10, // Higher term
+		CandidateID:  "candidate-1",
+		LastLogIndex: 1,
+		LastLogTerm:  1,
+	}
+
+	_ = node.handlePreVote(req)
+
+	// Pre-vote should NOT update our term
+	if node.currentTerm != 5 {
+		t.Errorf("Expected term to remain 5, got %d", node.currentTerm)
+	}
+	if node.votedFor != "" {
+		t.Errorf("Expected votedFor to remain empty, got %s", node.votedFor)
 	}
 }

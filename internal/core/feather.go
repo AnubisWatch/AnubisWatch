@@ -66,6 +66,7 @@ type StorageConfig struct {
 	Path       string           `json:"path" yaml:"path"`
 	Encryption EncryptionConfig `json:"encryption" yaml:"encryption"`
 	TimeSeries TimeSeriesConfig `json:"timeseries" yaml:"timeseries"`
+	BTreeOrder int              `json:"btree_order" yaml:"btree_order"` // B+Tree order (default: 32)
 }
 
 // EncryptionConfig defines at-rest encryption settings

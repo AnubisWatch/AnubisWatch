@@ -24,6 +24,7 @@ type CobaltDB struct {
 	logger    *slog.Logger
 	closed    bool
 	closedMu  sync.Mutex
+	btreeOrder int // Configurable B+Tree order
 }
 
 // btreeIndex is an in-memory B+Tree index (simplified for Phase 1)
@@ -31,6 +32,7 @@ type btreeIndex struct {
 	root     *btreeNode
 	nextSeq  uint64
 	mu       sync.RWMutex
+	btreeOrder int // B+Tree order
 }
 
 type btreeNode struct {
@@ -42,8 +44,14 @@ type btreeNode struct {
 }
 
 const (
-	// Default order of B+Tree
-	btreeOrder = 32
+	// Default order of B+Tree (balanced for most workloads)
+	defaultBTreeOrder = 32
+
+	// Minimum B+Tree order
+	minBTreeOrder = 4
+
+	// Maximum B+Tree order
+	maxBTreeOrder = 256
 
 	// Key separator for namespacing
 	keySeparator = "/"
@@ -62,6 +70,19 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 		logger = slog.New(slog.NewTextHandler(os.Stdout, nil))
 	}
 
+	// Validate and apply B+Tree order configuration
+	btreeOrder := defaultBTreeOrder
+	if config.BTreeOrder > 0 {
+		btreeOrder = config.BTreeOrder
+		if btreeOrder < minBTreeOrder {
+			btreeOrder = minBTreeOrder
+			logger.Warn("B+Tree order too low, using minimum", "configured", config.BTreeOrder, "minimum", minBTreeOrder)
+		} else if btreeOrder > maxBTreeOrder {
+			btreeOrder = maxBTreeOrder
+			logger.Warn("B+Tree order too high, using maximum", "configured", config.BTreeOrder, "maximum", maxBTreeOrder)
+		}
+	}
+
 	// Ensure data directory exists
 	if err := os.MkdirAll(config.Path, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
@@ -74,20 +95,22 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 		return nil, fmt.Errorf("failed to initialize WAL: %w", err)
 	}
 
-	// Initialize B+Tree index
+	// Initialize B+Tree index with configured order
 	index := &btreeIndex{
 		root: &btreeNode{
 			isLeaf: true,
 			keys:   make([]string, 0),
 			values: make([][]byte, 0),
 		},
+		btreeOrder: btreeOrder,
 	}
 
 	db := &CobaltDB{
-		path:   config.Path,
-		data:   index,
-		wal:    wal,
-		logger: logger.With("component", "cobaltdb"),
+		path:       config.Path,
+		data:       index,
+		wal:        wal,
+		logger:     logger.With("component", "cobaltdb"),
+		btreeOrder: btreeOrder,
 	}
 
 	// Recover from WAL
@@ -95,7 +118,7 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 		logger.Warn("WAL recovery failed, starting fresh", "err", err)
 	}
 
-	logger.Info("CobaltDB initialized", "path", config.Path)
+	logger.Info("CobaltDB initialized", "path", config.Path, "btree_order", btreeOrder)
 	return db, nil
 }
 
@@ -339,21 +362,20 @@ func (db *CobaltDB) RangeScan(start, end string) (map[string][]byte, error) {
 
 func (idx *btreeIndex) insert(key string, value []byte) error {
 	// If root is full, split it
-	if len(idx.root.keys) >= btreeOrder-1 {
+	if len(idx.root.keys) >= idx.btreeOrder-1 {
 		newRoot := &btreeNode{
 			isLeaf:   false,
 			children: []*btreeNode{idx.root},
 		}
-		newRoot.splitChild(0)
+		newRoot.splitChild(0, idx.btreeOrder)
 		idx.root = newRoot
 	}
 
-	idx.root.insertNonFull(key, value)
+	idx.root.insertNonFull(key, value, idx.btreeOrder)
 	return nil
 }
 
-func (n *btreeNode) splitChild(idx int) {
-	order := btreeOrder
+func (n *btreeNode) splitChild(idx int, order int) {
 	child := n.children[idx]
 
 	// Create new node
@@ -389,7 +411,7 @@ func (n *btreeNode) splitChild(idx int) {
 	n.children = insertNode(n.children, idx+1, newNode)
 }
 
-func (n *btreeNode) insertNonFull(key string, value []byte) {
+func (n *btreeNode) insertNonFull(key string, value []byte, order int) {
 	if n.isLeaf {
 		// Insert into leaf
 		idx := findKeyIndex(n.keys, key)
@@ -405,14 +427,14 @@ func (n *btreeNode) insertNonFull(key string, value []byte) {
 		idx := findChildIndex(n.keys, key)
 
 		// Split child if full
-		if len(n.children[idx].keys) >= btreeOrder-1 {
-			n.splitChild(idx)
+		if len(n.children[idx].keys) >= order-1 {
+			n.splitChild(idx, order)
 			if key > n.keys[idx] {
 				idx++
 			}
 		}
 
-		n.children[idx].insertNonFull(key, value)
+		n.children[idx].insertNonFull(key, value, order)
 	}
 }
 

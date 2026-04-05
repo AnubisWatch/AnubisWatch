@@ -1,6 +1,9 @@
-<div align="center">
-
 # ⚖️ AnubisWatch
+
+<p align="center">
+  <img src="assets/banner.jpeg" alt="AnubisWatch" width="100%">
+</p>
+
 
 ### *The Judgment Never Sleeps*
 
@@ -390,5 +393,3 @@ You may obtain a copy of the License at
 **[anubis.watch](https://anubis.watch)** · **[anubiswatch.com](https://anubiswatch.com)**
 
 *The Judgment Never Sleeps* ⚖️
-
-</div>

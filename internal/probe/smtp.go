@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/textproto"
@@ -149,10 +150,11 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		}
 
 		// Upgrade to TLS
-		tlsConn := tls.Client(conn, &tls.Config{
-			InsecureSkipVerify: true, // TODO: Make configurable
+		tlsConfig := &tls.Config{
+			InsecureSkipVerify: cfg.InsecureSkipVerify, // Default: false (secure)
 			ServerName:         ehloDomain,
-		})
+		}
+		tlsConn := tls.Client(conn, tlsConfig)
 		if err := tlsConn.Handshake(); err != nil {
 			return failJudgment(soul, fmt.Errorf("TLS handshake failed: %w", err)), nil
 		}
@@ -191,12 +193,19 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 
 	// AUTH if credentials provided
 	if cfg.Auth != nil && cfg.Auth.Username != "" {
-		// Try AUTH LOGIN (simplified - just check if AUTH is supported)
+		// Check for AUTH capability
 		hasAuth := false
+		supportsLogin := false
+		supportsPlain := false
 		for _, cap := range capabilities {
 			if strings.Contains(cap, "AUTH") {
 				hasAuth = true
-				break
+				if strings.Contains(cap, "LOGIN") {
+					supportsLogin = true
+				}
+				if strings.Contains(cap, "PLAIN") {
+					supportsPlain = true
+				}
 			}
 		}
 
@@ -204,8 +213,70 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 			return failJudgment(soul, fmt.Errorf("AUTH requested but not advertised")), nil
 		}
 
-		// For now, just verify AUTH is available (full implementation would do actual auth)
-		// TODO: Implement actual AUTH LOGIN/PLAIN/CRAM-MD5
+		// Prefer LOGIN, fall back to PLAIN
+		if supportsLogin {
+			// AUTH LOGIN: server sends 334 with base64 username prompt
+			fmt.Fprintf(conn, "AUTH LOGIN\r\n")
+			line, err = textReader.ReadLine()
+			if err != nil {
+				return failJudgment(soul, fmt.Errorf("AUTH LOGIN command failed: %w", err)), nil
+			}
+			if !strings.HasPrefix(line, "334") {
+				return failJudgment(soul, fmt.Errorf("AUTH LOGIN rejected: %s", line)), nil
+			}
+
+			// Send base64-encoded username
+			usernameB64 := base64.StdEncoding.EncodeToString([]byte(cfg.Auth.Username))
+			fmt.Fprintf(conn, "%s\r\n", usernameB64)
+			line, err = textReader.ReadLine()
+			if err != nil {
+				return failJudgment(soul, fmt.Errorf("failed to read username response: %w", err)), nil
+			}
+			if !strings.HasPrefix(line, "334") {
+				return failJudgment(soul, fmt.Errorf("username rejected: %s", line)), nil
+			}
+
+			// Send base64-encoded password
+			passwordB64 := base64.StdEncoding.EncodeToString([]byte(cfg.Auth.Password))
+			fmt.Fprintf(conn, "%s\r\n", passwordB64)
+			line, err = textReader.ReadLine()
+			if err != nil {
+				return failJudgment(soul, fmt.Errorf("failed to read auth result: %w", err)), nil
+			}
+			if !strings.HasPrefix(line, "235") {
+				return failJudgment(soul, fmt.Errorf("authentication failed: %s", line)), nil
+			}
+
+			judgment.Details.Assertions = append(judgment.Details.Assertions, core.AssertionResult{
+				Type:     "auth_login",
+				Expected: "success",
+				Actual:   "authenticated",
+				Passed:   true,
+			})
+		} else if supportsPlain {
+			// AUTH PLAIN: send credentials in single command
+			// Format: "AUTH PLAIN \0username\0password" (base64 encoded)
+			authString := fmt.Sprintf("\000%s\000%s", cfg.Auth.Username, cfg.Auth.Password)
+			authB64 := base64.StdEncoding.EncodeToString([]byte(authString))
+			fmt.Fprintf(conn, "AUTH PLAIN %s\r\n", authB64)
+			line, err = textReader.ReadLine()
+			if err != nil {
+				return failJudgment(soul, fmt.Errorf("AUTH PLAIN command failed: %w", err)), nil
+			}
+			if !strings.HasPrefix(line, "235") {
+				return failJudgment(soul, fmt.Errorf("AUTH PLAIN rejected: %s", line)), nil
+			}
+
+			judgment.Details.Assertions = append(judgment.Details.Assertions, core.AssertionResult{
+				Type:     "auth_plain",
+				Expected: "success",
+				Actual:   "authenticated",
+				Passed:   true,
+			})
+		} else {
+			// AUTH available but mechanism unknown
+			return failJudgment(soul, fmt.Errorf("AUTH supported but no known mechanism (need LOGIN or PLAIN)")), nil
+		}
 	}
 
 	duration := time.Since(start)

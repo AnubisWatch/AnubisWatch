@@ -28,7 +28,9 @@ type Node struct {
 	mu        sync.RWMutex
 	state     core.RaftState
 	currentTerm uint64
+	preVoteTerm uint64 // Term for pre-vote (separate from currentTerm)
 	votedFor  string
+	preVotedFor string // Candidate we pre-voted for
 	log       []core.RaftLogEntry
 	commitIndex uint64
 	lastApplied uint64
@@ -45,6 +47,11 @@ type Node struct {
 	storage   LogStore
 	snapshot  SnapshotStore
 	fsm       FSM
+
+	// Snapshot state
+	snapshotThreshold  int
+	lastSnapshotIndex  uint64
+	snapshotInProgress atomic.Bool
 
 	// Networking
 	transport Transport
@@ -160,6 +167,7 @@ type Transport interface {
 	Stop() error
 	SendAppendEntries(peerID string, req *core.AppendEntriesRequest) (*core.AppendEntriesResponse, error)
 	SendRequestVote(peerID string, req *core.RequestVoteRequest) (*core.RequestVoteResponse, error)
+	SendPreVote(peerID string, req *core.PreVoteRequest) (*core.PreVoteResponse, error)
 	SendInstallSnapshot(peerID string, req *core.InstallSnapshotRequest) (*core.InstallSnapshotResponse, error)
 	SendHeartbeat(peerID string, req *core.HeartbeatRequest) (*core.HeartbeatResponse, error)
 	LocalAddr() string
@@ -200,6 +208,8 @@ func NewNode(config core.RaftConfig, storage LogStore, snapshot SnapshotStore, f
 		leaderID:         "",
 		lastContact:      time.Now(),
 		logger:           logger.With("component", "raft", "node_id", config.NodeID),
+		snapshotThreshold: config.SnapshotThreshold,
+		lastSnapshotIndex: 0,
 	}
 
 	// Initialize peers from config
@@ -231,6 +241,15 @@ func (n *Node) Start() error {
 	// Restore from storage
 	if err := n.restoreLog(); err != nil {
 		return fmt.Errorf("failed to restore log: %w", err)
+	}
+
+	// Register peer addresses with transport for connection pooling
+	if tt, ok := n.transport.(*TCPTransport); ok {
+		n.peerMu.RLock()
+		for _, peer := range n.peers {
+			tt.RegisterPeer(peer.ID, peer.Address)
+		}
+		n.peerMu.RUnlock()
 	}
 
 	// Start transport
@@ -392,6 +411,11 @@ func (n *Node) AddPeer(peer core.RaftPeer) error {
 		Role:    peer.Role,
 	}
 
+	// Register peer address with transport for connection pooling
+	if tt, ok := n.transport.(*TCPTransport); ok {
+		tt.RegisterPeer(peer.ID, peer.Address)
+	}
+
 	n.logger.Info("Peer added", "peer_id", peer.ID, "address", peer.Address)
 	return nil
 }
@@ -410,6 +434,12 @@ func (n *Node) RemovePeer(peerID string) error {
 	}
 
 	delete(n.peers, peerID)
+
+	// Unregister peer from transport
+	if tt, ok := n.transport.(*TCPTransport); ok {
+		tt.UnregisterPeer(peerID)
+	}
+
 	n.logger.Info("Peer removed", "peer_id", peerID)
 	return nil
 }
@@ -501,6 +531,7 @@ func (n *Node) run() {
 
 		case idx := <-n.commitCh:
 			n.processCommitted(idx)
+			n.maybeTakeSnapshot() // Check if snapshot needed after commit
 		}
 
 		// Send heartbeats if leader
@@ -522,23 +553,18 @@ func (n *Node) applyLoop() {
 	}
 }
 
-// startElection initiates a leader election
+// startElection initiates a leader election with pre-vote
 func (n *Node) startElection() {
 	n.mu.Lock()
-	defer n.mu.Unlock()
 
+	// Pre-vote phase: check if we would win an election
 	n.state = core.StateCandidate
-	n.currentTerm++
-	n.votedFor = n.nodeID
-	n.leaderID = ""
-	n.lastContact = time.Now()
-
-	term := n.currentTerm
+	preVoteTerm := n.currentTerm + 1
 	lastLogIndex := uint64(len(n.log) - 1)
 	lastLogTerm := n.getLogTerm(lastLogIndex)
 
-	n.logger.Info("Starting election",
-		"term", term,
+	n.logger.Info("Starting pre-vote",
+		"current_term", preVoteTerm,
 		"last_log_index", lastLogIndex,
 		"last_log_term", lastLogTerm)
 
@@ -550,23 +576,143 @@ func (n *Node) startElection() {
 		}
 	}
 	n.peerMu.RUnlock()
+	n.mu.Unlock()
+
+	// Request pre-votes from all peers
+	preVotes := n.requestPreVotes(preVoteTerm, lastLogIndex, lastLogTerm, peers)
+
+	// Check if we should proceed with real election
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if !preVotes {
+		n.logger.Info("Pre-vote failed, not starting election")
+		n.state = core.StateFollower
+		return
+	}
+
+	// Pre-vote succeeded, start real election
+	n.state = core.StateCandidate
+	n.currentTerm++
+	n.votedFor = n.nodeID
+	n.leaderID = ""
+	n.lastContact = time.Now()
+
+	term := n.currentTerm
+	lastLogIndex = uint64(len(n.log) - 1)
+	lastLogTerm = n.getLogTerm(lastLogIndex)
+
+	n.logger.Info("Pre-vote succeeded, starting election",
+		"term", term,
+		"last_log_index", lastLogIndex,
+		"last_log_term", lastLogTerm)
 
 	// Request votes from all peers
-	var votesGranted atomic.Int32
-	votesGranted.Add(1) // Vote for self
+	votesGranted := n.requestVotes(term, lastLogIndex, lastLogTerm, peers)
 
+	// Check if we won
+	votesNeeded := int32((len(peers) + 1)/2 + 1)
+	if votesGranted >= votesNeeded {
+		n.becomeLeader()
+	} else {
+		n.logger.Info("Election failed",
+			"term", term,
+			"votes", votesGranted,
+			"needed", votesNeeded)
+		n.state = core.StateFollower
+	}
+}
+
+// requestPreVotes sends PreVote RPCs to all peers and returns true if majority would grant votes
+func (n *Node) requestPreVotes(term, lastLogIndex, lastLogTerm uint64, peers []*Peer) bool {
+	var preVotesGranted atomic.Int32
+	preVotesGranted.Add(1) // Vote for self
+
+	var wg sync.WaitGroup
 	for _, peer := range peers {
+		wg.Add(1)
 		go func(p *Peer) {
-			req := &core.RequestVoteRequest{
+			defer wg.Done()
+
+			req := &core.PreVoteRequest{
 				Term:         term,
 				CandidateID:  n.nodeID,
 				LastLogIndex: lastLogIndex,
 				LastLogTerm:  lastLogTerm,
 			}
 
+			resp, err := n.transport.SendPreVote(p.ID, req)
+			if err != nil {
+				n.logger.Debug("PreVote failed",
+					"peer", p.ID, "error", err)
+				return
+			}
+
+			if resp.VoteGranted {
+				preVotesGranted.Add(1)
+			}
+
+			// Update term if peer has higher term
+			if resp.Term > term {
+				n.mu.Lock()
+				if resp.Term > n.currentTerm {
+					n.currentTerm = resp.Term
+					n.state = core.StateFollower
+					n.votedFor = ""
+				}
+				n.mu.Unlock()
+			}
+		}(peer)
+	}
+
+	// Wait for pre-votes with timeout
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// All responses received
+	case <-time.After(n.electionTimeout / 2):
+		// Timeout waiting for some pre-votes
+		n.logger.Debug("PreVote timeout waiting for responses")
+	}
+
+	votes := preVotesGranted.Load()
+	needed := int32((len(peers) + 1)/2 + 1)
+
+	n.logger.Debug("PreVote results",
+		"votes", votes,
+		"needed", needed,
+		"total", len(peers)+1)
+
+	return votes >= needed
+}
+
+// requestVotes sends RequestVote RPCs and returns the number of votes granted
+func (n *Node) requestVotes(term, lastLogIndex, lastLogTerm uint64, peers []*Peer) int32 {
+	var votesGranted atomic.Int32
+	votesGranted.Add(1) // Vote for self
+
+	var wg sync.WaitGroup
+	for _, peer := range peers {
+		wg.Add(1)
+		go func(p *Peer) {
+			defer wg.Done()
+
+			req := &core.RequestVoteRequest{
+				Term:         term,
+				CandidateID:  n.nodeID,
+				LastLogIndex: lastLogIndex,
+				LastLogTerm:  lastLogTerm,
+				PreVoteTerm:  term, // Indicate we completed pre-vote
+			}
+
 			resp, err := n.transport.SendRequestVote(p.ID, req)
 			if err != nil {
-				n.logger.Debug("Failed to send RequestVote",
+				n.logger.Debug("RequestVote failed",
 					"peer", p.ID, "error", err)
 				return
 			}
@@ -589,24 +735,21 @@ func (n *Node) startElection() {
 	}
 
 	// Wait for votes with timeout
+	done := make(chan struct{})
 	go func() {
-		time.Sleep(n.electionTimeout)
-
-		n.mu.Lock()
-		if n.state != core.StateCandidate {
-			n.mu.Unlock()
-			return
-		}
-
-		// Check if we won
-		votes := votesGranted.Load()
-		needed := int32((len(peers) + 1) / 2 + 1)
-
-		if votes >= needed {
-			n.becomeLeader()
-		}
-		n.mu.Unlock()
+		wg.Wait()
+		close(done)
 	}()
+
+	select {
+	case <-done:
+		// All responses received
+	case <-time.After(n.electionTimeout / 2):
+		// Timeout waiting for some votes
+		n.logger.Debug("RequestVote timeout waiting for responses")
+	}
+
+	return votesGranted.Load()
 }
 
 // becomeLeader transitions to leader state
@@ -690,6 +833,10 @@ func (n *Node) handleRPC(rpc *rpcWrapper) {
 
 	case *core.RequestVoteRequest:
 		resp := n.handleRequestVote(cmd)
+		rpc.respCh <- resp
+
+	case *core.PreVoteRequest:
+		resp := n.handlePreVote(cmd)
 		rpc.respCh <- resp
 
 	case *core.InstallSnapshotRequest:
@@ -843,6 +990,61 @@ func (n *Node) handleRequestVote(req *core.RequestVoteRequest) *core.RequestVote
 		Term:        n.currentTerm,
 		VoteGranted: false,
 		Reason:      reason,
+	}
+}
+
+// handlePreVote processes PreVote RPC
+func (n *Node) handlePreVote(req *core.PreVoteRequest) *core.PreVoteResponse {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	n.logger.Debug("Received PreVote request",
+		"candidate", req.CandidateID,
+		"term", req.Term,
+		"last_log_index", req.LastLogIndex,
+		"last_log_term", req.LastLogTerm)
+
+	// In pre-vote, we don't update our term yet
+	// We only check if we would grant a vote
+
+	// Check if the candidate's term is at least as current as ours
+	if req.Term < n.currentTerm {
+		return &core.PreVoteResponse{
+			Term:        n.currentTerm,
+			VoteGranted: false,
+			Reason:      "term too old",
+		}
+	}
+
+	// Check if candidate's log is at least as up-to-date as ours
+	lastLogIndex := uint64(len(n.log) - 1)
+	lastLogTerm := n.getLogTerm(lastLogIndex)
+
+	logIsCurrent := req.LastLogTerm > lastLogTerm ||
+		(req.LastLogTerm == lastLogTerm && req.LastLogIndex >= lastLogIndex)
+
+	if !logIsCurrent {
+		n.logger.Debug("PreVote denied: log not current",
+			"candidate_log_term", req.LastLogTerm,
+			"candidate_log_index", req.LastLogIndex,
+			"my_log_term", lastLogTerm,
+			"my_log_index", lastLogIndex)
+
+		return &core.PreVoteResponse{
+			Term:        n.currentTerm,
+			VoteGranted: false,
+			Reason:      "log not current",
+		}
+	}
+
+	// We would grant a vote - candidate has current log
+	n.logger.Debug("PreVote granted",
+		"candidate", req.CandidateID,
+		"term", req.Term)
+
+	return &core.PreVoteResponse{
+		Term:        n.currentTerm,
+		VoteGranted: true,
 	}
 }
 
@@ -1068,6 +1270,122 @@ func (n *Node) notifyApply(index, term uint64, err error) {
 		close(f.done)
 		applyWaiters.Delete(index)
 	}
+}
+
+// maybeTakeSnapshot checks if a snapshot should be taken and creates one
+func (n *Node) maybeTakeSnapshot() {
+	if n.snapshot == nil || n.snapshotThreshold <= 0 {
+		return
+	}
+
+	// Check if snapshot is in progress
+	if n.snapshotInProgress.Load() {
+		return
+	}
+
+	n.mu.RLock()
+	logSize := len(n.log) - 1 // Exclude index 0
+	commitIndex := n.commitIndex
+	n.mu.RUnlock()
+
+	// Check if log exceeds threshold
+	if logSize < n.snapshotThreshold {
+		return
+	}
+
+	// Try to claim snapshot creation
+	if !n.snapshotInProgress.CompareAndSwap(false, true) {
+		return // Another goroutine took it
+	}
+	defer n.snapshotInProgress.Store(false)
+
+	n.logger.Info("Taking snapshot", "log_size", logSize, "commit_index", commitIndex)
+
+	// Create snapshot
+	snapIndex := commitIndex
+	snapTerm := n.getLogTerm(snapIndex)
+
+	// Get current configuration
+	configData, _ := json.Marshal(n.peers)
+
+	sink, err := n.snapshot.Create(1, snapIndex, snapTerm, configData)
+	if err != nil {
+		n.logger.Error("Failed to create snapshot sink", "err", err)
+		return
+	}
+	defer sink.Close()
+
+	// Write log entries up to commitIndex to snapshot
+	n.mu.RLock()
+	var entries []byte
+	// Safe conversion: snapIndex is bounded by log length which is int
+	snapIdx := int(snapIndex)
+	if snapIdx > len(n.log) {
+		snapIdx = len(n.log)
+	}
+	for i := 1; i <= snapIdx && i < len(n.log); i++ {
+		entryData, _ := json.Marshal(n.log[i])
+		entries = append(entries, entryData...)
+		entries = append(entries, '\n')
+	}
+	n.mu.RUnlock()
+
+	if len(entries) > 0 {
+		if _, err := sink.Write(entries); err != nil {
+			n.logger.Error("Failed to write snapshot", "err", err)
+			sink.Cancel()
+			return
+		}
+	}
+
+	n.logger.Info("Snapshot created", "index", snapIndex, "term", snapTerm)
+
+	// Update last snapshot index
+	n.mu.Lock()
+	n.lastSnapshotIndex = snapIndex
+	n.mu.Unlock()
+
+	// Compact log - remove entries before snapshot
+	n.compactLog(snapIndex)
+}
+
+// compactLog removes log entries that are included in the snapshot
+func (n *Node) compactLog(snapshotIndex uint64) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	if snapshotIndex <= 0 || snapshotIndex >= uint64(len(n.log)) {
+		return
+	}
+
+	// Keep trailing logs as configured
+	trailingLogs := n.config.TrailingLogs
+	if trailingLogs <= 0 {
+		trailingLogs = 1024 // Default
+	}
+
+	// Calculate new start - keep some trailing logs
+	newStart := snapshotIndex - uint64(trailingLogs)
+	if newStart < 1 {
+		newStart = 1
+	}
+
+	// Create new log with retained entries
+	newLog := make([]core.RaftLogEntry, newStart)
+	copy(newLog, n.log[:newStart])
+
+	// Append entries from snapshotIndex onwards
+	for i := snapshotIndex; i < uint64(len(n.log)); i++ {
+		newLog = append(newLog, n.log[i])
+	}
+
+	oldLen := len(n.log)
+	n.log = newLog
+
+	n.logger.Info("Log compacted",
+		"old_size", oldLen,
+		"new_size", len(n.log),
+		"removed", oldLen-len(n.log))
 }
 
 // applyWaiters stores futures waiting for commit

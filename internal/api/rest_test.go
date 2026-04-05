@@ -292,10 +292,23 @@ func TestHandleListSouls(t *testing.T) {
 		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	var souls []core.Soul
-	json.NewDecoder(w.Body).Decode(&souls)
+	var response PaginatedResponse
+	json.NewDecoder(w.Body).Decode(&response)
+
+	souls, ok := response.Data.([]interface{})
+	if !ok {
+		t.Errorf("expected data array, got %T", response.Data)
+	}
 	if len(souls) != 1 {
 		t.Errorf("expected 1 soul, got %d", len(souls))
+	}
+
+	// Verify pagination metadata
+	if response.Pagination.Offset != 0 {
+		t.Errorf("expected offset 0, got %d", response.Pagination.Offset)
+	}
+	if response.Pagination.Limit != 20 {
+		t.Errorf("expected limit 20, got %d", response.Pagination.Limit)
 	}
 }
 
@@ -3184,7 +3197,7 @@ func TestNewRESTServer(t *testing.T) {
 	cluster := &mockClusterManager{}
 	logger := newTestLogger()
 
-	server := NewRESTServer(config, store, probe, alert, auth, cluster, nil, nil, logger)
+	server := NewRESTServer(config, store, probe, alert, auth, cluster, nil, nil, nil, logger)
 
 	if server == nil {
 		t.Fatal("Expected REST server to be created")
@@ -3212,7 +3225,7 @@ func TestRESTServer_StartStop(t *testing.T) {
 	cluster := &mockClusterManager{}
 	logger := newTestLogger()
 
-	server := NewRESTServer(config, store, probe, alert, auth, cluster, nil, nil, logger)
+	server := NewRESTServer(config, store, probe, alert, auth, cluster, nil, nil, nil, logger)
 
 	// Start server in background
 	go func() {
@@ -3244,7 +3257,7 @@ func TestRESTServer_StopWithoutStart(t *testing.T) {
 	cluster := &mockClusterManager{}
 	logger := newTestLogger()
 
-	server := NewRESTServer(config, store, probe, alert, auth, cluster, nil, nil, logger)
+	server := NewRESTServer(config, store, probe, alert, auth, cluster, nil, nil, nil, logger)
 
 	// Stop without start should return nil
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -3265,7 +3278,7 @@ func TestRESTServer_handleHealth(t *testing.T) {
 	cluster := &mockClusterManager{}
 	logger := newTestLogger()
 
-	server := NewRESTServer(config, store, probe, alert, auth, cluster, nil, nil, logger)
+	server := NewRESTServer(config, store, probe, alert, auth, cluster, nil, nil, nil, logger)
 
 	rec := httptest.NewRecorder()
 	ctx := &Context{
@@ -3292,7 +3305,7 @@ func TestRESTServer_handleReady(t *testing.T) {
 	cluster := &mockClusterManager{}
 	logger := newTestLogger()
 
-	server := NewRESTServer(config, store, probe, alert, auth, cluster, nil, nil, logger)
+	server := NewRESTServer(config, store, probe, alert, auth, cluster, nil, nil, nil, logger)
 
 	rec := httptest.NewRecorder()
 	ctx := &Context{
@@ -3319,7 +3332,7 @@ func TestRESTServer_handleMe(t *testing.T) {
 	cluster := &mockClusterManager{}
 	logger := newTestLogger()
 
-	server := NewRESTServer(config, store, probe, alert, auth, cluster, nil, nil, logger)
+	server := NewRESTServer(config, store, probe, alert, auth, cluster, nil, nil, nil, logger)
 
 	rec := httptest.NewRecorder()
 	ctx := &Context{

@@ -7,6 +7,14 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
+// Size limits for reading data from network connections
+// Prevents memory exhaustion DoS from malicious servers
+const (
+	maxReadSize    = 1024 * 1024       // 1MB default limit
+	maxBannerSize  = 64 * 1024         // 64KB for banners
+	maxMessageSize = 4 * 1024 * 1024   // 4MB for explicit messages
+)
+
 // Checker is the interface every protocol must implement.
 // Named after the priests who assisted Anubis in the weighing ceremony.
 type Checker interface {

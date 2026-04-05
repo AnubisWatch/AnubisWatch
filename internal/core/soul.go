@@ -124,10 +124,11 @@ type DNSConfig struct {
 
 // SMTPConfig defines SMTP check settings
 type SMTPConfig struct {
-	EHLODomain  string     `json:"ehlo_domain" yaml:"ehlo_domain"`
-	StartTLS    bool       `json:"starttls" yaml:"starttls"`
-	Auth        *AuthCreds `json:"auth,omitempty" yaml:"auth,omitempty"`
-	BannerContains string  `json:"banner_contains" yaml:"banner_contains"`
+	EHLODomain         string     `json:"ehlo_domain" yaml:"ehlo_domain"`
+	StartTLS           bool       `json:"starttls" yaml:"starttls"`
+	InsecureSkipVerify bool       `json:"insecure_skip_verify" yaml:"insecure_skip_verify"`
+	Auth               *AuthCreds `json:"auth,omitempty" yaml:"auth,omitempty"`
+	BannerContains     string     `json:"banner_contains" yaml:"banner_contains"`
 }
 
 // IMAPConfig defines IMAP check settings
@@ -155,21 +156,23 @@ type ICMPConfig struct {
 
 // GRPCConfig defines gRPC health check settings
 type GRPCConfig struct {
-	Service   string            `json:"service" yaml:"service"`
-	TLS       bool              `json:"tls" yaml:"tls"`
-	TLSCA     string            `json:"tls_ca" yaml:"tls_ca"`
-	Metadata  map[string]string `json:"metadata" yaml:"metadata"`
-	Feather   Duration          `json:"feather" yaml:"feather"`
+	Service            string            `json:"service" yaml:"service"`
+	TLS                bool              `json:"tls" yaml:"tls"`
+	TLSCA              string            `json:"tls_ca" yaml:"tls_ca"`
+	InsecureSkipVerify bool              `json:"insecure_skip_verify" yaml:"insecure_skip_verify"`
+	Metadata           map[string]string `json:"metadata" yaml:"metadata"`
+	Feather            Duration          `json:"feather" yaml:"feather"`
 }
 
 // WebSocketConfig defines WebSocket check settings
 type WebSocketConfig struct {
-	Headers       map[string]string `json:"headers" yaml:"headers"`
-	Subprotocols  []string          `json:"subprotocols" yaml:"subprotocols"`
-	Send          string            `json:"send" yaml:"send"`
-	ExpectContains string           `json:"expect_contains" yaml:"expect_contains"`
-	PingCheck     bool              `json:"ping_check" yaml:"ping_check"`
-	Feather       Duration          `json:"feather" yaml:"feather"`
+	Headers            map[string]string `json:"headers" yaml:"headers"`
+	Subprotocols       []string          `json:"subprotocols" yaml:"subprotocols"`
+	Send               string            `json:"send" yaml:"send"`
+	ExpectContains     string            `json:"expect_contains" yaml:"expect_contains"`
+	PingCheck          bool              `json:"ping_check" yaml:"ping_check"`
+	Feather            Duration          `json:"feather" yaml:"feather"`
+	InsecureSkipVerify bool              `json:"insecure_skip_verify" yaml:"insecure_skip_verify"`
 }
 
 // TLSConfig defines TLS certificate check settings
@@ -270,10 +273,13 @@ type Stats struct {
 type ProbeStatus struct {
 	Running         bool     `json:"running"`
 	ActiveChecks    int      `json:"active_checks"`
+	ChecksRunning   int      `json:"checks_running"`
 	ChecksPerSecond float64  `json:"checks_per_second"`
 	AvgLatency      Duration `json:"avg_latency"`
 	FailedChecks    int64    `json:"failed_checks"`
 	TotalChecks     int64    `json:"total_checks"`
+	NodeID          string   `json:"node_id,omitempty"`
+	Region          string   `json:"region,omitempty"`
 }
 
 // ClusterState represents the current state of the cluster

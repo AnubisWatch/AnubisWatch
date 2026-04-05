@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"regexp"
 	"strings"
@@ -92,9 +93,9 @@ func (c *TCPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 		// Read response
 		banner, err := reader.ReadString('\n')
 		if err != nil && banner == "" {
-			// Try reading without delimiter
-			buf := make([]byte, 4096)
-			n, _ := reader.Read(buf)
+			// Try reading without delimiter (limited to maxBannerSize)
+			buf := make([]byte, maxBannerSize)
+			n, _ := io.ReadFull(reader, buf[:])
 			banner = string(buf[:n])
 		}
 
@@ -210,8 +211,8 @@ func (c *UDPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 		}
 	}
 
-	// Wait for response
-	buf := make([]byte, 4096)
+	// Wait for response (limited to maxBannerSize)
+	buf := make([]byte, maxBannerSize)
 	n, err := conn.Read(buf)
 	duration := time.Since(start)
 

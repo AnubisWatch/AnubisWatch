@@ -1,12 +1,17 @@
 package probe
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"time"
+
+	"golang.org/x/net/http2"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
@@ -48,99 +53,95 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		timeout = 10 * time.Second
 	}
 
-	// Parse target
-	host, port, err := net.SplitHostPort(soul.Target)
-	if err != nil {
-		return failJudgment(soul, fmt.Errorf("invalid target: %w", err)), nil
-	}
-
-	// Connect
 	start := time.Now()
-	var conn net.Conn
 
-	if cfg.TLS {
-		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true, // TODO: Use CA cert
-		}
-		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", soul.Target, tlsConfig)
-	} else {
-		conn, err = net.DialTimeout("tcp", soul.Target, timeout)
+	// Use HTTP/2 transport (handles both h2 and h2c)
+	transport := &http2.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: cfg.InsecureSkipVerify, // Default: false (secure)
+			ServerName:         soul.Target,
+		},
+		AllowHTTP: true, // Allow h2c (HTTP/2 over cleartext)
 	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   timeout,
+	}
+
+	// Build gRPC health check URL
+	scheme := "https"
+	if !cfg.TLS {
+		scheme = "http"
+	}
+	path := "/grpc.health.v1.Health/Check"
+	if cfg.Service != "" {
+		path = fmt.Sprintf("/grpc.health.v1.Health/Check?service=%s", cfg.Service)
+	}
+	url := fmt.Sprintf("%s://%s%s", scheme, soul.Target, path)
+
+	// Build request body (protobuf HealthCheckRequest)
+	body := buildGRPCHealthCheckRequest(cfg.Service)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return failJudgment(soul, fmt.Errorf("failed to create request: %w", err)), nil
+	}
+
+	req.Header.Set("Content-Type", "application/grpc")
+	req.Header.Set("TE", "trailers")
+
+	resp, err := client.Do(req)
+	duration := time.Since(start)
 
 	if err != nil {
-		return failJudgment(soul, fmt.Errorf("gRPC connection failed: %w", err)), nil
+		return failJudgment(soul, fmt.Errorf("gRPC request failed: %w", err)), nil
 	}
-	defer conn.Close()
+	defer resp.Body.Close()
 
-	conn.SetDeadline(time.Now().Add(timeout))
-
-	// Send HTTP/2 connection preface
-	preface := []byte("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n")
-	if _, err := conn.Write(preface); err != nil {
-		return failJudgment(soul, fmt.Errorf("failed to send HTTP/2 preface: %w", err)), nil
+	// Read response body (limited)
+	_, err = io.ReadAll(io.LimitReader(resp.Body, maxReadSize))
+	if err != nil {
+		// Non-fatal, we got a response
 	}
 
-	// Send HTTP/2 SETTINGS frame
-	settingsFrame := buildHTTP2SettingsFrame()
-	if _, err := conn.Write(settingsFrame); err != nil {
-		return failJudgment(soul, fmt.Errorf("failed to send SETTINGS frame: %w", err)), nil
-	}
-
-	// Read SETTINGS response
-	buf := make([]byte, 9) // HTTP/2 frame header
-	if _, err := conn.Read(buf); err != nil {
-		return failJudgment(soul, fmt.Errorf("failed to read SETTINGS response: %w", err)), nil
-	}
-
-	// Build gRPC Health Check request
-	// Method: /grpc.health.v1.Health/Check
-	serviceName := cfg.Service
-	if serviceName == "" {
-		serviceName = "" // Empty string = overall health
-	}
-
-	grpcRequest := buildGRPCHealthCheckRequest(serviceName)
-
-	// Send HEADERS frame
-	headers := buildHTTP2HeadersFrame(host, port, len(grpcRequest))
-	if _, err := conn.Write(headers); err != nil {
-		return failJudgment(soul, fmt.Errorf("failed to send HEADERS frame: %w", err)), nil
-	}
-
-	// Send DATA frame with request
-	dataFrame := buildHTTP2DataFrame(grpcRequest, true)
-	if _, err := conn.Write(dataFrame); err != nil {
-		return failJudgment(soul, fmt.Errorf("failed to send DATA frame: %w", err)), nil
-	}
-
-	// Read response
-	// Read HEADERS frame
-	if _, err := conn.Read(buf); err != nil {
-		return failJudgment(soul, fmt.Errorf("failed to read response HEADERS: %w", err)), nil
-	}
-
-	// Parse response
-	duration := time.Since(start)
+	// Check gRPC status from headers
+	grpcStatus := resp.Header.Get("Grpc-Status") // "0" = OK
 
 	judgment := &core.Judgment{
 		ID:         core.GenerateID(),
 		SoulID:     soul.ID,
 		Timestamp:  time.Now().UTC(),
 		Duration:   duration,
-		Status:     core.SoulAlive,
-		StatusCode: 0,
+		StatusCode: resp.StatusCode,
 		Details: &core.JudgmentDetails{
 			ServiceStatus: "SERVING",
 		},
 	}
 
-	// Check performance budget
-	if cfg.Feather.Duration > 0 && duration > cfg.Feather.Duration {
-		judgment.Status = core.SoulDegraded
-		judgment.Message = fmt.Sprintf("gRPC health check OK in %s (exceeds feather %s)",
-			duration.Round(time.Millisecond), cfg.Feather.Duration)
+	// Determine status based on gRPC response
+	if grpcStatus != "0" && grpcStatus != "" {
+		judgment.Status = core.SoulDead
+		judgment.Message = fmt.Sprintf("gRPC health check failed (grpc-status=%s) in %s",
+			grpcStatus, duration.Round(time.Millisecond))
+		judgment.Details.ServiceStatus = "NOT_SERVING"
+	} else if resp.StatusCode != http.StatusOK {
+		judgment.Status = core.SoulDead
+		judgment.Message = fmt.Sprintf("gRPC health check failed (HTTP %d) in %s",
+			resp.StatusCode, duration.Round(time.Millisecond))
+		judgment.Details.ServiceStatus = "NOT_SERVING"
 	} else {
+		judgment.Status = core.SoulAlive
 		judgment.Message = fmt.Sprintf("gRPC health check OK in %s", duration.Round(time.Millisecond))
+	}
+
+	// Performance budget check
+	if cfg.Feather.Duration > 0 && duration > cfg.Feather.Duration {
+		if judgment.Status == core.SoulAlive {
+			judgment.Status = core.SoulDegraded
+		}
+		judgment.Message = fmt.Sprintf("gRPC health check in %s (exceeds feather %s)",
+			duration.Round(time.Millisecond), cfg.Feather.Duration)
 	}
 
 	return judgment, nil

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -348,8 +349,10 @@ func serve() {
 	}
 	defer store.Close()
 
-	// Initialize auth
-	authenticator := auth.NewLocalAuthenticator()
+	// Initialize auth with session persistence
+	sessionPath := filepath.Join(cfg.Storage.Path, "sessions.json")
+	authenticator := auth.NewLocalAuthenticator(sessionPath)
+	defer authenticator.Shutdown()
 
 	// Initialize alert manager
 	alertStorage := &alertStorageAdapter{store: store}
@@ -431,7 +434,10 @@ func serve() {
 	acmeMgr := initACMEManager(cfg, store, logger)
 	statusPageHandler := statuspage.NewHandler(statusPageRepo, acmeMgr)
 
-	restServer := api.NewRESTServer(cfg.Server, restStore, probeEngine, alertMgr, authenticator, clusterAdapt, dashboardHandler, statusPageHandler, logger)
+	// Initialize MCP server for AI agent integration
+	mcpServer := api.NewMCPServer(restStore, probeEngine, alertMgr, logger)
+
+	restServer := api.NewRESTServer(cfg.Server, restStore, probeEngine, alertMgr, authenticator, clusterAdapt, dashboardHandler, statusPageHandler, mcpServer, logger)
 	go func() {
 		if err := restServer.Start(); err != nil {
 			logger.Error("REST server failed", "err", err)
@@ -1086,6 +1092,12 @@ func httpPost(url, contentType string, body []byte, token string) (*http.Respons
 }
 
 func truncate(s string, maxLen int) string {
+	if maxLen <= 3 {
+		if len(s) <= maxLen {
+			return s
+		}
+		return ""
+	}
 	if len(s) <= maxLen {
 		return s
 	}

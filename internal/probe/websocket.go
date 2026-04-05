@@ -3,6 +3,7 @@ package probe
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/base64"
@@ -78,7 +79,7 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 
 	if u.Scheme == "wss" {
 		tlsConfig := &tls.Config{
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: cfg.InsecureSkipVerify, // Default: false (secure)
 			ServerName:         u.Hostname(),
 		}
 		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", host, tlsConfig)
@@ -170,9 +171,9 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 			return failJudgment(soul, fmt.Errorf("failed to send WebSocket message: %w", err)), nil
 		}
 
-		// Read response
+		// Read response (limited to maxMessageSize)
 		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		responseBuf := make([]byte, 4096)
+		responseBuf := make([]byte, maxMessageSize)
 		n, err := conn.Read(responseBuf)
 		if err != nil {
 			return failJudgment(soul, fmt.Errorf("failed to read WebSocket response: %w", err)), nil
@@ -245,12 +246,14 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 	return judgment, nil
 }
 
-// generateWebSocketKey generates a random WebSocket key
+// generateWebSocketKey generates a random WebSocket key per RFC 6455
 func generateWebSocketKey() string {
 	b := make([]byte, 16)
-	// Use simple random bytes (in production, use crypto/rand)
-	for i := range b {
-		b[i] = byte(i * 7) // Not actually random, but valid base64
+	if _, err := rand.Read(b); err != nil {
+		// Fallback to deterministic (should never happen in practice)
+		for i := range b {
+			b[i] = byte(i * 7)
+		}
 	}
 	return base64.StdEncoding.EncodeToString(b)
 }

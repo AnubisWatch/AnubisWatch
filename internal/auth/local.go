@@ -3,7 +3,10 @@ package auth
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -12,22 +15,152 @@ import (
 
 // LocalAuthenticator implements simple token-based auth
 type LocalAuthenticator struct {
-	mu      sync.RWMutex
-	tokens  map[string]*session
-	users   map[string]*api.User
+	mu           sync.RWMutex
+	tokens       map[string]*session
+	users        map[string]*api.User
+	sessionPath  string
+	stopCleanup  chan struct{}
+	cleanupDone  chan struct{}
 }
 
 type session struct {
-	userID    string
-	expiresAt time.Time
+	UserID    string    `json:"user_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// sessionData represents the data persisted to disk
+type sessionData struct {
+	Tokens map[string]*session  `json:"tokens"`
+	Users  map[string]*api.User `json:"users"`
 }
 
 // NewLocalAuthenticator creates a new local authenticator
-func NewLocalAuthenticator() *LocalAuthenticator {
-	return &LocalAuthenticator{
-		tokens: make(map[string]*session),
-		users:  make(map[string]*api.User),
+// If sessionPath is provided, sessions are persisted to disk
+func NewLocalAuthenticator(sessionPath string) *LocalAuthenticator {
+	a := &LocalAuthenticator{
+		tokens:      make(map[string]*session),
+		users:       make(map[string]*api.User),
+		sessionPath: sessionPath,
+		stopCleanup: make(chan struct{}),
+		cleanupDone: make(chan struct{}),
 	}
+
+	// Load persisted sessions if path provided
+	if sessionPath != "" {
+		a.loadSessions()
+	}
+
+	// Start background cleanup goroutine
+	go a.cleanupExpiredSessions()
+
+	return a
+}
+
+// loadSessions loads sessions and users from disk
+func (a *LocalAuthenticator) loadSessions() {
+	if a.sessionPath == "" {
+		return
+	}
+
+	data, err := os.ReadFile(a.sessionPath)
+	if err != nil {
+		// File doesn't exist yet, start fresh
+		return
+	}
+
+	var sessionData sessionData
+	if err := json.Unmarshal(data, &sessionData); err != nil {
+		// Corrupted file, start fresh
+		return
+	}
+
+	// Only load non-expired sessions and their users
+	now := time.Now()
+	for token, sess := range sessionData.Tokens {
+		if now.Before(sess.ExpiresAt) {
+			a.tokens[token] = sess
+			// Also load the associated user
+			if user, ok := sessionData.Users[sess.UserID]; ok {
+				a.users[sess.UserID] = user
+			}
+		}
+	}
+}
+
+// saveSessionsLocked persists sessions and users to disk
+// Must be called with a.mu held (at least RLock)
+func (a *LocalAuthenticator) saveSessionsLocked() {
+	if a.sessionPath == "" {
+		return
+	}
+
+	data := sessionData{
+		Tokens: a.tokens,
+		Users:  a.users,
+	}
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+
+	// Ensure directory exists
+	dir := filepath.Dir(a.sessionPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return
+	}
+
+	// Write atomically using temp file
+	tmpPath := a.sessionPath + ".tmp"
+	if err := os.WriteFile(tmpPath, jsonData, 0600); err != nil {
+		return
+	}
+	os.Rename(tmpPath, a.sessionPath)
+}
+
+// saveSessions persists sessions to disk (public version that acquires lock)
+func (a *LocalAuthenticator) saveSessions() {
+	if a.sessionPath == "" {
+		return
+	}
+
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	a.saveSessionsLocked()
+}
+
+// cleanupExpiredSessions removes expired sessions periodically
+func (a *LocalAuthenticator) cleanupExpiredSessions() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	defer close(a.cleanupDone)
+
+	for {
+		select {
+		case <-ticker.C:
+			a.mu.Lock()
+			now := time.Now()
+			for token, sess := range a.tokens {
+				if now.After(sess.ExpiresAt) {
+					delete(a.tokens, token)
+				}
+			}
+			a.saveSessionsLocked()
+			a.mu.Unlock()
+
+		case <-a.stopCleanup:
+			a.mu.Lock()
+			a.saveSessionsLocked()
+			a.mu.Unlock()
+			return
+		}
+	}
+}
+
+// Shutdown gracefully stops the authenticator
+func (a *LocalAuthenticator) Shutdown() {
+	close(a.stopCleanup)
+	<-a.cleanupDone
 }
 
 // Authenticate validates a token and returns the user
@@ -40,12 +173,12 @@ func (a *LocalAuthenticator) Authenticate(token string) (*api.User, error) {
 		return nil, errors.New("invalid token")
 	}
 
-	if time.Now().After(sess.expiresAt) {
+	if time.Now().After(sess.ExpiresAt) {
 		delete(a.tokens, token)
 		return nil, errors.New("token expired")
 	}
 
-	user := a.users[sess.userID]
+	user := a.users[sess.UserID]
 	if user == nil {
 		return nil, errors.New("user not found")
 	}
@@ -88,9 +221,12 @@ func (a *LocalAuthenticator) Login(email, password string) (*api.User, string, e
 	// Generate token
 	token := generateToken()
 	a.tokens[token] = &session{
-		userID:    user.ID,
-		expiresAt: time.Now().Add(24 * time.Hour),
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(24 * time.Hour),
 	}
+
+	// Persist sessions if configured
+	a.saveSessionsLocked()
 
 	return user, token, nil
 }
@@ -101,6 +237,7 @@ func (a *LocalAuthenticator) Logout(token string) error {
 	defer a.mu.Unlock()
 
 	delete(a.tokens, token)
+	a.saveSessionsLocked()
 	return nil
 }
 

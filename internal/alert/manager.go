@@ -115,6 +115,9 @@ func (m *Manager) Start() error {
 		go m.worker()
 	}
 
+	// Start escalation checker
+	go m.escalationChecker()
+
 	m.logger.Info("Alert manager started",
 		"channels", len(m.channels),
 		"rules", len(m.rules))
@@ -249,6 +252,14 @@ func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, j
 			Details:     m.extractDetails(judgment),
 			Severity:    m.calculateSeverity(judgment),
 			Timestamp:   time.Now().UTC(),
+		}
+
+		// Check deduplication before queuing
+		if m.isDuplicate(rule, event) {
+			m.logger.Debug("Alert deduplicated",
+				"rule", rule.Name,
+				"soul_id", event.SoulID)
+			continue
 		}
 
 		// Send to queue
@@ -453,6 +464,56 @@ func (m *Manager) isRateLimited(channel *core.AlertChannel, event *core.AlertEve
 	return false
 }
 
+// isDuplicate checks if an identical alert was recently sent (deduplication)
+func (m *Manager) isDuplicate(rule *core.AlertRule, event *core.AlertEvent) bool {
+	// Build dedup key: rule + soul + status
+	key := fmt.Sprintf("dedup:%s:%s:%s", rule.ID, event.SoulID, event.Status)
+
+	m.history.Mu.Lock()
+	defer m.history.Mu.Unlock()
+
+	entry, exists := m.history.Entries[key]
+	if !exists {
+		// First alert for this dedup key
+		m.history.Entries[key] = &core.AlertHistoryEntry{
+			Key:        key,
+			ChannelID:  rule.ID,
+			Count:      1,
+			FirstSent:  time.Now(),
+			LastSent:   time.Now(),
+			SoulStatus: event.Status,
+		}
+		return false
+	}
+
+	// Check if dedup window has expired (use rule cooldown as dedup window)
+	dedupWindow := rule.Cooldown.Duration
+	if dedupWindow == 0 {
+		dedupWindow = 5 * time.Minute // Default 5 minute dedup window
+	}
+
+	if time.Since(entry.LastSent) >= dedupWindow {
+		// Window expired, allow alert
+		entry.FirstSent = time.Now()
+		entry.LastSent = time.Now()
+		entry.Count = 1
+		return false
+	}
+
+	// Within dedup window - check if status changed
+	if entry.SoulStatus != event.Status {
+		// Status changed, allow alert
+		entry.FirstSent = time.Now()
+		entry.LastSent = time.Now()
+		entry.Count = 1
+		entry.SoulStatus = event.Status
+		return false
+	}
+
+	// Duplicate alert within window
+	return true
+}
+
 // extractDetails extracts relevant details from a judgment
 func (m *Manager) extractDetails(judgment *core.Judgment) map[string]string {
 	details := make(map[string]string)
@@ -608,4 +669,156 @@ func (m *Manager) GetRule(id string) (*core.AlertRule, error) {
 		return nil, fmt.Errorf("rule not found: %s", id)
 	}
 	return rule, nil
+}
+
+// escalationChecker periodically checks for incidents that need escalation
+func (m *Manager) escalationChecker() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.stopCh:
+			return
+		case <-ticker.C:
+			m.checkEscalations()
+		}
+	}
+}
+
+// checkEscalations checks all active incidents for escalation
+func (m *Manager) checkEscalations() {
+	m.mu.RLock()
+	incidents := make([]*core.Incident, 0, len(m.incidents))
+	for _, inc := range m.incidents {
+		if inc.Status == core.IncidentOpen || inc.Status == core.IncidentAcked {
+			incidents = append(incidents, inc)
+		}
+	}
+	rules := m.rules
+	m.mu.RUnlock()
+
+	for _, incident := range incidents {
+		rule, ok := rules[incident.RuleID]
+		if !ok || rule.Escalation == nil || len(rule.Escalation.Stages) == 0 {
+			continue
+		}
+
+		// Check if escalation is needed
+		if m.shouldEscalate(incident, rule) {
+			m.escalateIncident(incident, rule)
+		}
+	}
+}
+
+// shouldEscalate determines if an incident needs escalation
+func (m *Manager) shouldEscalate(incident *core.Incident, rule *core.AlertRule) bool {
+	esc := rule.Escalation
+	if esc == nil || len(esc.Stages) == 0 {
+		return false
+	}
+
+	// Check if we have more stages
+	if incident.EscalationLevel >= len(esc.Stages) {
+		return false
+	}
+
+	// Don't escalate if acknowledged
+	if incident.AckedAt != nil {
+		return false
+	}
+
+	// Get current stage
+	stage := esc.Stages[incident.EscalationLevel]
+
+	// Calculate time since last escalation (or since started if never escalated)
+	var timeSinceLastEvent time.Duration
+	if incident.LastEscalatedAt != nil {
+		timeSinceLastEvent = time.Since(*incident.LastEscalatedAt)
+	} else {
+		timeSinceLastEvent = time.Since(incident.StartedAt)
+	}
+
+	// Check wait time for this stage
+	wait := stage.Wait.Duration
+	if wait == 0 {
+		wait = 15 * time.Minute // Default 15 minute escalation timeout
+	}
+
+	return timeSinceLastEvent >= wait
+}
+
+// escalateIncident escalates an incident to higher-level channels
+func (m *Manager) escalateIncident(incident *core.Incident, rule *core.AlertRule) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	esc := rule.Escalation
+	if esc == nil || len(esc.Stages) == 0 {
+		return
+	}
+
+	// Check if we have more stages
+	if incident.EscalationLevel >= len(esc.Stages) {
+		return
+	}
+
+	// Get current stage
+	stage := esc.Stages[incident.EscalationLevel]
+
+	// Get escalation channels
+	channels := make([]*core.AlertChannel, 0, len(stage.Channels))
+	for _, chID := range stage.Channels {
+		if ch, ok := m.channels[chID]; ok {
+			channels = append(channels, ch)
+		}
+	}
+
+	if len(channels) == 0 {
+		m.logger.Warn("No escalation channels available",
+			"incident_id", incident.ID,
+			"rule_id", rule.ID)
+		return
+	}
+
+	// Create escalation event
+	now := time.Now()
+	event := &core.AlertEvent{
+		ID:          generateAlertID(),
+		SoulID:      incident.SoulID,
+		SoulName:    incident.SoulID,
+		WorkspaceID: incident.WorkspaceID,
+		Status:      core.SoulDead, // Escalations are for critical incidents
+		PrevStatus:  core.SoulDead,
+		Message:     fmt.Sprintf("[ESCALATED Level %d] %s", incident.EscalationLevel+1, incident.SoulID),
+		Severity:    core.SeverityCritical,
+		Timestamp:   now,
+	}
+
+	// Send to escalation channels
+	for _, channel := range channels {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err := m.sendToChannel(ctx, event, channel)
+		cancel()
+
+		if err != nil {
+			m.logger.Error("Failed to send escalation alert",
+				"channel", channel.ID,
+				"incident_id", incident.ID,
+				"error", err)
+		}
+	}
+
+	// Update incident
+	incident.EscalationLevel++
+	incident.LastEscalatedAt = &now
+
+	if m.storage != nil {
+		m.storage.SaveIncident(incident)
+	}
+
+	m.logger.Info("Incident escalated",
+		"incident_id", incident.ID,
+		"level", incident.EscalationLevel,
+		"channels", len(channels))
 }

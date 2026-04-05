@@ -22,6 +22,7 @@ type RESTServer struct {
 	router   *Router
 	http     *http.Server
 	logger   *slog.Logger
+	mcp      *MCPServer
 
 	// Dependencies
 	store    Storage
@@ -55,6 +56,36 @@ type Context struct {
 	User     *User
 	Workspace string
 	StartTime time.Time
+}
+
+// Pagination holds pagination metadata
+type Pagination struct {
+	Total     int    `json:"total"`
+	Offset    int    `json:"offset"`
+	Limit     int    `json:"limit"`
+	HasMore   bool   `json:"has_more"`
+	NextOffset *int  `json:"next_offset,omitempty"`
+}
+
+// PaginatedResponse wraps data with pagination metadata
+type PaginatedResponse struct {
+	Data       interface{} `json:"data"`
+	Pagination Pagination  `json:"pagination"`
+}
+
+// parsePagination extracts pagination params from request
+func parsePagination(r *http.Request, defaultLimit, maxLimit int) (offset, limit int) {
+	offset, _ = strconv.Atoi(r.URL.Query().Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
+
+	limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 || limit > maxLimit {
+		limit = defaultLimit
+	}
+
+	return offset, limit
 }
 
 // Storage interface for data access
@@ -145,7 +176,7 @@ type User struct {
 }
 
 // NewRESTServer creates a new REST server
-func NewRESTServer(config core.ServerConfig, store Storage, probe ProbeEngine, alert AlertManager, auth Authenticator, cluster ClusterManager, dashboard http.Handler, statusPage http.Handler, logger *slog.Logger) *RESTServer {
+func NewRESTServer(config core.ServerConfig, store Storage, probe ProbeEngine, alert AlertManager, auth Authenticator, cluster ClusterManager, dashboard http.Handler, statusPage http.Handler, mcp *MCPServer, logger *slog.Logger) *RESTServer {
 	s := &RESTServer{
 		config:  config,
 		router:  &Router{
@@ -159,6 +190,7 @@ func NewRESTServer(config core.ServerConfig, store Storage, probe ProbeEngine, a
 		alert:     alert,
 		auth:      auth,
 		cluster:   cluster,
+		mcp:       mcp,
 		dashboard: dashboard,
 		statusPage: statusPage,
 	}
@@ -173,6 +205,8 @@ func (s *RESTServer) setupRoutes() {
 	s.router.Use(s.loggingMiddleware)
 	s.router.Use(s.corsMiddleware)
 	s.router.Use(s.recoveryMiddleware)
+	s.router.Use(s.validateJSONMiddleware)
+	s.router.Use(s.rateLimitMiddleware)
 
 	// Health
 	s.router.Handle("GET", "/health", s.handleHealth)
@@ -237,6 +271,9 @@ func (s *RESTServer) setupRoutes() {
 	s.router.Handle("GET", "/api/v1/status-pages/:id", s.requireAuth(s.handleGetStatusPage))
 	s.router.Handle("PUT", "/api/v1/status-pages/:id", s.requireAuth(s.handleUpdateStatusPage))
 	s.router.Handle("DELETE", "/api/v1/status-pages/:id", s.requireAuth(s.handleDeleteStatusPage))
+
+	// MCP (Model Context Protocol)
+	s.router.Handle("POST", "/api/v1/mcp", s.handleMCP)
 }
 
 // Start starts the REST server
@@ -327,18 +364,31 @@ func (s *RESTServer) handleMe(ctx *Context) error {
 
 func (s *RESTServer) handleListSouls(ctx *Context) error {
 	workspace := ctx.Workspace
-	offset, _ := strconv.Atoi(ctx.Request.URL.Query().Get("offset"))
-	limit, _ := strconv.Atoi(ctx.Request.URL.Query().Get("limit"))
-	if limit <= 0 || limit > 100 {
-		limit = 20
-	}
+	offset, limit := parsePagination(ctx.Request, 20, 100)
 
 	souls, err := s.store.ListSoulsNoCtx(workspace, offset, limit)
 	if err != nil {
 		return ctx.Error(http.StatusInternalServerError, err.Error())
 	}
 
-	return ctx.JSON(http.StatusOK, souls)
+	// Check if there are more results
+	hasMore := len(souls) == limit
+	nextOffset := offset + limit
+
+	response := PaginatedResponse{
+		Data: souls,
+		Pagination: Pagination{
+			Offset:   offset,
+			Limit:    limit,
+			HasMore:  hasMore,
+		},
+	}
+
+	if hasMore {
+		response.Pagination.NextOffset = &nextOffset
+	}
+
+	return ctx.JSON(http.StatusOK, response)
 }
 
 func (s *RESTServer) handleCreateSoul(ctx *Context) error {
@@ -437,8 +487,39 @@ func (s *RESTServer) handleListAllJudgments(ctx *Context) error {
 // Channel handlers
 
 func (s *RESTServer) handleListChannels(ctx *Context) error {
-	channels := s.alert.ListChannels()
-	return ctx.JSON(http.StatusOK, channels)
+	offset, limit := parsePagination(ctx.Request, 20, 100)
+
+	allChannels := s.alert.ListChannels()
+
+	// Apply pagination
+	start := offset
+	if start > len(allChannels) {
+		start = len(allChannels)
+	}
+	end := start + limit
+	if end > len(allChannels) {
+		end = len(allChannels)
+	}
+
+	channels := allChannels[start:end]
+	hasMore := end < len(allChannels)
+	nextOffset := offset + limit
+
+	response := PaginatedResponse{
+		Data: channels,
+		Pagination: Pagination{
+			Total:    len(allChannels),
+			Offset:   offset,
+			Limit:    limit,
+			HasMore:  hasMore,
+		},
+	}
+
+	if hasMore {
+		response.Pagination.NextOffset = &nextOffset
+	}
+
+	return ctx.JSON(http.StatusOK, response)
 }
 
 func (s *RESTServer) handleCreateChannel(ctx *Context) error {
@@ -503,8 +584,39 @@ func (s *RESTServer) handleTestChannel(ctx *Context) error {
 // Rule handlers
 
 func (s *RESTServer) handleListRules(ctx *Context) error {
-	rules := s.alert.ListRules()
-	return ctx.JSON(http.StatusOK, rules)
+	offset, limit := parsePagination(ctx.Request, 20, 100)
+
+	allRules := s.alert.ListRules()
+
+	// Apply pagination
+	start := offset
+	if start > len(allRules) {
+		start = len(allRules)
+	}
+	end := start + limit
+	if end > len(allRules) {
+		end = len(allRules)
+	}
+
+	rules := allRules[start:end]
+	hasMore := end < len(allRules)
+	nextOffset := offset + limit
+
+	response := PaginatedResponse{
+		Data: rules,
+		Pagination: Pagination{
+			Total:    len(allRules),
+			Offset:   offset,
+			Limit:    limit,
+			HasMore:  hasMore,
+		},
+	}
+
+	if hasMore {
+		response.Pagination.NextOffset = &nextOffset
+	}
+
+	return ctx.JSON(http.StatusOK, response)
 }
 
 func (s *RESTServer) handleCreateRule(ctx *Context) error {
@@ -783,6 +895,22 @@ func (s *RESTServer) handleDeleteStatusPage(ctx *Context) error {
 	return ctx.JSON(http.StatusNoContent, nil)
 }
 
+// MCP Handler
+
+func (s *RESTServer) handleMCP(ctx *Context) error {
+	if s.mcp == nil {
+		return ctx.Error(http.StatusServiceUnavailable, "MCP server not initialized")
+	}
+
+	// MCP requires authentication
+	if ctx.User == nil {
+		return ctx.Error(http.StatusUnauthorized, "authentication required")
+	}
+
+	s.mcp.ServeHTTP(ctx.Response, ctx.Request)
+	return nil
+}
+
 // Middleware
 
 func (s *RESTServer) requireAuth(handler Handler) Handler {
@@ -844,6 +972,85 @@ func (s *RESTServer) recoveryMiddleware(handler Handler) Handler {
 				ctx.Error(http.StatusInternalServerError, "internal server error")
 			}
 		}()
+		return handler(ctx)
+	}
+}
+
+// validateJSONMiddleware validates Content-Type and JSON body for POST/PUT requests
+func (s *RESTServer) validateJSONMiddleware(handler Handler) Handler {
+	return func(ctx *Context) error {
+		if ctx.Request.Method == "POST" || ctx.Request.Method == "PUT" {
+			contentType := ctx.Request.Header.Get("Content-Type")
+			if !strings.HasPrefix(contentType, "application/json") {
+				return ctx.Error(http.StatusBadRequest, "Content-Type must be application/json")
+			}
+
+			// Check Content-Length
+			if ctx.Request.ContentLength > 1<<20 { // 1MB limit
+				return ctx.Error(http.StatusRequestEntityTooLarge, "Request body too large (max 1MB)")
+			}
+		}
+		return handler(ctx)
+	}
+}
+
+// rateLimitMiddleware implements basic rate limiting per IP
+func (s *RESTServer) rateLimitMiddleware(handler Handler) Handler {
+	type clientState struct {
+		count     int
+		resetTime time.Time
+	}
+
+	var (
+		mu       sync.RWMutex
+		clients  = make(map[string]*clientState)
+		limit    = 100 // requests per minute
+		window   = time.Minute
+	)
+
+	cleanup := func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		for range ticker.C {
+			mu.Lock()
+			now := time.Now()
+			for ip, state := range clients {
+				if state.resetTime.Before(now) {
+					delete(clients, ip)
+				}
+			}
+			mu.Unlock()
+		}
+	}
+	go cleanup()
+
+	return func(ctx *Context) error {
+		// Get client IP
+		ip := ctx.Request.RemoteAddr
+		if forwarded := ctx.Request.Header.Get("X-Forwarded-For"); forwarded != "" {
+			ip = strings.Split(forwarded, ",")[0]
+		}
+
+		mu.Lock()
+		state, exists := clients[ip]
+		now := time.Now()
+
+		if !exists || state.resetTime.Before(now) {
+			clients[ip] = &clientState{
+				count:     1,
+				resetTime: now.Add(window),
+			}
+			mu.Unlock()
+			return handler(ctx)
+		}
+
+		if state.count >= limit {
+			mu.Unlock()
+			ctx.Response.Header().Set("Retry-After", strconv.Itoa(int(state.resetTime.Sub(now).Seconds())))
+			return ctx.Error(http.StatusTooManyRequests, "Rate limit exceeded (100 requests/minute)")
+		}
+
+		state.count++
+		mu.Unlock()
 		return handler(ctx)
 	}
 }

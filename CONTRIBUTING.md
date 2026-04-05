@@ -24,9 +24,8 @@ This project and everyone participating in it is governed by our commitment to:
 
 ### Prerequisites
 
-- Go 1.24 or later
+- Go 1.26 or later
 - Node.js 20 or later (for dashboard)
-- Make
 - Git
 
 ### Building
@@ -71,20 +70,21 @@ npm run build
 AnubisWatch/
 ├── cmd/anubis/          # CLI entry point
 ├── internal/
-│   ├── api/             # REST, WebSocket, gRPC, MCP
-│   ├── checkers/        # Protocol checkers
-│   ├── core/            # Domain types
-│   ├── feather/         # Storage engine
-│   ├── jackal/          # Probe engine
-│   ├── maat/            # Alert engine
-│   ├── dispatch/        # Alert dispatchers
-│   ├── raft/            # Raft consensus
-│   ├── necropolis/      # Cluster coordination
-│   ├── journey/         # Time-series storage
-│   ├── acme/            # ACME certificates
-│   ├── statuspage/      # Public status pages
-│   └── storage/         # Repository implementations
-└── web/                 # React dashboard
+│   ├── acme/            # ACME/Let's Encrypt integration
+│   ├── alert/           # Alert management and dispatchers
+│   ├── api/             # REST API, MCP server, routing
+│   ├── auth/            # Authentication and sessions
+│   ├── cluster/         # Raft consensus and clustering
+│   ├── core/            # Core data types and interfaces
+│   ├── dashboard/       # Web dashboard handler
+│   ├── journey/         # Synthetic monitoring journeys (Duat)
+│   ├── probe/           # Health check implementations
+│   ├── raft/            # Raft consensus implementation
+│   ├── statuspage/      # Public status page generator
+│   └── storage/         # CobaltDB storage engine
+├── docs/                # Documentation
+├── .project/            # Project metadata and roadmap
+└── web/                 # React dashboard (optional)
 ```
 
 ## Coding Standards

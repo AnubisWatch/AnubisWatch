@@ -208,6 +208,7 @@ func TestWebSocketChecker_Judge_WSS(t *testing.T) {
 		Type:   core.CheckWebSocket,
 		Target: "wss://" + listener.Addr().String(),
 		WebSocket: &core.WebSocketConfig{
+			InsecureSkipVerify: true, // Accept self-signed test cert
 			Headers: map[string]string{
 				"X-Custom-Header": "test",
 			},

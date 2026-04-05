@@ -1197,3 +1197,311 @@ func TestDNSChecker_JudgePropagation_NameserverErrors(t *testing.T) {
 		t.Logf("Got status %s, expected Degraded or Dead", judgment.Status)
 	}
 }
+
+// Test CircuitBreaker state transitions
+func TestCircuitBreaker_StateTransitions(t *testing.T) {
+	engine := NewEngine(EngineOptions{
+		Registry: NewCheckerRegistry(),
+		NodeID:   "test-node",
+		Region:   "test-region",
+		Logger:   newTestProbeLogger(),
+		Config: EngineConfig{
+			CircuitBreaker: CircuitBreakerConfig{
+				Enabled:         true,
+				FailureThreshold: 3,
+				SuccessThreshold: 2,
+				Timeout:         100 * time.Millisecond,
+			},
+		},
+	})
+
+	soulID := "test-soul-cb"
+
+	// Initially closed
+	cb := engine.getCircuitBreaker(soulID)
+	cb.mu.RLock()
+	state := cb.state
+	cb.mu.RUnlock()
+	if state != "closed" {
+		t.Errorf("Expected initially closed, got '%s'", state)
+	}
+
+	// Record failures to open circuit (threshold is 3)
+	for i := 0; i < 3; i++ {
+		engine.recordFailure(soulID)
+	}
+
+	// Should now be open
+	cb.mu.RLock()
+	state = cb.state
+	failures := cb.failures
+	cb.mu.RUnlock()
+	if state != "open" {
+		t.Errorf("Expected state 'open' after 3 failures, got '%s'", state)
+	}
+	if failures < 3 {
+		t.Errorf("Expected at least 3 failures, got %d", failures)
+	}
+
+	// Wait for timeout to elapse
+	time.Sleep(150 * time.Millisecond)
+
+	// Call isOpen to trigger transition to half-open
+	cb.isOpen(engine.Config().CircuitBreaker)
+
+	cb.mu.RLock()
+	state = cb.state
+	cb.mu.RUnlock()
+	if state != "half-open" {
+		t.Errorf("Expected state 'half-open' after timeout, got '%s'", state)
+	}
+}
+
+// Test recordSuccess closes circuit breaker from half-open
+func TestCircuitBreaker_RecordSuccess(t *testing.T) {
+	engine := NewEngine(EngineOptions{
+		Registry: NewCheckerRegistry(),
+		NodeID:   "test-node",
+		Region:   "test-region",
+		Logger:   newTestProbeLogger(),
+	})
+
+	soulID := "test-soul-success"
+
+	// Get circuit breaker and force to half-open state
+	cb := engine.getCircuitBreaker(soulID)
+	cb.mu.Lock()
+	cb.state = "half-open"
+	cb.successes = 1
+	cb.mu.Unlock()
+
+	// Record successes (need 3 total to close)
+	engine.recordSuccess(soulID)
+	engine.recordSuccess(soulID)
+	engine.recordSuccess(soulID)
+
+	// Should be closed now (successes >= 3)
+	cb.mu.RLock()
+	state := cb.state
+	cb.mu.RUnlock()
+
+	if state != "closed" {
+		t.Errorf("Expected state 'closed' after successes, got '%s'", state)
+	}
+}
+
+// Test recordFailure opens circuit breaker
+func TestCircuitBreaker_RecordFailure(t *testing.T) {
+	engine := NewEngine(EngineOptions{
+		Registry: NewCheckerRegistry(),
+		NodeID:   "test-node",
+		Region:   "test-region",
+		Logger:   newTestProbeLogger(),
+	})
+
+	soulID := "test-soul-failure"
+
+	// Record failures (threshold is 5 by default)
+	for i := 0; i < 5; i++ {
+		engine.recordFailure(soulID)
+	}
+
+	// Get circuit breaker
+	cb := engine.getCircuitBreaker(soulID)
+	cb.mu.RLock()
+	state := cb.state
+	failures := cb.failures
+	cb.mu.RUnlock()
+
+	if state != "open" {
+		t.Errorf("Expected state 'open' after 5 failures, got '%s'", state)
+	}
+	if failures < 5 {
+		t.Errorf("Expected at least 5 failures, got %d", failures)
+	}
+
+	// Verify failedChecks counter incremented
+	stats := engine.Stats()
+	if stats["failed_checks"].(int64) < 5 {
+		t.Errorf("Expected at least 5 failed checks in stats, got %d", stats["failed_checks"])
+	}
+}
+
+// Test semaphore concurrency limiting
+func TestEngine_Semaphore_ConcurrencyLimit(t *testing.T) {
+	const maxConcurrent = 3
+	const totalSouls = 5
+
+	registry := NewCheckerRegistry()
+	engine := NewEngine(EngineOptions{
+		Registry: registry,
+		NodeID:   "test-node",
+		Region:   "test-region",
+		Logger:   newTestProbeLogger(),
+		Config: EngineConfig{
+			MaxConcurrentChecks: maxConcurrent,
+		},
+	})
+
+	// Verify semaphore capacity
+	if cap(engine.semaphore) != maxConcurrent {
+		t.Errorf("Expected semaphore capacity %d, got %d", maxConcurrent, cap(engine.semaphore))
+	}
+}
+
+// Test Engine Config returns correct values
+func TestEngine_Config(t *testing.T) {
+	engine := NewEngine(EngineOptions{
+		Registry: NewCheckerRegistry(),
+		NodeID:   "test-node",
+		Region:   "test-region",
+		Logger:   newTestProbeLogger(),
+		Config: EngineConfig{
+			MaxConcurrentChecks: 50,
+			CircuitBreaker: CircuitBreakerConfig{
+				Enabled:         true,
+				FailureThreshold: 10,
+				SuccessThreshold: 5,
+				Timeout:         60 * time.Second,
+			},
+		},
+	})
+
+	config := engine.Config()
+
+	if config.MaxConcurrentChecks != 50 {
+		t.Errorf("Expected MaxConcurrentChecks 50, got %d", config.MaxConcurrentChecks)
+	}
+	if config.CircuitBreaker.FailureThreshold != 10 {
+		t.Errorf("Expected FailureThreshold 10, got %d", config.CircuitBreaker.FailureThreshold)
+	}
+	if config.CircuitBreaker.SuccessThreshold != 5 {
+		t.Errorf("Expected SuccessThreshold 5, got %d", config.CircuitBreaker.SuccessThreshold)
+	}
+	if config.CircuitBreaker.Timeout != 60*time.Second {
+		t.Errorf("Expected Timeout 60s, got %v", config.CircuitBreaker.Timeout)
+	}
+	if !config.CircuitBreaker.Enabled {
+		t.Error("Expected CircuitBreaker to be enabled")
+	}
+}
+
+// Test circuit breaker is created per soul
+func TestCircuitBreaker_PerSoul(t *testing.T) {
+	engine := NewEngine(EngineOptions{
+		Registry: NewCheckerRegistry(),
+		NodeID:   "test-node",
+		Region:   "test-region",
+		Logger:   newTestProbeLogger(),
+	})
+
+	// Get circuit breakers for different souls
+	cb1 := engine.getCircuitBreaker("soul-1")
+	cb2 := engine.getCircuitBreaker("soul-2")
+
+	// Should be different instances
+	if cb1 == cb2 {
+		t.Error("Expected different circuit breaker instances per soul")
+	}
+
+	// Getting same soul should return same instance
+	cb1Again := engine.getCircuitBreaker("soul-1")
+	if cb1 != cb1Again {
+		t.Error("Expected same circuit breaker instance for same soul")
+	}
+}
+
+// Test default engine config
+func TestDefaultEngineConfig(t *testing.T) {
+	cfg := DefaultEngineConfig()
+
+	if cfg.MaxConcurrentChecks != 100 {
+		t.Errorf("Expected MaxConcurrentChecks 100, got %d", cfg.MaxConcurrentChecks)
+	}
+	if !cfg.CircuitBreaker.Enabled {
+		t.Error("Expected CircuitBreaker to be enabled by default")
+	}
+	if cfg.CircuitBreaker.FailureThreshold != 5 {
+		t.Errorf("Expected FailureThreshold 5, got %d", cfg.CircuitBreaker.FailureThreshold)
+	}
+	if cfg.CircuitBreaker.SuccessThreshold != 3 {
+		t.Errorf("Expected SuccessThreshold 3, got %d", cfg.CircuitBreaker.SuccessThreshold)
+	}
+	if cfg.CircuitBreaker.Timeout != 30*time.Second {
+		t.Errorf("Expected Timeout 30s, got %v", cfg.CircuitBreaker.Timeout)
+	}
+}
+
+// Test AssignSouls with region filtering
+func TestEngine_AssignSouls_RegionFiltering(t *testing.T) {
+	registry := NewCheckerRegistry()
+	engine := NewEngine(EngineOptions{
+		Registry: registry,
+		NodeID:   "test-node-us",
+		Region:   "us-east-1",
+		Logger:   newTestProbeLogger(),
+	})
+
+	// Souls with different region restrictions
+	souls := []*core.Soul{
+		{
+			ID:      "soul-us",
+			Name:    "Soul US",
+			Type:    core.CheckHTTP,
+			Target:  "https://example.com",
+			Regions: []string{"us-east-1", "us-west-2"}, // Should be assigned
+			HTTP:    &core.HTTPConfig{Method: "GET", ValidStatus: []int{200}},
+		},
+		{
+			ID:      "soul-eu",
+			Name:    "Soul EU",
+			Type:    core.CheckHTTP,
+			Target:  "https://example.com",
+			Regions: []string{"eu-west-1", "eu-central-1"}, // Should be skipped
+			HTTP:    &core.HTTPConfig{Method: "GET", ValidStatus: []int{200}},
+		},
+		{
+			ID:      "soul-global",
+			Name:    "Soul Global",
+			Type:    core.CheckHTTP,
+			Target:  "https://example.com",
+			Regions: []string{}, // No restriction - should be assigned
+			HTTP:    &core.HTTPConfig{Method: "GET", ValidStatus: []int{200}},
+		},
+		{
+			ID:      "soul-any",
+			Name:    "Soul Any",
+			Type:    core.CheckHTTP,
+			Target:  "https://example.com",
+			// No Regions field - should be assigned
+			HTTP: &core.HTTPConfig{Method: "GET", ValidStatus: []int{200}},
+		},
+	}
+
+	engine.AssignSouls(souls)
+
+	// Should have 3 souls assigned (us, global, any)
+	activeSouls := engine.ListActiveSouls()
+	if len(activeSouls) != 3 {
+		t.Errorf("Expected 3 souls assigned, got %d", len(activeSouls))
+	}
+
+	// Verify which souls are assigned
+	assignedIDs := make(map[string]bool)
+	for _, s := range activeSouls {
+		assignedIDs[s.ID] = true
+	}
+
+	if !assignedIDs["soul-us"] {
+		t.Error("Expected soul-us to be assigned (region matches)")
+	}
+	if !assignedIDs["soul-global"] {
+		t.Error("Expected soul-global to be assigned (no region restriction)")
+	}
+	if !assignedIDs["soul-any"] {
+		t.Error("Expected soul-any to be assigned (no Regions field)")
+	}
+	if assignedIDs["soul-eu"] {
+		t.Error("Expected soul-eu to NOT be assigned (region mismatch)")
+	}
+}
