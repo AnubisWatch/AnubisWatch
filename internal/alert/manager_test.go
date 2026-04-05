@@ -1121,3 +1121,263 @@ func TestManager_ListActiveIncidents(t *testing.T) {
 		t.Errorf("Expected 2 active incidents, got %d", len(active))
 	}
 }
+
+func TestManager_ProcessJudgment_NoRules(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	soul := &core.Soul{
+		ID:          "soul-1",
+		Name:        "Test Soul",
+		WorkspaceID: "default",
+	}
+
+	prevStatus := core.SoulAlive
+	judgment := &core.Judgment{
+		Status:  core.SoulDead,
+		Message: "Test failed",
+	}
+
+	// Should not panic with no rules
+	manager.ProcessJudgment(soul, prevStatus, judgment)
+}
+
+func TestManager_ProcessJudgment_DisabledRule(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Add a disabled rule
+	rule := &core.AlertRule{
+		ID:      "disabled-rule",
+		Name:    "Disabled Rule",
+		Enabled: false,
+		Scope:   core.RuleScope{Type: "all"},
+		Conditions: []core.AlertCondition{
+			{Type: "status_change", From: "alive", To: "dead"},
+		},
+		Channels: []string{},
+	}
+	manager.RegisterRule(rule)
+
+	soul := &core.Soul{
+		ID:          "soul-1",
+		Name:        "Test Soul",
+		WorkspaceID: "default",
+	}
+
+	judgment := &core.Judgment{
+		Status:  core.SoulDead,
+		Message: "Test failed",
+	}
+
+	// Disabled rule should not trigger
+	manager.ProcessJudgment(soul, core.SoulAlive, judgment)
+}
+
+func TestManager_ProcessJudgment_RuleNotApplicable(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Add a rule for specific soul that doesn't match
+	rule := &core.AlertRule{
+		ID:      "specific-rule",
+		Name:    "Specific Rule",
+		Enabled: true,
+		Scope:   core.RuleScope{Type: "soul", SoulIDs: []string{"other-soul"}},
+		Conditions: []core.AlertCondition{
+			{Type: "status_change", From: "alive", To: "dead"},
+		},
+		Channels: []string{},
+	}
+	manager.RegisterRule(rule)
+
+	soul := &core.Soul{
+		ID:          "soul-1",
+		Name:        "Test Soul",
+		WorkspaceID: "default",
+	}
+
+	judgment := &core.Judgment{
+		Status:  core.SoulDead,
+		Message: "Test failed",
+	}
+
+	// Rule for other-soul should not apply to soul-1
+	manager.ProcessJudgment(soul, core.SoulAlive, judgment)
+}
+
+func TestManager_ProcessJudgment_ConditionNotMet(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Add a rule with condition that won't be met
+	rule := &core.AlertRule{
+		ID:      "test-rule",
+		Name:    "Test Rule",
+		Enabled: true,
+		Scope:   core.RuleScope{Type: "all"},
+		Conditions: []core.AlertCondition{
+			{Type: "status_change", From: "degraded", To: "dead"},
+		},
+		Channels: []string{},
+	}
+	manager.RegisterRule(rule)
+
+	soul := &core.Soul{
+		ID:          "soul-1",
+		Name:        "Test Soul",
+		WorkspaceID: "default",
+	}
+
+	// Transition from alive to dead, but rule expects degraded to dead
+	judgment := &core.Judgment{
+		Status:  core.SoulDead,
+		Message: "Test failed",
+	}
+
+	manager.ProcessJudgment(soul, core.SoulAlive, judgment)
+}
+
+func TestManager_dispatch_NoChannels(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	event := &core.AlertEvent{
+		ID:       "event-1",
+		SoulID:   "soul-1",
+		SoulName: "Test Soul",
+		Status:   core.SoulDead,
+		Message:  "Test failed",
+	}
+
+	// Should not panic with no channels
+	manager.dispatch(event)
+}
+
+func TestManager_dispatch_ChannelNotMatching(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Add a channel that only notifies on specific events
+	channel := &core.AlertChannel{
+		ID:      "channel-1",
+		Name:    "Test Channel",
+		Type:    core.ChannelWebHook,
+		Enabled: true,
+		Filters: []core.AlertFilter{
+			{Field: "status", Operator: "eq", Value: "resolved"}, // Only notify on resolved, not dead
+		},
+		Config: map[string]interface{}{
+			"url": "https://example.com/webhook",
+		},
+	}
+	manager.RegisterChannel(channel)
+
+	event := &core.AlertEvent{
+		ID:       "event-1",
+		SoulID:   "soul-1",
+		SoulName: "Test Soul",
+		Status:   core.SoulDead,
+		Message:  "Test failed",
+	}
+
+	// Channel only notifies on resolved, so this should be skipped
+	manager.dispatch(event)
+}
+
+func TestManager_sendToChannel_InvalidType(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	event := &core.AlertEvent{
+		ID:       "event-1",
+		SoulID:   "soul-1",
+		SoulName: "Test Soul",
+		Status:   core.SoulDead,
+		Message:  "Test failed",
+	}
+
+	channel := &core.AlertChannel{
+		ID:      "channel-1",
+		Name:    "Test Channel",
+		Type:    "invalid-type",
+		Enabled: true,
+	}
+
+	ctx := context.Background()
+	err := manager.sendToChannel(ctx, event, channel)
+
+	if err == nil {
+		t.Error("Expected error for invalid channel type")
+	}
+}
+
+func TestManager_extractDetails_NilDetails(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	judgment := &core.Judgment{
+		Status:  core.SoulDead,
+		Message: "Test failed",
+		// Details is nil
+	}
+
+	details := manager.extractDetails(judgment)
+
+	if details == nil {
+		t.Error("Expected details map to be created")
+	}
+}
+
+func TestManager_calculateSeverity(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	tests := []struct {
+		status   core.SoulStatus
+		expected core.Severity
+	}{
+		{core.SoulDead, core.SeverityCritical},
+		{core.SoulDegraded, core.SeverityWarning},
+		{core.SoulAlive, core.SeverityInfo},
+		{core.SoulUnknown, core.SeverityInfo},
+	}
+
+	for _, tt := range tests {
+		judgment := &core.Judgment{
+			Status: tt.status,
+		}
+		severity := manager.calculateSeverity(judgment)
+		if severity != tt.expected {
+			t.Errorf("For status %s, expected severity %s, got %s",
+				tt.status, tt.expected, severity)
+		}
+	}
+}
