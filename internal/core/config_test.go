@@ -276,3 +276,126 @@ func TestRaftConfig_Validate(t *testing.T) {
 		t.Errorf("Expected AdvertiseAddr to default to BindAddr")
 	}
 }
+
+func TestConfig_applyEnvOverrides(t *testing.T) {
+	tests := []struct {
+		name     string
+		envVars  map[string]string
+		validate func(*testing.T, *Config)
+	}{
+		{
+			name: "ANUBIS_HOST",
+			envVars: map[string]string{"ANUBIS_HOST": "custom-host"},
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Server.Host != "custom-host" {
+					t.Errorf("Expected Server.Host = custom-host, got %s", cfg.Server.Host)
+				}
+			},
+		},
+		{
+			name: "ANUBIS_PORT",
+			envVars: map[string]string{"ANUBIS_PORT": "9090"},
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Server.Port != 9090 {
+					t.Errorf("Expected Server.Port = 9090, got %d", cfg.Server.Port)
+				}
+			},
+		},
+		{
+			name: "ANUBIS_DATA_DIR",
+			envVars: map[string]string{"ANUBIS_DATA_DIR": "/custom/data"},
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Storage.Path != "/custom/data" {
+					t.Errorf("Expected Storage.Path = /custom/data, got %s", cfg.Storage.Path)
+				}
+			},
+		},
+		{
+			name: "ANUBIS_ENCRYPTION_KEY",
+			envVars: map[string]string{"ANUBIS_ENCRYPTION_KEY": "test-key-123"},
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Storage.Encryption.Key != "test-key-123" {
+					t.Errorf("Expected Storage.Encryption.Key = test-key-123, got %s", cfg.Storage.Encryption.Key)
+				}
+				if !cfg.Storage.Encryption.Enabled {
+					t.Error("Expected Storage.Encryption.Enabled = true")
+				}
+			},
+		},
+		{
+			name: "ANUBIS_CLUSTER_SECRET",
+			envVars: map[string]string{"ANUBIS_CLUSTER_SECRET": "secret-123"},
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Necropolis.ClusterSecret != "secret-123" {
+					t.Errorf("Expected Necropolis.ClusterSecret = secret-123, got %s", cfg.Necropolis.ClusterSecret)
+				}
+			},
+		},
+		{
+			name: "ANUBIS_ADMIN_PASSWORD",
+			envVars: map[string]string{"ANUBIS_ADMIN_PASSWORD": "admin-pass"},
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Auth.Local.AdminPassword != "admin-pass" {
+					t.Errorf("Expected Auth.Local.AdminPassword = admin-pass, got %s", cfg.Auth.Local.AdminPassword)
+				}
+			},
+		},
+		{
+			name: "ANUBIS_LOG_LEVEL",
+			envVars: map[string]string{"ANUBIS_LOG_LEVEL": "debug"},
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Logging.Level != "debug" {
+					t.Errorf("Expected Logging.Level = debug, got %s", cfg.Logging.Level)
+				}
+			},
+		},
+		{
+			name: "invalid port",
+			envVars: map[string]string{"ANUBIS_PORT": "invalid"},
+			validate: func(t *testing.T, cfg *Config) {
+				// Invalid port should not update the value (defaults to 0)
+				if cfg.Server.Port != 0 {
+					t.Errorf("Expected Server.Port = 0 (unchanged), got %d", cfg.Server.Port)
+				}
+			},
+		},
+		{
+			name: "multiple overrides",
+			envVars: map[string]string{
+				"ANUBIS_HOST":         "multi-host",
+				"ANUBIS_PORT":         "8888",
+				"ANUBIS_LOG_LEVEL":    "warn",
+				"ANUBIS_ADMIN_PASSWORD": "multi-pass",
+			},
+			validate: func(t *testing.T, cfg *Config) {
+				if cfg.Server.Host != "multi-host" {
+					t.Errorf("Expected Server.Host = multi-host, got %s", cfg.Server.Host)
+				}
+				if cfg.Server.Port != 8888 {
+					t.Errorf("Expected Server.Port = 8888, got %d", cfg.Server.Port)
+				}
+				if cfg.Logging.Level != "warn" {
+					t.Errorf("Expected Logging.Level = warn, got %s", cfg.Logging.Level)
+				}
+				if cfg.Auth.Local.AdminPassword != "multi-pass" {
+					t.Errorf("Expected Auth.Local.AdminPassword = multi-pass, got %s", cfg.Auth.Local.AdminPassword)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Set env vars
+			for k, v := range tt.envVars {
+				os.Setenv(k, v)
+				defer os.Unsetenv(k)
+			}
+
+			cfg := &Config{}
+			cfg.applyEnvOverrides()
+
+			tt.validate(t, cfg)
+		})
+	}
+}
