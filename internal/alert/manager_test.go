@@ -1303,6 +1303,124 @@ func TestManager_dispatch_ChannelNotMatching(t *testing.T) {
 	manager.dispatch(event)
 }
 
+func TestManager_dispatch_RateLimitedChannel(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Add a webhook channel
+	channel := &core.AlertChannel{
+		ID:      "channel-1",
+		Name:    "Test Channel",
+		Type:    core.ChannelWebHook,
+		Enabled: true,
+		Config: map[string]interface{}{
+			"url": "https://example.com/webhook",
+		},
+		RateLimit: core.RateLimitConfig{
+			Enabled:   true,
+			MaxAlerts: 1,
+			Window:    core.Duration{Duration: time.Minute},
+		},
+	}
+	manager.RegisterChannel(channel)
+
+	event1 := &core.AlertEvent{
+		ID:       "event-1",
+		SoulID:   "soul-1",
+		SoulName: "Test Soul",
+		Status:   core.SoulDead,
+		Message:  "Test failed",
+	}
+
+	event2 := &core.AlertEvent{
+		ID:       "event-2",
+		SoulID:   "soul-1",
+		SoulName: "Test Soul",
+		Status:   core.SoulDead,
+		Message:  "Test failed again",
+	}
+
+	// First dispatch should go through
+	manager.dispatch(event1)
+
+	// Second dispatch should be rate limited
+	manager.dispatch(event2)
+}
+
+func TestManager_dispatch_MultipleChannels(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Add multiple channels
+	channel1 := &core.AlertChannel{
+		ID:      "webhook-1",
+		Name:    "Webhook Channel",
+		Type:    core.ChannelWebHook,
+		Enabled: true,
+		Config: map[string]interface{}{
+			"url": "https://example.com/webhook",
+		},
+	}
+
+	channel2 := &core.AlertChannel{
+		ID:      "invalid-1",
+		Name:    "Invalid Channel",
+		Type:    "invalid-type",
+		Enabled: true,
+	}
+
+	manager.RegisterChannel(channel1)
+	manager.RegisterChannel(channel2)
+
+	event := &core.AlertEvent{
+		ID:       "event-1",
+		SoulID:   "soul-1",
+		SoulName: "Test Soul",
+		Status:   core.SoulDead,
+		Message:  "Test failed",
+	}
+
+	// Should process both channels (one succeeds, one fails)
+	manager.dispatch(event)
+}
+
+func TestManager_dispatch_DisabledChannel(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Add a disabled channel
+	channel := &core.AlertChannel{
+		ID:      "channel-1",
+		Name:    "Disabled Channel",
+		Type:    core.ChannelWebHook,
+		Enabled: false,
+		Config: map[string]interface{}{
+			"url": "https://example.com/webhook",
+		},
+	}
+	manager.RegisterChannel(channel)
+
+	event := &core.AlertEvent{
+		ID:       "event-1",
+		SoulID:   "soul-1",
+		SoulName: "Test Soul",
+		Status:   core.SoulDead,
+		Message:  "Test failed",
+	}
+
+	// Disabled channel should not be notified
+	manager.dispatch(event)
+}
+
 func TestManager_sendToChannel_InvalidType(t *testing.T) {
 	storage := &mockAlertStorage{
 		channels: make(map[string]*core.AlertChannel),
