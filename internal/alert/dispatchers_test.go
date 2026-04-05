@@ -1103,3 +1103,41 @@ func (t *testTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	return nil, fmt.Errorf("connection refused")
 }
+
+// Test plainAuth for SMTP
+func TestPlainAuth_Start(t *testing.T) {
+	auth := &plainAuth{
+		identity: "test-identity",
+		username: "testuser",
+		password: "testpass",
+		host:     "smtp.example.com",
+	}
+
+	method, response, err := auth.Start(nil)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if method != "PLAIN" {
+		t.Errorf("Expected method PLAIN, got %s", method)
+	}
+	expected := []byte("test-identity\x00testuser\x00testpass")
+	if string(response) != string(expected) {
+		t.Errorf("Expected response %q, got %q", expected, response)
+	}
+}
+
+func TestPlainAuth_Next(t *testing.T) {
+	auth := &plainAuth{
+		username: "testuser",
+		password: "testpass",
+		host:     "smtp.example.com",
+	}
+
+	response, err := auth.Next([]byte{}, true)
+	if err != nil {
+		t.Fatalf("Next() error = %v", err)
+	}
+	if response != nil {
+		t.Errorf("Expected nil response, got %v", response)
+	}
+}
