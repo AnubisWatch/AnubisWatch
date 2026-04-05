@@ -221,12 +221,9 @@ func (ts *TimeSeriesStore) compactionLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	for {
-		select {
-		case <-ticker.C:
-			if err := ts.runCompaction(); err != nil {
-				ts.logger.Error("compaction failed", "err", err)
-			}
+	for range ticker.C {
+		if err := ts.runCompaction(); err != nil {
+			ts.logger.Error("compaction failed", "err", err)
 		}
 	}
 }
@@ -277,7 +274,7 @@ func (ts *TimeSeriesStore) compactToResolution(srcRes, tgtRes TimeResolution, th
 
 	// Find all souls with data in source resolution
 	// Pattern: {workspace}/ts/{soul}/{resolution}/{timestamp}
-	prefix := fmt.Sprintf("default/ts/")
+	prefix := "default/ts/"
 	results, err := ts.db.PrefixScan(prefix)
 	if err != nil {
 		return err

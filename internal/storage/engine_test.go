@@ -286,15 +286,15 @@ func TestCobaltDB_SaveJudgment(t *testing.T) {
 	ctx := context.Background()
 
 	judgment := &core.Judgment{
-		ID:        "judgment-1",
-		SoulID:    "test-soul",
-		JackalID:  "jackal-1",
-		Region:    "default",
-		Timestamp: time.Now().UTC(),
-		Duration:  150 * time.Millisecond,
-		Status:    core.SoulAlive,
+		ID:         "judgment-1",
+		SoulID:     "test-soul",
+		JackalID:   "jackal-1",
+		Region:     "default",
+		Timestamp:  time.Now().UTC(),
+		Duration:   150 * time.Millisecond,
+		Status:     core.SoulAlive,
 		StatusCode: 200,
-		Message:   "OK",
+		Message:    "OK",
 	}
 
 	if err := db.SaveJudgment(ctx, judgment); err != nil {

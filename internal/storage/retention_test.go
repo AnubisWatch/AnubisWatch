@@ -37,8 +37,8 @@ func TestRetentionManager_Start(t *testing.T) {
 	defer db.Close()
 
 	config := core.RetentionConfig{
-		Raw:    core.Duration{Duration: 24 * time.Hour},
-		Day:    "unlimited",
+		Raw: core.Duration{Duration: 24 * time.Hour},
+		Day: "unlimited",
 	}
 
 	logger := newTestLogger()
@@ -75,8 +75,8 @@ func TestRetentionManager_runCleanup_UnlimitedDay(t *testing.T) {
 	defer db.Close()
 
 	config := core.RetentionConfig{
-		Raw:  core.Duration{Duration: 1 * time.Hour},
-		Day:  "unlimited",
+		Raw: core.Duration{Duration: 1 * time.Hour},
+		Day: "unlimited",
 	}
 
 	logger := newTestLogger()
@@ -91,8 +91,8 @@ func TestRetentionManager_runCleanup_ZeroDuration(t *testing.T) {
 	defer db.Close()
 
 	config := core.RetentionConfig{
-		Raw:  core.Duration{Duration: 0},
-		Day:  "7d",
+		Raw: core.Duration{Duration: 0},
+		Day: "7d",
 	}
 
 	logger := newTestLogger()
@@ -311,8 +311,8 @@ func TestRetentionManager_retentionLoop(t *testing.T) {
 	defer db.Close()
 
 	config := core.RetentionConfig{
-		Raw:  core.Duration{Duration: 1 * time.Hour},
-		Day:  "7d",
+		Raw: core.Duration{Duration: 1 * time.Hour},
+		Day: "7d",
 	}
 
 	logger := newTestLogger()
