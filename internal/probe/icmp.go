@@ -98,7 +98,7 @@ func (c *ICMPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	for i := 0; i < count; i++ {
 		select {
 		case <-ctx.Done():
-			break
+			return failJudgment(soul, ctx.Err()), nil
 		default:
 		}
 

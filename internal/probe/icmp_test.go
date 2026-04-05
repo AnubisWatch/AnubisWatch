@@ -174,8 +174,8 @@ func TestICMPChecker_Judge_MaxLossPercent(t *testing.T) {
 		Type:   core.CheckICMP,
 		Target: "8.8.8.8",
 		ICMP: &core.ICMPConfig{
-			Count:             3,
-			MaxLossPercent:    50, // Allow 50% loss
+			Count:          3,
+			MaxLossPercent: 50, // Allow 50% loss
 		},
 		Timeout: core.Duration{Duration: 5 * time.Second},
 	}
@@ -198,7 +198,7 @@ func TestICMPChecker_Judge_Feather(t *testing.T) {
 		Type:   core.CheckICMP,
 		Target: "8.8.8.8",
 		ICMP: &core.ICMPConfig{
-			Count:  1,
+			Count:   1,
 			Feather: core.Duration{Duration: 500 * time.Millisecond}, // Generous budget
 		},
 		Timeout: core.Duration{Duration: 5 * time.Second},
@@ -219,7 +219,7 @@ func TestICMPChecker_Judge_FeatherExceeded(t *testing.T) {
 		Type:   core.CheckICMP,
 		Target: "8.8.8.8",
 		ICMP: &core.ICMPConfig{
-			Count:  1,
+			Count:   1,
 			Feather: core.Duration{Duration: 1 * time.Microsecond}, // Impossible budget
 		},
 		Timeout: core.Duration{Duration: 5 * time.Second},

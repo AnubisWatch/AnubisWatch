@@ -59,10 +59,10 @@ func TestGRPCChecker_Judge_ConnectionRefused(t *testing.T) {
 	checker := NewGRPCChecker()
 
 	soul := &core.Soul{
-		ID:     "test-grpc",
-		Name:   "Test gRPC",
-		Type:   core.CheckGRPC,
-		Target: "127.0.0.1:1", // Invalid port
+		ID:      "test-grpc",
+		Name:    "Test gRPC",
+		Type:    core.CheckGRPC,
+		Target:  "127.0.0.1:1", // Invalid port
 		Timeout: core.Duration{Duration: 2 * time.Second},
 	}
 
@@ -78,10 +78,10 @@ func TestGRPCChecker_Judge_Timeout(t *testing.T) {
 	checker := NewGRPCChecker()
 
 	soul := &core.Soul{
-		ID:     "test-grpc",
-		Name:   "Test gRPC",
-		Type:   core.CheckGRPC,
-		Target: "127.0.0.1:50051", // Nothing listening
+		ID:      "test-grpc",
+		Name:    "Test gRPC",
+		Type:    core.CheckGRPC,
+		Target:  "127.0.0.1:50051", // Nothing listening
 		Timeout: core.Duration{Duration: 100 * time.Millisecond},
 	}
 
@@ -97,10 +97,10 @@ func TestGRPCChecker_Judge_NoConfig(t *testing.T) {
 	checker := NewGRPCChecker()
 
 	soul := &core.Soul{
-		ID:     "test-grpc",
-		Name:   "Test gRPC",
-		Type:   core.CheckGRPC,
-		Target: "127.0.0.1:1",
+		ID:      "test-grpc",
+		Name:    "Test gRPC",
+		Type:    core.CheckGRPC,
+		Target:  "127.0.0.1:1",
 		Timeout: core.Duration{Duration: 100 * time.Millisecond},
 		// No GRPC config
 	}
@@ -231,9 +231,9 @@ func TestBuildHTTP2HeadersFrame(t *testing.T) {
 
 func TestBuildHTTP2DataFrame(t *testing.T) {
 	tests := []struct {
-		name       string
-		data       []byte
-		endStream  bool
+		name        string
+		data        []byte
+		endStream   bool
 		expectedLen int
 	}{
 		{"empty no end", []byte{}, false, 9},
@@ -274,7 +274,7 @@ func TestBuildGRPCHealthCheckRequest(t *testing.T) {
 		serviceName string
 		expectedLen int
 	}{
-		{"empty service", "", 5},  // Just framing
+		{"empty service", "", 5},     // Just framing
 		{"short service", "svc", 10}, // Framing (5) + tag + len + 4 bytes
 		{"long service", "grpc.health.v1.Health", 28},
 	}
@@ -330,10 +330,10 @@ func TestGRPCChecker_Judge_InvalidTarget(t *testing.T) {
 	checker := NewGRPCChecker()
 
 	soul := &core.Soul{
-		ID:     "test-grpc",
-		Name:   "Test gRPC",
-		Type:   core.CheckGRPC,
-		Target: "not-a-valid-target",
+		ID:      "test-grpc",
+		Name:    "Test gRPC",
+		Type:    core.CheckGRPC,
+		Target:  "not-a-valid-target",
 		Timeout: core.Duration{Duration: 2 * time.Second},
 	}
 
@@ -349,10 +349,10 @@ func TestGRPCChecker_Judge_ContextCancellation(t *testing.T) {
 	checker := NewGRPCChecker()
 
 	soul := &core.Soul{
-		ID:     "test-grpc",
-		Name:   "Test gRPC",
-		Type:   core.CheckGRPC,
-		Target: "127.0.0.1:50051",
+		ID:      "test-grpc",
+		Name:    "Test gRPC",
+		Type:    core.CheckGRPC,
+		Target:  "127.0.0.1:50051",
 		Timeout: core.Duration{Duration: 5 * time.Second},
 	}
 
@@ -400,10 +400,10 @@ func TestGRPCChecker_Judge_StatusCodes(t *testing.T) {
 	checker := NewGRPCChecker()
 
 	soul := &core.Soul{
-		ID:     "test-grpc",
-		Name:   "Test gRPC",
-		Type:   core.CheckGRPC,
-		Target: "127.0.0.1:1",
+		ID:      "test-grpc",
+		Name:    "Test gRPC",
+		Type:    core.CheckGRPC,
+		Target:  "127.0.0.1:1",
 		Timeout: core.Duration{Duration: 100 * time.Millisecond},
 	}
 
@@ -559,10 +559,10 @@ func TestGRPCChecker_Judge_WithServiceName(t *testing.T) {
 	checker := NewGRPCChecker()
 
 	soul := &core.Soul{
-		ID:      "test-grpc",
-		Name:    "Test gRPC",
-		Type:    core.CheckGRPC,
-		Target:  "127.0.0.1:1",
+		ID:     "test-grpc",
+		Name:   "Test gRPC",
+		Type:   core.CheckGRPC,
+		Target: "127.0.0.1:1",
 		GRPC: &core.GRPCConfig{
 			Service: "my.service.Name",
 		},

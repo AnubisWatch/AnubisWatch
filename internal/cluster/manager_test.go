@@ -411,10 +411,8 @@ func TestManager_GetStatus_WithRunningNode(t *testing.T) {
 		t.Error("Expected state to be populated")
 	}
 
-	// Term should be >= 0
-	if status.Term < 0 {
-		t.Errorf("Expected non-negative term, got %d", status.Term)
-	}
+	// Term should be >= 0 (unsigned, so always true - verify field exists)
+	_ = status.Term
 
 	// PeerCount should be >= 0
 	if status.PeerCount < 0 {

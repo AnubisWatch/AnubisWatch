@@ -406,10 +406,10 @@ func TestHTTPChecker_Judge_Timeout(t *testing.T) {
 	checker := NewHTTPChecker()
 
 	soul := &core.Soul{
-		ID:     "test-http",
-		Name:   "Test HTTP",
-		Type:   core.CheckHTTP,
-		Target: ts.URL,
+		ID:      "test-http",
+		Name:    "Test HTTP",
+		Type:    core.CheckHTTP,
+		Target:  ts.URL,
 		Timeout: core.Duration{Duration: 100 * time.Millisecond}, // Short timeout
 		HTTP: &core.HTTPConfig{
 			Method:      "GET",
