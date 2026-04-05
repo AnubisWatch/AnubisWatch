@@ -486,3 +486,149 @@ func TestGRPCChecker_Judge_TLSNoServer(t *testing.T) {
 		t.Errorf("Expected status Dead, got %s", judgment.Status)
 	}
 }
+
+func TestGRPCChecker_Judge_InvalidTargetFormat(t *testing.T) {
+	checker := NewGRPCChecker()
+
+	// Target without port - SplitHostPort will fail
+	soul := &core.Soul{
+		ID:      "test-grpc",
+		Name:    "Test gRPC",
+		Type:    core.CheckGRPC,
+		Target:  "invalid-no-port",
+		Timeout: core.Duration{Duration: 100 * time.Millisecond},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should fail with invalid target error
+	if judgment.Status != core.SoulDead {
+		t.Errorf("Expected status Dead, got %s", judgment.Status)
+	}
+
+	if judgment.Message == "" {
+		t.Error("Expected error message")
+	}
+}
+
+func TestGRPCChecker_Judge_NilConfig(t *testing.T) {
+	checker := NewGRPCChecker()
+
+	// No GRPC config - should use defaults
+	soul := &core.Soul{
+		ID:      "test-grpc",
+		Name:    "Test gRPC",
+		Type:    core.CheckGRPC,
+		Target:  "127.0.0.1:1",
+		Timeout: core.Duration{Duration: 100 * time.Millisecond},
+		// GRPC field is nil
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should fail with connection refused, not panic
+	if judgment.Status != core.SoulDead {
+		t.Errorf("Expected status Dead, got %s", judgment.Status)
+	}
+}
+
+func TestGRPCChecker_Judge_ZeroTimeout(t *testing.T) {
+	checker := NewGRPCChecker()
+
+	// Zero timeout - should default to 10 seconds
+	soul := &core.Soul{
+		ID:     "test-grpc",
+		Name:   "Test gRPC",
+		Type:   core.CheckGRPC,
+		Target: "127.0.0.1:1",
+		// Timeout is zero - should default to 10s
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should fail with connection refused
+	if judgment.Status != core.SoulDead {
+		t.Errorf("Expected status Dead, got %s", judgment.Status)
+	}
+}
+
+func TestGRPCChecker_Judge_WithServiceName(t *testing.T) {
+	checker := NewGRPCChecker()
+
+	soul := &core.Soul{
+		ID:      "test-grpc",
+		Name:    "Test gRPC",
+		Type:    core.CheckGRPC,
+		Target:  "127.0.0.1:1",
+		GRPC: &core.GRPCConfig{
+			Service: "my.service.Name",
+		},
+		Timeout: core.Duration{Duration: 100 * time.Millisecond},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should fail with connection refused
+	if judgment.Status != core.SoulDead {
+		t.Errorf("Expected status Dead, got %s", judgment.Status)
+	}
+
+	// Service name should be in details
+	if judgment.Details == nil {
+		t.Error("Expected details to be populated")
+	}
+}
+
+func TestGRPCChecker_Judge_InvalidHost(t *testing.T) {
+	checker := NewGRPCChecker()
+
+	soul := &core.Soul{
+		ID:      "test-grpc",
+		Name:    "Test gRPC",
+		Type:    core.CheckGRPC,
+		Target:  "invalid.host.that.does.not.exist:50051",
+		Timeout: core.Duration{Duration: 500 * time.Millisecond},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should fail with DNS resolution error
+	if judgment.Status != core.SoulDead {
+		t.Errorf("Expected status Dead, got %s", judgment.Status)
+	}
+}
+
+func TestBuildHTTP2DataFrame_EOF(t *testing.T) {
+	// Test with endStream flag (EOF = true)
+	data := []byte("test payload")
+	frame := buildHTTP2DataFrame(data, true)
+
+	if len(frame) < 9 {
+		t.Fatalf("Expected frame header, got length %d", len(frame))
+	}
+
+	// Check END_STREAM flag (0x01)
+	if frame[4]&0x01 != 0x01 {
+		t.Error("Expected END_STREAM flag to be set")
+	}
+}
+
+func TestBuildHTTP2DataFrame_NoEOF(t *testing.T) {
+	// Test without endStream flag
+	data := []byte("test payload")
+	frame := buildHTTP2DataFrame(data, false)
+
+	if len(frame) < 9 {
+		t.Fatalf("Expected frame header, got length %d", len(frame))
+	}
+
+	// Check END_STREAM flag is not set
+	if frame[4]&0x01 != 0x00 {
+		t.Error("Expected END_STREAM flag to not be set")
+	}
+}
