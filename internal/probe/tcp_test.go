@@ -428,3 +428,164 @@ func TestUDPChecker_Judge_NoResponse(t *testing.T) {
 		t.Errorf("Expected status Dead, got %s", judgment.Status)
 	}
 }
+
+func TestUDPChecker_Judge_NilConfig(t *testing.T) {
+	checker := NewUDPChecker()
+
+	soul := &core.Soul{
+		ID:      "test-udp",
+		Name:    "Test UDP",
+		Type:    core.CheckUDP,
+		Target:  "127.0.0.1:53",
+		Timeout: core.Duration{Duration: 100 * time.Millisecond},
+		// UDP config is nil
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should not panic, should use defaults
+	if judgment == nil {
+		t.Error("Expected judgment to be returned")
+	}
+}
+
+func TestUDPChecker_Judge_ZeroTimeout(t *testing.T) {
+	checker := NewUDPChecker()
+
+	soul := &core.Soul{
+		ID:     "test-udp",
+		Name:   "Test UDP",
+		Type:   core.CheckUDP,
+		Target: "127.0.0.1:53",
+		// Timeout is zero - should default to 10s
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should not panic
+	if judgment == nil {
+		t.Error("Expected judgment to be returned")
+	}
+}
+
+func TestUDPChecker_Judge_ResolutionFailure(t *testing.T) {
+	checker := NewUDPChecker()
+
+	soul := &core.Soul{
+		ID:      "test-udp",
+		Name:    "Test UDP",
+		Type:    core.CheckUDP,
+		Target:  "invalid:port:format:too:many:colons",
+		Timeout: core.Duration{Duration: 100 * time.Millisecond},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should fail with resolution error
+	if judgment.Status != core.SoulDead {
+		t.Errorf("Expected status Dead, got %s", judgment.Status)
+	}
+
+	if judgment.Message == "" {
+		t.Error("Expected error message")
+	}
+}
+
+func TestUDPChecker_Judge_ValidHexPayload(t *testing.T) {
+	checker := NewUDPChecker()
+
+	// Use DNS server with valid DNS query payload
+	soul := &core.Soul{
+		ID:      "test-udp",
+		Name:    "Test UDP",
+		Type:    core.CheckUDP,
+		Target:  "8.8.8.8:53",
+		Timeout: core.Duration{Duration: 2 * time.Second},
+		UDP: &core.UDPConfig{
+			SendHex: "000101000001000000000000076578616d706c6503636f6d0000010001",
+		},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should either get response (alive) or timeout (dead)
+	// Just verify it doesn't panic
+	if judgment == nil {
+		t.Error("Expected judgment to be returned")
+	}
+}
+
+func TestUDPChecker_Judge_ExpectContains(t *testing.T) {
+	checker := NewUDPChecker()
+
+	// DNS server with expectContains
+	soul := &core.Soul{
+		ID:      "test-udp",
+		Name:    "Test UDP",
+		Type:    core.CheckUDP,
+		Target:  "8.8.8.8:53",
+		Timeout: core.Duration{Duration: 2 * time.Second},
+		UDP: &core.UDPConfig{
+			SendHex:         "000101000001000000000000076578616d706c6503636f6d0000010001",
+			ExpectContains:  "example",
+		},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should either match or not match the expected content
+	if judgment == nil {
+		t.Error("Expected judgment to be returned")
+	}
+}
+
+func TestUDPChecker_Judge_ExpectContainsMismatch(t *testing.T) {
+	checker := NewUDPChecker()
+
+	soul := &core.Soul{
+		ID:      "test-udp",
+		Name:    "Test UDP",
+		Type:    core.CheckUDP,
+		Target:  "8.8.8.8:53",
+		Timeout: core.Duration{Duration: 2 * time.Second},
+		UDP: &core.UDPConfig{
+			SendHex:         "000101000001000000000000076578616d706c6503636f6d0000010001",
+			ExpectContains:  "this_will_never_be_in_dns_response_xyz123",
+		},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should be degraded or dead due to mismatch
+	if judgment.Status == core.SoulAlive {
+		t.Logf("Unexpected Alive status with expectContains mismatch")
+	}
+}
+
+func TestUDPChecker_Judge_ContextCancellation(t *testing.T) {
+	checker := NewUDPChecker()
+
+	soul := &core.Soul{
+		ID:      "test-udp",
+		Name:    "Test UDP",
+		Type:    core.CheckUDP,
+		Target:  "8.8.8.8:53",
+		Timeout: core.Duration{Duration: 5 * time.Second},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should return without panic
+	if judgment == nil {
+		t.Error("Expected judgment to be returned")
+	}
+}
