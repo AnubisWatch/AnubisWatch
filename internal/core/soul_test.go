@@ -264,3 +264,46 @@ func TestRaftState_String(t *testing.T) {
 		t.Errorf("Expected StateCandidate.String() = 'candidate', got '%s'", StateCandidate.String())
 	}
 }
+
+func TestLogEntryType_String(t *testing.T) {
+	tests := []struct {
+		entryType LogEntryType
+		expected  string
+	}{
+		{LogCommand, "command"},
+		{LogNoOp, "noop"},
+		{LogConfiguration, "configuration"},
+		{99, "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.expected, func(t *testing.T) {
+			if got := tt.entryType.String(); got != tt.expected {
+				t.Errorf("LogEntryType(%d).String() = %q, want %q", tt.entryType, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestRaftError_Error(t *testing.T) {
+	err := &RaftError{
+		Code:    "NOT_LEADER",
+		Message: "node is not the leader",
+		NodeID:  "node-1",
+	}
+
+	expected := "raft error [NOT_LEADER]: node is not the leader"
+	if err.Error() != expected {
+		t.Errorf("Expected %q, got %q", expected, err.Error())
+	}
+
+	// Test without NodeID
+	err2 := &RaftError{
+		Code:    "TIMEOUT",
+		Message: "operation timed out",
+	}
+	expected2 := "raft error [TIMEOUT]: operation timed out"
+	if err2.Error() != expected2 {
+		t.Errorf("Expected %q, got %q", expected2, err2.Error())
+	}
+}
