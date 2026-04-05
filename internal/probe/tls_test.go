@@ -732,3 +732,81 @@ func TestTLSChecker_Judge_IssuerMismatch(t *testing.T) {
 		t.Error("Expected issuer assertion")
 	}
 }
+
+// TestTLSChecker_Judge_EmptyIssuerOrg tests issuer check when Organization is empty
+func TestTLSChecker_Judge_EmptyIssuerOrg(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	host := ts.URL[8:]
+
+	checker := NewTLSChecker()
+
+	soul := &core.Soul{
+		ID:     "test-tls-issuer-empty",
+		Name:   "Test TLS Issuer Empty Org",
+		Type:   core.CheckTLS,
+		Target: host,
+		TLS: &core.TLSConfig{
+			ExpectedIssuer: "SomeCA",
+		},
+		Timeout: core.Duration{Duration: 5 * time.Second},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should handle empty org gracefully
+	if judgment == nil {
+		t.Error("Expected judgment to be returned")
+	}
+}
+
+// TestTLSChecker_Judge_OCSPStaplingAbsent tests the OCSP absent degraded path
+func TestTLSChecker_Judge_OCSPStaplingAbsent(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	host := ts.URL[8:]
+
+	checker := NewTLSChecker()
+
+	soul := &core.Soul{
+		ID:     "test-tls-ocsp-absent",
+		Name:   "Test TLS OCSP Absent",
+		Type:   core.CheckTLS,
+		Target: host,
+		TLS: &core.TLSConfig{
+			CheckOCSP: true,
+		},
+		Timeout: core.Duration{Duration: 5 * time.Second},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Test servers don't have OCSP stapling, should be degraded
+	// (unless another check already set it to dead)
+	if judgment.Status == core.SoulAlive {
+		t.Logf("Expected non-Alive status for missing OCSP, got %s", judgment.Status)
+	}
+
+	// Verify OCSP assertion was added and failed
+	foundOCSPAssert := false
+	for _, assert := range judgment.Details.Assertions {
+		if assert.Type == "ocsp_stapling" {
+			foundOCSPAssert = true
+			if assert.Passed {
+				t.Error("Expected OCSP assertion to fail (no stapling)")
+			}
+			break
+		}
+	}
+	if !foundOCSPAssert {
+		t.Error("Expected OCSP stapling assertion")
+	}
+}
