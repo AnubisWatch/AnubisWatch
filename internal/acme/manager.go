@@ -20,17 +20,18 @@ import (
 
 // Manager handles ACME certificate operations
 // The Divine Scribe - records certificates in the sacred tablets
+//
 //go:generate echo "The Judgment Never Sleeps"
 type Manager struct {
-	storage       *storage.CobaltDB
-	accountKey    crypto.PrivateKey
-	accountEmail  string
-	provider      Provider
-	httpClient    *http.Client
-	certCache     map[string]*CachedCertificate
-	cacheMu       sync.RWMutex
-	directoryURL  string
-	certPath      string
+	storage          *storage.CobaltDB
+	accountKey       crypto.PrivateKey
+	accountEmail     string
+	provider         Provider
+	httpClient       *http.Client
+	certCache        map[string]*CachedCertificate
+	cacheMu          sync.RWMutex
+	directoryURL     string
+	certPath         string
 	challengeHandler *ChallengeHandler
 }
 
@@ -38,10 +39,10 @@ type Manager struct {
 type Provider string
 
 const (
-	ProviderLetsEncrypt    Provider = "letsencrypt"     // Let's Encrypt production
+	ProviderLetsEncrypt        Provider = "letsencrypt"         // Let's Encrypt production
 	ProviderLetsEncryptStaging Provider = "letsencrypt_staging" // Let's Encrypt staging
-	ProviderZeroSSL        Provider = "zerossl"         // ZeroSSL
-	ProviderCustom         Provider = "custom"          // Custom ACME server
+	ProviderZeroSSL            Provider = "zerossl"             // ZeroSSL
+	ProviderCustom             Provider = "custom"              // Custom ACME server
 )
 
 // Directory URLs for known providers

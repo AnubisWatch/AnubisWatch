@@ -17,10 +17,10 @@ import (
 // Discovery handles peer discovery via gossip and mDNS
 // The jackals howl to find each other in the Necropolis
 type Discovery struct {
-	config    core.RaftConfig
-	nodeID    string
-	bindAddr  string
-	region    string
+	config   core.RaftConfig
+	nodeID   string
+	bindAddr string
+	region   string
 
 	// mDNS
 	mdnsServer *MDNSServer
@@ -45,26 +45,26 @@ type Discovery struct {
 
 // DiscoveredPeer represents a peer discovered through gossip/mDNS
 type DiscoveredPeer struct {
-	ID            string
-	Address       string
-	Region        string
-	Version       string
-	Capabilities  core.NodeCapabilities
-	LastSeen      time.Time
-	LastGossip    time.Time
-	GossipCount   int
-	IsStatic      bool // Configured vs discovered
+	ID           string
+	Address      string
+	Region       string
+	Version      string
+	Capabilities core.NodeCapabilities
+	LastSeen     time.Time
+	LastGossip   time.Time
+	GossipCount  int
+	IsStatic     bool // Configured vs discovered
 }
 
 // GossipMessage is sent between peers during gossip
 type GossipMessage struct {
-	Type      string                `json:"type"`
-	NodeID    string                `json:"node_id"`
-	Address   string                `json:"address"`
-	Region    string                `json:"region"`
-	Version   string                `json:"version"`
-	Peers     []GossipPeerInfo      `json:"peers"`
-	Timestamp int64                 `json:"timestamp"`
+	Type      string           `json:"type"`
+	NodeID    string           `json:"node_id"`
+	Address   string           `json:"address"`
+	Region    string           `json:"region"`
+	Version   string           `json:"version"`
+	Peers     []GossipPeerInfo `json:"peers"`
+	Timestamp int64            `json:"timestamp"`
 }
 
 // GossipPeerInfo is information about a peer in gossip
@@ -100,11 +100,11 @@ type MDNSClient struct {
 
 // MDNSService represents a discovered mDNS service
 type MDNSService struct {
-	Name     string
-	Host     string
-	Port     int
-	IPs      []net.IP
-	TXT      []string
+	Name string
+	Host string
+	Port int
+	IPs  []net.IP
+	TXT  []string
 }
 
 // NewDiscovery creates a new discovery service
@@ -299,12 +299,12 @@ func (d *Discovery) handleGossip(msg *GossipMessage) {
 	} else {
 		// New peer discovered
 		newPeer := &DiscoveredPeer{
-			ID:         msg.NodeID,
-			Address:    msg.Address,
-			Region:     msg.Region,
-			Version:    msg.Version,
-			LastSeen:   time.Now(),
-			IsStatic:   false,
+			ID:       msg.NodeID,
+			Address:  msg.Address,
+			Region:   msg.Region,
+			Version:  msg.Version,
+			LastSeen: time.Now(),
+			IsStatic: false,
 		}
 		d.knownPeers[msg.NodeID] = newPeer
 

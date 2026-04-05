@@ -155,13 +155,13 @@ func NewCobaltDBSnapshotStore(db *CobaltDB) *CobaltDBSnapshotStore {
 // Create creates a new snapshot
 func (s *CobaltDBSnapshotStore) Create(version, index, term uint64, configuration []byte) (raft.SnapshotSink, error) {
 	sink := &cobaltDBSnapshotSink{
-		store: s,
-		id:    fmt.Sprintf("%d-%d", term, index),
-		index: index,
-		term:  term,
+		store:   s,
+		id:      fmt.Sprintf("%d-%d", term, index),
+		index:   index,
+		term:    term,
 		version: version,
-		config: configuration,
-		buf:   &bytes.Buffer{},
+		config:  configuration,
+		buf:     &bytes.Buffer{},
 	}
 	return sink, nil
 }

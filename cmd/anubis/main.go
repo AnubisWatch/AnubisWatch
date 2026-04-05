@@ -17,16 +17,16 @@ import (
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/acme"
+	"github.com/AnubisWatch/anubiswatch/internal/alert"
+	"github.com/AnubisWatch/anubiswatch/internal/api"
 	"github.com/AnubisWatch/anubiswatch/internal/auth"
 	"github.com/AnubisWatch/anubiswatch/internal/cluster"
 	"github.com/AnubisWatch/anubiswatch/internal/core"
+	"github.com/AnubisWatch/anubiswatch/internal/dashboard"
 	"github.com/AnubisWatch/anubiswatch/internal/journey"
 	"github.com/AnubisWatch/anubiswatch/internal/probe"
-	"github.com/AnubisWatch/anubiswatch/internal/storage"
-	"github.com/AnubisWatch/anubiswatch/internal/alert"
-	"github.com/AnubisWatch/anubiswatch/internal/api"
-	"github.com/AnubisWatch/anubiswatch/internal/dashboard"
 	"github.com/AnubisWatch/anubiswatch/internal/statuspage"
+	"github.com/AnubisWatch/anubiswatch/internal/storage"
 )
 
 var (

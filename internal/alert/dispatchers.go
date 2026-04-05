@@ -20,8 +20,8 @@ import (
 
 // SlackDispatcher sends alerts to Slack via webhooks
 type SlackDispatcher struct {
-	logger  *slog.Logger
-	client  *http.Client
+	logger *slog.Logger
+	client *http.Client
 }
 
 // Send sends an alert to Slack
@@ -272,10 +272,10 @@ func (d *DiscordDispatcher) getColor(severity core.Severity, status core.SoulSta
 // Discord types
 
 type discordPayload struct {
-	Content   string          `json:"content"`
-	Username  string          `json:"username,omitempty"`
-	AvatarURL string          `json:"avatar_url,omitempty"`
-	Embeds    []discordEmbed  `json:"embeds"`
+	Content   string         `json:"content"`
+	Username  string         `json:"username,omitempty"`
+	AvatarURL string         `json:"avatar_url,omitempty"`
+	Embeds    []discordEmbed `json:"embeds"`
 }
 
 type discordEmbed struct {
@@ -508,9 +508,9 @@ func (d *PagerDutyDispatcher) mapSeverity(severity core.Severity) string {
 
 // PagerDuty types
 type pagerDutyPayload struct {
-	RoutingKey  string               `json:"routing_key"`
-	EventAction string               `json:"event_action"`
-	DedupKey    string               `json:"dedup_key"`
+	RoutingKey  string                `json:"routing_key"`
+	EventAction string                `json:"event_action"`
+	DedupKey    string                `json:"dedup_key"`
 	Payload     pagerDutyEventPayload `json:"payload"`
 }
 
@@ -758,9 +758,9 @@ func (d *TelegramDispatcher) Send(ctx context.Context, event *core.AlertEvent, c
 	// Build request
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
 	payload := map[string]string{
-		"chat_id":      chatID,
-		"text":         message,
-		"parse_mode":   "Markdown",
+		"chat_id":    chatID,
+		"text":       message,
+		"parse_mode": "Markdown",
 	}
 
 	// Disable notifications for non-critical alerts
@@ -1016,15 +1016,15 @@ func (d *WebHookDispatcher) Send(ctx context.Context, event *core.AlertEvent, ch
 
 	// Build payload
 	payload := map[string]interface{}{
-		"id":           event.ID,
-		"soul_id":      event.SoulID,
-		"soul_name":    event.SoulName,
-		"status":       event.Status,
-		"prev_status":  event.PrevStatus,
-		"severity":     event.Severity,
-		"message":      event.Message,
-		"details":      event.Details,
-		"timestamp":    event.Timestamp,
+		"id":          event.ID,
+		"soul_id":     event.SoulID,
+		"soul_name":   event.SoulName,
+		"status":      event.Status,
+		"prev_status": event.PrevStatus,
+		"severity":    event.Severity,
+		"message":     event.Message,
+		"details":     event.Details,
+		"timestamp":   event.Timestamp,
 	}
 
 	data, err := json.Marshal(payload)

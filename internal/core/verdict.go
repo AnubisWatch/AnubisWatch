@@ -8,18 +8,18 @@ import (
 
 // Verdict is the alert decision — the judgment pronounced upon a soul.
 type Verdict struct {
-	ID           string        `json:"id"`
-	WorkspaceID  string        `json:"workspace_id"`
-	SoulID       string        `json:"soul_id"`
-	RuleID       string        `json:"rule_id"`
-	Severity     Severity      `json:"severity"`
-	Status       VerdictStatus `json:"status"`
-	Message      string        `json:"message"`
-	FiredAt      time.Time     `json:"fired_at"`
-	AcknowledgedAt *time.Time  `json:"acknowledged_at,omitempty"`
-	AcknowledgedBy string      `json:"acknowledged_by,omitempty"`
-	ResolvedAt   *time.Time    `json:"resolved_at,omitempty"`
-	Judgments    []string      `json:"judgments"`     // judgment IDs that caused this
+	ID             string        `json:"id"`
+	WorkspaceID    string        `json:"workspace_id"`
+	SoulID         string        `json:"soul_id"`
+	RuleID         string        `json:"rule_id"`
+	Severity       Severity      `json:"severity"`
+	Status         VerdictStatus `json:"status"`
+	Message        string        `json:"message"`
+	FiredAt        time.Time     `json:"fired_at"`
+	AcknowledgedAt *time.Time    `json:"acknowledged_at,omitempty"`
+	AcknowledgedBy string        `json:"acknowledged_by,omitempty"`
+	ResolvedAt     *time.Time    `json:"resolved_at,omitempty"`
+	Judgments      []string      `json:"judgments"` // judgment IDs that caused this
 }
 
 // Severity represents alert severity levels
@@ -72,25 +72,25 @@ type AlertCondition struct {
 	Value     any      `json:"value" yaml:"value"`
 	Window    Duration `json:"window" yaml:"window"`
 	// Additional fields for status-based conditions
-	From     string   `json:"from" yaml:"from"` // for status_change
-	To       string   `json:"to" yaml:"to"`     // for status_change
-	Status   string   `json:"status" yaml:"status"` // for status_for
+	From     string   `json:"from" yaml:"from"`         // for status_change
+	To       string   `json:"to" yaml:"to"`             // for status_change
+	Status   string   `json:"status" yaml:"status"`     // for status_for
 	Duration Duration `json:"duration" yaml:"duration"` // for status_for
 }
 
 // ChannelConfig defines an alert notification channel
 type ChannelConfig struct {
-	Name     string         `json:"name" yaml:"name"`
-	Type     string         `json:"type" yaml:"type"` // webhook, slack, discord, telegram, email, pagerduty, opsgenie, sms, ntfy
-	Webhook  *WebhookConfig `json:"webhook,omitempty" yaml:"webhook,omitempty"`
-	Slack    *SlackConfig   `json:"slack,omitempty" yaml:"slack,omitempty"`
-	Discord  *DiscordConfig `json:"discord,omitempty" yaml:"discord,omitempty"`
-	Telegram *TelegramConfig `json:"telegram,omitempty" yaml:"telegram,omitempty"`
-	Email    *EmailConfig   `json:"email,omitempty" yaml:"email,omitempty"`
+	Name      string           `json:"name" yaml:"name"`
+	Type      string           `json:"type" yaml:"type"` // webhook, slack, discord, telegram, email, pagerduty, opsgenie, sms, ntfy
+	Webhook   *WebhookConfig   `json:"webhook,omitempty" yaml:"webhook,omitempty"`
+	Slack     *SlackConfig     `json:"slack,omitempty" yaml:"slack,omitempty"`
+	Discord   *DiscordConfig   `json:"discord,omitempty" yaml:"discord,omitempty"`
+	Telegram  *TelegramConfig  `json:"telegram,omitempty" yaml:"telegram,omitempty"`
+	Email     *EmailConfig     `json:"email,omitempty" yaml:"email,omitempty"`
 	PagerDuty *PagerDutyConfig `json:"pagerduty,omitempty" yaml:"pagerduty,omitempty"`
-	OpsGenie *OpsGenieConfig `json:"opsgenie,omitempty" yaml:"opsgenie,omitempty"`
-	SMS      *SMSConfig     `json:"sms,omitempty" yaml:"sms,omitempty"`
-	Ntfy     *NtfyConfig    `json:"ntfy,omitempty" yaml:"ntfy,omitempty"`
+	OpsGenie  *OpsGenieConfig  `json:"opsgenie,omitempty" yaml:"opsgenie,omitempty"`
+	SMS       *SMSConfig       `json:"sms,omitempty" yaml:"sms,omitempty"`
+	Ntfy      *NtfyConfig      `json:"ntfy,omitempty" yaml:"ntfy,omitempty"`
 }
 
 // WebhookConfig for generic webhook notifications
@@ -103,10 +103,10 @@ type WebhookConfig struct {
 
 // SlackConfig for Slack webhook notifications
 type SlackConfig struct {
-	WebhookURL      string   `json:"webhook_url" yaml:"webhook_url"`
-	Channel         string   `json:"channel" yaml:"channel"`
-	Username        string   `json:"username" yaml:"username"`
-	IconEmoji       string   `json:"icon_emoji" yaml:"icon_emoji"`
+	WebhookURL        string   `json:"webhook_url" yaml:"webhook_url"`
+	Channel           string   `json:"channel" yaml:"channel"`
+	Username          string   `json:"username" yaml:"username"`
+	IconEmoji         string   `json:"icon_emoji" yaml:"icon_emoji"`
 	MentionOnCritical []string `json:"mention_on_critical" yaml:"mention_on_critical"`
 }
 
@@ -119,22 +119,22 @@ type DiscordConfig struct {
 
 // TelegramConfig for Telegram bot notifications
 type TelegramConfig struct {
-	BotToken           string `json:"bot_token" yaml:"bot_token"`
-	ChatID             string `json:"chat_id" yaml:"chat_id"`
-	ParseMode          string `json:"parse_mode" yaml:"parse_mode"`
-	DisableNotification bool  `json:"disable_notification" yaml:"disable_notification"`
+	BotToken            string `json:"bot_token" yaml:"bot_token"`
+	ChatID              string `json:"chat_id" yaml:"chat_id"`
+	ParseMode           string `json:"parse_mode" yaml:"parse_mode"`
+	DisableNotification bool   `json:"disable_notification" yaml:"disable_notification"`
 }
 
 // EmailConfig for SMTP email notifications
 type EmailConfig struct {
-	SMTPHost       string   `json:"smtp_host" yaml:"smtp_host"`
-	SMTPPort       int      `json:"smtp_port" yaml:"smtp_port"`
-	StartTLS       bool     `json:"starttls" yaml:"starttls"`
-	Username       string   `json:"username" yaml:"username"`
-	Password       string   `json:"password" yaml:"password"`
-	From           string   `json:"from" yaml:"from"`
-	To             []string `json:"to" yaml:"to"`
-	SubjectTemplate string  `json:"subject_template" yaml:"subject_template"`
+	SMTPHost        string   `json:"smtp_host" yaml:"smtp_host"`
+	SMTPPort        int      `json:"smtp_port" yaml:"smtp_port"`
+	StartTLS        bool     `json:"starttls" yaml:"starttls"`
+	Username        string   `json:"username" yaml:"username"`
+	Password        string   `json:"password" yaml:"password"`
+	From            string   `json:"from" yaml:"from"`
+	To              []string `json:"to" yaml:"to"`
+	SubjectTemplate string   `json:"subject_template" yaml:"subject_template"`
 }
 
 // PagerDutyConfig for PagerDuty integration
@@ -164,10 +164,10 @@ type SMSConfig struct {
 
 // NtfyConfig for Ntfy.sh notifications
 type NtfyConfig struct {
-	Server     string            `json:"server" yaml:"server"`
-	Topic      string            `json:"topic" yaml:"topic"`
+	Server      string            `json:"server" yaml:"server"`
+	Topic       string            `json:"topic" yaml:"topic"`
 	PriorityMap map[string]string `json:"priority_map" yaml:"priority_map"`
-	Auth       struct {
+	Auth        struct {
 		Username string `json:"username" yaml:"username"`
 		Password string `json:"password" yaml:"password"`
 	} `json:"auth" yaml:"auth"`
@@ -191,16 +191,16 @@ type AlertChannel struct {
 type AlertChannelType string
 
 const (
-	ChannelEmail      AlertChannelType = "email"
-	ChannelSlack      AlertChannelType = "slack"
-	ChannelDiscord    AlertChannelType = "discord"
-	ChannelTelegram   AlertChannelType = "telegram"
-	ChannelPagerDuty  AlertChannelType = "pagerduty"
-	ChannelOpsGenie   AlertChannelType = "opsgenie"
-	ChannelNtfy       AlertChannelType = "ntfy"
-	ChannelWebHook    AlertChannelType = "webhook"
-	ChannelSMS        AlertChannelType = "sms"
-	ChannelMCP        AlertChannelType = "mcp"
+	ChannelEmail     AlertChannelType = "email"
+	ChannelSlack     AlertChannelType = "slack"
+	ChannelDiscord   AlertChannelType = "discord"
+	ChannelTelegram  AlertChannelType = "telegram"
+	ChannelPagerDuty AlertChannelType = "pagerduty"
+	ChannelOpsGenie  AlertChannelType = "opsgenie"
+	ChannelNtfy      AlertChannelType = "ntfy"
+	ChannelWebHook   AlertChannelType = "webhook"
+	ChannelSMS       AlertChannelType = "sms"
+	ChannelMCP       AlertChannelType = "mcp"
 )
 
 // AlertFilter determines when alerts are sent through a channel
@@ -276,15 +276,15 @@ type NotificationResult struct {
 
 // AlertManagerStats tracks alert system performance
 type AlertManagerStats struct {
-	TotalAlerts         uint64    `json:"total_alerts"`
-	SentAlerts          uint64    `json:"sent_alerts"`
-	FailedAlerts        uint64    `json:"failed_alerts"`
-	AcknowledgedAlerts  uint64    `json:"acknowledged_alerts"`
-	ResolvedAlerts      uint64    `json:"resolved_alerts"`
-	RateLimitedAlerts   uint64    `json:"rate_limited_alerts"`
-	FilteredAlerts      uint64    `json:"filtered_alerts"`
-	ActiveIncidents     int       `json:"active_incidents"`
-	LastAlertTime       time.Time `json:"last_alert_time"`
+	TotalAlerts        uint64    `json:"total_alerts"`
+	SentAlerts         uint64    `json:"sent_alerts"`
+	FailedAlerts       uint64    `json:"failed_alerts"`
+	AcknowledgedAlerts uint64    `json:"acknowledged_alerts"`
+	ResolvedAlerts     uint64    `json:"resolved_alerts"`
+	RateLimitedAlerts  uint64    `json:"rate_limited_alerts"`
+	FilteredAlerts     uint64    `json:"filtered_alerts"`
+	ActiveIncidents    int       `json:"active_incidents"`
+	LastAlertTime      time.Time `json:"last_alert_time"`
 }
 
 // Incident represents an active or resolved alert incident

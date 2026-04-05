@@ -12,9 +12,9 @@ import (
 // Distributor handles assignment of souls (monitors) to nodes
 // The Pharaoh decides which priest judges which soul
 type Distributor struct {
-	strategy    core.DistributionStrategy
-	nodeID      string
-	region      string
+	strategy core.DistributionStrategy
+	nodeID   string
+	region   string
 
 	// State
 	mu          sync.RWMutex
@@ -35,10 +35,10 @@ func NewDistributor(nodeID, region string, strategy core.DistributionStrategy) *
 	}
 
 	return &Distributor{
-		strategy:    strategy,
-		nodeID:      nodeID,
-		region:      region,
-		plan:        &core.DistributionPlan{
+		strategy: strategy,
+		nodeID:   nodeID,
+		region:   region,
+		plan: &core.DistributionPlan{
 			Version:     1,
 			Timestamp:   time.Now().UTC(),
 			Strategy:    strategy,
@@ -193,11 +193,11 @@ func (d *Distributor) GetStats() DistributionStats {
 	defer d.mu.RUnlock()
 
 	stats := DistributionStats{
-		TotalSouls:    len(d.souls),
-		TotalNodes:    len(d.nodes),
-		HealthyNodes:  len(d.getHealthyNodes()),
-		Strategy:      string(d.strategy),
-		Revision:      d.revision,
+		TotalSouls:       len(d.souls),
+		TotalNodes:       len(d.nodes),
+		HealthyNodes:     len(d.getHealthyNodes()),
+		Strategy:         string(d.strategy),
+		Revision:         d.revision,
 		NodeDistribution: make(map[string]int),
 	}
 
@@ -395,12 +395,12 @@ func (d *Distributor) IsResponsible(soulID string) bool {
 
 // DistributionStats holds distribution statistics
 type DistributionStats struct {
-	TotalSouls       int               `json:"total_souls"`
-	TotalNodes       int               `json:"total_nodes"`
-	HealthyNodes     int               `json:"healthy_nodes"`
-	Strategy         string            `json:"strategy"`
-	Revision         uint64            `json:"revision"`
-	NodeDistribution map[string]int    `json:"node_distribution"`
+	TotalSouls       int            `json:"total_souls"`
+	TotalNodes       int            `json:"total_nodes"`
+	HealthyNodes     int            `json:"healthy_nodes"`
+	Strategy         string         `json:"strategy"`
+	Revision         uint64         `json:"revision"`
+	NodeDistribution map[string]int `json:"node_distribution"`
 }
 
 // SetOnRebalanceCallback sets the callback for rebalance events

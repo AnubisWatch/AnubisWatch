@@ -2,30 +2,30 @@ package core
 
 // FeatherConfig defines a performance budget (Feather of Ma'at)
 type FeatherConfig struct {
-	Name   string        `json:"name" yaml:"name"`
-	Scope  string        `json:"scope" yaml:"scope"` // "tag:xxx", "soul:xxx", "type:xxx"
-	Rules  FeatherRules  `json:"rules" yaml:"rules"`
-	Window Duration      `json:"window" yaml:"window"`           // evaluation window
-	ViolationThreshold int           `json:"violation_threshold" yaml:"violation_threshold"` // consecutive violations
+	Name               string       `json:"name" yaml:"name"`
+	Scope              string       `json:"scope" yaml:"scope"` // "tag:xxx", "soul:xxx", "type:xxx"
+	Rules              FeatherRules `json:"rules" yaml:"rules"`
+	Window             Duration     `json:"window" yaml:"window"`                           // evaluation window
+	ViolationThreshold int          `json:"violation_threshold" yaml:"violation_threshold"` // consecutive violations
 }
 
 // FeatherRules defines latency thresholds
 type FeatherRules struct {
-	P50  Duration `json:"p50" yaml:"p50"`
-	P95  Duration `json:"p95" yaml:"p95"`
-	P99  Duration `json:"p99" yaml:"p99"`
-	Max  Duration `json:"max" yaml:"max"`
+	P50 Duration `json:"p50" yaml:"p50"`
+	P95 Duration `json:"p95" yaml:"p95"`
+	P99 Duration `json:"p99" yaml:"p99"`
+	Max Duration `json:"max" yaml:"max"`
 }
 
 // VerdictsConfig holds alert rules configuration
 type VerdictsConfig struct {
-	Rules      []AlertRule      `json:"rules" yaml:"rules"`
+	Rules      []AlertRule        `json:"rules" yaml:"rules"`
 	Escalation []EscalationPolicy `json:"escalation,omitempty" yaml:"escalation,omitempty"`
 }
 
 // EscalationPolicy defines multi-stage escalation
 type EscalationPolicy struct {
-	Name   string           `json:"name" yaml:"name"`
+	Name   string            `json:"name" yaml:"name"`
 	Stages []EscalationStage `json:"stages" yaml:"stages"`
 }
 
@@ -100,15 +100,15 @@ type RetentionConfig struct {
 
 // NecropolisConfig defines cluster settings
 type NecropolisConfig struct {
-	Enabled       bool              `json:"enabled" yaml:"enabled"`
-	NodeName      string            `json:"node_name" yaml:"node_name"`
-	Region        string            `json:"region" yaml:"region"`
-	Tags          map[string]string `json:"tags" yaml:"tags"`
-	BindAddr      string            `json:"bind_addr" yaml:"bind_addr"`
-	AdvertiseAddr string            `json:"advertise_addr" yaml:"advertise_addr"`
-	ClusterSecret string            `json:"cluster_secret" yaml:"cluster_secret"`
-	Discovery     DiscoveryConfig   `json:"discovery" yaml:"discovery"`
-	Raft          RaftConfig        `json:"raft" yaml:"raft"`
+	Enabled       bool               `json:"enabled" yaml:"enabled"`
+	NodeName      string             `json:"node_name" yaml:"node_name"`
+	Region        string             `json:"region" yaml:"region"`
+	Tags          map[string]string  `json:"tags" yaml:"tags"`
+	BindAddr      string             `json:"bind_addr" yaml:"bind_addr"`
+	AdvertiseAddr string             `json:"advertise_addr" yaml:"advertise_addr"`
+	ClusterSecret string             `json:"cluster_secret" yaml:"cluster_secret"`
+	Discovery     DiscoveryConfig    `json:"discovery" yaml:"discovery"`
+	Raft          RaftConfig         `json:"raft" yaml:"raft"`
 	Distribution  DistributionConfig `json:"distribution" yaml:"distribution"`
 	Capabilities  CapabilitiesConfig `json:"capabilities" yaml:"capabilities"`
 }
@@ -121,20 +121,20 @@ type DiscoveryConfig struct {
 
 // RaftConfig defines Raft consensus settings
 type RaftConfig struct {
-	NodeID            string            `json:"node_id" yaml:"node_id"`
-	BindAddr          string            `json:"bind_addr" yaml:"bind_addr"`
-	AdvertiseAddr     string            `json:"advertise_addr" yaml:"advertise_addr"`
-	Bootstrap         bool              `json:"bootstrap" yaml:"bootstrap"`
-	ElectionTimeout   Duration          `json:"election_timeout" yaml:"election_timeout"`
-	HeartbeatTimeout  Duration          `json:"heartbeat_timeout" yaml:"heartbeat_timeout"`
-	CommitTimeout     Duration          `json:"commit_timeout" yaml:"commit_timeout"`
-	SnapshotInterval  Duration          `json:"snapshot_interval" yaml:"snapshot_interval"`
-	SnapshotThreshold int               `json:"snapshot_threshold" yaml:"snapshot_threshold"`
-	MaxAppendEntries  int               `json:"max_append_entries" yaml:"max_append_entries"`
-	TrailingLogs      int               `json:"trailing_logs" yaml:"trailing_logs"`
-	Peers             []RaftPeer        `json:"peers" yaml:"peers"`
-	TLS               *TLSPeerConfig    `json:"tls" yaml:"tls"`
-	Role              RaftRole          `json:"role" yaml:"role"`
+	NodeID            string         `json:"node_id" yaml:"node_id"`
+	BindAddr          string         `json:"bind_addr" yaml:"bind_addr"`
+	AdvertiseAddr     string         `json:"advertise_addr" yaml:"advertise_addr"`
+	Bootstrap         bool           `json:"bootstrap" yaml:"bootstrap"`
+	ElectionTimeout   Duration       `json:"election_timeout" yaml:"election_timeout"`
+	HeartbeatTimeout  Duration       `json:"heartbeat_timeout" yaml:"heartbeat_timeout"`
+	CommitTimeout     Duration       `json:"commit_timeout" yaml:"commit_timeout"`
+	SnapshotInterval  Duration       `json:"snapshot_interval" yaml:"snapshot_interval"`
+	SnapshotThreshold int            `json:"snapshot_threshold" yaml:"snapshot_threshold"`
+	MaxAppendEntries  int            `json:"max_append_entries" yaml:"max_append_entries"`
+	TrailingLogs      int            `json:"trailing_logs" yaml:"trailing_logs"`
+	Peers             []RaftPeer     `json:"peers" yaml:"peers"`
+	TLS               *TLSPeerConfig `json:"tls" yaml:"tls"`
+	Role              RaftRole       `json:"role" yaml:"role"`
 }
 
 // TLSPeerConfig holds TLS configuration for peer-to-peer communication
@@ -181,9 +181,9 @@ type CapabilitiesConfig struct {
 
 // TenantsConfig defines multi-tenancy settings
 type TenantsConfig struct {
-	Enabled       bool         `json:"enabled" yaml:"enabled"`
-	Isolation     string       `json:"isolation" yaml:"isolation"` // strict, shared
-	DefaultQuotas QuotaConfig  `json:"default_quotas" yaml:"default_quotas"`
+	Enabled       bool        `json:"enabled" yaml:"enabled"`
+	Isolation     string      `json:"isolation" yaml:"isolation"` // strict, shared
+	DefaultQuotas QuotaConfig `json:"default_quotas" yaml:"default_quotas"`
 }
 
 // QuotaConfig defines resource limits
@@ -198,23 +198,23 @@ type QuotaConfig struct {
 
 // DashboardConfig defines dashboard settings
 type DashboardConfig struct {
-	Enabled   bool              `json:"enabled" yaml:"enabled"`
-	Branding  DashboardBranding `json:"branding" yaml:"branding"`
+	Enabled  bool              `json:"enabled" yaml:"enabled"`
+	Branding DashboardBranding `json:"branding" yaml:"branding"`
 }
 
 // DashboardBranding defines dashboard customization
 type DashboardBranding struct {
-	Title  string `json:"title" yaml:"title"`
-	Logo   string `json:"logo" yaml:"logo"`
-	Theme  string `json:"theme" yaml:"theme"` // auto, dark, light
+	Title string `json:"title" yaml:"title"`
+	Logo  string `json:"logo" yaml:"logo"`
+	Theme string `json:"theme" yaml:"theme"` // auto, dark, light
 }
 
 // AuthConfig defines authentication settings
 type AuthConfig struct {
-	Type  string      `json:"type" yaml:"type"` // local, oidc, ldap
-	Local LocalAuth   `json:"local" yaml:"local"`
-	OIDC  OIDCAuth    `json:"oidc" yaml:"oidc"`
-	LDAP  LDAPAuth    `json:"ldap" yaml:"ldap"`
+	Type  string    `json:"type" yaml:"type"` // local, oidc, ldap
+	Local LocalAuth `json:"local" yaml:"local"`
+	OIDC  OIDCAuth  `json:"oidc" yaml:"oidc"`
+	LDAP  LDAPAuth  `json:"ldap" yaml:"ldap"`
 }
 
 // LocalAuth defines local authentication
@@ -253,4 +253,3 @@ func (c *RaftConfig) Validate() error {
 	}
 	return nil
 }
-

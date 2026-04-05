@@ -131,6 +131,7 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 	if err != nil {
 		return failJudgment(soul, fmt.Errorf("failed to read upgrade response: %w", err)), nil
 	}
+	defer resp.Body.Close()
 
 	duration := time.Since(start)
 

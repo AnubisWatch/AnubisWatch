@@ -563,8 +563,8 @@ func TestGetAllDomains_Empty(t *testing.T) {
 func TestGetAllDomains_WithCerts(t *testing.T) {
 	m := &Manager{
 		certCache: map[string]*CachedCertificate{
-			"example.com":      {Domain: "example.com"},
-			"api.example.com":  {Domain: "api.example.com"},
+			"example.com":     {Domain: "example.com"},
+			"api.example.com": {Domain: "api.example.com"},
 		},
 	}
 
@@ -813,8 +813,8 @@ func TestManager_DeleteCertificate_NonExistent(t *testing.T) {
 func TestManager_GetAllDomains_WithCerts(t *testing.T) {
 	m := &Manager{
 		certCache: map[string]*CachedCertificate{
-			"example.com":     {Domain: "example.com"},
-			"api.example.com": {Domain: "api.example.com"},
+			"example.com":      {Domain: "example.com"},
+			"api.example.com":  {Domain: "api.example.com"},
 			"blog.example.com": {Domain: "blog.example.com"},
 		},
 	}
@@ -885,8 +885,8 @@ func TestRenewIfNeeded_ExpiredCertificate(t *testing.T) {
 	m := &Manager{
 		certCache: map[string]*CachedCertificate{
 			"expired.com": {
-				Domain:      "expired.com",
-				ExpiresAt:   time.Now().Add(-24 * time.Hour), // Already expired
+				Domain:    "expired.com",
+				ExpiresAt: time.Now().Add(-24 * time.Hour), // Already expired
 			},
 		},
 	}
@@ -930,8 +930,8 @@ func TestGetCertificate_Expired(t *testing.T) {
 	m := &Manager{
 		certCache: map[string]*CachedCertificate{
 			"expiring.com": {
-				Domain:      "expiring.com",
-				ExpiresAt:   time.Now().Add(-24 * time.Hour),
+				Domain:    "expiring.com",
+				ExpiresAt: time.Now().Add(-24 * time.Hour),
 			},
 		},
 	}
@@ -1402,8 +1402,8 @@ func TestManager_GetCertificate_Expiring(t *testing.T) {
 	m := &Manager{
 		certCache: map[string]*CachedCertificate{
 			"expiring.com": {
-				Domain:      "expiring.com",
-				ExpiresAt:   time.Now().Add(5 * 24 * time.Hour), // Less than 7 days
+				Domain:    "expiring.com",
+				ExpiresAt: time.Now().Add(5 * 24 * time.Hour), // Less than 7 days
 			},
 		},
 	}
@@ -1430,7 +1430,7 @@ func TestParseTLSCertificate_ValidECKey(t *testing.T) {
 	})
 
 	cert := &CachedCertificate{
-		Domain: "valid-ec.com",
+		Domain:      "valid-ec.com",
 		Certificate: []byte("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----"),
 		PrivateKey:  keyPEM,
 	}
@@ -1690,9 +1690,9 @@ func TestEncodeDecodeCertificate_Roundtrip(t *testing.T) {
 		Subject: pkix.Name{
 			CommonName: "roundtrip.com",
 		},
-		DNSNames:     []string{"roundtrip.com"},
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(24 * time.Hour),
+		DNSNames:  []string{"roundtrip.com"},
+		NotBefore: time.Now(),
+		NotAfter:  time.Now().Add(24 * time.Hour),
 	}
 
 	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
@@ -1943,9 +1943,9 @@ func TestTLSConfig_GetCertificate_ValidCert(t *testing.T) {
 		Subject: pkix.Name{
 			CommonName: "valid.com",
 		},
-		DNSNames:     []string{"valid.com"},
-		NotBefore:    time.Now(),
-		NotAfter:     time.Now().Add(90 * 24 * time.Hour),
+		DNSNames:  []string{"valid.com"},
+		NotBefore: time.Now(),
+		NotAfter:  time.Now().Add(90 * 24 * time.Hour),
 	}
 
 	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)

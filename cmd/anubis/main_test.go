@@ -251,15 +251,17 @@ func TestHTTPPost(t *testing.T) {
 }
 
 func TestHTTPGet_InvalidURL(t *testing.T) {
-	_, err := httpGet("://invalid-url", "token")
+	resp, err := httpGet("://invalid-url", "token")
 	if err == nil {
+		resp.Body.Close()
 		t.Error("Expected error for invalid URL")
 	}
 }
 
 func TestHTTPPost_InvalidURL(t *testing.T) {
-	_, err := httpPost("://invalid-url", "application/json", []byte("{}"), "token")
+	resp, err := httpPost("://invalid-url", "application/json", []byte("{}"), "token")
 	if err == nil {
+		resp.Body.Close()
 		t.Error("Expected error for invalid URL")
 	}
 }

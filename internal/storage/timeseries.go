@@ -25,30 +25,30 @@ type TimeSeriesStore struct {
 type TimeResolution string
 
 const (
-	ResolutionRaw  TimeResolution = "raw"
-	Resolution1Min TimeResolution = "1min"
-	Resolution5Min TimeResolution = "5min"
+	ResolutionRaw   TimeResolution = "raw"
+	Resolution1Min  TimeResolution = "1min"
+	Resolution5Min  TimeResolution = "5min"
 	Resolution1Hour TimeResolution = "1hour"
-	Resolution1Day TimeResolution = "1day"
+	Resolution1Day  TimeResolution = "1day"
 )
 
 // JudgmentSummary aggregates multiple judgments into a time bucket
 type JudgmentSummary struct {
-	SoulID          string    `json:"soul_id"`
-	WorkspaceID     string    `json:"workspace_id"`
-	Resolution      string    `json:"resolution"`
-	BucketTime      time.Time `json:"bucket_time"`
-	Count           int       `json:"count"`
-	SuccessCount    int       `json:"success_count"`
-	FailureCount    int       `json:"failure_count"`
-	MinLatency      float64   `json:"min_latency_ms"`
-	MaxLatency      float64   `json:"max_latency_ms"`
-	AvgLatency      float64   `json:"avg_latency_ms"`
-	P50Latency      float64   `json:"p50_latency_ms"`
-	P95Latency      float64   `json:"p95_latency_ms"`
-	P99Latency      float64   `json:"p99_latency_ms"`
-	UptimePercent   float64   `json:"uptime_percent"`
-	PacketLossAvg   float64   `json:"packet_loss_avg,omitempty"`
+	SoulID        string    `json:"soul_id"`
+	WorkspaceID   string    `json:"workspace_id"`
+	Resolution    string    `json:"resolution"`
+	BucketTime    time.Time `json:"bucket_time"`
+	Count         int       `json:"count"`
+	SuccessCount  int       `json:"success_count"`
+	FailureCount  int       `json:"failure_count"`
+	MinLatency    float64   `json:"min_latency_ms"`
+	MaxLatency    float64   `json:"max_latency_ms"`
+	AvgLatency    float64   `json:"avg_latency_ms"`
+	P50Latency    float64   `json:"p50_latency_ms"`
+	P95Latency    float64   `json:"p95_latency_ms"`
+	P99Latency    float64   `json:"p99_latency_ms"`
+	UptimePercent float64   `json:"uptime_percent"`
+	PacketLossAvg float64   `json:"packet_loss_avg,omitempty"`
 }
 
 // NewTimeSeriesStore creates a time-series store

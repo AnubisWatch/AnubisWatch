@@ -26,7 +26,7 @@ type RequestVoteRequest struct {
 	LastLogIndex uint64 `json:"last_log_index"`
 	LastLogTerm  uint64 `json:"last_log_term"`
 	// Pre-vote extension: carry over pre-vote term
-	PreVoteTerm  uint64 `json:"pre_vote_term,omitempty"`
+	PreVoteTerm uint64 `json:"pre_vote_term,omitempty"`
 }
 
 // RequestVoteResponse is the response to a RequestVote RPC
@@ -48,8 +48,8 @@ type AppendEntriesRequest struct {
 
 // AppendEntriesResponse is the response to an AppendEntries RPC
 type AppendEntriesResponse struct {
-	Term      uint64 `json:"term"`
-	Success   bool   `json:"success"`
+	Term       uint64 `json:"term"`
+	Success    bool   `json:"success"`
 	MatchIndex uint64 `json:"match_index"`
 	// Used for log inconsistency optimization
 	ConflictTerm  uint64 `json:"conflict_term,omitempty"`
@@ -93,19 +93,19 @@ type PeerInfoRequest struct {
 
 // PeerInfoResponse returns peer information
 type PeerInfoResponse struct {
-	Info       RaftPeerInfo `json:"info"`
+	Info         RaftPeerInfo `json:"info"`
 	ClusterState ClusterState `json:"cluster_state"`
 }
 
 // JoinRequest is sent by a node wanting to join the cluster
 type JoinRequest struct {
-	NodeID        string           `json:"node_id"`
-	Address       string           `json:"address"`
-	Region        string           `json:"region"`
-	Role          RaftRole         `json:"role"`
-	Capabilities  NodeCapabilities `json:"capabilities"`
-	Version       string           `json:"version"`
-	PrevConfigurationIndex uint64  `json:"prev_configuration_index"`
+	NodeID                 string           `json:"node_id"`
+	Address                string           `json:"address"`
+	Region                 string           `json:"region"`
+	Role                   RaftRole         `json:"role"`
+	Capabilities           NodeCapabilities `json:"capabilities"`
+	Version                string           `json:"version"`
+	PrevConfigurationIndex uint64           `json:"prev_configuration_index"`
 }
 
 // JoinResponse is the response to a JoinRequest
@@ -171,8 +171,8 @@ type RaftServer struct {
 
 // ApplyCommandRequest applies a command through Raft
 type ApplyCommandRequest struct {
-	Command   FSMCommand    `json:"command"`
-	Timeout   Duration      `json:"timeout"`
+	Command FSMCommand `json:"command"`
+	Timeout Duration   `json:"timeout"`
 }
 
 // ApplyCommandResponse is the response to an ApplyCommand
@@ -208,9 +208,9 @@ type VerifyLeaderResponse struct {
 
 // AddVoterRequest adds a voter to the cluster
 type AddVoterRequest struct {
-	ID            string `json:"id"`
-	Address       string `json:"address"`
-	PrevIndex     uint64 `json:"prev_index"`
+	ID        string `json:"id"`
+	Address   string `json:"address"`
+	PrevIndex uint64 `json:"prev_index"`
 }
 
 // AddVoterResponse is the response to an AddVoterRequest
@@ -234,21 +234,21 @@ type StatsRequest struct{}
 
 // StatsResponse returns Raft statistics
 type StatsResponse struct {
-	State           string       `json:"state"`
-	Term            uint64       `json:"term"`
-	LastLogIndex    uint64       `json:"last_log_index"`
-	LastLogTerm     uint64       `json:"last_log_term"`
-	CommitIndex     uint64       `json:"commit_index"`
-	AppliedIndex    uint64       `json:"applied_index"`
-	FSMIndex        uint64       `json:"fsm_index"`
-	LastSnapshotIndex uint64     `json:"last_snapshot_index"`
-	LastSnapshotTerm  uint64     `json:"last_snapshot_term"`
-	LatestConfigurationIndex uint64 `json:"latest_configuration_index"`
+	State                    string       `json:"state"`
+	Term                     uint64       `json:"term"`
+	LastLogIndex             uint64       `json:"last_log_index"`
+	LastLogTerm              uint64       `json:"last_log_term"`
+	CommitIndex              uint64       `json:"commit_index"`
+	AppliedIndex             uint64       `json:"applied_index"`
+	FSMIndex                 uint64       `json:"fsm_index"`
+	LastSnapshotIndex        uint64       `json:"last_snapshot_index"`
+	LastSnapshotTerm         uint64       `json:"last_snapshot_term"`
+	LatestConfigurationIndex uint64       `json:"latest_configuration_index"`
 	LatestConfiguration      []RaftServer `json:"latest_configuration"`
-	LastContact     int64        `json:"last_contact"` // milliseconds
-	NumPeers        int          `json:"num_peers"`
-	LastAppliedTime int64        `json:"last_applied_time"` // milliseconds
-	Stats           ClusterStats `json:"stats"`
+	LastContact              int64        `json:"last_contact"` // milliseconds
+	NumPeers                 int          `json:"num_peers"`
+	LastAppliedTime          int64        `json:"last_applied_time"` // milliseconds
+	Stats                    ClusterStats `json:"stats"`
 }
 
 // LeadershipTransferRequest requests a leadership transfer
@@ -264,19 +264,19 @@ type LeadershipTransferResponse struct {
 
 // HeartbeatRequest is a lightweight heartbeat for health checks
 type HeartbeatRequest struct {
-	NodeID    string    `json:"node_id"`
-	LeaderID  string    `json:"leader_id"`
-	Term      uint64    `json:"term"`
-	Timestamp int64     `json:"timestamp"`
+	NodeID    string `json:"node_id"`
+	LeaderID  string `json:"leader_id"`
+	Term      uint64 `json:"term"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 // HeartbeatResponse is the response to a HeartbeatRequest
 type HeartbeatResponse struct {
-	NodeID      string `json:"node_id"`
-	Term        uint64 `json:"term"`
-	IsLeader    bool   `json:"is_leader"`
-	LeaderID    string `json:"leader_id"`
-	Timestamp   int64  `json:"timestamp"`
+	NodeID    string `json:"node_id"`
+	Term      uint64 `json:"term"`
+	IsLeader  bool   `json:"is_leader"`
+	LeaderID  string `json:"leader_id"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 // DiscoveryRequest is sent during service discovery
@@ -303,10 +303,10 @@ type DistributionUpdateRequest struct {
 
 // DistributionUpdateResponse is the response to a DistributionUpdateRequest
 type DistributionUpdateResponse struct {
-	Success  bool   `json:"success"`
-	Accepted bool   `json:"accepted"` // If false, client should fetch new plan
+	Success         bool   `json:"success"`
+	Accepted        bool   `json:"accepted"` // If false, client should fetch new plan
 	CurrentRevision uint64 `json:"current_revision,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Error           string `json:"error,omitempty"`
 }
 
 // GetDistributionRequest requests the current distribution plan
@@ -319,13 +319,13 @@ type GetDistributionResponse struct {
 
 // NodeHealthReport is sent periodically by nodes to report health
 type NodeHealthReport struct {
-	NodeID        string  `json:"node_id"`
-	Timestamp     int64   `json:"timestamp"`
-	LoadAvg       float64 `json:"load_avg"`
-	MemoryUsage   float64 `json:"memory_usage"`
-	DiskUsage     float64 `json:"disk_usage"`
-	ActiveSouls   int     `json:"active_souls"`
-	CheckRate     float64 `json:"check_rate"` // actual checks/sec
-	FailedChecks  int     `json:"failed_checks"`
-	Region        string  `json:"region"`
+	NodeID       string  `json:"node_id"`
+	Timestamp    int64   `json:"timestamp"`
+	LoadAvg      float64 `json:"load_avg"`
+	MemoryUsage  float64 `json:"memory_usage"`
+	DiskUsage    float64 `json:"disk_usage"`
+	ActiveSouls  int     `json:"active_souls"`
+	CheckRate    float64 `json:"check_rate"` // actual checks/sec
+	FailedChecks int     `json:"failed_checks"`
+	Region       string  `json:"region"`
 }

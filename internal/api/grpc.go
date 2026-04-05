@@ -20,10 +20,10 @@ type GRPCServer struct {
 	logger   *slog.Logger
 
 	// Services
-	soulService    SoulService
+	soulService     SoulService
 	judgmentService JudgmentService
-	alertService   AlertService
-	clusterService ClusterService
+	alertService    AlertService
+	clusterService  ClusterService
 }
 
 // SoulService handles soul operations
@@ -164,13 +164,13 @@ type DeleteRuleRequest struct {
 type GetClusterStatusRequest struct{}
 
 type ClusterStatusResponse struct {
-	Status    string             `json:"status"`
-	Role      string             `json:"role"`
-	Term      uint64             `json:"term"`
-	LeaderID  string             `json:"leader_id"`
-	NodeID    string             `json:"node_id"`
-	PeerCount int                `json:"peer_count"`
-	Stats     core.ClusterStats  `json:"stats"`
+	Status    string            `json:"status"`
+	Role      string            `json:"role"`
+	Term      uint64            `json:"term"`
+	LeaderID  string            `json:"leader_id"`
+	NodeID    string            `json:"node_id"`
+	PeerCount int               `json:"peer_count"`
+	Stats     core.ClusterStats `json:"stats"`
 }
 
 type GetClusterPeersRequest struct{}
@@ -188,13 +188,13 @@ type PeerInfo struct {
 }
 
 type JoinClusterRequest struct {
-	NodeID   string `json:"node_id"`
-	Address  string `json:"address"`
-	Region   string `json:"region"`
+	NodeID  string `json:"node_id"`
+	Address string `json:"address"`
+	Region  string `json:"region"`
 }
 
 type JoinClusterResponse struct {
-	Success bool   `json:"success"`
+	Success bool       `json:"success"`
 	Peers   []PeerInfo `json:"peers"`
 }
 

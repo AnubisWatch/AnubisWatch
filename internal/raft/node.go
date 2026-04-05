@@ -18,20 +18,20 @@ import (
 // The Pharaoh's throne in the Necropolis
 type Node struct {
 	// Configuration
-	config    core.RaftConfig
-	nodeID    string
-	bindAddr  string
+	config        core.RaftConfig
+	nodeID        string
+	bindAddr      string
 	advertiseAddr string
-	region    string
+	region        string
 
 	// State machine (protected by mu)
-	mu        sync.RWMutex
-	state     core.RaftState
+	mu          sync.RWMutex
+	state       core.RaftState
 	currentTerm uint64
 	preVoteTerm uint64 // Term for pre-vote (separate from currentTerm)
-	votedFor  string
+	votedFor    string
 	preVotedFor string // Candidate we pre-voted for
-	log       []core.RaftLogEntry
+	log         []core.RaftLogEntry
 	commitIndex uint64
 	lastApplied uint64
 
@@ -40,13 +40,13 @@ type Node struct {
 	matchIndex map[string]uint64
 
 	// Peers
-	peers     map[string]*Peer
-	peerMu    sync.RWMutex
+	peers  map[string]*Peer
+	peerMu sync.RWMutex
 
 	// Storage
-	storage   LogStore
-	snapshot  SnapshotStore
-	fsm       FSM
+	storage  LogStore
+	snapshot SnapshotStore
+	fsm      FSM
 
 	// Snapshot state
 	snapshotThreshold  int
@@ -57,11 +57,11 @@ type Node struct {
 	transport Transport
 
 	// Channels for internal communication
-	applyCh   chan *applyFuture
-	commitCh  chan uint64
-	rpcCh     chan *rpcWrapper
+	applyCh    chan *applyFuture
+	commitCh   chan uint64
+	rpcCh      chan *rpcWrapper
 	shutdownCh chan struct{}
-	doneCh    chan struct{}
+	doneCh     chan struct{}
 
 	// Timing
 	electionTimeout  time.Duration
@@ -73,39 +73,39 @@ type Node struct {
 	lastContact time.Time
 
 	// Control
-	running     atomic.Bool
-	shutdown    atomic.Bool
+	running  atomic.Bool
+	shutdown atomic.Bool
 
 	// Logger
-	logger      *slog.Logger
+	logger *slog.Logger
 
 	// Stats
-	stats       core.ClusterStats
+	stats core.ClusterStats
 }
 
 // Peer represents a remote Raft node
 type Peer struct {
-	ID            string
-	Address       string
-	Region        string
-	Role          core.RaftRole
-	conn          net.Conn
-	tlsConn       *tls.Conn
-	nextIndex     uint64
-	matchIndex    uint64
-	lastContact   time.Time
-	heartbeatRTT  time.Duration
-	inflight      atomic.Uint64
-	mu            sync.RWMutex
+	ID           string
+	Address      string
+	Region       string
+	Role         core.RaftRole
+	conn         net.Conn
+	tlsConn      *tls.Conn
+	nextIndex    uint64
+	matchIndex   uint64
+	lastContact  time.Time
+	heartbeatRTT time.Duration
+	inflight     atomic.Uint64
+	mu           sync.RWMutex
 }
 
 // applyFuture represents a future result of applying a command
 type applyFuture struct {
-	command   core.FSMCommand
-	index     uint64
-	term      uint64
-	err       error
-	done      chan struct{}
+	command core.FSMCommand
+	index   uint64
+	term    uint64
+	err     error
+	done    chan struct{}
 }
 
 // rpcWrapper wraps an RPC with response channel
@@ -140,11 +140,11 @@ type SnapshotStore interface {
 
 // SnapshotMeta holds metadata about a snapshot
 type SnapshotMeta struct {
-	ID       string
-	Index    uint64
-	Term     uint64
-	Size     int64
-	Version  uint64
+	ID      string
+	Index   uint64
+	Term    uint64
+	Size    int64
+	Version uint64
 }
 
 // SnapshotSink is where snapshots are written
@@ -180,34 +180,34 @@ func NewNode(config core.RaftConfig, storage LogStore, snapshot SnapshotStore, f
 	}
 
 	n := &Node{
-		config:           config,
-		nodeID:           config.NodeID,
-		bindAddr:         config.BindAddr,
-		advertiseAddr:    config.AdvertiseAddr,
-		region:           "default",
-		state:            core.StateFollower,
-		currentTerm:      0,
-		votedFor:         "",
-		log:              make([]core.RaftLogEntry, 1), // Index 0 is unused
-		commitIndex:      0,
-		lastApplied:      0,
-		nextIndex:        make(map[string]uint64),
-		matchIndex:       make(map[string]uint64),
-		peers:            make(map[string]*Peer),
-		storage:          storage,
-		snapshot:         snapshot,
-		fsm:              fsm,
-		applyCh:          make(chan *applyFuture, 256),
-		commitCh:         make(chan uint64, 16),
-		rpcCh:            make(chan *rpcWrapper, 256),
-		shutdownCh:       make(chan struct{}),
-		doneCh:           make(chan struct{}),
-		electionTimeout:  config.ElectionTimeout.Duration,
-		heartbeatTimeout: config.HeartbeatTimeout.Duration,
-		commitTimeout:    config.CommitTimeout.Duration,
-		leaderID:         "",
-		lastContact:      time.Now(),
-		logger:           logger.With("component", "raft", "node_id", config.NodeID),
+		config:            config,
+		nodeID:            config.NodeID,
+		bindAddr:          config.BindAddr,
+		advertiseAddr:     config.AdvertiseAddr,
+		region:            "default",
+		state:             core.StateFollower,
+		currentTerm:       0,
+		votedFor:          "",
+		log:               make([]core.RaftLogEntry, 1), // Index 0 is unused
+		commitIndex:       0,
+		lastApplied:       0,
+		nextIndex:         make(map[string]uint64),
+		matchIndex:        make(map[string]uint64),
+		peers:             make(map[string]*Peer),
+		storage:           storage,
+		snapshot:          snapshot,
+		fsm:               fsm,
+		applyCh:           make(chan *applyFuture, 256),
+		commitCh:          make(chan uint64, 16),
+		rpcCh:             make(chan *rpcWrapper, 256),
+		shutdownCh:        make(chan struct{}),
+		doneCh:            make(chan struct{}),
+		electionTimeout:   config.ElectionTimeout.Duration,
+		heartbeatTimeout:  config.HeartbeatTimeout.Duration,
+		commitTimeout:     config.CommitTimeout.Duration,
+		leaderID:          "",
+		lastContact:       time.Now(),
+		logger:            logger.With("component", "raft", "node_id", config.NodeID),
 		snapshotThreshold: config.SnapshotThreshold,
 		lastSnapshotIndex: 0,
 	}
@@ -364,7 +364,7 @@ func (n *Node) Apply(cmd core.FSMCommand, timeout time.Duration) (uint64, uint64
 
 	if !n.IsLeader() {
 		return 0, 0, nil, &core.RaftError{
-			Code:   core.ErrNotLeader,
+			Code:    core.ErrNotLeader,
 			Message: "not leader",
 			NodeID:  n.Leader(),
 		}
@@ -452,10 +452,10 @@ func (n *Node) GetPeers() []core.RaftPeer {
 	peers := make([]core.RaftPeer, 0, len(n.peers))
 	for _, p := range n.peers {
 		peers = append(peers, core.RaftPeer{
-			ID:       p.ID,
-			Address:  p.Address,
-			Region:   p.Region,
-			Role:     p.Role,
+			ID:      p.ID,
+			Address: p.Address,
+			Region:  p.Region,
+			Role:    p.Role,
 		})
 	}
 	return peers
@@ -611,7 +611,7 @@ func (n *Node) startElection() {
 	votesGranted := n.requestVotes(term, lastLogIndex, lastLogTerm, peers)
 
 	// Check if we won
-	votesNeeded := int32((len(peers) + 1)/2 + 1)
+	votesNeeded := int32((len(peers)+1)/2 + 1)
 	if votesGranted >= votesNeeded {
 		n.becomeLeader()
 	} else {
@@ -681,7 +681,7 @@ func (n *Node) requestPreVotes(term, lastLogIndex, lastLogTerm uint64, peers []*
 	}
 
 	votes := preVotesGranted.Load()
-	needed := int32((len(peers) + 1)/2 + 1)
+	needed := int32((len(peers)+1)/2 + 1)
 
 	n.logger.Debug("PreVote results",
 		"votes", votes,
@@ -876,8 +876,8 @@ func (n *Node) handleAppendEntries(req *core.AppendEntriesRequest) *core.AppendE
 	if req.PrevLogIndex > 0 {
 		if req.PrevLogIndex >= uint64(len(n.log)) {
 			return &core.AppendEntriesResponse{
-				Term:      n.currentTerm,
-				Success:   false,
+				Term:       n.currentTerm,
+				Success:    false,
 				MatchIndex: uint64(len(n.log) - 1),
 			}
 		}
@@ -931,8 +931,8 @@ func (n *Node) handleAppendEntries(req *core.AppendEntriesRequest) *core.AppendE
 	}
 
 	return &core.AppendEntriesResponse{
-		Term:    n.currentTerm,
-		Success: true,
+		Term:       n.currentTerm,
+		Success:    true,
 		MatchIndex: req.PrevLogIndex + uint64(len(req.Entries)),
 	}
 }

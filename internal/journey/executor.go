@@ -17,18 +17,18 @@ import (
 // Executor handles multi-step synthetic monitoring journeys
 // Named after Duat, the Egyptian realm of the afterlife through which souls journey
 type Executor struct {
-	db        *storage.CobaltDB
-	logger    *slog.Logger
-	mu        sync.RWMutex
-	running   map[string]context.CancelFunc // journey ID -> cancel function
+	db      *storage.CobaltDB
+	logger  *slog.Logger
+	mu      sync.RWMutex
+	running map[string]context.CancelFunc // journey ID -> cancel function
 }
 
 // NewExecutor creates a new Journey executor
 func NewExecutor(db *storage.CobaltDB, logger *slog.Logger) *Executor {
 	return &Executor{
-		db:        db,
-		logger:    logger.With("component", "duat"),
-		running:   make(map[string]context.CancelFunc),
+		db:      db,
+		logger:  logger.With("component", "duat"),
+		running: make(map[string]context.CancelFunc),
 	}
 }
 

@@ -908,7 +908,7 @@ func (db *CobaltDB) GetUptimeHistory(soulID string, days int) ([]core.UptimeDay,
 
 	// Collect judgments by date
 	dayStats := make(map[string]struct {
-		up   int
+		up    int
 		total int
 	})
 
@@ -916,7 +916,7 @@ func (db *CobaltDB) GetUptimeHistory(soulID string, days int) ([]core.UptimeDay,
 	for i := 0; i < days; i++ {
 		day := now.AddDate(0, 0, -i).Format("2006-01-02")
 		dayStats[day] = struct {
-			up   int
+			up    int
 			total int
 		}{0, 0}
 	}

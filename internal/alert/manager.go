@@ -23,9 +23,9 @@ type Manager struct {
 	dispatchers map[core.AlertChannelType]ChannelDispatcher
 
 	// State
-	running  bool
-	stopCh   chan struct{}
-	queue    chan *core.AlertEvent
+	running bool
+	stopCh  chan struct{}
+	queue   chan *core.AlertEvent
 
 	// Dependencies
 	logger  *slog.Logger

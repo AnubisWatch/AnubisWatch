@@ -17,28 +17,28 @@ import (
 // RESTServer implements the HTTP REST API
 // The scribes record the judgments on papyrus scrolls
 type RESTServer struct {
-	mu       sync.RWMutex
-	config   core.ServerConfig
-	router   *Router
-	http     *http.Server
-	logger   *slog.Logger
-	mcp      *MCPServer
+	mu     sync.RWMutex
+	config core.ServerConfig
+	router *Router
+	http   *http.Server
+	logger *slog.Logger
+	mcp    *MCPServer
 
 	// Dependencies
-	store    Storage
-	probe    ProbeEngine
-	alert    AlertManager
-	auth     Authenticator
-	cluster  ClusterManager
-	dashboard http.Handler
+	store      Storage
+	probe      ProbeEngine
+	alert      AlertManager
+	auth       Authenticator
+	cluster    ClusterManager
+	dashboard  http.Handler
 	statusPage http.Handler
 }
 
 // Router handles HTTP routing
 type Router struct {
-	routes  map[string]map[string]Handler // path -> method -> handler
+	routes     map[string]map[string]Handler // path -> method -> handler
 	middleware []Middleware
-	dashboard http.Handler
+	dashboard  http.Handler
 	statusPage http.Handler
 }
 
@@ -50,21 +50,21 @@ type Middleware func(Handler) Handler
 
 // Context holds request context
 type Context struct {
-	Request  *http.Request
-	Response http.ResponseWriter
-	Params   map[string]string
-	User     *User
+	Request   *http.Request
+	Response  http.ResponseWriter
+	Params    map[string]string
+	User      *User
 	Workspace string
 	StartTime time.Time
 }
 
 // Pagination holds pagination metadata
 type Pagination struct {
-	Total     int    `json:"total"`
-	Offset    int    `json:"offset"`
-	Limit     int    `json:"limit"`
-	HasMore   bool   `json:"has_more"`
-	NextOffset *int  `json:"next_offset,omitempty"`
+	Total      int  `json:"total"`
+	Offset     int  `json:"offset"`
+	Limit      int  `json:"limit"`
+	HasMore    bool `json:"has_more"`
+	NextOffset *int `json:"next_offset,omitempty"`
 }
 
 // PaginatedResponse wraps data with pagination metadata
@@ -178,20 +178,20 @@ type User struct {
 // NewRESTServer creates a new REST server
 func NewRESTServer(config core.ServerConfig, store Storage, probe ProbeEngine, alert AlertManager, auth Authenticator, cluster ClusterManager, dashboard http.Handler, statusPage http.Handler, mcp *MCPServer, logger *slog.Logger) *RESTServer {
 	s := &RESTServer{
-		config:  config,
-		router:  &Router{
-			routes: make(map[string]map[string]Handler),
-			dashboard: dashboard,
+		config: config,
+		router: &Router{
+			routes:     make(map[string]map[string]Handler),
+			dashboard:  dashboard,
 			statusPage: statusPage,
 		},
-		logger:    logger.With("component", "rest_server"),
-		store:     store,
-		probe:     probe,
-		alert:     alert,
-		auth:      auth,
-		cluster:   cluster,
-		mcp:       mcp,
-		dashboard: dashboard,
+		logger:     logger.With("component", "rest_server"),
+		store:      store,
+		probe:      probe,
+		alert:      alert,
+		auth:       auth,
+		cluster:    cluster,
+		mcp:        mcp,
+		dashboard:  dashboard,
 		statusPage: statusPage,
 	}
 
@@ -378,9 +378,9 @@ func (s *RESTServer) handleListSouls(ctx *Context) error {
 	response := PaginatedResponse{
 		Data: souls,
 		Pagination: Pagination{
-			Offset:   offset,
-			Limit:    limit,
-			HasMore:  hasMore,
+			Offset:  offset,
+			Limit:   limit,
+			HasMore: hasMore,
 		},
 	}
 
@@ -508,10 +508,10 @@ func (s *RESTServer) handleListChannels(ctx *Context) error {
 	response := PaginatedResponse{
 		Data: channels,
 		Pagination: Pagination{
-			Total:    len(allChannels),
-			Offset:   offset,
-			Limit:    limit,
-			HasMore:  hasMore,
+			Total:   len(allChannels),
+			Offset:  offset,
+			Limit:   limit,
+			HasMore: hasMore,
 		},
 	}
 
@@ -605,10 +605,10 @@ func (s *RESTServer) handleListRules(ctx *Context) error {
 	response := PaginatedResponse{
 		Data: rules,
 		Pagination: Pagination{
-			Total:    len(allRules),
-			Offset:   offset,
-			Limit:    limit,
-			HasMore:  hasMore,
+			Total:   len(allRules),
+			Offset:  offset,
+			Limit:   limit,
+			HasMore: hasMore,
 		},
 	}
 
@@ -758,8 +758,8 @@ func (s *RESTServer) handleStatsOverview(ctx *Context) error {
 			"dead":     0,
 		},
 		"judgments": map[string]interface{}{
-			"today":     0,
-			"failures":  0,
+			"today":          0,
+			"failures":       0,
 			"avg_latency_ms": 0,
 		},
 		"alerts": s.alert.GetStats(),
@@ -1002,10 +1002,10 @@ func (s *RESTServer) rateLimitMiddleware(handler Handler) Handler {
 	}
 
 	var (
-		mu       sync.RWMutex
-		clients  = make(map[string]*clientState)
-		limit    = 100 // requests per minute
-		window   = time.Minute
+		mu      sync.RWMutex
+		clients = make(map[string]*clientState)
+		limit   = 100 // requests per minute
+		window  = time.Minute
 	)
 
 	cleanup := func() {

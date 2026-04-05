@@ -7,29 +7,29 @@ import (
 
 // Soul represents a monitored target — the entity whose heart is weighed.
 type Soul struct {
-	ID          string            `json:"id" yaml:"id"`
-	WorkspaceID string            `json:"workspace_id" yaml:"-"`
-	Name        string            `json:"name" yaml:"name"`
-	Type        CheckType         `json:"type" yaml:"type"`
-	Target      string            `json:"target" yaml:"target"`
-	Weight      Duration          `json:"weight" yaml:"weight"` // check interval
-	Timeout     Duration          `json:"timeout" yaml:"timeout"`
-	Enabled     bool              `json:"enabled" yaml:"enabled"`
-	Tags        []string          `json:"tags" yaml:"tags"`
-	Regions     []string          `json:"regions" yaml:"regions"` // restrict to specific regions
-	Region      string            `json:"region" yaml:"region"`   // assigned region
-	HTTP        *HTTPConfig       `json:"http,omitempty" yaml:"http,omitempty"`
-	TCP         *TCPConfig        `json:"tcp,omitempty" yaml:"tcp,omitempty"`
-	UDP         *UDPConfig        `json:"udp,omitempty" yaml:"udp,omitempty"`
-	DNS         *DNSConfig        `json:"dns,omitempty" yaml:"dns,omitempty"`
-	SMTP        *SMTPConfig       `json:"smtp,omitempty" yaml:"smtp,omitempty"`
-	IMAP        *IMAPConfig       `json:"imap,omitempty" yaml:"imap,omitempty"`
-	ICMP        *ICMPConfig       `json:"icmp,omitempty" yaml:"icmp,omitempty"`
-	GRPC        *GRPCConfig        `json:"grpc,omitempty" yaml:"grpc,omitempty"`
-	WebSocket   *WebSocketConfig  `json:"websocket,omitempty" yaml:"websocket,omitempty"`
-	TLS         *TLSConfig        `json:"tls,omitempty" yaml:"tls,omitempty"`
-	CreatedAt   time.Time         `json:"created_at" yaml:"-"`
-	UpdatedAt   time.Time         `json:"updated_at" yaml:"-"`
+	ID          string           `json:"id" yaml:"id"`
+	WorkspaceID string           `json:"workspace_id" yaml:"-"`
+	Name        string           `json:"name" yaml:"name"`
+	Type        CheckType        `json:"type" yaml:"type"`
+	Target      string           `json:"target" yaml:"target"`
+	Weight      Duration         `json:"weight" yaml:"weight"` // check interval
+	Timeout     Duration         `json:"timeout" yaml:"timeout"`
+	Enabled     bool             `json:"enabled" yaml:"enabled"`
+	Tags        []string         `json:"tags" yaml:"tags"`
+	Regions     []string         `json:"regions" yaml:"regions"` // restrict to specific regions
+	Region      string           `json:"region" yaml:"region"`   // assigned region
+	HTTP        *HTTPConfig      `json:"http,omitempty" yaml:"http,omitempty"`
+	TCP         *TCPConfig       `json:"tcp,omitempty" yaml:"tcp,omitempty"`
+	UDP         *UDPConfig       `json:"udp,omitempty" yaml:"udp,omitempty"`
+	DNS         *DNSConfig       `json:"dns,omitempty" yaml:"dns,omitempty"`
+	SMTP        *SMTPConfig      `json:"smtp,omitempty" yaml:"smtp,omitempty"`
+	IMAP        *IMAPConfig      `json:"imap,omitempty" yaml:"imap,omitempty"`
+	ICMP        *ICMPConfig      `json:"icmp,omitempty" yaml:"icmp,omitempty"`
+	GRPC        *GRPCConfig      `json:"grpc,omitempty" yaml:"grpc,omitempty"`
+	WebSocket   *WebSocketConfig `json:"websocket,omitempty" yaml:"websocket,omitempty"`
+	TLS         *TLSConfig       `json:"tls,omitempty" yaml:"tls,omitempty"`
+	CreatedAt   time.Time        `json:"created_at" yaml:"-"`
+	UpdatedAt   time.Time        `json:"updated_at" yaml:"-"`
 }
 
 // CheckType identifies the protocol checker to use
@@ -52,11 +52,11 @@ const (
 type SoulStatus string
 
 const (
-	SoulAlive    SoulStatus = "alive"     // Passed to Aaru (paradise)
-	SoulDead     SoulStatus = "dead"      // Devoured by Ammit
-	SoulDegraded SoulStatus = "degraded"  // Heart is heavy
-	SoulUnknown  SoulStatus = "unknown"   // Not yet judged
-	SoulEmbalmed SoulStatus = "embalmed"  // Maintenance window
+	SoulAlive    SoulStatus = "alive"    // Passed to Aaru (paradise)
+	SoulDead     SoulStatus = "dead"     // Devoured by Ammit
+	SoulDegraded SoulStatus = "degraded" // Heart is heavy
+	SoulUnknown  SoulStatus = "unknown"  // Not yet judged
+	SoulEmbalmed SoulStatus = "embalmed" // Maintenance window
 )
 
 // Duration is a YAML-friendly time.Duration
@@ -177,14 +177,14 @@ type WebSocketConfig struct {
 
 // TLSConfig defines TLS certificate check settings
 type TLSConfig struct {
-	ExpiryWarnDays       int      `json:"expiry_warn_days" yaml:"expiry_warn_days"`
-	ExpiryCriticalDays   int      `json:"expiry_critical_days" yaml:"expiry_critical_days"`
-	MinProtocol          string   `json:"min_protocol" yaml:"min_protocol"`
-	ForbiddenCiphers     []string `json:"forbidden_ciphers" yaml:"forbidden_ciphers"`
-	ExpectedIssuer       string   `json:"expected_issuer" yaml:"expected_issuer"`
-	ExpectedSAN          []string `json:"expected_san" yaml:"expected_san"`
-	CheckOCSP            bool     `json:"check_ocsp" yaml:"check_ocsp"`
-	MinKeyBits           int      `json:"min_key_bits" yaml:"min_key_bits"`
+	ExpiryWarnDays     int      `json:"expiry_warn_days" yaml:"expiry_warn_days"`
+	ExpiryCriticalDays int      `json:"expiry_critical_days" yaml:"expiry_critical_days"`
+	MinProtocol        string   `json:"min_protocol" yaml:"min_protocol"`
+	ForbiddenCiphers   []string `json:"forbidden_ciphers" yaml:"forbidden_ciphers"`
+	ExpectedIssuer     string   `json:"expected_issuer" yaml:"expected_issuer"`
+	ExpectedSAN        []string `json:"expected_san" yaml:"expected_san"`
+	CheckOCSP          bool     `json:"check_ocsp" yaml:"check_ocsp"`
+	MinKeyBits         int      `json:"min_key_bits" yaml:"min_key_bits"`
 }
 
 // RaftState represents the state of a Raft node
@@ -249,24 +249,24 @@ func (t LogEntryType) String() string {
 // RaftPeerInfo extends RaftPeer with runtime information
 type RaftPeerInfo struct {
 	RaftPeer
-	IsConnected    bool      `json:"is_connected"`
-	LastContact    time.Time `json:"last_contact"`
-	NextIndex      uint64    `json:"next_index"`
-	MatchIndex     uint64    `json:"match_index"`
-	Inflight       uint64    `json:"inflight"`
-	HeartbeatRTT   Duration  `json:"heartbeat_rtt"`
+	IsConnected  bool      `json:"is_connected"`
+	LastContact  time.Time `json:"last_contact"`
+	NextIndex    uint64    `json:"next_index"`
+	MatchIndex   uint64    `json:"match_index"`
+	Inflight     uint64    `json:"inflight"`
+	HeartbeatRTT Duration  `json:"heartbeat_rtt"`
 }
 
 // Stats represents system statistics
 type Stats struct {
-	TotalSouls      int                `json:"total_souls"`
-	AliveSouls      int                `json:"alive_souls"`
-	DeadSouls       int                `json:"dead_souls"`
-	DegradedSouls   int                `json:"degraded_souls"`
-	TotalJudgments  int64              `json:"total_judgments"`
-	AvgResponseTime Duration           `json:"avg_response_time"`
-	UptimePercent   float64            `json:"uptime_percent"`
-	ProbeStatus     *ProbeStatus       `json:"probe_status"`
+	TotalSouls      int          `json:"total_souls"`
+	AliveSouls      int          `json:"alive_souls"`
+	DeadSouls       int          `json:"dead_souls"`
+	DegradedSouls   int          `json:"degraded_souls"`
+	TotalJudgments  int64        `json:"total_judgments"`
+	AvgResponseTime Duration     `json:"avg_response_time"`
+	UptimePercent   float64      `json:"uptime_percent"`
+	ProbeStatus     *ProbeStatus `json:"probe_status"`
 }
 
 // ProbeStatus represents the probe engine status
@@ -284,31 +284,31 @@ type ProbeStatus struct {
 
 // ClusterState represents the current state of the cluster
 type ClusterState struct {
-	NodeID          string          `json:"node_id"`
-	State           RaftState       `json:"state"`
-	Term            uint64          `json:"term"`
-	LastLogIndex    uint64          `json:"last_log_index"`
-	LastLogTerm     uint64          `json:"last_log_term"`
-	CommitIndex     uint64          `json:"commit_index"`
-	LastApplied     uint64          `json:"last_applied"`
-	LeaderID        string          `json:"leader_id"`
-	VotedFor        string          `json:"voted_for"`
-	Peers           []RaftPeerInfo  `json:"peers"`
-	Stats           ClusterStats    `json:"stats"`
-	LastContact     time.Time       `json:"last_contact"`
-	Uptime          Duration        `json:"uptime"`
+	NodeID       string         `json:"node_id"`
+	State        RaftState      `json:"state"`
+	Term         uint64         `json:"term"`
+	LastLogIndex uint64         `json:"last_log_index"`
+	LastLogTerm  uint64         `json:"last_log_term"`
+	CommitIndex  uint64         `json:"commit_index"`
+	LastApplied  uint64         `json:"last_applied"`
+	LeaderID     string         `json:"leader_id"`
+	VotedFor     string         `json:"voted_for"`
+	Peers        []RaftPeerInfo `json:"peers"`
+	Stats        ClusterStats   `json:"stats"`
+	LastContact  time.Time      `json:"last_contact"`
+	Uptime       Duration       `json:"uptime"`
 }
 
 // ClusterStats holds cluster-wide statistics
 type ClusterStats struct {
-	TotalCommands          uint64 `json:"total_commands"`
-	AppliedCommands        uint64 `json:"applied_commands"`
-	FailedCommands         uint64 `json:"failed_commands"`
-	SnapshotsTaken         int    `json:"snapshots_taken"`
-	ElectionsWon           uint64 `json:"elections_won"`
-	ElectionsLost          uint64 `json:"elections_lost"`
-	LeaderChanges          uint64 `json:"leader_changes"`
-	HeartbeatCount         uint64 `json:"heartbeat_count"`
+	TotalCommands   uint64 `json:"total_commands"`
+	AppliedCommands uint64 `json:"applied_commands"`
+	FailedCommands  uint64 `json:"failed_commands"`
+	SnapshotsTaken  int    `json:"snapshots_taken"`
+	ElectionsWon    uint64 `json:"elections_won"`
+	ElectionsLost   uint64 `json:"elections_lost"`
+	LeaderChanges   uint64 `json:"leader_changes"`
+	HeartbeatCount  uint64 `json:"heartbeat_count"`
 }
 
 // NodeCapabilities describes what a node can do
@@ -389,11 +389,11 @@ const (
 
 // SnapshotMeta holds metadata about a snapshot
 type SnapshotMeta struct {
-	ID       string `json:"id"`
-	Index    uint64 `json:"index"`
-	Term     uint64 `json:"term"`
-	Size     int64  `json:"size"`
-	Version  uint64 `json:"version"`
+	ID      string `json:"id"`
+	Index   uint64 `json:"index"`
+	Term    uint64 `json:"term"`
+	Size    int64  `json:"size"`
+	Version uint64 `json:"version"`
 }
 
 // RaftError represents Raft-specific errors
@@ -409,16 +409,14 @@ func (e *RaftError) Error() string {
 
 // Common Raft error codes
 const (
-	ErrNotLeader            = "NOT_LEADER"
-	ErrLeadershipLost       = "LEADERSHIP_LOST"
-	ErrTimeout              = "TIMEOUT"
-	ErrShutdown             = "SHUTDOWN"
-	ErrUnknownPeer          = "UNKNOWN_PEER"
-	ErrPeerExists           = "PEER_EXISTS"
-	ErrTooManyPeers         = "TOO_MANY_PEERS"
-	ErrInvalidConfig        = "INVALID_CONFIG"
-	ErrLogNotFound          = "LOG_NOT_FOUND"
-	ErrSnapshotInProgress   = "SNAPSHOT_IN_PROGRESS"
+	ErrNotLeader          = "NOT_LEADER"
+	ErrLeadershipLost     = "LEADERSHIP_LOST"
+	ErrTimeout            = "TIMEOUT"
+	ErrShutdown           = "SHUTDOWN"
+	ErrUnknownPeer        = "UNKNOWN_PEER"
+	ErrPeerExists         = "PEER_EXISTS"
+	ErrTooManyPeers       = "TOO_MANY_PEERS"
+	ErrInvalidConfig      = "INVALID_CONFIG"
+	ErrLogNotFound        = "LOG_NOT_FOUND"
+	ErrSnapshotInProgress = "SNAPSHOT_IN_PROGRESS"
 )
-
-

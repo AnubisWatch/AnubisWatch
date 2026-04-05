@@ -46,8 +46,8 @@ type WSConn struct {
 // NewWebSocketServer creates a new WebSocket server
 func NewWebSocketServer(logger *slog.Logger) *WebSocketServer {
 	return &WebSocketServer{
-		clients:   make(map[string]*WSClient),
-		upgrader:  &WSUpgrader{
+		clients: make(map[string]*WSClient),
+		upgrader: &WSUpgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
 			CheckOrigin:     func(r *http.Request) bool { return true },

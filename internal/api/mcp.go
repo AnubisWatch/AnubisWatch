@@ -22,9 +22,9 @@ type MCPServer struct {
 	logger    *slog.Logger
 
 	// Dependencies
-	store  Storage
-	probe  ProbeEngine
-	alert  AlertManager
+	store Storage
+	probe ProbeEngine
+	alert AlertManager
 }
 
 // MCPTool represents an MCP tool (function)
@@ -37,18 +37,18 @@ type MCPTool struct {
 
 // MCPResource represents an MCP resource
 type MCPResource struct {
-	URI         string            `json:"uri"`
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	MIMEType    string            `json:"mimeType"`
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	MIMEType    string `json:"mimeType"`
 	Handler     func() (interface{}, error)
 }
 
 // MCPPrompt represents an MCP prompt
 type MCPPrompt struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Arguments   []MCPPromptArg    `json:"arguments"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Arguments   []MCPPromptArg `json:"arguments"`
 	Handler     func(args map[string]string) (string, error)
 }
 
@@ -572,7 +572,7 @@ func (s *MCPServer) handleCreateSoul(args json.RawMessage) (interface{}, error) 
 
 	if params.Interval != "" {
 		d, _ := time.ParseDuration(params.Interval)
-		soul.Weight = core.Duration{d}
+		soul.Weight = core.Duration{Duration: d}
 	}
 
 	return soul, s.store.SaveSoul(context.Background(), soul)

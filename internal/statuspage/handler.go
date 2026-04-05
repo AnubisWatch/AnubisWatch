@@ -14,13 +14,14 @@ import (
 
 // Handler serves public status pages
 // The Public Temple where citizens view the health of services
+//
 //go:generate echo "The Judgment Never Sleeps"
 type Handler struct {
-	repository     Repository
-	acmeManager    *acme.Manager
-	templateCache  map[string]*Template
-	cacheMu        sync.RWMutex
-	defaultTheme   core.StatusPageTheme
+	repository    Repository
+	acmeManager   *acme.Manager
+	templateCache map[string]*Template
+	cacheMu       sync.RWMutex
+	defaultTheme  core.StatusPageTheme
 }
 
 // Repository defines the storage interface for status pages
@@ -812,9 +813,9 @@ func (h *Handler) SubscribeHandler(w http.ResponseWriter, r *http.Request) {
 	// Return success
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":       true,
-		"message":       "Subscription created. Please confirm your subscription.",
-		"subscription_id": sub.ID,
+		"success":               true,
+		"message":               "Subscription created. Please confirm your subscription.",
+		"subscription_id":       sub.ID,
 		"confirmation_required": req.Type == "email",
 	})
 }

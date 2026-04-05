@@ -7,23 +7,23 @@ import (
 // StatusPage represents a public status page
 // The public temple where citizens view the health of services
 type StatusPage struct {
-	ID            string            `json:"id" yaml:"id"`
-	WorkspaceID   string            `json:"workspace_id" yaml:"workspace_id"`
-	Name          string            `json:"name" yaml:"name"`
-	Slug          string            `json:"slug" yaml:"slug"`
-	Description   string            `json:"description" yaml:"description"`
-	LogoURL       string            `json:"logo_url" yaml:"logo_url"`
-	FaviconURL    string            `json:"favicon_url" yaml:"favicon_url"`
-	CustomDomain  string            `json:"custom_domain" yaml:"custom_domain"`
-	Theme         StatusPageTheme   `json:"theme" yaml:"theme"`
-	Visibility    PageVisibility    `json:"visibility" yaml:"visibility"`
-	Enabled       bool              `json:"enabled" yaml:"enabled"`
-	Souls         []string          `json:"souls" yaml:"souls"` // Soul IDs to display
-	Groups        []StatusGroup     `json:"groups" yaml:"groups"`
-	Incidents     []StatusIncident  `json:"incidents" yaml:"incidents"`
-	UptimeDays    int               `json:"uptime_days" yaml:"uptime_days"` // Days to show
-	CreatedAt     time.Time         `json:"created_at" yaml:"-"`
-	UpdatedAt     time.Time         `json:"updated_at" yaml:"-"`
+	ID           string           `json:"id" yaml:"id"`
+	WorkspaceID  string           `json:"workspace_id" yaml:"workspace_id"`
+	Name         string           `json:"name" yaml:"name"`
+	Slug         string           `json:"slug" yaml:"slug"`
+	Description  string           `json:"description" yaml:"description"`
+	LogoURL      string           `json:"logo_url" yaml:"logo_url"`
+	FaviconURL   string           `json:"favicon_url" yaml:"favicon_url"`
+	CustomDomain string           `json:"custom_domain" yaml:"custom_domain"`
+	Theme        StatusPageTheme  `json:"theme" yaml:"theme"`
+	Visibility   PageVisibility   `json:"visibility" yaml:"visibility"`
+	Enabled      bool             `json:"enabled" yaml:"enabled"`
+	Souls        []string         `json:"souls" yaml:"souls"` // Soul IDs to display
+	Groups       []StatusGroup    `json:"groups" yaml:"groups"`
+	Incidents    []StatusIncident `json:"incidents" yaml:"incidents"`
+	UptimeDays   int              `json:"uptime_days" yaml:"uptime_days"` // Days to show
+	CreatedAt    time.Time        `json:"created_at" yaml:"-"`
+	UpdatedAt    time.Time        `json:"updated_at" yaml:"-"`
 }
 
 // StatusPageTheme contains theme configuration
@@ -58,9 +58,9 @@ type StatusGroup struct {
 type IncidentStatus string
 
 const (
-	IncidentOpen       IncidentStatus = "open"
-	IncidentAcked      IncidentStatus = "acknowledged"
-	IncidentResolved   IncidentStatus = "resolved"
+	IncidentOpen     IncidentStatus = "open"
+	IncidentAcked    IncidentStatus = "acknowledged"
+	IncidentResolved IncidentStatus = "resolved"
 	// Legacy aliases for status page compatibility
 	StatusOngoing       IncidentStatus = "ongoing"
 	StatusInvestigating IncidentStatus = "investigating"
@@ -71,15 +71,15 @@ const (
 
 // StatusIncident is an incident displayed on the status page
 type StatusIncident struct {
-	ID          string             `json:"id"`
-	Title       string             `json:"title"`
-	Description string             `json:"description"`
-	Status      IncidentStatus     `json:"status"`
-	Severity    Severity           `json:"severity"`
+	ID            string           `json:"id"`
+	Title         string           `json:"title"`
+	Description   string           `json:"description"`
+	Status        IncidentStatus   `json:"status"`
+	Severity      Severity         `json:"severity"`
 	AffectedSouls []string         `json:"affected_souls"`
-	StartedAt   time.Time          `json:"started_at"`
-	ResolvedAt  *time.Time         `json:"resolved_at,omitempty"`
-	Updates     []IncidentUpdate   `json:"updates"`
+	StartedAt     time.Time        `json:"started_at"`
+	ResolvedAt    *time.Time       `json:"resolved_at,omitempty"`
+	Updates       []IncidentUpdate `json:"updates"`
 }
 
 // IncidentUpdate is a status update for an incident
@@ -92,12 +92,12 @@ type IncidentUpdate struct {
 
 // StatusPageData is the data exposed via status page API
 type StatusPageData struct {
-	Page      StatusPageInfo     `json:"page"`
-	Status    OverallStatus      `json:"status"`
-	Souls     []SoulStatusInfo   `json:"souls"`
-	Groups    []GroupStatusInfo  `json:"groups"`
-	Incidents []StatusIncident   `json:"incidents"`
-	Uptime    UptimeData         `json:"uptime"`
+	Page      StatusPageInfo    `json:"page"`
+	Status    OverallStatus     `json:"status"`
+	Souls     []SoulStatusInfo  `json:"souls"`
+	Groups    []GroupStatusInfo `json:"groups"`
+	Incidents []StatusIncident  `json:"incidents"`
+	Uptime    UptimeData        `json:"uptime"`
 }
 
 // StatusPageInfo basic page info
@@ -119,12 +119,12 @@ type OverallStatus struct {
 
 // SoulStatusInfo is soul info for status page
 type SoulStatusInfo struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	Status         string    `json:"status"`
-	UptimePercent  float64   `json:"uptime_percent"`
-	LastCheckedAt  time.Time `json:"last_checked_at"`
-	ResponseTime   float64   `json:"response_time_ms"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Status        string    `json:"status"`
+	UptimePercent float64   `json:"uptime_percent"`
+	LastCheckedAt time.Time `json:"last_checked_at"`
+	ResponseTime  float64   `json:"response_time_ms"`
 }
 
 // GroupStatusInfo is group info for status page
@@ -137,8 +137,8 @@ type GroupStatusInfo struct {
 
 // UptimeData contains historical uptime
 type UptimeData struct {
-	Days        []UptimeDay `json:"days"`
-	Overall     float64     `json:"overall_percent"`
+	Days    []UptimeDay `json:"days"`
+	Overall float64     `json:"overall_percent"`
 }
 
 // UptimeDay is a single day's uptime
@@ -201,11 +201,11 @@ func GetDefaultTheme() StatusPageTheme {
 
 // StatusPageSubscription represents a subscription to updates
 type StatusPageSubscription struct {
-	ID          string    `json:"id"`
-	PageID      string    `json:"page_id"`
-	Email       string    `json:"email"`
-	WebhookURL  string    `json:"webhook_url"`
-	Type        string    `json:"type"` // email, webhook, rss
-	Confirmed   bool      `json:"confirmed"`
+	ID           string    `json:"id"`
+	PageID       string    `json:"page_id"`
+	Email        string    `json:"email"`
+	WebhookURL   string    `json:"webhook_url"`
+	Type         string    `json:"type"` // email, webhook, rss
+	Confirmed    bool      `json:"confirmed"`
 	SubscribedAt time.Time `json:"subscribed_at"`
 }

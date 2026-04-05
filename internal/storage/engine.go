@@ -17,21 +17,21 @@ import (
 // CobaltDB implements a B+Tree-based embedded storage engine
 // optimized for time-series monitoring data with MVCC support.
 type CobaltDB struct {
-	path      string
-	data      *btreeIndex
-	wal       *writeAheadLog
-	mu        sync.RWMutex
-	logger    *slog.Logger
-	closed    bool
-	closedMu  sync.Mutex
+	path       string
+	data       *btreeIndex
+	wal        *writeAheadLog
+	mu         sync.RWMutex
+	logger     *slog.Logger
+	closed     bool
+	closedMu   sync.Mutex
 	btreeOrder int // Configurable B+Tree order
 }
 
 // btreeIndex is an in-memory B+Tree index (simplified for Phase 1)
 type btreeIndex struct {
-	root     *btreeNode
-	nextSeq  uint64
-	mu       sync.RWMutex
+	root       *btreeNode
+	nextSeq    uint64
+	mu         sync.RWMutex
 	btreeOrder int // B+Tree order
 }
 
@@ -59,9 +59,9 @@ const (
 
 // writeAheadLog provides crash recovery
 type writeAheadLog struct {
-	path   string
-	file   *os.File
-	mu     sync.Mutex
+	path string
+	file *os.File
+	mu   sync.Mutex
 }
 
 // NewEngine creates a new CobaltDB storage engine

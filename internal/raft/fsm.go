@@ -12,9 +12,9 @@ import (
 // StorageFSM implements the FSM interface using CobaltDB
 // The sacred records inscribed on the tablets of the Necropolis
 type StorageFSM struct {
-	mu      sync.RWMutex
-	store   Storage
-	index   uint64
+	mu    sync.RWMutex
+	store Storage
+	index uint64
 }
 
 // Storage is the interface for key-value storage

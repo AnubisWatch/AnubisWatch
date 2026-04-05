@@ -12,7 +12,7 @@ import (
 
 // EngineConfig configures probe engine behavior
 type EngineConfig struct {
-	MaxConcurrentChecks int           // Maximum concurrent checks (default: 100)
+	MaxConcurrentChecks int // Maximum concurrent checks (default: 100)
 	CircuitBreaker      CircuitBreakerConfig
 	NodeID              string
 	Region              string
@@ -20,10 +20,10 @@ type EngineConfig struct {
 
 // CircuitBreakerConfig configures circuit breaker behavior
 type CircuitBreakerConfig struct {
-	Enabled         bool          // Enable circuit breaker
+	Enabled          bool          // Enable circuit breaker
 	FailureThreshold int           // Failures before opening (default: 5)
 	SuccessThreshold int           // Successes before closing (default: 3)
-	Timeout         time.Duration // Time before attempting again (default: 30s)
+	Timeout          time.Duration // Time before attempting again (default: 30s)
 }
 
 // DefaultEngineConfig returns default engine configuration
@@ -31,10 +31,10 @@ func DefaultEngineConfig() EngineConfig {
 	return EngineConfig{
 		MaxConcurrentChecks: 100,
 		CircuitBreaker: CircuitBreakerConfig{
-			Enabled:         true,
+			Enabled:          true,
 			FailureThreshold: 5,
 			SuccessThreshold: 3,
-			Timeout:         30 * time.Second,
+			Timeout:          30 * time.Second,
 		},
 	}
 }
@@ -42,12 +42,12 @@ func DefaultEngineConfig() EngineConfig {
 // Engine is the probe scheduling and execution engine.
 // It manages the lifecycle of all soul checks on this Jackal.
 type Engine struct {
-	registry  *CheckerRegistry
-	store     Storage
-	alerter   AlertDispatcher
-	nodeID    string
-	region    string
-	config    EngineConfig
+	registry *CheckerRegistry
+	store    Storage
+	alerter  AlertDispatcher
+	nodeID   string
+	region   string
+	config   EngineConfig
 
 	souls  map[string]*soulRunner
 	mu     sync.RWMutex
@@ -377,13 +377,13 @@ func (e *Engine) GetStatus() *core.ProbeStatus {
 	defer e.mu.RUnlock()
 
 	return &core.ProbeStatus{
-		Running:      true,
-		ActiveChecks: len(e.souls),
+		Running:       true,
+		ActiveChecks:  len(e.souls),
 		ChecksRunning: int(e.checksRunning.Load()),
-		FailedChecks: e.failedChecks.Load(),
-		TotalChecks:  e.totalChecks.Load(),
-		NodeID:       e.nodeID,
-		Region:       e.region,
+		FailedChecks:  e.failedChecks.Load(),
+		TotalChecks:   e.totalChecks.Load(),
+		NodeID:        e.nodeID,
+		Region:        e.region,
 	}
 }
 

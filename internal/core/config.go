@@ -321,7 +321,7 @@ func GenerateDefaultConfig() *Config {
 			Host: "0.0.0.0",
 			Port: 8443,
 			TLS: TLSServerConfig{
-				Enabled: true,
+				Enabled:  true,
 				AutoCert: true,
 			},
 		},

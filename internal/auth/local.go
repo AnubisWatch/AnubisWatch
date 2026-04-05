@@ -15,12 +15,12 @@ import (
 
 // LocalAuthenticator implements simple token-based auth
 type LocalAuthenticator struct {
-	mu           sync.RWMutex
-	tokens       map[string]*session
-	users        map[string]*api.User
-	sessionPath  string
-	stopCleanup  chan struct{}
-	cleanupDone  chan struct{}
+	mu          sync.RWMutex
+	tokens      map[string]*session
+	users       map[string]*api.User
+	sessionPath string
+	stopCleanup chan struct{}
+	cleanupDone chan struct{}
 }
 
 type session struct {

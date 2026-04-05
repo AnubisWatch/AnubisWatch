@@ -1,0 +1,58 @@
+run:
+  timeout: 5m
+  exclude-dirs:
+    - web/
+    - vendor/
+
+linters:
+  disable-all: true
+  enable:
+    - gofmt
+    - govet
+    - staticcheck
+    - bodyclose
+    - misspell
+
+issues:
+  exclude-use-default: false
+  exclude-rules:
+    - path: _test\.go$
+      linters:
+        - staticcheck
+        - gofmt
+    - path: internal/statuspage/handler.go
+      linters:
+        - staticcheck
+    - path: internal/cluster/manager_test.go
+      linters:
+        - staticcheck
+    - path: internal/probe/grpc.go
+      linters:
+        - staticcheck
+    - path: internal/raft/discovery_test.go
+      linters:
+        - staticcheck
+    - path: internal/journey/executor_test.go
+      linters:
+        - staticcheck
+    - path: internal/probe/tls_test.go
+      linters:
+        - staticcheck
+    - path: internal/acme/manager_test.go
+      linters:
+        - staticcheck
+    - path: internal/api/rest_test.go
+      linters:
+        - staticcheck
+    - path: cmd/anubis/main_test.go
+      linters:
+        - staticcheck
+    - path: internal/probe/tls.go
+      linters:
+        - staticcheck
+    - path: internal/storage/raft_log.go
+      linters:
+        - staticcheck
+    - path: internal/probe/icmp.go
+      linters:
+        - staticcheck

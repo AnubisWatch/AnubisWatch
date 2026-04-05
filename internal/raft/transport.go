@@ -17,22 +17,22 @@ import (
 
 // TCPTransport implements Transport over TCP with optional TLS
 type TCPTransport struct {
-	bindAddr     string
+	bindAddr      string
 	advertiseAddr string
-	tlsConfig    *tls.Config
-	listener     net.Listener
+	tlsConfig     *tls.Config
+	listener      net.Listener
 
-	handlers     map[string]RPCHandler
-	handlerMu    sync.RWMutex
+	handlers  map[string]RPCHandler
+	handlerMu sync.RWMutex
 
 	// Connection pool with peer addresses
-	connections  map[string]net.Conn
-	peerAddrs    map[string]string // peerID -> address mapping
-	connMu       sync.Mutex
+	connections map[string]net.Conn
+	peerAddrs   map[string]string // peerID -> address mapping
+	connMu      sync.Mutex
 
-	logger       *slog.Logger
-	shutdown     bool
-	doneCh       chan struct{}
+	logger   *slog.Logger
+	shutdown bool
+	doneCh   chan struct{}
 }
 
 // RPCHandler handles incoming RPCs

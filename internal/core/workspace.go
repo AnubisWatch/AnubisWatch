@@ -32,12 +32,12 @@ type WorkspaceSettings struct {
 
 // WorkspaceBranding contains custom branding settings
 type WorkspaceBranding struct {
-	LogoURL        string `json:"logo_url" yaml:"logo_url"`
-	FaviconURL     string `json:"favicon_url" yaml:"favicon_url"`
-	PrimaryColor   string `json:"primary_color" yaml:"primary_color"`
-	AccentColor    string `json:"accent_color" yaml:"accent_color"`
-	CustomCSS      string `json:"custom_css" yaml:"custom_css"`
-	HidePoweredBy  bool   `json:"hide_powered_by" yaml:"hide_powered_by"`
+	LogoURL       string `json:"logo_url" yaml:"logo_url"`
+	FaviconURL    string `json:"favicon_url" yaml:"favicon_url"`
+	PrimaryColor  string `json:"primary_color" yaml:"primary_color"`
+	AccentColor   string `json:"accent_color" yaml:"accent_color"`
+	CustomCSS     string `json:"custom_css" yaml:"custom_css"`
+	HidePoweredBy bool   `json:"hide_powered_by" yaml:"hide_powered_by"`
 }
 
 // NotificationPrefs contains notification preferences
@@ -69,33 +69,33 @@ const (
 
 // Member represents a workspace member
 type Member struct {
-	ID          string        `json:"id"`
-	WorkspaceID string        `json:"workspace_id"`
-	UserID      string        `json:"user_id"`
-	Role        MemberRole    `json:"role"`
-	JoinedAt    time.Time     `json:"joined_at"`
-	LastActive  time.Time     `json:"last_active"`
+	ID          string     `json:"id"`
+	WorkspaceID string     `json:"workspace_id"`
+	UserID      string     `json:"user_id"`
+	Role        MemberRole `json:"role"`
+	JoinedAt    time.Time  `json:"joined_at"`
+	LastActive  time.Time  `json:"last_active"`
 }
 
 // MemberRole defines permission levels
 type MemberRole string
 
 const (
-	RoleOwner     MemberRole = "owner"     // Full access
-	RoleAdmin     MemberRole = "admin"     // Manage souls, channels, members
-	RoleEditor    MemberRole = "editor"    // Manage souls only
-	RoleViewer    MemberRole = "viewer"    // Read-only access
-	RoleAPI       MemberRole = "api"       // API-only access
+	RoleOwner  MemberRole = "owner"  // Full access
+	RoleAdmin  MemberRole = "admin"  // Manage souls, channels, members
+	RoleEditor MemberRole = "editor" // Manage souls only
+	RoleViewer MemberRole = "viewer" // Read-only access
+	RoleAPI    MemberRole = "api"    // API-only access
 )
 
 // Can checks if role has permission
 func (r MemberRole) Can(permission string) bool {
 	perms := map[MemberRole][]string{
-		RoleOwner:     {"*"},
-		RoleAdmin:     {"souls:*", "channels:*", "rules:*", "members:*", "settings:read", "settings:write"},
-		RoleEditor:    {"souls:*", "channels:read", "rules:read"},
-		RoleViewer:    {"souls:read", "judgments:read", "channels:read", "rules:read"},
-		RoleAPI:       {"souls:*", "judgments:read", "api:*"},
+		RoleOwner:  {"*"},
+		RoleAdmin:  {"souls:*", "channels:*", "rules:*", "members:*", "settings:read", "settings:write"},
+		RoleEditor: {"souls:*", "channels:read", "rules:read"},
+		RoleViewer: {"souls:read", "judgments:read", "channels:read", "rules:read"},
+		RoleAPI:    {"souls:*", "judgments:read", "api:*"},
 	}
 
 	rolePerms, ok := perms[r]
