@@ -284,7 +284,7 @@ func TestConfig_applyEnvOverrides(t *testing.T) {
 		validate func(*testing.T, *Config)
 	}{
 		{
-			name: "ANUBIS_HOST",
+			name:    "ANUBIS_HOST",
 			envVars: map[string]string{"ANUBIS_HOST": "custom-host"},
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.Server.Host != "custom-host" {
@@ -293,7 +293,7 @@ func TestConfig_applyEnvOverrides(t *testing.T) {
 			},
 		},
 		{
-			name: "ANUBIS_PORT",
+			name:    "ANUBIS_PORT",
 			envVars: map[string]string{"ANUBIS_PORT": "9090"},
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.Server.Port != 9090 {
@@ -302,7 +302,7 @@ func TestConfig_applyEnvOverrides(t *testing.T) {
 			},
 		},
 		{
-			name: "ANUBIS_DATA_DIR",
+			name:    "ANUBIS_DATA_DIR",
 			envVars: map[string]string{"ANUBIS_DATA_DIR": "/custom/data"},
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.Storage.Path != "/custom/data" {
@@ -311,7 +311,7 @@ func TestConfig_applyEnvOverrides(t *testing.T) {
 			},
 		},
 		{
-			name: "ANUBIS_ENCRYPTION_KEY",
+			name:    "ANUBIS_ENCRYPTION_KEY",
 			envVars: map[string]string{"ANUBIS_ENCRYPTION_KEY": "test-key-123"},
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.Storage.Encryption.Key != "test-key-123" {
@@ -323,7 +323,7 @@ func TestConfig_applyEnvOverrides(t *testing.T) {
 			},
 		},
 		{
-			name: "ANUBIS_CLUSTER_SECRET",
+			name:    "ANUBIS_CLUSTER_SECRET",
 			envVars: map[string]string{"ANUBIS_CLUSTER_SECRET": "secret-123"},
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.Necropolis.ClusterSecret != "secret-123" {
@@ -332,7 +332,7 @@ func TestConfig_applyEnvOverrides(t *testing.T) {
 			},
 		},
 		{
-			name: "ANUBIS_ADMIN_PASSWORD",
+			name:    "ANUBIS_ADMIN_PASSWORD",
 			envVars: map[string]string{"ANUBIS_ADMIN_PASSWORD": "admin-pass"},
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.Auth.Local.AdminPassword != "admin-pass" {
@@ -341,7 +341,7 @@ func TestConfig_applyEnvOverrides(t *testing.T) {
 			},
 		},
 		{
-			name: "ANUBIS_LOG_LEVEL",
+			name:    "ANUBIS_LOG_LEVEL",
 			envVars: map[string]string{"ANUBIS_LOG_LEVEL": "debug"},
 			validate: func(t *testing.T, cfg *Config) {
 				if cfg.Logging.Level != "debug" {
@@ -350,7 +350,7 @@ func TestConfig_applyEnvOverrides(t *testing.T) {
 			},
 		},
 		{
-			name: "invalid port",
+			name:    "invalid port",
 			envVars: map[string]string{"ANUBIS_PORT": "invalid"},
 			validate: func(t *testing.T, cfg *Config) {
 				// Invalid port should not update the value (defaults to 0)
@@ -362,9 +362,9 @@ func TestConfig_applyEnvOverrides(t *testing.T) {
 		{
 			name: "multiple overrides",
 			envVars: map[string]string{
-				"ANUBIS_HOST":         "multi-host",
-				"ANUBIS_PORT":         "8888",
-				"ANUBIS_LOG_LEVEL":    "warn",
+				"ANUBIS_HOST":           "multi-host",
+				"ANUBIS_PORT":           "8888",
+				"ANUBIS_LOG_LEVEL":      "warn",
 				"ANUBIS_ADMIN_PASSWORD": "multi-pass",
 			},
 			validate: func(t *testing.T, cfg *Config) {

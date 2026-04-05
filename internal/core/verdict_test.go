@@ -197,11 +197,11 @@ func TestValidateSlug(t *testing.T) {
 
 	// Invalid slugs
 	invalidSlugs := []string{
-		"",           // empty
-		"test_slug",  // underscore
-		"TEST",       // uppercase
-		"test slug",  // space
-		"a",          // too short
+		"",          // empty
+		"test_slug", // underscore
+		"TEST",      // uppercase
+		"test slug", // space
+		"a",         // too short
 		"a very long slug that exceeds the maximum length allowed", // too long
 	}
 	for _, slug := range invalidSlugs {

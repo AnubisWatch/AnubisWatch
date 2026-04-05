@@ -29,13 +29,13 @@ func newTestDB(t *testing.T) *storage.CobaltDB {
 
 func newTestRaftConfig() core.RaftConfig {
 	return core.RaftConfig{
-		NodeID:         "test-node-1",
-		BindAddr:       "127.0.0.1:0",
-		AdvertiseAddr:  "127.0.0.1:7000",
-		Bootstrap:      false,
-		ElectionTimeout: core.Duration{Duration: 1 * time.Second},
+		NodeID:           "test-node-1",
+		BindAddr:         "127.0.0.1:0",
+		AdvertiseAddr:    "127.0.0.1:7000",
+		Bootstrap:        false,
+		ElectionTimeout:  core.Duration{Duration: 1 * time.Second},
 		HeartbeatTimeout: core.Duration{Duration: 500 * time.Millisecond},
-		CommitTimeout:  core.Duration{Duration: 100 * time.Millisecond},
+		CommitTimeout:    core.Duration{Duration: 100 * time.Millisecond},
 		MaxAppendEntries: 64,
 	}
 }
@@ -85,27 +85,27 @@ func TestManager_IsClustered(t *testing.T) {
 	defer db.Close()
 
 	tests := []struct {
-		name          string
-		bootstrap     bool
-		peers         []core.RaftPeer
+		name              string
+		bootstrap         bool
+		peers             []core.RaftPeer
 		expectedClustered bool
 	}{
 		{
-			name:          "bootstrap mode",
-			bootstrap:     true,
-			peers:         []core.RaftPeer{},
+			name:              "bootstrap mode",
+			bootstrap:         true,
+			peers:             []core.RaftPeer{},
 			expectedClustered: true,
 		},
 		{
-			name:          "with peers",
-			bootstrap:     false,
-			peers:         []core.RaftPeer{{ID: "node-2", Address: "127.0.0.1:7001"}},
+			name:              "with peers",
+			bootstrap:         false,
+			peers:             []core.RaftPeer{{ID: "node-2", Address: "127.0.0.1:7001"}},
 			expectedClustered: true,
 		},
 		{
-			name:          "standalone mode",
-			bootstrap:     false,
-			peers:         []core.RaftPeer{},
+			name:              "standalone mode",
+			bootstrap:         false,
+			peers:             []core.RaftPeer{},
 			expectedClustered: false,
 		},
 	}
