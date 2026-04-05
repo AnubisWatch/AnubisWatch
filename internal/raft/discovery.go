@@ -85,6 +85,7 @@ type MDNSServer struct {
 	txt      []string
 	shutdown bool
 	conn     *net.UDPConn
+	connMu   sync.Mutex
 }
 
 // MDNSClient handles mDNS service discovery
@@ -94,6 +95,7 @@ type MDNSClient struct {
 	results  chan *MDNSService
 	shutdown bool
 	conn     *net.UDPConn
+	connMu   sync.Mutex
 	ctx      context.Context
 	cancel   context.CancelFunc
 }
@@ -484,7 +486,9 @@ func (s *MDNSServer) Start() error {
 		return err
 	}
 
+	s.connMu.Lock()
 	s.conn = conn
+	s.connMu.Unlock()
 	s.shutdown = false
 
 	// Start listening
@@ -531,8 +535,12 @@ func (s *MDNSServer) broadcastPresence() {
 			Port: 7947,
 		}
 
-		if s.conn != nil {
-			s.conn.WriteToUDP([]byte(msg), broadcastAddr)
+		s.connMu.Lock()
+		conn := s.conn
+		s.connMu.Unlock()
+
+		if conn != nil {
+			conn.WriteToUDP([]byte(msg), broadcastAddr)
 		}
 
 		<-ticker.C
@@ -541,6 +549,8 @@ func (s *MDNSServer) broadcastPresence() {
 
 func (s *MDNSServer) Stop() {
 	s.shutdown = true
+	s.connMu.Lock()
+	defer s.connMu.Unlock()
 	if s.conn != nil {
 		s.conn.Close()
 	}
@@ -571,7 +581,9 @@ func (c *MDNSClient) Start() error {
 		return err
 	}
 
+	c.connMu.Lock()
 	c.conn = conn
+	c.connMu.Unlock()
 	c.shutdown = false
 
 	// Start listening for responses
@@ -643,6 +655,8 @@ func (c *MDNSClient) queryPeriodically() {
 func (c *MDNSClient) Stop() {
 	c.shutdown = true
 	c.cancel()
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 	if c.conn != nil {
 		c.conn.Close()
 	}
@@ -657,8 +671,12 @@ func (c *MDNSClient) Query(service string) []*MDNSService {
 		Port: 7947,
 	}
 
-	if c.conn != nil {
-		c.conn.WriteToUDP([]byte(queryMsg), broadcastAddr)
+	c.connMu.Lock()
+	conn := c.conn
+	c.connMu.Unlock()
+
+	if conn != nil {
+		conn.WriteToUDP([]byte(queryMsg), broadcastAddr)
 	}
 
 	// Collect responses
