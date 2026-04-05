@@ -390,15 +390,15 @@ func (e *Engine) GetStatus() *core.ProbeStatus {
 // GetSoulStatus returns the current status of a soul
 func (e *Engine) GetSoulStatus(soulID string) (*core.SoulStatus, error) {
 	e.mu.RLock()
-	_, ok := e.souls[soulID]
+	runner, ok := e.souls[soulID]
 	e.mu.RUnlock()
 
 	if !ok {
 		return nil, &core.NotFoundError{Entity: "soul", ID: soulID}
 	}
 
-	// TODO: Return actual status from latest judgment
-	return nil, nil
+	// Return the last known status from the runner
+	return &runner.lastStatus, nil
 }
 
 // ListActiveSouls returns all currently assigned souls

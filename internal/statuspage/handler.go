@@ -302,11 +302,26 @@ func (h *Handler) buildStatusPageData(page *core.StatusPage) (*core.StatusPageDa
 			status = string(lastJudgment.Status)
 		}
 
+		// Calculate uptime from 30-day history
+		uptimePercent := 100.0
+		history, err := h.repository.GetUptimeHistory(soulID, 30)
+		if err == nil && len(history) > 0 {
+			totalHours := 0.0
+			upHours := 0.0
+			for _, day := range history {
+				totalHours += 24.0
+				upHours += 24.0 * (day.Uptime / 100.0)
+			}
+			if totalHours > 0 {
+				uptimePercent = (upHours / totalHours) * 100.0
+			}
+		}
+
 		soulInfo := core.SoulStatusInfo{
 			ID:            soul.ID,
 			Name:          soul.Name,
 			Status:        status,
-			UptimePercent: 100.0, // TODO: Calculate from history
+			UptimePercent: uptimePercent,
 			LastCheckedAt: lastJudgment.Timestamp,
 			ResponseTime:  float64(lastJudgment.Duration.Milliseconds()),
 		}
