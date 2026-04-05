@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -156,9 +157,12 @@ func TestDistributor_Recompute_UnknownStrategy(t *testing.T) {
 func TestDistributor_Recompute_WithCallback(t *testing.T) {
 	d := NewDistributor("node-1", "default", core.StrategyRoundRobin)
 
+	var mu sync.Mutex
 	callbackCalled := false
 	d.SetOnRebalanceCallback(func(plan core.DistributionPlan) {
+		mu.Lock()
 		callbackCalled = true
+		mu.Unlock()
 	})
 
 	// Add healthy node
@@ -181,7 +185,11 @@ func TestDistributor_Recompute_WithCallback(t *testing.T) {
 	// Give goroutine time to call callback
 	time.Sleep(50 * time.Millisecond)
 
-	if !callbackCalled {
+	mu.Lock()
+	wasCalled := callbackCalled
+	mu.Unlock()
+
+	if !wasCalled {
 		t.Error("Expected callback to be called")
 	}
 }

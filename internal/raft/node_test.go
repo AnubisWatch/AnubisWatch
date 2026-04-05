@@ -1031,9 +1031,12 @@ func TestDistributor_IsResponsible(t *testing.T) {
 
 func TestDistributor_SetOnRebalanceCallback(t *testing.T) {
 	d := NewDistributor("node-1", "default", core.StrategyRoundRobin)
+	var mu sync.Mutex
 	called := false
 	d.SetOnRebalanceCallback(func(plan core.DistributionPlan) {
+		mu.Lock()
 		called = true
+		mu.Unlock()
 	})
 
 	// Trigger recompute which should call the callback
@@ -1044,7 +1047,11 @@ func TestDistributor_SetOnRebalanceCallback(t *testing.T) {
 	// Give goroutine time to call callback
 	time.Sleep(10 * time.Millisecond)
 
-	if !called {
+	mu.Lock()
+	wasCalled := called
+	mu.Unlock()
+
+	if !wasCalled {
 		t.Error("Expected onRebalance callback to be called")
 	}
 }
