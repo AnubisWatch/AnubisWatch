@@ -4,8 +4,10 @@ run:
 linters:
   default: none
   enable:
-    - gofmt
     - govet
     - staticcheck
     - bodyclose
     - misspell
+formatters:
+  enable:
+    - gofmt
