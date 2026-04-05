@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -1239,9 +1240,12 @@ func TestDistributor_pickBestWeighted_Empty(t *testing.T) {
 func TestDistributor_TriggerRebalance(t *testing.T) {
 	d := NewDistributor("node-1", "default", core.StrategyRoundRobin)
 
+	var mu sync.Mutex
 	called := false
 	d.SetOnRebalanceCallback(func(plan core.DistributionPlan) {
+		mu.Lock()
 		called = true
+		mu.Unlock()
 	})
 
 	d.AddNode(&core.NodeInfo{ID: "node-1", Region: "default", Address: "127.0.0.1:7001", CanProbe: true})
@@ -1253,7 +1257,11 @@ func TestDistributor_TriggerRebalance(t *testing.T) {
 	// Give goroutine time to call callback
 	time.Sleep(10 * time.Millisecond)
 
-	if !called {
+	mu.Lock()
+	wasCalled := called
+	mu.Unlock()
+
+	if !wasCalled {
 		t.Error("Expected rebalance callback to be called")
 	}
 }
