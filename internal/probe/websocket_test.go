@@ -168,7 +168,7 @@ func TestWebSocketChecker_Judge_WSS(t *testing.T) {
 
 	// Create TLS listener
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
-		Certificates: []tls.Certificate{cert},
+		Certificates:       []tls.Certificate{cert},
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
@@ -254,10 +254,10 @@ func TestWebSocketChecker_Judge_UpgradeFailed(t *testing.T) {
 	checker := NewWebSocketChecker()
 
 	soul := &core.Soul{
-		ID:     "test-ws",
-		Name:   "Test WebSocket",
-		Type:   core.CheckWebSocket,
-		Target: "ws://" + listener.Addr().String(),
+		ID:      "test-ws",
+		Name:    "Test WebSocket",
+		Type:    core.CheckWebSocket,
+		Target:  "ws://" + listener.Addr().String(),
 		Timeout: core.Duration{Duration: 5 * time.Second},
 	}
 
@@ -300,10 +300,10 @@ func TestWebSocketChecker_Judge_InvalidAcceptHeader(t *testing.T) {
 	checker := NewWebSocketChecker()
 
 	soul := &core.Soul{
-		ID:     "test-ws",
-		Name:   "Test WebSocket",
-		Type:   core.CheckWebSocket,
-		Target: "ws://" + listener.Addr().String(),
+		ID:      "test-ws",
+		Name:    "Test WebSocket",
+		Type:    core.CheckWebSocket,
+		Target:  "ws://" + listener.Addr().String(),
 		Timeout: core.Duration{Duration: 5 * time.Second},
 	}
 
@@ -361,7 +361,7 @@ func TestWebSocketChecker_Judge_SendMessage(t *testing.T) {
 		Type:   core.CheckWebSocket,
 		Target: "ws://" + listener.Addr().String(),
 		WebSocket: &core.WebSocketConfig{
-			Send:          "test message",
+			Send:           "test message",
 			ExpectContains: "echo",
 		},
 		Timeout: core.Duration{Duration: 5 * time.Second},
@@ -420,7 +420,7 @@ func TestWebSocketChecker_Judge_ExpectContainsMismatch(t *testing.T) {
 		Type:   core.CheckWebSocket,
 		Target: "ws://" + listener.Addr().String(),
 		WebSocket: &core.WebSocketConfig{
-			Send:          "test",
+			Send:           "test",
 			ExpectContains: "expected",
 		},
 		Timeout: core.Duration{Duration: 5 * time.Second},
@@ -657,10 +657,10 @@ func TestWebSocketChecker_Judge_ConnectionRefused(t *testing.T) {
 	checker := NewWebSocketChecker()
 
 	soul := &core.Soul{
-		ID:     "test-ws",
-		Name:   "Test WebSocket",
-		Type:   core.CheckWebSocket,
-		Target: "ws://127.0.0.1:1",
+		ID:      "test-ws",
+		Name:    "Test WebSocket",
+		Type:    core.CheckWebSocket,
+		Target:  "ws://127.0.0.1:1",
 		Timeout: core.Duration{Duration: 2 * time.Second},
 	}
 
@@ -821,8 +821,8 @@ func TestBuildWebSocketTextFrame(t *testing.T) {
 		payload     string
 		expectedLen int
 	}{
-		{"short", "Hello", 7},        // 2 bytes header + 5 bytes payload
-		{"empty", "", 2},             // 2 bytes header
+		{"short", "Hello", 7},                     // 2 bytes header + 5 bytes payload
+		{"empty", "", 2},                          // 2 bytes header
 		{"medium", strings.Repeat("a", 100), 102}, // 2 bytes header + 100 bytes
 	}
 
@@ -871,10 +871,10 @@ func TestWebSocketChecker_Judge_NoUpgradeHeader(t *testing.T) {
 	checker := NewWebSocketChecker()
 
 	soul := &core.Soul{
-		ID:     "test-ws",
-		Name:   "Test WebSocket",
-		Type:   core.CheckWebSocket,
-		Target: "ws://" + listener.Addr().String(),
+		ID:      "test-ws",
+		Name:    "Test WebSocket",
+		Type:    core.CheckWebSocket,
+		Target:  "ws://" + listener.Addr().String(),
 		Timeout: core.Duration{Duration: 5 * time.Second},
 	}
 
@@ -932,10 +932,10 @@ func TestWebSocketChecker_Judge_PortDefaults(t *testing.T) {
 
 	// These tests will fail to connect but verify the URL parsing
 	soul := &core.Soul{
-		ID:     "test-ws",
-		Name:   "Test WebSocket",
-		Type:   core.CheckWebSocket,
-		Target: "ws://example.com", // No port
+		ID:      "test-ws",
+		Name:    "Test WebSocket",
+		Type:    core.CheckWebSocket,
+		Target:  "ws://example.com", // No port
 		Timeout: core.Duration{Duration: 100 * time.Millisecond},
 	}
 

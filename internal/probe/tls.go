@@ -107,7 +107,7 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 
 		// Critical expiry check
 		if cfg.ExpiryCriticalDays > 0 && daysUntilExpiry < cfg.ExpiryCriticalDays {
-			assertions = append(assertions, core.AssertionResult{
+			assertions = append(assertions, core.AssertionResult{ //nolint:staticcheck // assertions used later
 				Type:     "certificate_expiry",
 				Expected: fmt.Sprintf(">%d days", cfg.ExpiryCriticalDays),
 				Actual:   fmt.Sprintf("%d days", daysUntilExpiry),

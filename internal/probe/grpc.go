@@ -100,10 +100,8 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	defer resp.Body.Close()
 
 	// Read response body (limited)
-	_, err = io.ReadAll(io.LimitReader(resp.Body, maxReadSize))
-	if err != nil {
-		// Non-fatal, we got a response - ignore read error
-	}
+	_, _ = io.ReadAll(io.LimitReader(resp.Body, maxReadSize))
+	// Error intentionally ignored - we got a response, body content not needed
 
 	// Check gRPC status from headers
 	grpcStatus := resp.Header.Get("Grpc-Status") // "0" = OK

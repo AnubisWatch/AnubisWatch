@@ -114,9 +114,8 @@ func TestDiscovery_RegisterPeerCallback(t *testing.T) {
 
 	// Callback should be registered (no error)
 	// We can't easily trigger it without full gossip setup
-	if !called {
-		// Expected - callback not triggered yet
-	}
+	// Expected - callback not triggered yet in this test
+	_ = called
 }
 
 func TestDiscovery_StartStop(t *testing.T) {

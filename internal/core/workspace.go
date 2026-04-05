@@ -167,15 +167,13 @@ func ValidateSlug(slug string) error {
 		return &ValidationError{Field: "slug", Message: "slug must be 3-63 characters"}
 	}
 	// Check valid characters (lowercase, numbers, hyphens)
-	valid := true
 	for _, c := range slug {
-		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
-			valid = false
-			break
+		isLower := c >= 'a' && c <= 'z'
+		isDigit := c >= '0' && c <= '9'
+		isHyphen := c == '-'
+		if !(isLower || isDigit || isHyphen) {
+			return &ValidationError{Field: "slug", Message: "slug must contain only lowercase letters, numbers, and hyphens"}
 		}
-	}
-	if !valid {
-		return &ValidationError{Field: "slug", Message: "slug must contain only lowercase letters, numbers, and hyphens"}
 	}
 	return nil
 }

@@ -530,8 +530,8 @@ func TestUDPChecker_Judge_ExpectContains(t *testing.T) {
 		Target:  "8.8.8.8:53",
 		Timeout: core.Duration{Duration: 2 * time.Second},
 		UDP: &core.UDPConfig{
-			SendHex:         "000101000001000000000000076578616d706c6503636f6d0000010001",
-			ExpectContains:  "example",
+			SendHex:        "000101000001000000000000076578616d706c6503636f6d0000010001",
+			ExpectContains: "example",
 		},
 	}
 
@@ -554,8 +554,8 @@ func TestUDPChecker_Judge_ExpectContainsMismatch(t *testing.T) {
 		Target:  "8.8.8.8:53",
 		Timeout: core.Duration{Duration: 2 * time.Second},
 		UDP: &core.UDPConfig{
-			SendHex:         "000101000001000000000000076578616d706c6503636f6d0000010001",
-			ExpectContains:  "this_will_never_be_in_dns_response_xyz123",
+			SendHex:        "000101000001000000000000076578616d706c6503636f6d0000010001",
+			ExpectContains: "this_will_never_be_in_dns_response_xyz123",
 		},
 	}
 

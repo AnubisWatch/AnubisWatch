@@ -223,10 +223,10 @@ func TestSMTPChecker_Judge_UnexpectedGreeting(t *testing.T) {
 	checker := NewSMTPChecker()
 
 	soul := &core.Soul{
-		ID:     "test-smtp",
-		Name:   "Test SMTP",
-		Type:   core.CheckSMTP,
-		Target: server.Addr(),
+		ID:      "test-smtp",
+		Name:    "Test SMTP",
+		Type:    core.CheckSMTP,
+		Target:  server.Addr(),
 		Timeout: core.Duration{Duration: 5 * time.Second},
 	}
 
@@ -326,10 +326,10 @@ func TestSMTPChecker_Judge_ConnectionRefused(t *testing.T) {
 	checker := NewSMTPChecker()
 
 	soul := &core.Soul{
-		ID:     "test-smtp",
-		Name:   "Test SMTP",
-		Type:   core.CheckSMTP,
-		Target: "127.0.0.1:1", // Invalid port
+		ID:      "test-smtp",
+		Name:    "Test SMTP",
+		Type:    core.CheckSMTP,
+		Target:  "127.0.0.1:1", // Invalid port
 		Timeout: core.Duration{Duration: 2 * time.Second},
 	}
 
@@ -353,10 +353,10 @@ func TestSMTPChecker_Judge_Timeout(t *testing.T) {
 	checker := NewSMTPChecker()
 
 	soul := &core.Soul{
-		ID:     "test-smtp",
-		Name:   "Test SMTP",
-		Type:   core.CheckSMTP,
-		Target: server.Addr(),
+		ID:      "test-smtp",
+		Name:    "Test SMTP",
+		Type:    core.CheckSMTP,
+		Target:  server.Addr(),
 		Timeout: core.Duration{Duration: 100 * time.Millisecond},
 	}
 
@@ -546,7 +546,7 @@ func TestIMAPChecker_Judge_TLS(t *testing.T) {
 		// TLS handshake happens first
 		tlsConn := tls.Server(conn, &tls.Config{
 			InsecureSkipVerify: true,
-			Certificates: []tls.Certificate{loadTestCert(t)},
+			Certificates:       []tls.Certificate{loadTestCert(t)},
 		})
 		if err := tlsConn.Handshake(); err != nil {
 			return
@@ -673,10 +673,10 @@ func TestIMAPChecker_Judge_ConnectionRefused(t *testing.T) {
 	checker := NewIMAPChecker()
 
 	soul := &core.Soul{
-		ID:     "test-imap",
-		Name:   "Test IMAP",
-		Type:   core.CheckIMAP,
-		Target: "127.0.0.1:1",
+		ID:      "test-imap",
+		Name:    "Test IMAP",
+		Type:    core.CheckIMAP,
+		Target:  "127.0.0.1:1",
 		Timeout: core.Duration{Duration: 2 * time.Second},
 	}
 
@@ -840,10 +840,10 @@ func TestSMTPChecker_Judge_ContextCancellation(t *testing.T) {
 	checker := NewSMTPChecker()
 
 	soul := &core.Soul{
-		ID:     "test-smtp",
-		Name:   "Test SMTP",
-		Type:   core.CheckSMTP,
-		Target: server.Addr(),
+		ID:      "test-smtp",
+		Name:    "Test SMTP",
+		Type:    core.CheckSMTP,
+		Target:  server.Addr(),
 		Timeout: core.Duration{Duration: 5 * time.Second},
 	}
 
