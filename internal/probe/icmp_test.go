@@ -556,3 +556,305 @@ func TestICMPChecker_Judge_Localhost(t *testing.T) {
 	// Localhost should respond quickly if ICMP is allowed
 	t.Logf("ICMP localhost judgment: %s", judgment.Message)
 }
+
+// TestICMPChecker_Judge_IPv6NonPrivileged tests IPv6 in non-privileged mode
+func TestICMPChecker_Judge_IPv6NonPrivileged(t *testing.T) {
+	checker := NewICMPChecker()
+
+	soul := &core.Soul{
+		ID:     "test-icmp",
+		Name:   "Test ICMP IPv6 Non-Privileged",
+		Type:   core.CheckICMP,
+		Target: "::1", // IPv6 localhost
+		ICMP: &core.ICMPConfig{
+			Count:      1,
+			Privileged: false, // Use UDP mode
+		},
+		Timeout: core.Duration{Duration: 2 * time.Second},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	t.Logf("ICMP IPv6 non-privileged judgment: %s", judgment.Message)
+}
+
+// TestICMPChecker_Judge_ZeroTimeout tests default timeout handling
+func TestICMPChecker_Judge_ZeroTimeout(t *testing.T) {
+	checker := NewICMPChecker()
+
+	soul := &core.Soul{
+		ID:     "test-icmp",
+		Name:   "Test ICMP Zero Timeout",
+		Type:   core.CheckICMP,
+		Target: "8.8.8.8",
+		ICMP: &core.ICMPConfig{
+			Count: 1,
+		},
+		Timeout: core.Duration{Duration: 0}, // Should default to 5s
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	t.Logf("ICMP zero timeout judgment: %s", judgment.Message)
+}
+
+// TestICMPChecker_Judge_AvgLatencyCalculation tests average latency calculation
+func TestICMPChecker_Judge_AvgLatencyCalculation(t *testing.T) {
+	checker := NewICMPChecker()
+
+	soul := &core.Soul{
+		ID:     "test-icmp",
+		Name:   "Test ICMP Avg Latency",
+		Type:   core.CheckICMP,
+		Target: "8.8.8.8",
+		ICMP: &core.ICMPConfig{
+			Count: 3,
+		},
+		Timeout: core.Duration{Duration: 5 * time.Second},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// If packets received, avg should be between min and max
+	if judgment.Details.PacketsReceived > 0 {
+		if judgment.Details.AvgLatency < judgment.Details.MinLatency {
+			t.Errorf("Avg latency %.2f should be >= min latency %.2f",
+				judgment.Details.AvgLatency, judgment.Details.MinLatency)
+		}
+		if judgment.Details.AvgLatency > judgment.Details.MaxLatency {
+			t.Errorf("Avg latency %.2f should be <= max latency %.2f",
+				judgment.Details.AvgLatency, judgment.Details.MaxLatency)
+		}
+	}
+}
+
+// TestICMPChecker_Judge_MaxLatencyEqualsMinWhenOnePacket tests max/min with single packet
+func TestICMPChecker_Judge_MaxLatencyEqualsMinWhenOnePacket(t *testing.T) {
+	checker := NewICMPChecker()
+
+	soul := &core.Soul{
+		ID:     "test-icmp",
+		Name:   "Test ICMP Single Packet",
+		Type:   core.CheckICMP,
+		Target: "8.8.8.8",
+		ICMP: &core.ICMPConfig{
+			Count: 1,
+		},
+		Timeout: core.Duration{Duration: 5 * time.Second},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// With single packet received, min should equal max
+	if judgment.Details.PacketsReceived == 1 {
+		if judgment.Details.MinLatency != judgment.Details.MaxLatency {
+			t.Errorf("With 1 packet, min %.2f should equal max %.2f",
+				judgment.Details.MinLatency, judgment.Details.MaxLatency)
+		}
+	}
+}
+
+// TestICMPChecker_Judge_PacketLossCalculation tests packet loss percentage
+func TestICMPChecker_Judge_PacketLossCalculation(t *testing.T) {
+	checker := NewICMPChecker()
+
+	soul := &core.Soul{
+		ID:     "test-icmp",
+		Name:   "Test ICMP Packet Loss",
+		Type:   core.CheckICMP,
+		Target: "8.8.8.8",
+		ICMP: &core.ICMPConfig{
+			Count: 4,
+		},
+		Timeout: core.Duration{Duration: 5 * time.Second},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Verify packet loss calculation
+	if judgment.Details.PacketsSent > 0 {
+		expectedLoss := float64(judgment.Details.PacketsSent-judgment.Details.PacketsReceived) / float64(judgment.Details.PacketsSent) * 100
+		if judgment.Details.PacketLoss != expectedLoss {
+			t.Errorf("Expected packet loss %.1f%%, got %.1f%%", expectedLoss, judgment.Details.PacketLoss)
+		}
+	}
+}
+
+// TestICMPChecker_Judge_NoMaxLossPercent tests behavior without max loss percent set
+func TestICMPChecker_Judge_NoMaxLossPercent(t *testing.T) {
+	checker := NewICMPChecker()
+
+	soul := &core.Soul{
+		ID:     "test-icmp",
+		Name:   "Test ICMP No Max Loss",
+		Type:   core.CheckICMP,
+		Target: "8.8.8.8",
+		ICMP: &core.ICMPConfig{
+			Count:          3,
+			MaxLossPercent: 0, // No limit
+		},
+		Timeout: core.Duration{Duration: 5 * time.Second},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should not fail due to packet loss when MaxLossPercent is 0
+	t.Logf("ICMP no max loss judgment: %s", judgment.Message)
+}
+
+// TestICMPChecker_Judge_EmptyTarget tests validation for empty target
+func TestICMPChecker_Judge_EmptyTarget(t *testing.T) {
+	checker := NewICMPChecker()
+
+	soul := &core.Soul{
+		ID:     "test-icmp",
+		Name:   "Test ICMP Empty Target",
+		Type:   core.CheckICMP,
+		Target: "", // Empty target
+		ICMP: &core.ICMPConfig{
+			Count: 1,
+		},
+		Timeout: core.Duration{Duration: 5 * time.Second},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should fail with empty target
+	if judgment.Status != core.SoulDead {
+		t.Errorf("Expected status Dead for empty target, got %s", judgment.Status)
+	}
+}
+
+// TestICMPChecker_Judge_FeatherThreshold tests feather threshold for degraded status
+func TestICMPChecker_Judge_FeatherThreshold(t *testing.T) {
+	checker := NewICMPChecker()
+
+	// Use a very low feather threshold to force degraded status
+	soul := &core.Soul{
+		ID:     "test-icmp",
+		Name:   "Test ICMP Feather",
+		Type:   core.CheckICMP,
+		Target: "8.8.8.8",
+		ICMP: &core.ICMPConfig{
+			Count:  3,
+			Feather: core.Duration{Duration: 1 * time.Microsecond}, // Very low threshold
+		},
+		Timeout: core.Duration{Duration: 5 * time.Second},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// If packets received and latency > 1 microsecond, should be degraded
+	if judgment.Details.PacketsReceived > 0 {
+		t.Logf("Feather threshold judgment status: %s", judgment.Status)
+	}
+}
+
+// TestICMPChecker_Judge_PrivilegedMode tests ICMP in privileged mode
+func TestICMPChecker_Judge_PrivilegedMode(t *testing.T) {
+	checker := NewICMPChecker()
+
+	soul := &core.Soul{
+		ID:   "test-icmp-privileged",
+		Name: "Test ICMP Privileged",
+		Type: core.CheckICMP,
+		Target: "127.0.0.1",
+		ICMP: &core.ICMPConfig{
+			Count:      1,
+			Privileged: true, // Use raw sockets
+		},
+		Timeout: core.Duration{Duration: 2 * time.Second},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// Should get a judgment (may fail due to permissions, but code path is exercised)
+	if judgment == nil {
+		t.Fatal("Expected judgment")
+	}
+	t.Logf("Privileged mode judgment: %s", judgment.Message)
+}
+
+// TestICMPChecker_Judge_MaxLossPercentThreshold tests max loss percent threshold
+func TestICMPChecker_Judge_MaxLossPercentThreshold(t *testing.T) {
+	checker := NewICMPChecker()
+
+	soul := &core.Soul{
+		ID:   "test-icmp-loss",
+		Name: "Test ICMP Loss",
+		Type: core.CheckICMP,
+		Target: "192.0.2.1", // TEST-NET-1, should not respond
+		ICMP: &core.ICMPConfig{
+			Count:          3,
+			MaxLossPercent: 10.0, // Very low threshold
+		},
+		Timeout: core.Duration{Duration: 1 * time.Second},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	// All packets should be lost
+	if judgment.Status != core.SoulDead {
+		t.Logf("Expected Dead status due to packet loss, got %s", judgment.Status)
+	}
+}
+
+// TestICMPChecker_Judge_DefaultCount tests default count when count is 0
+func TestICMPChecker_Judge_DefaultCount(t *testing.T) {
+	checker := NewICMPChecker()
+
+	soul := &core.Soul{
+		ID:   "test-icmp-default",
+		Name: "Test ICMP Default",
+		Type: core.CheckICMP,
+		Target: "8.8.8.8",
+		ICMP: &core.ICMPConfig{
+			Count: 0, // Should default to 3
+		},
+		Timeout: core.Duration{Duration: 5 * time.Second},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	if judgment == nil {
+		t.Fatal("Expected judgment")
+	}
+	// Test that default count logic works - judgment should exist
+	t.Logf("Default count test: PacketsSent=%d, PacketsReceived=%d", judgment.Details.PacketsSent, judgment.Details.PacketsReceived)
+}
+
+// TestICMPChecker_Judge_DefaultInterval tests default interval when interval is 0
+func TestICMPChecker_Judge_DefaultInterval(t *testing.T) {
+	checker := NewICMPChecker()
+
+	soul := &core.Soul{
+		ID:   "test-icmp-interval",
+		Name: "Test ICMP Interval",
+		Type: core.CheckICMP,
+		Target: "8.8.8.8",
+		ICMP: &core.ICMPConfig{
+			Count:    2,
+			Interval: core.Duration{Duration: 0}, // Should default to 200ms
+		},
+		Timeout: core.Duration{Duration: 5 * time.Second},
+	}
+
+	ctx := context.Background()
+	judgment, _ := checker.Judge(ctx, soul)
+
+	if judgment == nil {
+		t.Fatal("Expected judgment")
+	}
+	t.Logf("Default interval test: %s", judgment.Message)
+}

@@ -568,7 +568,8 @@ func TestIMAPChecker_Judge_TLS(t *testing.T) {
 		Type:   core.CheckIMAP,
 		Target: listener.Addr().String(),
 		IMAP: &core.IMAPConfig{
-			TLS: true,
+			TLS:                true,
+			InsecureSkipVerify: true, // Test server uses self-signed cert
 		},
 		Timeout: core.Duration{Duration: 5 * time.Second},
 	}
@@ -1043,4 +1044,24 @@ func TestSMTPChecker_Judge_STARTTLSFullFlow(t *testing.T) {
 		t.Fatalf("Judge failed: %v", err)
 	}
 	t.Logf("STARTTLS full flow result: %s - %s", judgment.Status, judgment.Message)
+}
+
+func TestSMTPChecker_Judge_ContextTimeout(t *testing.T) {
+	checker := NewSMTPChecker()
+
+	soul := &core.Soul{
+		Target: "192.0.2.1:25", // RFC 5737 TEST-NET-1 - should timeout
+		SMTP:   &core.SMTPConfig{},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	judgment, err := checker.Judge(ctx, soul)
+	if err != nil {
+		t.Logf("Judge with timeout returned error (expected): %v", err)
+	}
+	if judgment != nil && judgment.Status != core.SoulDead {
+		t.Errorf("Expected dead status, got %v", judgment.Status)
+	}
 }

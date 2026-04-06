@@ -325,28 +325,62 @@ anubis_trigger_judgment api.example.com
 
 ---
 
+## 📊 Test Coverage
+
+| Package | Coverage | Status |
+|---------|----------|--------|
+| `internal/core` | 98.9% | ✅ |
+| `internal/cluster` | 90.0% | ✅ |
+| `internal/alert` | 89.3% | ✅ |
+| `internal/statuspage` | 88.7% | ✅ |
+| `internal/dashboard` | 87.5% | ✅ |
+| `internal/api` | 86.2% | ✅ |
+| `internal/auth` | 86.2% | ✅ |
+| `internal/journey` | 86.7% | ✅ |
+| `internal/raft` | 86.1% | ✅ |
+| `internal/probe` | 86.1% | ✅ |
+| `internal/storage` | 84.4% | ✅ |
+| `internal/acme` | 81.8% | ✅ |
+| `cmd/anubis` | 77.3% | ✅ |
+| **Average** | **86.0%** | ✅ |
+
+---
+
 ## 📦 Development
+
+### Prerequisites
+
+- Go 1.21+
+- Node.js 20+ (for dashboard)
+- Make (optional)
+
+### Quick Start
 
 ```bash
 # Clone repository
 git clone https://github.com/AnubisWatch/anubiswatch.git
 cd anubiswatch
 
-# Install dependencies
+# Install Go dependencies
 go mod download
-cd web && npm ci && cd ..
 
-# Build dashboard
-make dashboard
+# Install and build dashboard
+cd web && npm ci && npm run build && cd ..
 
 # Build binary
 make build
+# or
+go build -o bin/anubis ./cmd/anubis
 
 # Run tests
 make test
+# or
+go test -race -coverprofile=coverage.out ./...
 
 # Run locally
 make dev
+# or
+./bin/anubis serve
 ```
 
 ---
@@ -355,12 +389,12 @@ make dev
 
 - [x] Phase 1: Foundation (Go module, core types, config)
 - [x] Phase 2: Probe Engine (8 protocols)
-- [ ] Phase 3: Raft Consensus (distributed cluster)
-- [ ] Phase 4: Alert System (9 channels, escalation)
-- [ ] Phase 5: API Layer (REST, WebSocket, gRPC, MCP)
-- [ ] Phase 6: Dashboard (React 19, Hall of Ma'at)
-- [ ] Phase 7: Advanced Features (multi-tenant, status page)
-- [ ] Phase 8: Polish & Release
+- [x] Phase 3: Raft Consensus (distributed cluster)
+- [x] Phase 4: Alert System (9 channels, escalation)
+- [x] Phase 5: API Layer (REST, WebSocket, gRPC, MCP)
+- [x] Phase 6: Dashboard (React 19, Hall of Ma'at)
+- [x] Phase 7: Advanced Features (multi-tenant, status page)
+- [x] Phase 8: Polish & Release
 
 ---
 

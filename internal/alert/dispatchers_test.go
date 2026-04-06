@@ -1267,3 +1267,4 @@ func TestDiscordDispatcher_getColor(t *testing.T) {
 		}
 	}
 }
+

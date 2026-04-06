@@ -1,8 +1,11 @@
 package core
 
 import (
+	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestSoulValidation(t *testing.T) {
@@ -305,5 +308,96 @@ func TestRaftError_Error(t *testing.T) {
 	expected2 := "raft error [TIMEOUT]: operation timed out"
 	if err2.Error() != expected2 {
 		t.Errorf("Expected %q, got %q", expected2, err2.Error())
+	}
+}
+
+func TestDuration_UnmarshalYAML(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected time.Duration
+		wantErr  bool
+	}{
+		{
+			name:     "seconds",
+			input:    "\"30s\"",
+			expected: 30 * time.Second,
+			wantErr:  false,
+		},
+		{
+			name:     "minutes",
+			input:    "\"5m\"",
+			expected: 5 * time.Minute,
+			wantErr:  false,
+		},
+		{
+			name:     "hours",
+			input:    "\"1h\"",
+			expected: time.Hour,
+			wantErr:  false,
+		},
+		{
+			name:     "complex",
+			input:    "\"1h30m\"",
+			expected: 90 * time.Minute,
+			wantErr:  false,
+		},
+		{
+			name:     "invalid",
+			input:    "\"invalid\"",
+			expected: 0,
+			wantErr:  true,
+		},
+		{
+			name:     "empty",
+			input:    "\"\"",
+			expected: 0,
+			wantErr:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var d Duration
+			err := yaml.Unmarshal([]byte(tt.input), &d)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("UnmarshalYAML() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !tt.wantErr && d.Duration != tt.expected {
+				t.Errorf("Expected duration %v, got %v", tt.expected, d.Duration)
+			}
+		})
+	}
+}
+
+func TestDuration_MarshalYAML(t *testing.T) {
+	d := Duration{Duration: 5 * time.Minute}
+	data, err := yaml.Marshal(d)
+	if err != nil {
+		t.Fatalf("MarshalYAML failed: %v", err)
+	}
+
+	// Should marshal to string format
+	if !strings.Contains(string(data), "5m") {
+		t.Errorf("Expected marshaled YAML to contain '5m', got %s", string(data))
+	}
+}
+
+func TestDuration_UnmarshalYAML_Error(t *testing.T) {
+	// Test unmarshal error - invalid YAML type
+	yamlContent := "invalid: [not a string]"
+	var result struct {
+		Invalid Duration `yaml:"invalid"`
+	}
+	err := yaml.Unmarshal([]byte(yamlContent), &result)
+	// This may or may not error depending on yaml behavior
+	_ = err
+
+	// Test invalid duration string
+	var d Duration
+	err = yaml.Unmarshal([]byte("\"invalid_duration\""), &d)
+	if err == nil {
+		t.Error("Expected error for invalid duration string")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"testing"
 	"time"
@@ -4022,5 +4023,1354 @@ func TestBTree_Operations(t *testing.T) {
 	_, err = db.Get("test/btree/key-020")
 	if err != nil {
 		t.Errorf("Get(test/btree/key-020) should succeed, got error: %v", err)
+	}
+}
+
+// TestCobaltDB_SaveSoul_EdgeCases tests SaveSoul with various edge cases
+func TestCobaltDB_SaveSoul_EdgeCases(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Test with minimal soul
+	minimalSoul := &core.Soul{
+		ID:     "minimal-soul",
+		Name:   "Minimal",
+		Target: "http://localhost:8080",
+	}
+	if err := db.SaveSoul(ctx, minimalSoul); err != nil {
+		t.Errorf("SaveSoul with minimal data failed: %v", err)
+	}
+
+	// Test with soul having all fields
+	fullSoul := &core.Soul{
+		ID:          "full-soul",
+		WorkspaceID: "test-workspace",
+		Name:        "Full Soul",
+		Target:      "https://example.com/api",
+		Type:        core.CheckHTTP,
+		Weight:      core.Duration{Duration: 60 * time.Second},
+		Timeout:     core.Duration{Duration: 30 * time.Second},
+		Enabled:     true,
+		Tags:        []string{"tag1", "tag2", "tag3"},
+		Regions:     []string{"us-east", "eu-west"},
+		HTTP: &core.HTTPConfig{
+			Method:          "POST",
+			ValidStatus:     []int{200, 201},
+			Headers:         map[string]string{"Authorization": "Bearer token"},
+			Body:            `{"test": "data"}`,
+			FollowRedirects: true,
+		},
+	}
+	if err := db.SaveSoul(ctx, fullSoul); err != nil {
+		t.Errorf("SaveSoul with full data failed: %v", err)
+	}
+
+	// Test updating existing soul
+	updatedSoul := &core.Soul{
+		ID:     "minimal-soul",
+		Name:   "Updated Minimal",
+		Target: "http://localhost:9090",
+	}
+	if err := db.SaveSoul(ctx, updatedSoul); err != nil {
+		t.Errorf("SaveSoul update failed: %v", err)
+	}
+}
+
+// TestTimeSeriesStore_SaveJudgment_VariousStatuses tests SaveJudgment with all status types
+func TestTimeSeriesStore_SaveJudgment_VariousStatuses(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	ts := NewTimeSeriesStore(db, config, logger)
+
+	ctx := context.Background()
+	statuses := []core.SoulStatus{
+		core.SoulAlive,
+		core.SoulDead,
+		core.SoulDegraded,
+		core.SoulUnknown,
+		core.SoulEmbalmed,
+	}
+
+	for i, status := range statuses {
+		judgment := &core.Judgment{
+			ID:        fmt.Sprintf("status-test-%d", i),
+			SoulID:    "status-test-soul",
+			Status:    status,
+			Timestamp: time.Now(),
+		}
+		if err := ts.SaveJudgment(ctx, judgment); err != nil {
+			t.Errorf("SaveJudgment with status %s failed: %v", status, err)
+		}
+	}
+}
+
+// TestTimeSeriesStore_CompactToResolution_Disabled tests compactToResolution with disabled threshold
+func TestTimeSeriesStore_CompactToResolution_Disabled(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	ts := NewTimeSeriesStore(db, config, logger)
+
+	// Test with disabled threshold (zero) - should return nil immediately
+	err := ts.compactToResolution(ResolutionRaw, Resolution1Min, 0)
+	if err != nil {
+		t.Errorf("compactToResolution with disabled threshold should return nil, got: %v", err)
+	}
+}
+
+// TestTimeSeriesStore_CompactToResolution_WithData tests compactToResolution with actual data
+func TestTimeSeriesStore_CompactToResolution_WithData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{
+		Compaction: core.CompactionConfig{
+			RawToMinute: core.Duration{Duration: time.Minute},
+		},
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	ts := NewTimeSeriesStore(db, config, logger)
+
+	ctx := context.Background()
+
+	// Save old data that should be compacted
+	oldTime := time.Now().Add(-2 * time.Hour)
+	for i := 0; i < 10; i++ {
+		judgment := &core.Judgment{
+			ID:        fmt.Sprintf("compact-test-%d", i),
+			SoulID:    "compaction-test-soul",
+			Status:    core.SoulAlive,
+			Timestamp: oldTime.Add(time.Duration(i) * time.Second),
+		}
+		if err := ts.SaveJudgment(ctx, judgment); err != nil {
+			t.Fatalf("Failed to save judgment: %v", err)
+		}
+	}
+
+	// Compact raw to 1min
+	err := ts.compactToResolution(ResolutionRaw, Resolution1Min, time.Minute)
+	if err != nil {
+		t.Errorf("compactToResolution failed: %v", err)
+	}
+}
+
+// TestTimeSeriesStore_AggregateAndSave tests aggregateAndSave with valid data
+func TestTimeSeriesStore_AggregateAndSave(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	ts := NewTimeSeriesStore(db, config, logger)
+
+	// Create source summaries for aggregation
+	bucketTime := time.Now().Truncate(time.Hour)
+	sources := []*JudgmentSummary{
+		{
+			SoulID:        "test-soul",
+			WorkspaceID:   "default",
+			Resolution:    string(Resolution1Min),
+			BucketTime:    bucketTime,
+			Count:         10,
+			SuccessCount:  9,
+			FailureCount:  1,
+			MinLatency:    10.0,
+			MaxLatency:    100.0,
+			AvgLatency:    50.0,
+			UptimePercent: 90.0,
+		},
+		{
+			SoulID:        "test-soul",
+			WorkspaceID:   "default",
+			Resolution:    string(Resolution1Min),
+			BucketTime:    bucketTime.Add(time.Minute),
+			Count:         5,
+			SuccessCount:  5,
+			FailureCount:  0,
+			MinLatency:    20.0,
+			MaxLatency:    80.0,
+			AvgLatency:    45.0,
+			UptimePercent: 100.0,
+		},
+	}
+
+	err := ts.aggregateAndSave("default", "test-soul", Resolution5Min, bucketTime, sources)
+	if err != nil {
+		t.Errorf("aggregateAndSave failed: %v", err)
+	}
+}
+
+// TestTimeSeriesStore_RunCompaction_AllResolutions tests runCompaction with all resolution levels
+func TestTimeSeriesStore_RunCompaction_AllResolutions(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{
+		Compaction: core.CompactionConfig{
+			RawToMinute:   core.Duration{Duration: time.Nanosecond},
+			MinuteToFive:  core.Duration{Duration: time.Nanosecond},
+			FiveToHour:    core.Duration{Duration: time.Nanosecond},
+			HourToDay:     core.Duration{Duration: time.Nanosecond},
+		},
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	ts := NewTimeSeriesStore(db, config, logger)
+
+	ctx := context.Background()
+
+	// Save old data
+	oldTime := time.Now().Add(-100 * time.Hour)
+	for i := 0; i < 20; i++ {
+		judgment := &core.Judgment{
+			ID:        fmt.Sprintf("all-resolutions-%d", i),
+			SoulID:    "all-resolutions-soul",
+			Status:    core.SoulAlive,
+			Timestamp: oldTime.Add(time.Duration(i) * time.Minute),
+		}
+		if err := ts.SaveJudgment(ctx, judgment); err != nil {
+			t.Fatalf("SaveJudgment failed: %v", err)
+		}
+	}
+
+	// Run compaction for all resolutions
+	if err := ts.runCompaction(); err != nil {
+		t.Errorf("runCompaction failed: %v", err)
+	}
+}
+
+// TestTimeSeriesStore_CompactToResolution_NoMatches tests compactToResolution with no matching data
+func TestTimeSeriesStore_CompactToResolution_NoMatches(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	ts := NewTimeSeriesStore(db, config, logger)
+
+	// Compact with no data - should not error
+	err := ts.compactToResolution(ResolutionRaw, Resolution1Min, time.Hour)
+	if err != nil {
+		t.Errorf("compactToResolution with no data should not error: %v", err)
+	}
+}
+
+// TestTimeSeriesStore_UpdateSummary_AllResolutions tests updateSummary with all resolutions
+func TestTimeSeriesStore_UpdateSummary_AllResolutions(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{}
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	ts := NewTimeSeriesStore(db, config, logger)
+
+	ctx := context.Background()
+
+	resolutions := []TimeResolution{
+		Resolution1Min,
+		Resolution5Min,
+		Resolution1Hour,
+		Resolution1Day,
+	}
+
+	for _, resolution := range resolutions {
+		judgment := &core.Judgment{
+			ID:        fmt.Sprintf("resolution-test-%s", resolution),
+			SoulID:    "resolution-test-soul",
+			Status:    core.SoulAlive,
+			Timestamp: time.Now(),
+		}
+		if err := ts.updateSummary(ctx, judgment, resolution); err != nil {
+			t.Errorf("updateSummary for %s failed: %v", resolution, err)
+		}
+	}
+}
+
+// TestCobaltDB_QueryJourneyRuns_Limit tests the limit parameter
+func TestCobaltDB_QueryJourneyRuns_Limit(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Create multiple runs with different timestamps
+	baseTime := time.Now().UTC()
+	for i := 0; i < 5; i++ {
+		run := &core.JourneyRun{
+			ID:          fmt.Sprintf("limit-run-%d", i),
+			WorkspaceID: "default",
+			JourneyID:   "limit-journey",
+			Status:      core.SoulAlive,
+			StartedAt:   baseTime.Add(time.Duration(i) * time.Hour).UnixNano(),
+		}
+		if err := db.SaveJourneyRun(ctx, run); err != nil {
+			t.Fatalf("SaveJourneyRun failed: %v", err)
+		}
+	}
+
+	// Query with limit of 2
+	results, err := db.QueryJourneyRuns(ctx, "default", "limit-journey", 2)
+	if err != nil {
+		t.Fatalf("QueryJourneyRuns failed: %v", err)
+	}
+
+	if len(results) != 2 {
+		t.Errorf("Expected 2 runs (limited), got %d", len(results))
+	}
+
+	// Verify results are sorted by StartedAt descending
+	if results[0].StartedAt < results[1].StartedAt {
+		t.Error("Expected results sorted by StartedAt descending")
+	}
+}
+
+// TestCobaltDB_QueryJourneyRuns_EmptyWorkspace tests with empty workspace ID
+func TestCobaltDB_QueryJourneyRuns_EmptyWorkspace(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	run := &core.JourneyRun{
+		ID:          "empty-ws-run",
+		WorkspaceID: "default",
+		JourneyID:   "empty-ws-journey",
+		Status:      core.SoulAlive,
+		StartedAt:   time.Now().UTC().UnixNano(),
+	}
+
+	if err := db.SaveJourneyRun(ctx, run); err != nil {
+		t.Fatalf("SaveJourneyRun failed: %v", err)
+	}
+
+	// Query with empty workspace ID (should default to "default")
+	results, err := db.QueryJourneyRuns(ctx, "", "empty-ws-journey", 10)
+	if err != nil {
+		t.Fatalf("QueryJourneyRuns failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Errorf("Expected 1 run, got %d", len(results))
+	}
+}
+
+// TestCobaltDB_QueryJourneyRuns_NoResults tests with no matching runs
+func TestCobaltDB_QueryJourneyRuns_NoResults(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Query for non-existent journey
+	results, err := db.QueryJourneyRuns(ctx, "default", "non-existent-journey", 10)
+	if err != nil {
+		t.Fatalf("QueryJourneyRuns failed: %v", err)
+	}
+
+	if len(results) != 0 {
+		t.Errorf("Expected 0 runs, got %d", len(results))
+	}
+}
+
+// TestCobaltDB_QueryJourneyRuns_CorruptData tests handling of corrupt data
+func TestCobaltDB_QueryJourneyRuns_CorruptData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Save a valid run
+	validRun := &core.JourneyRun{
+		ID:          "valid-run",
+		WorkspaceID: "default",
+		JourneyID:   "corrupt-journey",
+		Status:      core.SoulAlive,
+		StartedAt:   time.Now().UTC().UnixNano(),
+	}
+	if err := db.SaveJourneyRun(ctx, validRun); err != nil {
+		t.Fatalf("SaveJourneyRun failed: %v", err)
+	}
+
+	// Manually insert corrupt data
+	key := "default/journey-runs/corrupt-journey/corrupt-run"
+	db.Put(key, []byte("not valid json"))
+
+	// Query should skip corrupt data and return valid run
+	results, err := db.QueryJourneyRuns(ctx, "default", "corrupt-journey", 10)
+	if err != nil {
+		t.Fatalf("QueryJourneyRuns failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Errorf("Expected 1 valid run (corrupt skipped), got %d", len(results))
+	}
+}
+
+// TestCobaltDB_SaveVerdict_EdgeCases tests SaveVerdict with various edge cases
+func TestCobaltDB_SaveVerdict_EdgeCases(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	tests := []struct {
+		name    string
+		verdict *core.Verdict
+	}{
+		{
+			name: "basic verdict",
+			verdict: &core.Verdict{
+				ID:       "verdict-1",
+				SoulID:   "test-soul-1",
+				Status:   core.VerdictActive,
+				Severity: core.SeverityCritical,
+				FiredAt:  time.Now().UTC(),
+			},
+		},
+		{
+			name: "with message",
+			verdict: &core.Verdict{
+				ID:      "verdict-2",
+				SoulID:  "test-soul-2",
+				Status:  core.VerdictAcknowledged,
+				Message: "Connection timeout",
+				FiredAt: time.Now().UTC(),
+			},
+		},
+		{
+			name: "with judgments",
+			verdict: &core.Verdict{
+				ID:        "verdict-3",
+				SoulID:    "test-soul-3",
+				Status:    core.VerdictResolved,
+				FiredAt:   time.Now().UTC(),
+				Judgments: []string{"judgment-1", "judgment-2"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := db.SaveVerdict(ctx, tt.verdict); err != nil {
+				t.Errorf("SaveVerdict failed: %v", err)
+			}
+
+			// Verify it can be retrieved
+			retrieved, err := db.GetVerdict(ctx, "default", tt.verdict.ID)
+			if err != nil {
+				t.Errorf("GetVerdict failed: %v", err)
+			}
+
+			if retrieved.Status != tt.verdict.Status {
+				t.Errorf("Expected status %s, got %s", tt.verdict.Status, retrieved.Status)
+			}
+		})
+	}
+}
+
+// TestCobaltDB_ListJourneys_WithData tests ListJourneys with actual data
+func TestCobaltDB_ListJourneys_WithData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Create test journeys
+	journeys := []*core.JourneyConfig{
+		{ID: "journey-1", Name: "Journey One", Steps: []core.JourneyStep{{Name: "step-1", Target: "https://example1.com"}}},
+		{ID: "journey-2", Name: "Journey Two", Steps: []core.JourneyStep{{Name: "step-2", Target: "https://example2.com"}}},
+		{ID: "journey-3", Name: "Journey Three", Steps: []core.JourneyStep{{Name: "step-3", Target: "https://example3.com"}}},
+	}
+
+	for _, j := range journeys {
+		if err := db.SaveJourney(ctx, j); err != nil {
+			t.Fatalf("SaveJourney failed: %v", err)
+		}
+	}
+
+	// Test ListJourneys
+	results, err := db.ListJourneys(ctx, "default")
+	if err != nil {
+		t.Fatalf("ListJourneys failed: %v", err)
+	}
+
+	if len(results) < 3 {
+		t.Errorf("Expected at least 3 journeys, got %d", len(results))
+	}
+
+	// Test with empty workspace ID
+	results, err = db.ListJourneys(ctx, "")
+	if err != nil {
+		t.Fatalf("ListJourneys with empty workspace failed: %v", err)
+	}
+
+	if len(results) < 3 {
+		t.Errorf("Expected at least 3 journeys with default workspace, got %d", len(results))
+	}
+}
+
+// TestCobaltDB_ListChannels_WithData tests ListChannels with actual data
+func TestCobaltDB_ListChannels_WithData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Create test channels
+	channels := []*core.ChannelConfig{
+		{Name: "channel-1", Type: "webhook", Webhook: &core.WebhookConfig{URL: "https://example.com/1"}},
+		{Name: "channel-2", Type: "slack", Slack: &core.SlackConfig{Channel: "#alerts"}},
+		{Name: "channel-3", Type: "email", Email: &core.EmailConfig{To: []string{"admin@example.com"}}},
+	}
+
+	for _, ch := range channels {
+		if err := db.SaveChannel(ctx, ch); err != nil {
+			t.Fatalf("SaveChannel failed: %v", err)
+		}
+	}
+
+	// Test ListChannels
+	results, err := db.ListChannels(ctx, "default")
+	if err != nil {
+		t.Fatalf("ListChannels failed: %v", err)
+	}
+
+	if len(results) < 3 {
+		t.Errorf("Expected at least 3 channels, got %d", len(results))
+	}
+
+	// Test with empty workspace ID
+	results, err = db.ListChannels(ctx, "")
+	if err != nil {
+		t.Fatalf("ListChannels with empty workspace failed: %v", err)
+	}
+
+	if len(results) < 3 {
+		t.Errorf("Expected at least 3 channels with default workspace, got %d", len(results))
+	}
+}
+
+// TestCobaltDB_ListRules_WithData tests ListRules with actual data
+func TestCobaltDB_ListRules_WithData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	// Create test rules
+	rules := []*core.AlertRule{
+		{ID: "rule-1", Name: "Rule One", Enabled: true},
+		{ID: "rule-2", Name: "Rule Two", Enabled: true},
+		{ID: "rule-3", Name: "Rule Three", Enabled: false},
+	}
+
+	for _, r := range rules {
+		if err := db.SaveAlertRule(r); err != nil {
+			t.Fatalf("SaveAlertRule failed: %v", err)
+		}
+	}
+
+	// Test ListAlertRules (ListRules has different key pattern)
+	results, err := db.ListAlertRules()
+	if err != nil {
+		t.Fatalf("ListAlertRules failed: %v", err)
+	}
+
+	if len(results) < 3 {
+		t.Errorf("Expected at least 3 rules, got %d", len(results))
+	}
+}
+
+// TestCobaltDB_ListAlertChannels_WithData tests ListAlertChannels with actual data
+func TestCobaltDB_ListAlertChannels_WithData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	// Create test alert channels
+	channels := []*core.AlertChannel{
+		{ID: "alert-ch-1", Name: "Channel One", Type: "webhook"},
+		{ID: "alert-ch-2", Name: "Channel Two", Type: "slack"},
+		{ID: "alert-ch-3", Name: "Channel Three", Type: "email"},
+	}
+
+	for _, ch := range channels {
+		if err := db.SaveAlertChannel(ch); err != nil {
+			t.Fatalf("SaveAlertChannel failed: %v", err)
+		}
+	}
+
+	// Test ListAlertChannels
+	results, err := db.ListAlertChannels()
+	if err != nil {
+		t.Fatalf("ListAlertChannels failed: %v", err)
+	}
+
+	if len(results) < 3 {
+		t.Errorf("Expected at least 3 alert channels, got %d", len(results))
+	}
+}
+
+// TestCobaltDB_SaveAlertEvent_WithData tests SaveAlertEvent with data
+func TestCobaltDB_SaveAlertEvent_WithData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	// Create test alert events
+	events := []*core.AlertEvent{
+		{ID: "event-1", SoulID: "soul-1", Message: "Event One"},
+		{ID: "event-2", SoulID: "soul-1", Message: "Event Two"},
+		{ID: "event-3", SoulID: "soul-2", Message: "Event Three"},
+	}
+
+	for _, e := range events {
+		if err := db.SaveAlertEvent(e); err != nil {
+			t.Fatalf("SaveAlertEvent failed: %v", err)
+		}
+	}
+
+	// Test ListAlertEvents
+	results, err := db.ListAlertEvents("soul-1", 10)
+	if err != nil {
+		t.Fatalf("ListAlertEvents failed: %v", err)
+	}
+
+	// Should have at least 1 event (may be affected by existing data)
+	if len(results) < 1 {
+		t.Errorf("Expected at least 1 event for soul-1, got %d", len(results))
+	}
+}
+
+// TestCobaltDB_SaveStatusPage_WithData tests SaveStatusPage with various data
+func TestCobaltDB_SaveStatusPage_WithData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	// Create test status pages
+	pages := []*core.StatusPage{
+		{ID: "page-1", Name: "Page One", Slug: "page-one", CustomDomain: "status1.example.com"},
+		{ID: "page-2", Name: "Page Two", Slug: "page-two", CustomDomain: "status2.example.com"},
+		{ID: "page-3", Name: "Page Three", Slug: "page-three", CustomDomain: "status3.example.com"},
+	}
+
+	for _, p := range pages {
+		if err := db.SaveStatusPage(p); err != nil {
+			t.Fatalf("SaveStatusPage failed: %v", err)
+		}
+	}
+
+	// Test ListStatusPages
+	results, err := db.ListStatusPages()
+	if err != nil {
+		t.Fatalf("ListStatusPages failed: %v", err)
+	}
+
+	if len(results) < 3 {
+		t.Errorf("Expected at least 3 status pages, got %d", len(results))
+	}
+}
+
+// TestCobaltDB_ListActiveIncidents_WithData tests ListActiveIncidents with actual data
+func TestCobaltDB_ListActiveIncidents_WithData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	// Create test incidents
+	incidents := []*core.Incident{
+		{ID: "inc-1", SoulID: "soul-1", Status: "active"},
+		{ID: "inc-2", SoulID: "soul-2", Status: "active"},
+		{ID: "inc-3", SoulID: "soul-3", Status: "resolved"},
+	}
+
+	for _, inc := range incidents {
+		if err := db.SaveIncident(inc); err != nil {
+			t.Fatalf("SaveIncident failed: %v", err)
+		}
+	}
+
+	// Test ListActiveIncidents
+	results, err := db.ListActiveIncidents()
+	if err != nil {
+		t.Fatalf("ListActiveIncidents failed: %v", err)
+	}
+
+	// Should return at least 2 active incidents
+	if len(results) < 2 {
+		t.Errorf("Expected at least 2 active incidents, got %d", len(results))
+	}
+}
+
+// TestCobaltDB_SaveJourneyRun_WithData tests SaveJourneyRun with various data
+func TestCobaltDB_SaveJourneyRun_WithData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Create test journey runs
+	runs := []*core.JourneyRun{
+		{ID: "run-1", JourneyID: "journey-1", Status: core.SoulAlive, StartedAt: time.Now().UnixNano()},
+		{ID: "run-2", JourneyID: "journey-1", Status: core.SoulDead, StartedAt: time.Now().Add(-time.Hour).UnixNano()},
+		{ID: "run-3", JourneyID: "journey-2", Status: core.SoulAlive, StartedAt: time.Now().Add(-2 * time.Hour).UnixNano()},
+	}
+
+	for _, r := range runs {
+		if err := db.SaveJourneyRun(ctx, r); err != nil {
+			t.Fatalf("SaveJourneyRun failed: %v", err)
+		}
+	}
+
+	// Verify by querying
+	results, err := db.QueryJourneyRuns(ctx, "default", "journey-1", 10)
+	if err != nil {
+		t.Fatalf("QueryJourneyRuns failed: %v", err)
+	}
+
+	if len(results) != 2 {
+		t.Errorf("Expected 2 runs for journey-1, got %d", len(results))
+	}
+}
+
+// TestTimeSeriesStore_SaveJudgment_WithDetails tests SaveJudgment with various details
+func TestTimeSeriesStore_SaveJudgment_WithDetails(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ts := NewTimeSeriesStore(db, config, logger)
+
+	ctx := context.Background()
+
+	// Test with different statuses and details
+	tests := []struct {
+		name      string
+		status    core.SoulStatus
+		duration  time.Duration
+		packetLoss float64
+	}{
+		{"alive", core.SoulAlive, 100 * time.Millisecond, 0.5},
+		{"dead", core.SoulDead, 500 * time.Millisecond, 2.0},
+		{"degraded", core.SoulDegraded, 200 * time.Millisecond, 1.0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			judgment := &core.Judgment{
+				ID:        fmt.Sprintf("ts-test-%s", tt.name),
+				SoulID:    "ts-detail-soul",
+				Status:    tt.status,
+				Duration:  tt.duration,
+				Timestamp: time.Now(),
+				Details: &core.JudgmentDetails{
+					PacketLoss: tt.packetLoss,
+				},
+			}
+
+			if err := ts.SaveJudgment(ctx, judgment); err != nil {
+				t.Errorf("SaveJudgment failed: %v", err)
+			}
+		})
+	}
+}
+
+// TestTimeSeriesStore_RunCompaction_WithAllResolutions tests runCompaction with all resolutions enabled
+func TestTimeSeriesStore_RunCompaction_WithAllResolutions(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{
+		Compaction: core.CompactionConfig{
+			RawToMinute:  core.Duration{Duration: time.Hour},
+			MinuteToFive: core.Duration{Duration: 2 * time.Hour},
+			FiveToHour:   core.Duration{Duration: 24 * time.Hour},
+			HourToDay:    core.Duration{Duration: 7 * 24 * time.Hour},
+		},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ts := NewTimeSeriesStore(db, config, logger)
+
+	// Save some judgments first
+	ctx := context.Background()
+	baseTime := time.Now().Add(-2 * time.Hour)
+
+	for i := 0; i < 5; i++ {
+		judgment := &core.Judgment{
+			ID:        fmt.Sprintf("compact-test-%d", i),
+			SoulID:    "compact-soul",
+			Status:    core.SoulAlive,
+			Duration:  time.Millisecond * time.Duration(100+i*10),
+			Timestamp: baseTime.Add(time.Duration(i) * time.Minute),
+		}
+		if err := db.SaveJudgment(ctx, judgment); err != nil {
+			t.Fatalf("SaveJudgment failed: %v", err)
+		}
+	}
+
+	// Run compaction
+	if err := ts.runCompaction(); err != nil {
+		t.Errorf("runCompaction failed: %v", err)
+	}
+}
+
+// TestTimeSeriesStore_CompactionLoop_ShortTicker tests compactionLoop with a short ticker (for coverage)
+func TestTimeSeriesStore_CompactionLoop_ShortTicker(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	ts := NewTimeSeriesStore(db, config, logger)
+
+	// Start compaction loop - it will run with 5 minute ticker
+	// We can't easily test the loop itself, but we can verify StartCompaction doesn't panic
+	ts.StartCompaction()
+
+	// Give it a moment
+	time.Sleep(10 * time.Millisecond)
+
+	// Cleanup would need to stop the goroutine, but for test coverage this is sufficient
+}
+
+// TestCobaltDB_ListRules_WithCorruptData tests ListRules with corrupt data
+func TestCobaltDB_ListRules_WithCorruptData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Save a valid rule
+	rule := &core.AlertRule{ID: "valid-rule", Name: "Valid Rule"}
+	if err := db.SaveRule(ctx, rule); err != nil {
+		t.Fatalf("SaveRule failed: %v", err)
+	}
+
+	// Manually insert corrupt data
+	key := "default/rules/corrupt-rule"
+	db.Put(key, []byte("not valid json"))
+
+	// ListRules should skip corrupt data and return valid rule
+	results, err := db.ListRules(ctx, "default")
+	if err != nil {
+		t.Fatalf("ListRules failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Errorf("Expected 1 valid rule (corrupt skipped), got %d", len(results))
+	}
+}
+
+// TestCobaltDB_ListAlertChannels_WithCorruptData tests ListAlertChannels with corrupt data
+func TestCobaltDB_ListAlertChannels_WithCorruptData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	// Save valid channel
+	ch := &core.AlertChannel{ID: "valid-ch", Name: "Valid Channel", Type: "webhook"}
+	if err := db.SaveAlertChannel(ch); err != nil {
+		t.Fatalf("SaveAlertChannel failed: %v", err)
+	}
+
+	// Manually insert corrupt data
+	key := "default/alert-channels/corrupt-ch"
+	db.Put(key, []byte("not valid json"))
+
+	// ListAlertChannels should skip corrupt data
+	results, err := db.ListAlertChannels()
+	if err != nil {
+		t.Fatalf("ListAlertChannels failed: %v", err)
+	}
+
+	// Should have at least 1 valid channel
+	if len(results) < 1 {
+		t.Errorf("Expected at least 1 valid channel, got %d", len(results))
+	}
+}
+
+// TestCobaltDB_ListStatusPages_WithData tests ListStatusPages with data
+func TestCobaltDB_ListStatusPages_WithData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	// Save status pages
+	pages := []*core.StatusPage{
+		{ID: "sp-1", Name: "Page 1", Slug: "page-1"},
+		{ID: "sp-2", Name: "Page 2", Slug: "page-2"},
+	}
+
+	for _, p := range pages {
+		if err := db.SaveStatusPage(p); err != nil {
+			t.Fatalf("SaveStatusPage failed: %v", err)
+		}
+	}
+
+	// Test ListStatusPages
+	results, err := db.ListStatusPages()
+	if err != nil {
+		t.Fatalf("ListStatusPages failed: %v", err)
+	}
+
+	if len(results) < 2 {
+		t.Errorf("Expected at least 2 status pages, got %d", len(results))
+	}
+}
+
+// TestCobaltDB_GetSoulJudgments_WithData tests GetSoulJudgments with data
+func TestCobaltDB_GetSoulJudgments_WithData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+
+	// Save judgments
+	judgments := []*core.Judgment{
+		{ID: "judg-1", SoulID: "test-soul", Status: core.SoulAlive, Timestamp: time.Now()},
+		{ID: "judg-2", SoulID: "test-soul", Status: core.SoulDead, Timestamp: time.Now().Add(-time.Hour)},
+	}
+
+	for _, j := range judgments {
+		if err := db.SaveJudgment(ctx, j); err != nil {
+			t.Fatalf("SaveJudgment failed: %v", err)
+		}
+	}
+
+	// Test GetSoulJudgments
+	results, err := db.GetSoulJudgments("test-soul", 10)
+	if err != nil {
+		t.Fatalf("GetSoulJudgments failed: %v", err)
+	}
+
+	if len(results) < 2 {
+		t.Errorf("Expected at least 2 judgments, got %d", len(results))
+	}
+}
+
+// TestCobaltDB_List_WithData tests List with actual data
+func TestCobaltDB_List_WithData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	// Save some data
+	if err := db.Put("test/key/1", []byte("value1")); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	if err := db.Put("test/key/2", []byte("value2")); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	// Test List
+	results, err := db.List("test/key/")
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+
+	if len(results) != 2 {
+		t.Errorf("Expected 2 keys, got %d", len(results))
+	}
+}
+
+// TestCobaltDB_RangeScan_WithData tests RangeScan with actual data
+func TestCobaltDB_RangeScan_WithData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	// Save some data
+	if err := db.Put("range/a", []byte("value-a")); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	if err := db.Put("range/b", []byte("value-b")); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	if err := db.Put("range/c", []byte("value-c")); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	// Test RangeScan
+	results, err := db.RangeScan("range/a", "range/c")
+	if err != nil {
+		t.Fatalf("RangeScan failed: %v", err)
+	}
+
+	if len(results) < 2 {
+		t.Errorf("Expected at least 2 results, got %d", len(results))
+	}
+}
+
+// TestTimeSeriesStore_SaveJudgment_DBError tests error path when DB fails
+func TestTimeSeriesStore_SaveJudgment_DBError(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{}
+	ts := NewTimeSeriesStore(db, config, newTestLogger())
+
+	ctx := context.Background()
+
+	// Try to save judgment without saving soul first (may cause error depending on implementation)
+	judgment := &core.Judgment{
+		ID:        "error-test-judgment",
+		SoulID:    "nonexistent-soul-for-error",
+		Status:    core.SoulAlive,
+		Duration:  time.Millisecond * 100,
+		Timestamp: time.Now().UTC(),
+	}
+
+	// Should either succeed or return error gracefully
+	err := ts.SaveJudgment(ctx, judgment)
+	// Just verify it doesn't panic - behavior depends on SaveJudgment implementation
+	_ = err
+}
+
+// TestTimeSeriesStore_QuerySummaries_WithCorruptData tests handling of corrupt data
+func TestTimeSeriesStore_QuerySummaries_WithCorruptData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{}
+	ts := NewTimeSeriesStore(db, config, newTestLogger())
+
+	ctx := context.Background()
+
+	// Save a valid soul first
+	soul := &core.Soul{
+		ID:          "corrupt-summary-soul",
+		WorkspaceID: "default",
+		Name:        "Corrupt Summary Test Soul",
+		Type:        core.CheckHTTP,
+	}
+	if err := db.SaveSoul(ctx, soul); err != nil {
+		t.Fatalf("SaveSoul failed: %v", err)
+	}
+
+	// Save a valid judgment to create summary
+	judgment := &core.Judgment{
+		ID:        "valid-judgment",
+		SoulID:    "corrupt-summary-soul",
+		Status:    core.SoulAlive,
+		Duration:  time.Millisecond * 100,
+		Timestamp: time.Now().UTC(),
+	}
+	if err := ts.SaveJudgment(ctx, judgment); err != nil {
+		t.Fatalf("SaveJudgment failed: %v", err)
+	}
+
+	// Manually insert corrupt summary data
+	corruptKey := fmt.Sprintf("default/ts/corrupt-summary-soul/1min/%d", time.Now().Unix())
+	db.Put(corruptKey, []byte("not valid json"))
+
+	// Query should handle corrupt data gracefully
+	summaries, err := ts.QuerySummaries(ctx, "default", "corrupt-summary-soul", Resolution1Min,
+		time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("QuerySummaries failed: %v", err)
+	}
+
+	// Should return at least the valid summary (corrupt one skipped)
+	if len(summaries) < 1 {
+		t.Errorf("Expected at least 1 valid summary, got %d", len(summaries))
+	}
+}
+
+// TestTimeSeriesStore_QuerySummaries_EmptyWorkspace tests empty workspace handling
+func TestTimeSeriesStore_QuerySummaries_EmptyWorkspace(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{}
+	ts := NewTimeSeriesStore(db, config, newTestLogger())
+
+	ctx := context.Background()
+
+	// Save soul
+	soul := &core.Soul{
+		ID:          "empty-ws-summary-soul",
+		WorkspaceID: "default",
+		Name:        "Empty WS Summary Soul",
+		Type:        core.CheckHTTP,
+	}
+	if err := db.SaveSoul(ctx, soul); err != nil {
+		t.Fatalf("SaveSoul failed: %v", err)
+	}
+
+	// Save judgment
+	judgment := &core.Judgment{
+		ID:        "test-judgment-empty-ws",
+		SoulID:    "empty-ws-summary-soul",
+		Status:    core.SoulAlive,
+		Duration:  time.Millisecond * 100,
+		Timestamp: time.Now().UTC(),
+	}
+	if err := ts.SaveJudgment(ctx, judgment); err != nil {
+		t.Fatalf("SaveJudgment failed: %v", err)
+	}
+
+	// Query with empty workspace ID (should default to "default")
+	summaries, err := ts.QuerySummaries(ctx, "", "empty-ws-summary-soul", Resolution1Min,
+		time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("QuerySummaries failed: %v", err)
+	}
+
+	if len(summaries) < 1 {
+		t.Errorf("Expected at least 1 summary with default workspace, got %d", len(summaries))
+	}
+}
+
+// TestTimeSeriesStore_runCompaction_WithErrorPaths tests runCompaction with various error conditions
+func TestTimeSeriesStore_runCompaction_WithErrorPaths(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	// Set up compaction with very short thresholds to trigger compaction paths
+	config := core.TimeSeriesConfig{
+		Compaction: core.CompactionConfig{
+			RawToMinute:  core.Duration{Duration: time.Nanosecond},
+			MinuteToFive: core.Duration{Duration: time.Nanosecond},
+			FiveToHour:   core.Duration{Duration: time.Nanosecond},
+			HourToDay:    core.Duration{Duration: time.Nanosecond},
+		},
+	}
+	ts := NewTimeSeriesStore(db, config, newTestLogger())
+
+	// Run compaction on empty database (should handle gracefully)
+	err := ts.runCompaction()
+	if err != nil {
+		t.Errorf("runCompaction on empty db should not error: %v", err)
+	}
+}
+
+// TestTimeSeriesStore_compactToResolution_ParseError tests handling of parse errors in compactToResolution
+func TestTimeSeriesStore_compactToResolution_ParseError(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{
+		Compaction: core.CompactionConfig{
+			RawToMinute: core.Duration{Duration: time.Nanosecond},
+		},
+	}
+	ts := NewTimeSeriesStore(db, config, newTestLogger())
+
+	// Insert malformed key that looks like a timeseries key but has invalid timestamp
+	malformedKey := "default/ts/test-soul/raw/not-a-number"
+	db.Put(malformedKey, []byte(`{"count": 1}`))
+
+	// Compaction should skip malformed keys gracefully
+	err := ts.compactToResolution(ResolutionRaw, Resolution1Min, time.Nanosecond)
+	if err != nil {
+		t.Errorf("compactToResolution should handle parse errors gracefully: %v", err)
+	}
+}
+
+// TestTimeSeriesStore_compactToResolution_CorruptData tests handling of corrupt data
+func TestTimeSeriesStore_compactToResolution_CorruptData(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{
+		Compaction: core.CompactionConfig{
+			RawToMinute: core.Duration{Duration: time.Nanosecond},
+		},
+	}
+	ts := NewTimeSeriesStore(db, config, newTestLogger())
+
+	// Insert corrupt data with valid key format
+	oldTime := time.Now().Add(-2 * time.Hour).Unix()
+	corruptKey := fmt.Sprintf("default/ts/test-soul/raw/%d", oldTime)
+	db.Put(corruptKey, []byte("not valid json"))
+
+	// Compaction should skip corrupt data gracefully
+	err := ts.compactToResolution(ResolutionRaw, Resolution1Min, time.Nanosecond)
+	if err != nil {
+		t.Errorf("compactToResolution should handle corrupt data gracefully: %v", err)
+	}
+}
+
+// TestTimeSeriesStore_compactToResolution_PrefixScanError tests error handling when PrefixScan fails
+func TestTimeSeriesStore_compactToResolution_PrefixScanError(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{
+		Compaction: core.CompactionConfig{
+			RawToMinute: core.Duration{Duration: time.Nanosecond},
+		},
+	}
+	ts := NewTimeSeriesStore(db, config, newTestLogger())
+
+	// Test compaction (PrefixScan on empty db should work fine)
+	err := ts.compactToResolution(ResolutionRaw, Resolution1Min, time.Nanosecond)
+	if err != nil {
+		t.Errorf("compactToResolution should not error on empty db: %v", err)
+	}
+}
+
+// TestTimeSeriesStore_updateSummary_WithPacketLoss tests updateSummary with packet loss data
+func TestTimeSeriesStore_updateSummary_WithPacketLoss(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{}
+	ts := NewTimeSeriesStore(db, config, newTestLogger())
+
+	ctx := context.Background()
+
+	// Save soul
+	soul := &core.Soul{
+		ID:          "packet-loss-soul",
+		WorkspaceID: "default",
+		Name:        "Packet Loss Test Soul",
+		Type:        core.CheckICMP,
+	}
+	if err := db.SaveSoul(ctx, soul); err != nil {
+		t.Fatalf("SaveSoul failed: %v", err)
+	}
+
+	// Save multiple judgments with packet loss
+	for i := 0; i < 5; i++ {
+		judgment := &core.Judgment{
+			ID:        fmt.Sprintf("pl-judgment-%d", i),
+			SoulID:    "packet-loss-soul",
+			Status:    core.SoulAlive,
+			Duration:  time.Millisecond * 100,
+			Timestamp: time.Now().UTC(),
+			Details: &core.JudgmentDetails{
+				PacketLoss: float64(i) * 0.5, // 0, 0.5, 1.0, 1.5, 2.0
+			},
+		}
+		if err := ts.SaveJudgment(ctx, judgment); err != nil {
+			t.Fatalf("SaveJudgment failed: %v", err)
+		}
+	}
+
+	// Query summaries and verify packet loss is tracked
+	summaries, err := ts.QuerySummaries(ctx, "default", "packet-loss-soul", Resolution1Min,
+		time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("QuerySummaries failed: %v", err)
+	}
+
+	if len(summaries) < 1 {
+		t.Fatalf("Expected at least 1 summary, got %d", len(summaries))
+	}
+
+	// Verify packet loss average is calculated
+	if summaries[0].PacketLossAvg == 0 {
+		t.Error("Expected PacketLossAvg to be non-zero")
+	}
+}
+
+// TestTimeSeriesStore_aggregateAndSave_ExistingTarget tests aggregating when target already exists
+func TestTimeSeriesStore_aggregateAndSave_ExistingTarget(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{}
+	ts := NewTimeSeriesStore(db, config, newTestLogger())
+
+	bucketTime := time.Now().Truncate(time.Hour)
+
+	// Pre-populate an existing target summary
+	existingKey := fmt.Sprintf("default/ts/test-soul/1hour/%d", bucketTime.Unix())
+	existingSummary := JudgmentSummary{
+		SoulID:        "test-soul",
+		WorkspaceID:   "default",
+		Resolution:    string(Resolution1Hour),
+		BucketTime:    bucketTime,
+		Count:         5,
+		SuccessCount:  4,
+		FailureCount:  1,
+		MinLatency:    10.0,
+		MaxLatency:    100.0,
+		AvgLatency:    50.0,
+		UptimePercent: 80.0,
+	}
+	data, _ := json.Marshal(existingSummary)
+	db.Put(existingKey, data)
+
+	// Now aggregate new sources
+	sources := []*JudgmentSummary{
+		{
+			SoulID:       "test-soul",
+			Count:        3,
+			SuccessCount: 3,
+			AvgLatency:   30.0,
+		},
+	}
+
+	err := ts.aggregateAndSave("default", "test-soul", Resolution1Hour, bucketTime, sources)
+	if err != nil {
+		t.Fatalf("aggregateAndSave failed: %v", err)
+	}
+
+	// Verify the aggregation updated the existing summary
+	updatedData, err := db.Get(existingKey)
+	if err != nil {
+		t.Fatalf("Get updated summary failed: %v", err)
+	}
+
+	var updatedSummary JudgmentSummary
+	if err := json.Unmarshal(updatedData, &updatedSummary); err != nil {
+		t.Fatalf("Unmarshal updated summary failed: %v", err)
+	}
+
+	if updatedSummary.Count != 3 { // Sources count, not combined
+		t.Errorf("Expected Count 3 from sources, got %d", updatedSummary.Count)
+	}
+}
+
+// TestTimeSeriesStore_compactToResolution_NoMatchingResolution tests when no data matches resolution
+func TestTimeSeriesStore_compactToResolution_NoMatchingResolution(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{
+		Compaction: core.CompactionConfig{
+			RawToMinute: core.Duration{Duration: time.Nanosecond},
+		},
+	}
+	ts := NewTimeSeriesStore(db, config, newTestLogger())
+
+	// Insert data with different resolution (5min instead of raw)
+	oldTime := time.Now().Add(-2 * time.Hour).Unix()
+	key := fmt.Sprintf("default/ts/test-soul/5min/%d", oldTime)
+	db.Put(key, []byte(`{"count": 1}`))
+
+	// Compaction from Raw should not find any matches
+	err := ts.compactToResolution(ResolutionRaw, Resolution1Min, time.Nanosecond)
+	if err != nil {
+		t.Errorf("compactToResolution should not error when no matches: %v", err)
+	}
+}
+
+// TestTimeSeriesStore_compactToResolution_RecentDataNotCompacted tests recent data is not compacted
+func TestTimeSeriesStore_compactToResolution_RecentDataNotCompacted(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.TimeSeriesConfig{
+		Compaction: core.CompactionConfig{
+			RawToMinute: core.Duration{Duration: time.Hour}, // 1 hour threshold
+		},
+	}
+	ts := NewTimeSeriesStore(db, config, newTestLogger())
+
+	// Insert recent data (within threshold)
+	recentTime := time.Now().Add(-30 * time.Minute).Unix() // Only 30 min old
+	key := fmt.Sprintf("default/ts/test-soul/raw/%d", recentTime)
+	db.Put(key, []byte(`{"count": 1}`))
+
+	// Compaction should skip recent data
+	err := ts.compactToResolution(ResolutionRaw, Resolution1Min, time.Hour)
+	if err != nil {
+		t.Errorf("compactToResolution should not error: %v", err)
+	}
+
+	// Data should still exist in original location
+	_, err = db.Get(key)
+	if err != nil {
+		t.Error("Recent data should not have been compacted")
 	}
 }

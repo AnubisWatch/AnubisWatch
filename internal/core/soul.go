@@ -133,9 +133,10 @@ type SMTPConfig struct {
 
 // IMAPConfig defines IMAP check settings
 type IMAPConfig struct {
-	TLS          bool       `json:"tls" yaml:"tls"`
-	Auth         *AuthCreds `json:"auth,omitempty" yaml:"auth,omitempty"`
-	CheckMailbox string     `json:"check_mailbox" yaml:"check_mailbox"`
+	TLS                bool       `json:"tls" yaml:"tls"`
+	Auth               *AuthCreds `json:"auth,omitempty" yaml:"auth,omitempty"`
+	CheckMailbox       string     `json:"check_mailbox" yaml:"check_mailbox"`
+	InsecureSkipVerify bool       `json:"insecure_skip_verify" yaml:"insecure_skip_verify"`
 }
 
 // AuthCreds holds authentication credentials

@@ -89,10 +89,11 @@ func TestAlertFilter_Matches(t *testing.T) {
 
 func TestAlertFilter_Matches_Operators(t *testing.T) {
 	event := &AlertEvent{
-		ID:       "event1",
-		SoulID:   "soul1",
-		Status:   SoulDead,
-		Severity: SeverityCritical,
+		ID:          "event1",
+		SoulID:      "soul1",
+		Status:      SoulDead,
+		Severity:    SeverityCritical,
+		ChannelType: ChannelSlack,
 	}
 
 	// eq operator
@@ -118,6 +119,110 @@ func TestAlertFilter_Matches_Operators(t *testing.T) {
 	if !filter.Matches(event) {
 		t.Error("Expected not_in filter to match")
 	}
+
+	// type field
+	filter = AlertFilter{Field: "type", Operator: "eq", Value: "slack"}
+	if !filter.Matches(event) {
+		t.Error("Expected type filter to match")
+	}
+
+	// severity field
+	filter = AlertFilter{Field: "severity", Operator: "eq", Value: "critical"}
+	if !filter.Matches(event) {
+		t.Error("Expected severity filter to match")
+	}
+
+	// soul_id field
+	filter = AlertFilter{Field: "soul_id", Operator: "eq", Value: "soul1"}
+	if !filter.Matches(event) {
+		t.Error("Expected soul_id filter to match")
+	}
+
+	// contains operator
+	filter = AlertFilter{Field: "soul_id", Operator: "contains", Value: "oul"}
+	if !filter.Matches(event) {
+		t.Error("Expected contains filter to match")
+	}
+
+	// default operator (returns true)
+	filter = AlertFilter{Field: "status", Operator: "unknown", Value: "dead"}
+	if !filter.Matches(event) {
+		t.Error("Expected default operator to return true")
+	}
+}
+
+func TestAlertFilter_Matches_Details(t *testing.T) {
+	event := &AlertEvent{
+		ID:       "event1",
+		SoulID:   "soul1",
+		Status:   SoulDead,
+		Severity: SeverityCritical,
+		Details: map[string]string{
+			"custom_field": "custom_value",
+			"response_time": "500ms",
+		},
+	}
+
+	// Custom field from details
+	filter := AlertFilter{Field: "custom_field", Operator: "eq", Value: "custom_value"}
+	if !filter.Matches(event) {
+		t.Error("Expected custom field filter to match")
+	}
+
+	// Non-existent custom field
+	filter = AlertFilter{Field: "non_existent", Operator: "eq", Value: "value"}
+	if filter.Matches(event) {
+		t.Error("Expected non-existent field to not match")
+	}
+
+	// Response time contains
+	filter = AlertFilter{Field: "response_time", Operator: "contains", Value: "500"}
+	if !filter.Matches(event) {
+		t.Error("Expected response_time contains filter to match")
+	}
+}
+
+func TestAlertFilter_Matches_InNotIn(t *testing.T) {
+	event := &AlertEvent{
+		ID:       "event1",
+		SoulID:   "soul1",
+		Status:   SoulDead,
+		Severity: SeverityCritical,
+	}
+
+	// in operator - no match
+	filter := AlertFilter{Field: "status", Operator: "in", Values: []string{"alive", "degraded"}}
+	if filter.Matches(event) {
+		t.Error("Expected in filter to not match when value not in list")
+	}
+
+	// not_in operator - match
+	filter = AlertFilter{Field: "status", Operator: "not_in", Values: []string{"alive", "degraded"}}
+	if !filter.Matches(event) {
+		t.Error("Expected not_in filter to match when value not in list")
+	}
+
+	// not_in operator - no match (value in list)
+	filter = AlertFilter{Field: "status", Operator: "not_in", Values: []string{"dead", "alive"}}
+	if filter.Matches(event) {
+		t.Error("Expected not_in filter to not match when value in list")
+	}
+}
+
+func TestAlertFilter_Matches_NilDetails(t *testing.T) {
+	event := &AlertEvent{
+		ID:       "event1",
+		SoulID:   "soul1",
+		Status:   SoulDead,
+		Severity: SeverityCritical,
+		Details:  nil,
+	}
+
+	// Custom field with nil details
+	filter := AlertFilter{Field: "custom_field", Operator: "eq", Value: "value"}
+	if filter.Matches(event) {
+		t.Error("Expected filter to not match with nil details")
+	}
 }
 
 func TestMemberRole_Can(t *testing.T) {
@@ -134,6 +239,43 @@ func TestMemberRole_Can(t *testing.T) {
 	// Viewer cannot write souls
 	if RoleViewer.Can("souls:write") {
 		t.Error("Expected Viewer to not have souls:write permission")
+	}
+
+	// Editor has "souls:*" permission - exact match only
+	if !RoleEditor.Can("souls:*") {
+		t.Error("Expected Editor to have souls:* permission")
+	}
+
+	// Editor has "channels:read" permission
+	if !RoleEditor.Can("channels:read") {
+		t.Error("Expected Editor to have channels:read permission")
+	}
+
+	// Editor does not have "channels:write" permission
+	if RoleEditor.Can("channels:write") {
+		t.Error("Expected Editor to NOT have channels:write permission")
+	}
+
+	// Owner has "*" wildcard - should have all permissions
+	if !RoleOwner.Can("souls:read") {
+		t.Error("Expected Owner to have souls:read permission")
+	}
+	if !RoleOwner.Can("channels:write") {
+		t.Error("Expected Owner to have channels:write permission")
+	}
+	if !RoleOwner.Can("random:permission") {
+		t.Error("Expected Owner to have any permission via wildcard")
+	}
+
+	// Unknown role should not have any permissions
+	unknownRole := MemberRole("unknown")
+	if unknownRole.Can("souls:read") {
+		t.Error("Unknown role should not have any permissions")
+	}
+
+	// Empty permission string
+	if RoleViewer.Can("") {
+		t.Error("Empty permission should not be valid")
 	}
 }
 

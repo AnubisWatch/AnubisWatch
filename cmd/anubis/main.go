@@ -8,24 +8,18 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
 	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/acme"
-	"github.com/AnubisWatch/anubiswatch/internal/alert"
 	"github.com/AnubisWatch/anubiswatch/internal/api"
 	"github.com/AnubisWatch/anubiswatch/internal/auth"
 	"github.com/AnubisWatch/anubiswatch/internal/cluster"
 	"github.com/AnubisWatch/anubiswatch/internal/core"
-	"github.com/AnubisWatch/anubiswatch/internal/dashboard"
-	"github.com/AnubisWatch/anubiswatch/internal/journey"
 	"github.com/AnubisWatch/anubiswatch/internal/probe"
-	"github.com/AnubisWatch/anubiswatch/internal/statuspage"
 	"github.com/AnubisWatch/anubiswatch/internal/storage"
 )
 
@@ -314,171 +308,37 @@ func serve() {
 		"commit", Commit,
 	)
 
-	// Load config
-	configPath := os.Getenv("ANUBIS_CONFIG")
-	if configPath == "" {
-		configPath = "anubis.json"
+	// Use the refactored server initialization
+	opts := ServerOptions{
+		ConfigPath: os.Getenv("ANUBIS_CONFIG"),
+		Logger:     logger,
 	}
 
-	var cfg *core.Config
-
-	if _, statErr := os.Stat(configPath); statErr == nil {
-		var err error
-		cfg, err = core.LoadConfig(configPath)
-		if err != nil {
-			logger.Error("failed to load config", "err", err)
-			os.Exit(1)
-		}
-		logger.Info("config loaded", "path", configPath)
-	} else {
-		logger.Info("no config file found, using defaults", "path", configPath)
-		cfg = core.GenerateDefaultConfig()
-	}
-
-	// Create data directory if needed
-	if err := os.MkdirAll(cfg.Storage.Path, 0755); err != nil {
-		logger.Error("failed to create data directory", "path", cfg.Storage.Path, "err", err)
-		os.Exit(1)
-	}
-
-	// Initialize storage
-	store, err := storage.NewEngine(cfg.Storage, logger)
+	deps, err := BuildServerDependencies(opts)
 	if err != nil {
-		logger.Error("failed to initialize storage", "err", err)
+		logger.Error("failed to build server dependencies", "err", err)
 		os.Exit(1)
 	}
-	defer store.Close()
 
-	// Initialize auth with session persistence
-	sessionPath := filepath.Join(cfg.Storage.Path, "sessions.json")
-	authenticator := auth.NewLocalAuthenticator(sessionPath)
-	defer authenticator.Shutdown()
+	server := NewServer(deps)
 
-	// Initialize alert manager
-	alertStorage := &alertStorageAdapter{store: store}
-	alertMgr := alert.NewManager(alertStorage, logger)
-	if err := alertMgr.Start(); err != nil {
-		logger.Warn("failed to start alert manager", "err", err)
-	} else {
-		logger.Info("alert manager started")
-	}
-
-	// Initialize probe engine with registry
-	registry := probe.NewCheckerRegistry()
-	probeEngine := probe.NewEngine(probe.EngineOptions{
-		Registry: registry,
-		Store:    &probeStorageAdapter{store: store},
-		Alerter:  alertMgr,
-		NodeID:   cfg.Necropolis.NodeName,
-		Region:   cfg.Necropolis.Region,
-		Logger:   logger,
-	})
-
-	// Assign souls from config (convert to pointers)
-	if len(cfg.Souls) > 0 {
-		soulPtrs := make([]*core.Soul, len(cfg.Souls))
-		for i := range cfg.Souls {
-			soulPtrs[i] = &cfg.Souls[i]
-		}
-		probeEngine.AssignSouls(soulPtrs)
-		logger.Info("souls assigned", "count", len(cfg.Souls))
-	}
-
-	// Initialize journey executor
-	journeyExec := journey.NewExecutor(store, logger)
-
-	// Start journey executors for configured journeys
+	// Start server
 	ctx := context.Background()
-	for _, j := range cfg.Journeys {
-		if j.Enabled {
-			j.WorkspaceID = "default"
-			if err := store.SaveJourney(ctx, &j); err != nil {
-				logger.Warn("failed to save journey", "journey", j.Name, "err", err)
-			}
-			if err := journeyExec.Start(ctx, &j); err != nil {
-				logger.Warn("failed to start journey", "journey", j.Name, "err", err)
-			}
-		}
+	if err := server.Start(ctx); err != nil {
+		logger.Error("failed to start server", "err", err)
+		os.Exit(1)
 	}
 
-	// Initialize cluster manager
-	clusterMgr, err := cluster.NewManager(cfg.Necropolis.Raft, store, logger)
-	if err != nil {
-		logger.Warn("failed to initialize cluster manager", "err", err)
-	} else {
-		if err := clusterMgr.Start(ctx); err != nil {
-			logger.Warn("failed to start cluster manager", "err", err)
-		} else {
-			logger.Info("cluster manager initialized", "clustered", clusterMgr.IsClustered())
-		}
-	}
-
-	// Initialize REST API server with adapters
-	restStore := &restStorageAdapter{store: store}
-	clusterAdapt := &clusterAdapter{mgr: clusterMgr}
-
-	// Initialize dashboard handler
-	var dashboardHandler http.Handler
-	if cfg.Dashboard.Enabled {
-		dh, err := dashboard.NewHandler()
-		if err != nil {
-			logger.Warn("failed to initialize dashboard", "err", err)
-		} else {
-			dashboardHandler = dh
-			logger.Info("dashboard handler initialized")
-		}
-	}
-
-	// Initialize status page handler
-	statusPageRepo := &statusPageRepository{store: store}
-	acmeMgr := initACMEManager(cfg, store, logger)
-	statusPageHandler := statuspage.NewHandler(statusPageRepo, acmeMgr)
-
-	// Initialize MCP server for AI agent integration
-	mcpServer := api.NewMCPServer(restStore, probeEngine, alertMgr, logger)
-
-	restServer := api.NewRESTServer(cfg.Server, restStore, probeEngine, alertMgr, authenticator, clusterAdapt, dashboardHandler, statusPageHandler, mcpServer, logger)
-	go func() {
-		if err := restServer.Start(); err != nil {
-			logger.Error("REST server failed", "err", err)
-		}
-	}()
-	logger.Info("REST API server initialized", "addr", fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port))
+	// Wait for shutdown signal
+	server.WaitForShutdown()
 
 	// Graceful shutdown
-	shutdownCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	logger.Info("AnubisWatch is ready. The judgment begins.")
-
-	<-shutdownCtx.Done()
-	logger.Info("shutting down...")
-
-	shutdownCtx2, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Stop REST server
-	if restServer != nil {
-		restServer.Stop(shutdownCtx2)
+	if err := server.Stop(shutdownCtx); err != nil {
+		logger.Error("error during shutdown", "err", err)
 	}
-
-	// Stop journey executors
-	journeyExec.StopAll()
-
-	// Stop alert manager
-	if alertMgr != nil {
-		alertMgr.Stop()
-	}
-
-	// Stop cluster manager
-	if clusterMgr != nil {
-		clusterMgr.Stop(shutdownCtx2)
-	}
-
-	// Stop probe engine
-	probeEngine.Stop()
-
-	logger.Info("⚖️  AnubisWatch stopped. The judgment rests.")
 }
 
 func handleLogin(a *auth.LocalAuthenticator) http.HandlerFunc {
@@ -748,15 +608,32 @@ func (r *statusPageRepository) GetSoulJudgments(soulID string, limit int) ([]cor
 }
 
 func (r *statusPageRepository) GetIncidentsByPage(pageID string) ([]core.Incident, error) {
-	// TODO: Filter incidents by status page
+	// Get the status page to find associated souls
+	page, err := r.store.GetStatusPageBySlug(pageID)
+	if err != nil {
+		// Try by ID if slug lookup fails
+		page, err = r.store.GetStatusPageNoCtx(pageID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Create a set of soul IDs for this page
+	soulSet := make(map[string]bool)
+	for _, soulID := range page.Souls {
+		soulSet[soulID] = true
+	}
+
+	// Get all active incidents and filter by page's souls
 	active, err := r.store.ListActiveIncidents()
 	if err != nil {
 		return nil, err
 	}
-	// Convert []*core.Incident to []core.Incident
+
+	// Convert []*core.Incident to []core.Incident, filtering by page's souls
 	result := make([]core.Incident, 0, len(active))
 	for _, inc := range active {
-		if inc != nil {
+		if inc != nil && soulSet[inc.SoulID] {
 			result = append(result, *inc)
 		}
 	}

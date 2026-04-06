@@ -1499,3 +1499,967 @@ func TestManager_calculateSeverity(t *testing.T) {
 		}
 	}
 }
+
+// Tests for escalation functions
+
+func TestManager_shouldEscalate_NoEscalationConfig(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		EscalationLevel: 0,
+		StartedAt:       time.Now().Add(-30 * time.Minute),
+	}
+
+	// Rule with no escalation config
+	rule := &core.AlertRule{
+		ID:         "rule-1",
+		Escalation: nil,
+	}
+
+	result := manager.shouldEscalate(incident, rule)
+	if result {
+		t.Error("shouldEscalate should return false when no escalation config")
+	}
+}
+
+func TestManager_shouldEscalate_NoStages(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		EscalationLevel: 0,
+		StartedAt:       time.Now().Add(-30 * time.Minute),
+	}
+
+	rule := &core.AlertRule{
+		ID: "rule-1",
+		Escalation: &core.EscalationPolicy{
+			Stages: []core.EscalationStage{},
+		},
+	}
+
+	result := manager.shouldEscalate(incident, rule)
+	if result {
+		t.Error("shouldEscalate should return false when no stages")
+	}
+}
+
+func TestManager_shouldEscalate_MaxLevelReached(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		EscalationLevel: 2, // Already at max level
+		StartedAt:       time.Now().Add(-2 * time.Hour),
+	}
+
+	rule := &core.AlertRule{
+		ID: "rule-1",
+		Escalation: &core.EscalationPolicy{
+			Stages: []core.EscalationStage{
+				{Wait: core.Duration{Duration: 15 * time.Minute}, Channels: []string{"ch1"}},
+				{Wait: core.Duration{Duration: 30 * time.Minute}, Channels: []string{"ch2"}},
+			},
+		},
+	}
+
+	result := manager.shouldEscalate(incident, rule)
+	if result {
+		t.Error("shouldEscalate should return false when max level reached")
+	}
+}
+
+func TestManager_shouldEscalate_Acknowledged(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	ackedAt := time.Now().Add(-30 * time.Minute)
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		EscalationLevel: 0,
+		StartedAt:       time.Now().Add(-1 * time.Hour),
+		AckedAt:         &ackedAt,
+	}
+
+	rule := &core.AlertRule{
+		ID: "rule-1",
+		Escalation: &core.EscalationPolicy{
+			Stages: []core.EscalationStage{
+				{Wait: core.Duration{Duration: 15 * time.Minute}, Channels: []string{"ch1"}},
+			},
+		},
+	}
+
+	result := manager.shouldEscalate(incident, rule)
+	if result {
+		t.Error("shouldEscalate should return false when incident is acknowledged")
+	}
+}
+
+func TestManager_shouldEscalate_WaitTimeNotMet(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Incident started only 5 minutes ago, but wait time is 15 minutes
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		EscalationLevel: 0,
+		StartedAt:       time.Now().Add(-5 * time.Minute),
+	}
+
+	rule := &core.AlertRule{
+		ID: "rule-1",
+		Escalation: &core.EscalationPolicy{
+			Stages: []core.EscalationStage{
+				{Wait: core.Duration{Duration: 15 * time.Minute}, Channels: []string{"ch1"}},
+			},
+		},
+	}
+
+	result := manager.shouldEscalate(incident, rule)
+	if result {
+		t.Error("shouldEscalate should return false when wait time not met")
+	}
+}
+
+func TestManager_shouldEscalate_WaitTimeMet(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Incident started 30 minutes ago, wait time is 15 minutes
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		EscalationLevel: 0,
+		StartedAt:       time.Now().Add(-30 * time.Minute),
+	}
+
+	rule := &core.AlertRule{
+		ID: "rule-1",
+		Escalation: &core.EscalationPolicy{
+			Stages: []core.EscalationStage{
+				{Wait: core.Duration{Duration: 15 * time.Minute}, Channels: []string{"ch1"}},
+			},
+		},
+	}
+
+	result := manager.shouldEscalate(incident, rule)
+	if !result {
+		t.Error("shouldEscalate should return true when wait time is met")
+	}
+}
+
+func TestManager_shouldEscalate_SecondLevelWait(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	lastEscalated := time.Now().Add(-5 * time.Minute)
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		EscalationLevel: 1, // Already escalated once
+		StartedAt:       time.Now().Add(-1 * time.Hour),
+		LastEscalatedAt: &lastEscalated,
+	}
+
+	rule := &core.AlertRule{
+		ID: "rule-1",
+		Escalation: &core.EscalationPolicy{
+			Stages: []core.EscalationStage{
+				{Wait: core.Duration{Duration: 15 * time.Minute}, Channels: []string{"ch1"}},
+				{Wait: core.Duration{Duration: 30 * time.Minute}, Channels: []string{"ch2"}},
+			},
+		},
+	}
+
+	// Only 5 minutes since last escalation, but need 30
+	result := manager.shouldEscalate(incident, rule)
+	if result {
+		t.Error("shouldEscalate should return false when second level wait time not met")
+	}
+}
+
+func TestManager_shouldEscalate_DefaultWaitTime(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Incident started 20 minutes ago, no wait time specified (default 15 min)
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		EscalationLevel: 0,
+		StartedAt:       time.Now().Add(-20 * time.Minute),
+	}
+
+	rule := &core.AlertRule{
+		ID: "rule-1",
+		Escalation: &core.EscalationPolicy{
+			Stages: []core.EscalationStage{
+				{Wait: core.Duration{Duration: 0}, Channels: []string{"ch1"}}, // No wait time
+			},
+		},
+	}
+
+	result := manager.shouldEscalate(incident, rule)
+	if !result {
+		t.Error("shouldEscalate should use default 15 min wait time")
+	}
+}
+
+func TestManager_escalateIncident_NoEscalation(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		EscalationLevel: 0,
+		StartedAt:       time.Now(),
+	}
+
+	// Rule with no escalation
+	rule := &core.AlertRule{
+		ID:         "rule-1",
+		Escalation: nil,
+	}
+
+	// Should not panic
+	manager.escalateIncident(incident, rule)
+
+	// Level should not change
+	if incident.EscalationLevel != 0 {
+		t.Error("Escalation level should not change when no escalation config")
+	}
+}
+
+func TestManager_escalateIncident_NoStages(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		EscalationLevel: 0,
+		StartedAt:       time.Now(),
+	}
+
+	rule := &core.AlertRule{
+		ID: "rule-1",
+		Escalation: &core.EscalationPolicy{
+			Stages: []core.EscalationStage{},
+		},
+	}
+
+	// Should not panic
+	manager.escalateIncident(incident, rule)
+
+	// Level should not change
+	if incident.EscalationLevel != 0 {
+		t.Error("Escalation level should not change when no stages")
+	}
+}
+
+func TestManager_escalateIncident_MaxLevel(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		EscalationLevel: 2, // At max level
+		StartedAt:       time.Now(),
+	}
+
+	rule := &core.AlertRule{
+		ID: "rule-1",
+		Escalation: &core.EscalationPolicy{
+			Stages: []core.EscalationStage{
+				{Wait: core.Duration{Duration: 15 * time.Minute}, Channels: []string{"ch1"}},
+				{Wait: core.Duration{Duration: 30 * time.Minute}, Channels: []string{"ch2"}},
+			},
+		},
+	}
+
+	// Should not panic
+	manager.escalateIncident(incident, rule)
+
+	// Level should not change
+	if incident.EscalationLevel != 2 {
+		t.Error("Escalation level should not change when at max level")
+	}
+}
+
+func TestManager_escalateIncident_NoChannels(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		WorkspaceID:     "default",
+		EscalationLevel: 0,
+		StartedAt:       time.Now(),
+	}
+
+	rule := &core.AlertRule{
+		ID: "rule-1",
+		Escalation: &core.EscalationPolicy{
+			Stages: []core.EscalationStage{
+				{Wait: core.Duration{Duration: 15 * time.Minute}, Channels: []string{"nonexistent"}},
+			},
+		},
+	}
+
+	// Should not panic even though channel doesn't exist
+	manager.escalateIncident(incident, rule)
+
+	// Level should not change since no channels were found
+	if incident.EscalationLevel != 0 {
+		t.Error("Escalation level should not change when no valid channels")
+	}
+}
+
+func TestManager_escalateIncident_Success(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Add a channel for escalation
+	channel := &core.AlertChannel{
+		ID:      "escalation-ch",
+		Name:    "Escalation Channel",
+		Type:    core.ChannelWebHook,
+		Enabled: true,
+		Config: map[string]interface{}{
+			"url": "https://example.com/webhook",
+		},
+	}
+	manager.RegisterChannel(channel)
+
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		WorkspaceID:     "default",
+		EscalationLevel: 0,
+		StartedAt:       time.Now(),
+	}
+
+	rule := &core.AlertRule{
+		ID: "rule-1",
+		Escalation: &core.EscalationPolicy{
+			Stages: []core.EscalationStage{
+				{Wait: core.Duration{Duration: 15 * time.Minute}, Channels: []string{"escalation-ch"}},
+			},
+		},
+	}
+
+	manager.escalateIncident(incident, rule)
+
+	// Level should increment
+	if incident.EscalationLevel != 1 {
+		t.Errorf("Escalation level should be 1, got %d", incident.EscalationLevel)
+	}
+
+	// LastEscalatedAt should be set
+	if incident.LastEscalatedAt == nil {
+		t.Error("LastEscalatedAt should be set")
+	}
+}
+
+func TestManager_checkEscalations(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Add a channel
+	channel := &core.AlertChannel{
+		ID:      "escalation-ch",
+		Name:    "Escalation Channel",
+		Type:    core.ChannelWebHook,
+		Enabled: true,
+		Config: map[string]interface{}{
+			"url": "https://example.com/webhook",
+		},
+	}
+	manager.RegisterChannel(channel)
+
+	// Add a rule with escalation
+	rule := &core.AlertRule{
+		ID:      "rule-1",
+		Enabled: true,
+		Scope:   core.RuleScope{Type: "all"},
+		Escalation: &core.EscalationPolicy{
+			Stages: []core.EscalationStage{
+				{Wait: core.Duration{Duration: 1 * time.Millisecond}, Channels: []string{"escalation-ch"}},
+			},
+		},
+	}
+	manager.RegisterRule(rule)
+
+	// Add an active incident (open, old enough to escalate)
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		WorkspaceID:     "default",
+		Status:          core.IncidentOpen,
+		EscalationLevel: 0,
+		StartedAt:       time.Now().Add(-1 * time.Hour),
+	}
+	manager.mu.Lock()
+	manager.incidents[incident.ID] = incident
+	manager.mu.Unlock()
+
+	// Run checkEscalations
+	manager.checkEscalations()
+
+	// Incident should be escalated
+	manager.mu.RLock()
+	level := manager.incidents[incident.ID].EscalationLevel
+	manager.mu.RUnlock()
+
+	if level != 1 {
+		t.Errorf("Expected escalation level 1, got %d", level)
+	}
+}
+
+func TestManager_checkEscalations_AckedIncident(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Add a channel
+	channel := &core.AlertChannel{
+		ID:      "escalation-ch",
+		Name:    "Escalation Channel",
+		Type:    core.ChannelWebHook,
+		Enabled: true,
+		Config: map[string]interface{}{
+			"url": "https://example.com/webhook",
+		},
+	}
+	manager.RegisterChannel(channel)
+
+	// Add a rule with escalation
+	rule := &core.AlertRule{
+		ID:      "rule-1",
+		Enabled: true,
+		Scope:   core.RuleScope{Type: "all"},
+		Escalation: &core.EscalationPolicy{
+			Stages: []core.EscalationStage{
+				{Wait: core.Duration{Duration: 1 * time.Millisecond}, Channels: []string{"escalation-ch"}},
+			},
+		},
+	}
+	manager.RegisterRule(rule)
+
+	ackedAt := time.Now().Add(-30 * time.Minute)
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		WorkspaceID:     "default",
+		Status:          core.IncidentAcked,
+		EscalationLevel: 0,
+		StartedAt:       time.Now().Add(-1 * time.Hour),
+		AckedAt:         &ackedAt,
+	}
+	manager.mu.Lock()
+	manager.incidents[incident.ID] = incident
+	manager.mu.Unlock()
+
+	// Run checkEscalations
+	manager.checkEscalations()
+
+	// Incident should NOT be escalated (it's acknowledged)
+	manager.mu.RLock()
+	level := manager.incidents[incident.ID].EscalationLevel
+	manager.mu.RUnlock()
+
+	if level != 0 {
+		t.Errorf("Expected escalation level 0 (not escalated), got %d", level)
+	}
+}
+
+func TestManager_checkEscalations_ResolvedIncident(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Add a rule with escalation
+	rule := &core.AlertRule{
+		ID:      "rule-1",
+		Enabled: true,
+		Scope:   core.RuleScope{Type: "all"},
+		Escalation: &core.EscalationPolicy{
+			Stages: []core.EscalationStage{
+				{Wait: core.Duration{Duration: 1 * time.Millisecond}, Channels: []string{"ch1"}},
+			},
+		},
+	}
+	manager.RegisterRule(rule)
+
+	resolvedAt := time.Now().Add(-30 * time.Minute)
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		WorkspaceID:     "default",
+		Status:          core.IncidentResolved,
+		EscalationLevel: 0,
+		StartedAt:       time.Now().Add(-1 * time.Hour),
+		ResolvedAt:      &resolvedAt,
+	}
+	manager.mu.Lock()
+	manager.incidents[incident.ID] = incident
+	manager.mu.Unlock()
+
+	// Run checkEscalations
+	manager.checkEscalations()
+
+	// Incident should NOT be escalated (it's resolved)
+	manager.mu.RLock()
+	level := manager.incidents[incident.ID].EscalationLevel
+	manager.mu.RUnlock()
+
+	if level != 0 {
+		t.Errorf("Expected escalation level 0 (not escalated), got %d", level)
+	}
+}
+
+func TestManager_checkEscalations_NoRule(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Add an incident with a rule ID that doesn't exist
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "nonexistent-rule",
+		SoulID:          "soul-1",
+		WorkspaceID:     "default",
+		Status:          core.IncidentOpen,
+		EscalationLevel: 0,
+		StartedAt:       time.Now().Add(-1 * time.Hour),
+	}
+	manager.mu.Lock()
+	manager.incidents[incident.ID] = incident
+	manager.mu.Unlock()
+
+	// Run checkEscalations - should not panic
+	manager.checkEscalations()
+}
+
+func TestManager_checkEscalations_RuleNoEscalation(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Add a rule WITHOUT escalation
+	rule := &core.AlertRule{
+		ID:      "rule-1",
+		Enabled: true,
+		Scope:   core.RuleScope{Type: "all"},
+		// No Escalation field
+	}
+	manager.RegisterRule(rule)
+
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		WorkspaceID:     "default",
+		Status:          core.IncidentOpen,
+		EscalationLevel: 0,
+		StartedAt:       time.Now().Add(-1 * time.Hour),
+	}
+	manager.mu.Lock()
+	manager.incidents[incident.ID] = incident
+	manager.mu.Unlock()
+
+	// Run checkEscalations
+	manager.checkEscalations()
+
+	// Should not escalate (rule has no escalation config)
+	manager.mu.RLock()
+	level := manager.incidents[incident.ID].EscalationLevel
+	manager.mu.RUnlock()
+
+	if level != 0 {
+		t.Errorf("Expected escalation level 0, got %d", level)
+	}
+}
+
+// Tests for checkConditions to improve coverage
+
+func TestCheckConditions_StatusFor(t *testing.T) {
+	storage := &mockAlertStorage{}
+	manager := NewManager(storage, newTestLogger())
+
+	rule := &core.AlertRule{
+		Conditions: []core.AlertCondition{
+			{Type: "status_for", Status: "dead"},
+		},
+	}
+
+	judgment := &core.Judgment{Status: core.SoulDead}
+	result := manager.checkConditions(rule, core.SoulAlive, judgment)
+	if !result {
+		t.Error("checkConditions should trigger for status_for when status matches")
+	}
+}
+
+func TestCheckConditions_FailureRate(t *testing.T) {
+	storage := &mockAlertStorage{}
+	manager := NewManager(storage, newTestLogger())
+
+	rule := &core.AlertRule{
+		Conditions: []core.AlertCondition{
+			{Type: "failure_rate", Threshold: 50},
+		},
+	}
+
+	judgment := &core.Judgment{Status: core.SoulDead}
+	result := manager.checkConditions(rule, core.SoulAlive, judgment)
+	if !result {
+		t.Error("checkConditions should trigger for failure_rate when soul is dead")
+	}
+}
+
+func TestCheckConditions_NoMatchingCondition(t *testing.T) {
+	storage := &mockAlertStorage{}
+	manager := NewManager(storage, newTestLogger())
+
+	rule := &core.AlertRule{
+		Conditions: []core.AlertCondition{
+			{Type: "status_change", From: "alive", To: "dead"},
+		},
+	}
+
+	// Status doesn't change from alive to dead
+	judgment := &core.Judgment{Status: core.SoulAlive}
+	result := manager.checkConditions(rule, core.SoulAlive, judgment)
+	if result {
+		t.Error("checkConditions should not trigger when condition doesn't match")
+	}
+}
+
+func TestCheckConditions_MultipleConditions(t *testing.T) {
+	storage := &mockAlertStorage{}
+	manager := NewManager(storage, newTestLogger())
+
+	rule := &core.AlertRule{
+		Conditions: []core.AlertCondition{
+			{Type: "status_change", From: "alive", To: "dead"},
+			{Type: "degraded"},
+		},
+	}
+
+	// First condition doesn't match, second does
+	judgment := &core.Judgment{Status: core.SoulDegraded}
+	result := manager.checkConditions(rule, core.SoulAlive, judgment)
+	if !result {
+		t.Error("checkConditions should trigger when any condition matches")
+	}
+}
+
+// Tests for isDuplicate to improve coverage
+
+func TestManager_isDuplicate_FirstAlert(t *testing.T) {
+	storage := &mockAlertStorage{}
+	manager := NewManager(storage, newTestLogger())
+
+	rule := &core.AlertRule{
+		ID:       "rule-1",
+		Cooldown: core.Duration{Duration: 5 * time.Minute},
+	}
+
+	event := &core.AlertEvent{
+		SoulID: "soul-1",
+		Status: core.SoulDead,
+	}
+
+	// First alert should not be duplicate
+	result := manager.isDuplicate(rule, event)
+	if result {
+		t.Error("First alert should not be duplicate")
+	}
+}
+
+func TestManager_isDuplicate_WithinWindow(t *testing.T) {
+	storage := &mockAlertStorage{}
+	manager := NewManager(storage, newTestLogger())
+
+	rule := &core.AlertRule{
+		ID:       "rule-1",
+		Cooldown: core.Duration{Duration: 5 * time.Minute},
+	}
+
+	event := &core.AlertEvent{
+		SoulID: "soul-1",
+		Status: core.SoulDead,
+	}
+
+	// First call - not duplicate
+	manager.isDuplicate(rule, event)
+
+	// Second call within window - should be duplicate
+	result := manager.isDuplicate(rule, event)
+	if !result {
+		t.Error("Second alert within window should be duplicate")
+	}
+}
+
+func TestManager_isDuplicate_StatusChanged(t *testing.T) {
+	storage := &mockAlertStorage{}
+	manager := NewManager(storage, newTestLogger())
+
+	rule := &core.AlertRule{
+		ID:       "rule-1",
+		Cooldown: core.Duration{Duration: 5 * time.Minute},
+	}
+
+	event1 := &core.AlertEvent{
+		SoulID: "soul-1",
+		Status: core.SoulDead,
+	}
+
+	// First call - not duplicate
+	manager.isDuplicate(rule, event1)
+
+	// Second call with different status - not duplicate
+	event2 := &core.AlertEvent{
+		SoulID: "soul-1",
+		Status: core.SoulAlive,
+	}
+	result := manager.isDuplicate(rule, event2)
+	if result {
+		t.Error("Alert with different status should not be duplicate")
+	}
+}
+
+func TestManager_isDuplicate_WindowExpired(t *testing.T) {
+	storage := &mockAlertStorage{}
+	manager := NewManager(storage, newTestLogger())
+
+	rule := &core.AlertRule{
+		ID:       "rule-1",
+		Cooldown: core.Duration{Duration: 1 * time.Nanosecond},
+	}
+
+	event := &core.AlertEvent{
+		SoulID: "soul-1",
+		Status: core.SoulDead,
+	}
+
+	// First call - not duplicate
+	manager.isDuplicate(rule, event)
+
+	// Wait a tiny bit for window to expire
+	time.Sleep(1 * time.Millisecond)
+
+	// Second call after window expired - should reset and not be duplicate
+	result := manager.isDuplicate(rule, event)
+	if result {
+		t.Error("Alert after window expired should not be duplicate")
+	}
+}
+
+func TestManager_isDuplicate_DefaultWindow(t *testing.T) {
+	storage := &mockAlertStorage{}
+	manager := NewManager(storage, newTestLogger())
+
+	rule := &core.AlertRule{
+		ID:       "rule-1",
+		Cooldown: core.Duration{Duration: 0}, // No cooldown set
+	}
+
+	event := &core.AlertEvent{
+		SoulID: "soul-1",
+		Status: core.SoulDead,
+	}
+
+	// First call - not duplicate
+	manager.isDuplicate(rule, event)
+
+	// Second call immediately after - should use default 5 min window
+	result := manager.isDuplicate(rule, event)
+	if !result {
+		t.Error("Alert within default window should be duplicate")
+	}
+}
+
+func TestManager_isRateLimited_WindowExpired(t *testing.T) {
+	storage := &mockAlertStorage{}
+	manager := NewManager(storage, newTestLogger())
+
+	channel := &core.AlertChannel{
+		ID:   "ch-1",
+		Type: core.ChannelWebHook,
+		RateLimit: core.RateLimitConfig{
+			Enabled:     true,
+			MaxAlerts:   1,
+			Window:      core.Duration{Duration: 1 * time.Millisecond},
+			GroupingKey: "soul",
+		},
+	}
+
+	event := &core.AlertEvent{
+		SoulID: "soul-1",
+		Status: core.SoulDead,
+	}
+
+	// First call - not rate limited
+	result1 := manager.isRateLimited(channel, event)
+	if result1 {
+		t.Error("First alert should not be rate limited")
+	}
+
+	// Wait for window to expire
+	time.Sleep(5 * time.Millisecond)
+
+	// Second call after window - not rate limited (window reset)
+	result2 := manager.isRateLimited(channel, event)
+	if result2 {
+		t.Error("Alert after window expired should not be rate limited")
+	}
+}
+
+func TestManager_escalateIncident_MultipleChannels(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Add multiple channels
+	channel1 := &core.AlertChannel{
+		ID:      "esc-ch1",
+		Name:    "Escalation Channel 1",
+		Type:    core.ChannelWebHook,
+		Enabled: true,
+		Config:  map[string]interface{}{"url": "https://example.com/webhook1"},
+	}
+	channel2 := &core.AlertChannel{
+		ID:      "esc-ch2",
+		Name:    "Escalation Channel 2",
+		Type:    core.ChannelWebHook,
+		Enabled: true,
+		Config:  map[string]interface{}{"url": "https://example.com/webhook2"},
+	}
+	manager.RegisterChannel(channel1)
+	manager.RegisterChannel(channel2)
+
+	incident := &core.Incident{
+		ID:              "inc-1",
+		RuleID:          "rule-1",
+		SoulID:          "soul-1",
+		WorkspaceID:     "default",
+		EscalationLevel: 0,
+		StartedAt:       time.Now(),
+	}
+
+	rule := &core.AlertRule{
+		ID: "rule-1",
+		Escalation: &core.EscalationPolicy{
+			Stages: []core.EscalationStage{
+				{Wait: core.Duration{Duration: 15 * time.Minute}, Channels: []string{"esc-ch1", "esc-ch2"}},
+			},
+		},
+	}
+
+	manager.escalateIncident(incident, rule)
+
+	// Level should increment
+	if incident.EscalationLevel != 1 {
+		t.Errorf("Escalation level should be 1, got %d", incident.EscalationLevel)
+	}
+}
+
+func TestManager_escalationChecker_Stop(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Start manager (which starts escalationChecker)
+	if err := manager.Start(); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	// Stop should stop escalationChecker
+	if err := manager.Stop(); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+}

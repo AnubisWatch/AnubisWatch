@@ -27,6 +27,18 @@ type Manager struct {
 	stopCh  chan struct{}
 	queue   chan *core.AlertEvent
 
+	// Statistics counters
+	stats struct {
+		totalAlerts        uint64
+		sentAlerts         uint64
+		failedAlerts       uint64
+		acknowledgedAlerts uint64
+		resolvedAlerts     uint64
+		rateLimitedAlerts  uint64
+		filteredAlerts     uint64
+		lastAlertTime      time.Time
+	}
+
 	// Dependencies
 	logger  *slog.Logger
 	storage AlertStorage
@@ -88,6 +100,13 @@ func (m *Manager) Start() error {
 	}
 
 	m.running = true
+
+	// Recreate stopCh if it was closed (allows restart after Stop)
+	select {
+	case <-m.stopCh:
+		m.stopCh = make(chan struct{})
+	default:
+	}
 
 	// Load channels and rules from storage
 	if m.storage != nil {
@@ -295,11 +314,17 @@ func (m *Manager) dispatch(event *core.AlertEvent) {
 
 	for _, channel := range channels {
 		if !channel.ShouldNotify(event) {
+			m.mu.Lock()
+			m.stats.filteredAlerts++
+			m.mu.Unlock()
 			continue
 		}
 
 		// Check rate limiting
 		if m.isRateLimited(channel, event) {
+			m.mu.Lock()
+			m.stats.rateLimitedAlerts++
+			m.mu.Unlock()
 			m.logger.Debug("Rate limited",
 				"channel", channel.ID,
 				"soul_id", event.SoulID)
@@ -334,7 +359,25 @@ func (m *Manager) sendToChannel(ctx context.Context, event *core.AlertEvent, cha
 	event.ChannelID = channel.ID
 	event.ChannelType = channel.Type
 
-	return dispatcher.Send(ctx, event, channel)
+	// Update statistics
+	m.mu.Lock()
+	m.stats.totalAlerts++
+	m.stats.lastAlertTime = time.Now()
+	m.mu.Unlock()
+
+	// Send the alert
+	err := dispatcher.Send(ctx, event, channel)
+
+	// Track result
+	m.mu.Lock()
+	if err != nil {
+		m.stats.failedAlerts++
+	} else {
+		m.stats.sentAlerts++
+	}
+	m.mu.Unlock()
+
+	return err
 }
 
 // registerDispatchers registers all built-in channel dispatchers
@@ -556,12 +599,19 @@ func generateShortID() string {
 
 // GetStats returns alert manager statistics
 func (m *Manager) GetStats() core.AlertManagerStats {
-	// TODO: track actual statistics
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	return core.AlertManagerStats{
-		TotalAlerts:     0,
-		SentAlerts:      0,
-		FailedAlerts:    0,
-		ActiveIncidents: len(m.incidents),
+		TotalAlerts:        m.stats.totalAlerts,
+		SentAlerts:         m.stats.sentAlerts,
+		FailedAlerts:       m.stats.failedAlerts,
+		AcknowledgedAlerts: m.stats.acknowledgedAlerts,
+		ResolvedAlerts:     m.stats.resolvedAlerts,
+		RateLimitedAlerts:  m.stats.rateLimitedAlerts,
+		FilteredAlerts:     m.stats.filteredAlerts,
+		ActiveIncidents:    len(m.incidents),
+		LastAlertTime:      m.stats.lastAlertTime,
 	}
 }
 
@@ -579,6 +629,8 @@ func (m *Manager) AcknowledgeIncident(incidentID, userID string) error {
 	incident.Status = core.IncidentAcked
 	incident.AckedAt = &now
 	incident.AckedBy = userID
+
+	m.stats.acknowledgedAlerts++
 
 	if m.storage != nil {
 		m.storage.SaveIncident(incident)
@@ -601,6 +653,8 @@ func (m *Manager) ResolveIncident(incidentID, userID string) error {
 	incident.Status = core.IncidentResolved
 	incident.ResolvedAt = &now
 	incident.ResolvedBy = userID
+
+	m.stats.resolvedAlerts++
 
 	if m.storage != nil {
 		m.storage.SaveIncident(incident)
@@ -751,15 +805,16 @@ func (m *Manager) shouldEscalate(incident *core.Incident, rule *core.AlertRule) 
 // escalateIncident escalates an incident to higher-level channels
 func (m *Manager) escalateIncident(incident *core.Incident, rule *core.AlertRule) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	esc := rule.Escalation
 	if esc == nil || len(esc.Stages) == 0 {
+		m.mu.Unlock()
 		return
 	}
 
 	// Check if we have more stages
 	if incident.EscalationLevel >= len(esc.Stages) {
+		m.mu.Unlock()
 		return
 	}
 
@@ -775,6 +830,7 @@ func (m *Manager) escalateIncident(incident *core.Incident, rule *core.AlertRule
 	}
 
 	if len(channels) == 0 {
+		m.mu.Unlock()
 		m.logger.Warn("No escalation channels available",
 			"incident_id", incident.ID,
 			"rule_id", rule.ID)
@@ -795,6 +851,9 @@ func (m *Manager) escalateIncident(incident *core.Incident, rule *core.AlertRule
 		Timestamp:   now,
 	}
 
+	// Unlock before calling sendToChannel (which also uses mutex)
+	m.mu.Unlock()
+
 	// Send to escalation channels
 	for _, channel := range channels {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -810,12 +869,14 @@ func (m *Manager) escalateIncident(incident *core.Incident, rule *core.AlertRule
 	}
 
 	// Update incident
+	m.mu.Lock()
 	incident.EscalationLevel++
 	incident.LastEscalatedAt = &now
 
 	if m.storage != nil {
 		m.storage.SaveIncident(incident)
 	}
+	m.mu.Unlock()
 
 	m.logger.Info("Incident escalated",
 		"incident_id", incident.ID,

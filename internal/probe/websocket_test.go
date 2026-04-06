@@ -1003,3 +1003,25 @@ func TestBuildWebSocketTextFrame_EmptyPayload(t *testing.T) {
 		t.Errorf("Expected second byte 0, got %d", frame[1])
 	}
 }
+
+// TestBuildWebSocketTextFrame_LargePayload tests frame building with payload >= 65536 bytes
+func TestBuildWebSocketTextFrame_LargePayload(t *testing.T) {
+	// Payload >= 65536 bytes triggers 8-byte length encoding
+	payload := strings.Repeat("B", 70000)
+	frame := buildWebSocketTextFrame(payload)
+
+	if frame[0] != 0x81 {
+		t.Errorf("Expected first byte 0x81, got 0x%02X", frame[0])
+	}
+
+	// Length indicator should be 127 for 8-byte length
+	if frame[1] != 127 {
+		t.Errorf("Expected length indicator 127, got %d", frame[1])
+	}
+
+	// Verify frame has correct structure: 1 byte FIN/opcode + 1 byte length indicator + 8 bytes length + payload
+	expectedLen := 1 + 1 + 8 + len(payload)
+	if len(frame) != expectedLen {
+		t.Errorf("Expected frame length %d, got %d", expectedLen, len(frame))
+	}
+}

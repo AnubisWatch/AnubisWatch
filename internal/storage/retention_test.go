@@ -3,6 +3,8 @@ package storage
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -341,4 +343,149 @@ func TestNewRetentionManager_InvalidDayConfig(t *testing.T) {
 	// runCleanup should handle invalid duration gracefully
 	rm.runCleanup()
 	// Should not panic
+}
+
+// TestRetentionManager_Stop tests the Stop function
+func TestRetentionManager_Stop(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.RetentionConfig{
+		Raw:  core.Duration{Duration: 24 * time.Hour},
+		Day:  "720h",
+	}
+
+	logger := newTestLogger()
+	rm := NewRetentionManager(db, config, t.TempDir(), logger)
+
+	// Start the retention manager
+	rm.Start()
+
+	// Give it a moment to start
+	time.Sleep(50 * time.Millisecond)
+
+	// Stop should complete gracefully
+	done := make(chan struct{})
+	go func() {
+		rm.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Success - Stop completed
+	case <-time.After(2 * time.Second):
+		t.Error("Stop() did not complete in time")
+	}
+}
+
+// TestRetentionManager_getDiskUsage tests disk usage calculation
+func TestRetentionManager_getDiskUsage(t *testing.T) {
+	// Create a temp directory with some files
+	tempDir := t.TempDir()
+
+	// Create test files
+	testFile1 := filepath.Join(tempDir, "test1.db")
+	testFile2 := filepath.Join(tempDir, "test2.db")
+
+	// Write some data to files
+	if err := os.WriteFile(testFile1, []byte("test data content"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	if err := os.WriteFile(testFile2, []byte("more test data content here"), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.RetentionConfig{}
+	logger := newTestLogger()
+	rm := NewRetentionManager(db, config, tempDir, logger)
+
+	// Test getDiskUsage
+	stats, err := rm.getDiskUsage()
+	if err != nil {
+		t.Fatalf("getDiskUsage failed: %v", err)
+	}
+
+	// Should count 2 files
+	if stats.FileCount != 2 {
+		t.Errorf("Expected 2 files, got %d", stats.FileCount)
+	}
+
+	// Should have total size > 0
+	expectedSize := int64(len("test data content") + len("more test data content here"))
+	if stats.TotalBytes != expectedSize {
+		t.Errorf("Expected %d bytes, got %d", expectedSize, stats.TotalBytes)
+	}
+}
+
+// TestRetentionManager_getDiskUsage_EmptyDir tests disk usage with empty directory
+func TestRetentionManager_getDiskUsage_EmptyDir(t *testing.T) {
+	tempDir := t.TempDir()
+
+	db := newTestDB(t)
+	defer db.Close()
+
+	config := core.RetentionConfig{}
+	logger := newTestLogger()
+	rm := NewRetentionManager(db, config, tempDir, logger)
+
+	// Test getDiskUsage on empty directory
+	stats, err := rm.getDiskUsage()
+	if err != nil {
+		t.Fatalf("getDiskUsage failed: %v", err)
+	}
+
+	if stats.FileCount != 0 {
+		t.Errorf("Expected 0 files, got %d", stats.FileCount)
+	}
+
+	if stats.TotalBytes != 0 {
+		t.Errorf("Expected 0 bytes, got %d", stats.TotalBytes)
+	}
+}
+
+// TestRetentionManager_GetStorageStats_WithDiskUsage tests GetStorageStats including disk usage
+func TestRetentionManager_GetStorageStats_WithDiskUsage(t *testing.T) {
+	// Create temp directory with files
+	tempDir := t.TempDir()
+	testFile := filepath.Join(tempDir, "data.db")
+	os.WriteFile(testFile, []byte("storage test data"), 0644)
+
+	db := newTestDB(t)
+	defer db.Close()
+
+	// Add some data to the database
+	ctx := context.Background()
+	soul := &core.Soul{
+		ID:   "test-soul",
+		Name: "Test Soul",
+	}
+	db.SaveSoul(ctx, soul)
+
+	config := core.RetentionConfig{}
+	logger := newTestLogger()
+	rm := NewRetentionManager(db, config, tempDir, logger)
+
+	ctx = context.Background()
+	stats, err := rm.GetStorageStats(ctx)
+	if err != nil {
+		t.Fatalf("GetStorageStats failed: %v", err)
+	}
+
+	// Should have at least 1 key
+	if stats.TotalKeys < 1 {
+		t.Errorf("Expected at least 1 key, got %d", stats.TotalKeys)
+	}
+
+	// Should have disk usage info
+	if stats.DiskFiles != 1 {
+		t.Errorf("Expected 1 disk file, got %d", stats.DiskFiles)
+	}
+
+	if stats.DiskSize == 0 {
+		t.Error("Expected non-zero disk size")
+	}
 }

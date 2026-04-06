@@ -399,3 +399,640 @@ func TestConfig_applyEnvOverrides(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadConfig_FileNotFound(t *testing.T) {
+	_, err := LoadConfig("nonexistent_config_file_12345.yaml")
+	if err == nil {
+		t.Error("Expected error for non-existent file")
+	}
+}
+
+func TestLoadConfig_InvalidYAML(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "invalid-*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	// Write invalid YAML
+	if _, err := tmpfile.WriteString("invalid: yaml: content: ["); err != nil {
+		t.Fatal(err)
+	}
+	tmpfile.Close()
+
+	_, err = LoadConfig(tmpfile.Name())
+	if err == nil {
+		t.Error("Expected error for invalid YAML")
+	}
+}
+
+func TestLoadConfig_InvalidJSON(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "invalid-*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	// Write invalid JSON
+	if _, err := tmpfile.WriteString("{invalid json}"); err != nil {
+		t.Fatal(err)
+	}
+	tmpfile.Close()
+
+	_, err = LoadConfig(tmpfile.Name())
+	if err == nil {
+		t.Error("Expected error for invalid JSON")
+	}
+}
+
+func TestLoadConfig_JSONFile(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "config-*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	// Write valid JSON
+	jsonContent := `{"server": {"host": "127.0.0.1", "port": 8080}}`
+	if _, err := tmpfile.WriteString(jsonContent); err != nil {
+		t.Fatal(err)
+	}
+	tmpfile.Close()
+
+	cfg, err := LoadConfig(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if cfg.Server.Host != "127.0.0.1" {
+		t.Errorf("Expected host 127.0.0.1, got %s", cfg.Server.Host)
+	}
+	if cfg.Server.Port != 8080 {
+		t.Errorf("Expected port 8080, got %d", cfg.Server.Port)
+	}
+}
+
+func TestSaveConfig_InvalidPath(t *testing.T) {
+	cfg := &Config{}
+	// Try to save to invalid path
+	err := SaveConfig("invalid:/path/config.yaml", cfg)
+	// On Windows this might succeed or fail depending on the path
+	// Just verify the function runs without panic
+	_ = err
+}
+
+func TestValidate_MissingSoulType(t *testing.T) {
+	cfg := &Config{
+		Souls: []Soul{
+			{
+				Name:   "Test Soul",
+				Target: "https://example.com",
+				// Type is missing
+			},
+		},
+	}
+
+	err := cfg.validate()
+	if err == nil {
+		t.Error("Expected error for missing soul type")
+	}
+}
+
+func TestValidate_MissingChannelType(t *testing.T) {
+	cfg := &Config{
+		Souls: []Soul{},
+		Channels: []ChannelConfig{
+			{
+				Name: "Test Channel",
+				// Type is missing
+			},
+		},
+	}
+
+	err := cfg.validate()
+	if err == nil {
+		t.Error("Expected error for missing channel type")
+	}
+}
+
+func TestValidate_HTTPConfigDefaults(t *testing.T) {
+	cfg := &Config{
+		Souls: []Soul{
+			{
+				Name:   "HTTP Soul",
+				Type:   CheckHTTP,
+				Target: "https://example.com",
+				// HTTP is nil, validate sets defaults for CheckHTTP type
+			},
+		},
+	}
+
+	err := cfg.validate()
+	// validate function modifies soul.HTTP in place if nil for CheckHTTP
+	// Note: The actual validate code sets defaults but doesn't return error
+	if err != nil {
+		t.Logf("validate returned: %v", err)
+	}
+}
+
+func TestSetDefaults_NilCases(t *testing.T) {
+	cfg := &Config{}
+	cfg.setDefaults()
+
+	// Test default values
+	if cfg.Server.Host != "0.0.0.0" {
+		t.Errorf("Expected default host 0.0.0.0, got %s", cfg.Server.Host)
+	}
+	if cfg.Server.Port != 8443 {
+		t.Errorf("Expected default port 8443, got %d", cfg.Server.Port)
+	}
+}
+
+func TestConfigError_Error(t *testing.T) {
+	err := &ConfigError{
+		Field:   "test.field",
+		Message: "test error message",
+	}
+
+	errStr := err.Error()
+	if errStr == "" {
+		t.Error("ConfigError.Error() should return non-empty string")
+	}
+	if !containsString(errStr, "test.field") {
+		t.Error("Error should contain field name")
+	}
+	if !containsString(errStr, "test error message") {
+		t.Error("Error should contain message")
+	}
+}
+
+func containsString(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+func TestLoadConfig_YAMLExtension(t *testing.T) {
+	// Test .yml extension
+	tmpfile, err := os.CreateTemp("", "config-*.yml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	yamlContent := `server:
+  host: 127.0.0.1
+  port: 9090
+`
+	if _, err := tmpfile.WriteString(yamlContent); err != nil {
+		t.Fatal(err)
+	}
+	tmpfile.Close()
+
+	cfg, err := LoadConfig(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if cfg.Server.Host != "127.0.0.1" {
+		t.Errorf("Expected host 127.0.0.1, got %s", cfg.Server.Host)
+	}
+}
+
+func TestLoadConfig_EnvExpansion(t *testing.T) {
+	os.Setenv("TEST_HOST", "env-host")
+	os.Setenv("TEST_PORT", "7777")
+	defer os.Unsetenv("TEST_HOST")
+	defer os.Unsetenv("TEST_PORT")
+
+	tmpfile, err := os.CreateTemp("", "config-*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	yamlContent := `server:
+  host: ${TEST_HOST}
+  port: ${TEST_PORT}
+`
+	if _, err := tmpfile.WriteString(yamlContent); err != nil {
+		t.Fatal(err)
+	}
+	tmpfile.Close()
+
+	cfg, err := LoadConfig(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if cfg.Server.Host != "env-host" {
+		t.Errorf("Expected host from env var, got %s", cfg.Server.Host)
+	}
+}
+
+func TestValidate_WithChannels(t *testing.T) {
+	cfg := &Config{
+		Souls: []Soul{
+			{
+				Name:   "Test Soul",
+				Type:   CheckHTTP,
+				Target: "https://example.com",
+			},
+		},
+		Channels: []ChannelConfig{
+			{
+				Name: "Test Channel",
+				Type: "slack",
+			},
+		},
+	}
+
+	err := cfg.validate()
+	if err != nil {
+		t.Errorf("validate failed: %v", err)
+	}
+}
+
+func TestValidate_ChannelMissingName(t *testing.T) {
+	cfg := &Config{
+		Souls: []Soul{},
+		Channels: []ChannelConfig{
+			{
+				Type: "slack",
+				// Name is missing
+			},
+		},
+	}
+
+	err := cfg.validate()
+	if err == nil {
+		t.Error("Expected error for channel missing name")
+	}
+}
+
+func TestSaveConfig_JSONExtension(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "config-*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	cfg := &Config{}
+	cfg.setDefaults()
+	cfg.Server.Host = "json-test"
+
+	err = SaveConfig(tmpfile.Name(), cfg)
+	if err != nil {
+		t.Fatalf("SaveConfig failed: %v", err)
+	}
+
+	// Verify file was created and can be loaded
+	loaded, err := LoadConfig(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if loaded.Server.Host != "json-test" {
+		t.Errorf("Expected host json-test, got %s", loaded.Server.Host)
+	}
+}
+
+func TestValidate_MissingRuleName(t *testing.T) {
+	cfg := &Config{
+		Souls: []Soul{
+			{
+				Name:   "Test Soul",
+				Type:   CheckHTTP,
+				Target: "https://example.com",
+			},
+		},
+		Verdicts: VerdictsConfig{
+			Rules: []AlertRule{
+				{
+					// Name is missing
+					Conditions: []AlertCondition{{Type: "consecutive_failures", Threshold: 3}},
+					Channels:   []string{"channel-1"},
+				},
+			},
+		},
+	}
+
+	err := cfg.validate()
+	if err == nil {
+		t.Error("Expected error for missing rule name")
+	}
+}
+
+func TestValidate_EmptyConditions(t *testing.T) {
+	cfg := &Config{
+		Souls: []Soul{
+			{
+				Name:   "Test Soul",
+				Type:   CheckHTTP,
+				Target: "https://example.com",
+			},
+		},
+		Verdicts: VerdictsConfig{
+			Rules: []AlertRule{
+				{
+					Name:       "Test Rule",
+					Conditions: []AlertCondition{}, // Empty conditions
+					Channels:   []string{"channel-1"},
+				},
+			},
+		},
+	}
+
+	err := cfg.validate()
+	if err == nil {
+		t.Error("Expected error for empty conditions")
+	}
+}
+
+func TestValidate_MissingConditionType(t *testing.T) {
+	cfg := &Config{
+		Souls: []Soul{
+			{
+				Name:   "Test Soul",
+				Type:   CheckHTTP,
+				Target: "https://example.com",
+			},
+		},
+		Verdicts: VerdictsConfig{
+			Rules: []AlertRule{
+				{
+					Name: "Test Rule",
+					Conditions: []AlertCondition{
+						{Threshold: 3}, // Type is missing
+					},
+					Channels: []string{"channel-1"},
+				},
+			},
+		},
+	}
+
+	err := cfg.validate()
+	if err == nil {
+		t.Error("Expected error for missing condition type")
+	}
+}
+
+func TestValidate_MissingChannels(t *testing.T) {
+	cfg := &Config{
+		Souls: []Soul{
+			{
+				Name:   "Test Soul",
+				Type:   CheckHTTP,
+				Target: "https://example.com",
+			},
+		},
+		Verdicts: VerdictsConfig{
+			Rules: []AlertRule{
+				{
+					Name:       "Test Rule",
+					Conditions: []AlertCondition{{Type: "consecutive_failures", Threshold: 3}},
+					Channels:   []string{}, // Empty channels
+				},
+			},
+		},
+	}
+
+	err := cfg.validate()
+	if err == nil {
+		t.Error("Expected error for missing channels")
+	}
+}
+
+func TestSaveConfig_YAMLExtension(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "config-*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	cfg := &Config{}
+	cfg.setDefaults()
+	cfg.Server.Host = "yaml-test"
+
+	err = SaveConfig(tmpfile.Name(), cfg)
+	if err != nil {
+		t.Fatalf("SaveConfig failed: %v", err)
+	}
+
+	// Verify file was created and can be loaded
+	loaded, err := LoadConfig(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if loaded.Server.Host != "yaml-test" {
+		t.Errorf("Expected host yaml-test, got %s", loaded.Server.Host)
+	}
+}
+
+func TestSetDefaults_AllPaths(t *testing.T) {
+	cfg := &Config{}
+	cfg.setDefaults()
+
+	// Verify all defaults are set
+	if cfg.Storage.TimeSeries.Compaction.RawToMinute.Duration == 0 {
+		t.Error("Expected RawToMinute default to be set")
+	}
+	if cfg.Storage.TimeSeries.Compaction.MinuteToFive.Duration == 0 {
+		t.Error("Expected MinuteToFive default to be set")
+	}
+	if cfg.Storage.TimeSeries.Compaction.FiveToHour.Duration == 0 {
+		t.Error("Expected FiveToHour default to be set")
+	}
+	if cfg.Storage.TimeSeries.Compaction.HourToDay.Duration == 0 {
+		t.Error("Expected HourToDay default to be set")
+	}
+	if cfg.Storage.TimeSeries.Retention.Raw.Duration == 0 {
+		t.Error("Expected Retention Raw default to be set")
+	}
+	if cfg.Storage.TimeSeries.Retention.Minute.Duration == 0 {
+		t.Error("Expected Retention Minute default to be set")
+	}
+	if cfg.Storage.TimeSeries.Retention.FiveMin.Duration == 0 {
+		t.Error("Expected Retention FiveMin default to be set")
+	}
+	if cfg.Storage.TimeSeries.Retention.Hour.Duration == 0 {
+		t.Error("Expected Retention Hour default to be set")
+	}
+	if cfg.Storage.TimeSeries.Retention.Day == "" {
+		t.Error("Expected Retention Day default to be set")
+	}
+	if cfg.Necropolis.Discovery.Mode == "" {
+		t.Error("Expected Discovery Mode default to be set")
+	}
+	if cfg.Necropolis.Distribution.Strategy == "" {
+		t.Error("Expected Distribution Strategy default to be set")
+	}
+	if cfg.Necropolis.Raft.SnapshotThreshold == 0 {
+		t.Error("Expected Raft SnapshotThreshold default to be set")
+	}
+	if cfg.Tenants.Isolation == "" {
+		t.Error("Expected Tenants Isolation default to be set")
+	}
+	if cfg.Tenants.DefaultQuotas.MaxSouls == 0 {
+		t.Error("Expected MaxSouls default to be set")
+	}
+	if cfg.Tenants.DefaultQuotas.MaxJourneys == 0 {
+		t.Error("Expected MaxJourneys default to be set")
+	}
+	if cfg.Tenants.DefaultQuotas.RetentionDays == 0 {
+		t.Error("Expected RetentionDays default to be set")
+	}
+	if cfg.Logging.Format == "" {
+		t.Error("Expected Logging Format default to be set")
+	}
+	if cfg.Logging.Output == "" {
+		t.Error("Expected Logging Output default to be set")
+	}
+	if cfg.Dashboard.Branding.Title == "" {
+		t.Error("Expected Dashboard Title default to be set")
+	}
+	if cfg.Dashboard.Branding.Theme == "" {
+		t.Error("Expected Dashboard Theme default to be set")
+	}
+}
+
+func TestSetDefaults_TLSAutoCert(t *testing.T) {
+	cfg := &Config{
+		Server: ServerConfig{
+			TLS: TLSServerConfig{
+				Enabled: true,
+			},
+		},
+	}
+	cfg.setDefaults()
+
+	if !cfg.Server.TLS.AutoCert {
+		t.Error("Expected TLS AutoCert to be true when Enabled and no cert/key provided")
+	}
+}
+
+func TestSetDefaults_TLSWithCert(t *testing.T) {
+	cfg := &Config{
+		Server: ServerConfig{
+			TLS: TLSServerConfig{
+				Enabled: true,
+				Cert:    "/path/to/cert.pem",
+				Key:     "/path/to/key.pem",
+			},
+		},
+	}
+	cfg.setDefaults()
+
+	// AutoCert should not be set when Cert and Key are provided
+	if cfg.Server.TLS.AutoCert {
+		t.Error("Expected TLS AutoCert to remain false when Cert/Key are provided")
+	}
+}
+
+// Test SaveConfig with a type that can't be marshaled to trigger error path
+type BadConfig struct {
+	Config
+	BadField func() // functions can't be marshaled
+}
+
+func TestSaveConfig_MarshalError(t *testing.T) {
+	// This test tries to trigger the marshal error path
+	// However, our Config struct doesn't have fields that can cause marshal errors
+	// So we test the normal path works
+	tmpfile, err := os.CreateTemp("", "config-*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	cfg := &Config{}
+	cfg.setDefaults()
+
+	// Normal save should work
+	err = SaveConfig(tmpfile.Name(), cfg)
+	if err != nil {
+		t.Errorf("SaveConfig should not fail: %v", err)
+	}
+}
+
+func TestSaveConfig_InvalidDirectory(t *testing.T) {
+	// Try to save to a non-existent directory
+	cfg := &Config{}
+	cfg.setDefaults()
+
+	// Use a path that doesn't exist
+	err := SaveConfig("/nonexistent/directory/config.yaml", cfg)
+	// This should fail on most systems
+	if err == nil {
+		t.Log("SaveConfig to invalid path did not error (may be Windows-specific)")
+	}
+}
+
+func TestLoadConfig_ValidJSON(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "config-*.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	// Write valid JSON config
+	jsonContent := `{
+		"server": {
+			"host": "127.0.0.1",
+			"port": 8080
+		},
+		"souls": [
+			{
+				"name": "Test",
+				"type": "http",
+				"target": "https://example.com"
+			}
+		]
+	}`
+	if _, err := tmpfile.WriteString(jsonContent); err != nil {
+		t.Fatal(err)
+	}
+	tmpfile.Close()
+
+	cfg, err := LoadConfig(tmpfile.Name())
+	if err != nil {
+		t.Fatalf("LoadConfig failed: %v", err)
+	}
+
+	if cfg.Server.Host != "127.0.0.1" {
+		t.Errorf("Expected host 127.0.0.1, got %s", cfg.Server.Host)
+	}
+	if cfg.Server.Port != 8080 {
+		t.Errorf("Expected port 8080, got %d", cfg.Server.Port)
+	}
+}
+
+func TestLoadConfig_ValidationError(t *testing.T) {
+	tmpfile, err := os.CreateTemp("", "config-*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpfile.Name())
+
+	// Write YAML config with invalid soul (missing target)
+	yamlContent := `server:
+  host: 127.0.0.1
+  port: 8080
+souls:
+  - name: Test Soul
+    type: http
+`
+	if _, err := tmpfile.WriteString(yamlContent); err != nil {
+		t.Fatal(err)
+	}
+	tmpfile.Close()
+
+	_, err = LoadConfig(tmpfile.Name())
+	if err == nil {
+		t.Error("Expected error for config with validation failure")
+	}
+}

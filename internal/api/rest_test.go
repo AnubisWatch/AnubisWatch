@@ -3359,3 +3359,221 @@ func TestRESTServer_handleMe(t *testing.T) {
 		t.Errorf("Expected 200, got %d", rec.Code)
 	}
 }
+
+// TestValidateJSONMiddleware tests the validateJSONMiddleware function
+func TestValidateJSONMiddleware(t *testing.T) {
+	store := newMockStorage()
+	config := core.ServerConfig{Port: 8080}
+	probe := &mockProbeEngine{}
+	alert := &mockAlertManager{}
+	auth := &mockAuthenticator{}
+	cluster := &mockClusterManager{}
+	logger := newTestLogger()
+	server := NewRESTServer(config, store, probe, alert, auth, cluster, nil, nil, nil, logger)
+
+	handler := server.validateJSONMiddleware(func(ctx *Context) error {
+		return ctx.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	tests := []struct {
+		name        string
+		method      string
+		contentType string
+		bodyLen     int64
+		expectCode  int
+	}{
+		{
+			name:        "GET request bypasses validation",
+			method:      "GET",
+			contentType: "",
+			bodyLen:     0,
+			expectCode:  http.StatusOK,
+		},
+		{
+			name:        "POST with valid JSON content type",
+			method:      "POST",
+			contentType: "application/json",
+			bodyLen:     100,
+			expectCode:  http.StatusOK,
+		},
+		{
+			name:        "POST without JSON content type",
+			method:      "POST",
+			contentType: "text/plain",
+			bodyLen:     100,
+			expectCode:  http.StatusBadRequest,
+		},
+		{
+			name:        "PUT without JSON content type",
+			method:      "PUT",
+			contentType: "application/xml",
+			bodyLen:     100,
+			expectCode:  http.StatusBadRequest,
+		},
+		{
+			name:        "POST with content type containing charset",
+			method:      "POST",
+			contentType: "application/json; charset=utf-8",
+			bodyLen:     100,
+			expectCode:  http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, "/test", nil)
+			if tt.contentType != "" {
+				req.Header.Set("Content-Type", tt.contentType)
+			}
+			if tt.bodyLen > 0 {
+				req.ContentLength = tt.bodyLen
+			}
+			rec := httptest.NewRecorder()
+			ctx := &Context{
+				Request:  req,
+				Response: rec,
+			}
+
+			err := handler(ctx)
+			if err != nil {
+				t.Logf("Handler returned error: %v", err)
+			}
+
+			if rec.Code != tt.expectCode {
+				t.Errorf("Expected status %d, got %d", tt.expectCode, rec.Code)
+			}
+		})
+	}
+}
+
+// TestRateLimitMiddleware tests the rateLimitMiddleware function
+func TestRateLimitMiddleware(t *testing.T) {
+	store := newMockStorage()
+	config := core.ServerConfig{Port: 8080}
+	probe := &mockProbeEngine{}
+	alert := &mockAlertManager{}
+	auth := &mockAuthenticator{}
+	cluster := &mockClusterManager{}
+	logger := newTestLogger()
+	server := NewRESTServer(config, store, probe, alert, auth, cluster, nil, nil, nil, logger)
+
+	handler := server.rateLimitMiddleware(func(ctx *Context) error {
+		return ctx.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	tests := []struct {
+		name       string
+		remoteAddr string
+		forwarded  string
+		expectCode int
+	}{
+		{
+			name:       "First request from IP",
+			remoteAddr: "192.168.1.1:12345",
+			expectCode: http.StatusOK,
+		},
+		{
+			name:       "Request with X-Forwarded-For",
+			remoteAddr: "10.0.0.1:12345",
+			forwarded:  "192.168.2.2, 10.0.0.1",
+			expectCode: http.StatusOK,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/test", nil)
+			req.RemoteAddr = tt.remoteAddr
+			if tt.forwarded != "" {
+				req.Header.Set("X-Forwarded-For", tt.forwarded)
+			}
+			rec := httptest.NewRecorder()
+			ctx := &Context{
+				Request:  req,
+				Response: rec,
+			}
+
+			err := handler(ctx)
+			if err != nil {
+				t.Logf("Handler returned error: %v", err)
+			}
+
+			if rec.Code != tt.expectCode {
+				t.Errorf("Expected status %d, got %d", tt.expectCode, rec.Code)
+			}
+		})
+	}
+}
+
+// TestRateLimitMiddleware_RateExceeded tests rate limiting when limit is exceeded
+func TestRateLimitMiddleware_RateExceeded(t *testing.T) {
+	store := newMockStorage()
+	server := NewRESTServer(core.ServerConfig{Port: 8080}, store, &mockProbeEngine{}, &mockAlertManager{}, &mockAuthenticator{}, &mockClusterManager{}, nil, nil, nil, newTestLogger())
+
+	handler := server.rateLimitMiddleware(func(ctx *Context) error {
+		return ctx.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	// Make many requests from the same IP to trigger rate limiting
+	// Note: The actual limit is 100 requests/minute, so we won't hit it in this test
+	// But we test the request counting mechanism
+	for i := 0; i < 5; i++ {
+		req := httptest.NewRequest("GET", "/test", nil)
+		req.RemoteAddr = "192.168.1.100:12345"
+		rec := httptest.NewRecorder()
+		ctx := &Context{
+			Request:  req,
+			Response: rec,
+		}
+
+		err := handler(ctx)
+		if err != nil {
+			t.Logf("Request %d returned error: %v", i+1, err)
+		}
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("Request %d: Expected status 200, got %d", i+1, rec.Code)
+		}
+	}
+}
+
+// TestHandleMCP_NotInitialized tests handleMCP when MCP server is nil
+// TestHandleMCP_NotInitialized tests handleMCP when MCP server is nil
+func TestHandleMCP_NotInitialized(t *testing.T) {
+	store := newMockStorage()
+	server := NewRESTServer(core.ServerConfig{Port: 8080}, store, &mockProbeEngine{}, &mockAlertManager{}, &mockAuthenticator{}, &mockClusterManager{}, nil, nil, nil, newTestLogger())
+
+	req := httptest.NewRequest("GET", "/mcp", nil)
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:  req,
+		Response: rec,
+	}
+
+	server.handleMCP(ctx)
+	
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("Expected status %d, got %d", http.StatusServiceUnavailable, rec.Code)
+	}
+}
+
+// TestHandleMCP_Unauthorized tests handleMCP without authentication
+func TestHandleMCP_Unauthorized(t *testing.T) {
+	store := newMockStorage()
+	mcpServer := NewMCPServer(store, nil, nil, newTestLogger())
+	server := NewRESTServer(core.ServerConfig{Port: 8080}, store, &mockProbeEngine{}, &mockAlertManager{}, &mockAuthenticator{}, &mockClusterManager{}, nil, nil, nil, newTestLogger())
+	server.mcp = mcpServer
+
+	req := httptest.NewRequest("GET", "/mcp", nil)
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:  req,
+		Response: rec,
+	}
+
+	server.handleMCP(ctx)
+	
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("Expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}

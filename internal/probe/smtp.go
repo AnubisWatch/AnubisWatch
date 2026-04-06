@@ -330,7 +330,7 @@ func (c *IMAPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	// Connect (with or without TLS)
 	if cfg.TLS {
 		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", soul.Target, &tls.Config{
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: cfg.InsecureSkipVerify,
 		})
 	} else {
 		conn, err = net.DialTimeout("tcp", soul.Target, timeout)
