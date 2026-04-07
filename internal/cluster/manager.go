@@ -23,6 +23,9 @@ type Manager struct {
 	fsm           *raft.StorageFSM
 	logger        *slog.Logger
 	isClustered   bool
+
+	// Distribution
+	distributor *Distributor
 }
 
 // NewManager creates a new cluster manager
@@ -79,6 +82,23 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	m.logger.Info("Raft node started")
+
+	// Initialize distributor
+	strategy := StrategyLoadBased
+	m.distributor = NewDistributor(m.config.NodeID, m.config.Region, strategy, m.logger)
+
+	// Register self
+	m.distributor.RegisterNode(m.config.NodeID, m.config.Region)
+
+	// Register peers
+	for _, peer := range m.config.Peers {
+		m.distributor.RegisterNode(peer.ID, peer.Region)
+	}
+
+	// Start distributor
+	m.distributor.Start()
+
+	m.logger.Info("Cluster distributor started", "strategy", strategy.String())
 	return nil
 }
 
@@ -86,6 +106,11 @@ func (m *Manager) Start(ctx context.Context) error {
 func (m *Manager) Stop(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.distributor != nil {
+		m.logger.Info("stopping distributor")
+		m.distributor.Stop()
+	}
 
 	if m.node != nil {
 		m.logger.Info("stopping Raft node")

@@ -351,8 +351,8 @@ func TestRetentionManager_Stop(t *testing.T) {
 	defer db.Close()
 
 	config := core.RetentionConfig{
-		Raw:  core.Duration{Duration: 24 * time.Hour},
-		Day:  "720h",
+		Raw: core.Duration{Duration: 24 * time.Hour},
+		Day: "720h",
 	}
 
 	logger := newTestLogger()

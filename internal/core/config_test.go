@@ -106,6 +106,7 @@ func TestConfigValidation(t *testing.T) {
 					{
 						Name:   "Test Soul",
 						Type:   CheckHTTP,
+						HTTP:   &HTTPConfig{Method: "GET", ValidStatus: []int{200}},
 						Target: "https://example.com",
 					},
 				},
@@ -128,6 +129,7 @@ func TestConfigValidation(t *testing.T) {
 				Souls: []Soul{
 					{
 						Type:   CheckHTTP,
+						HTTP:   &HTTPConfig{Method: "GET", ValidStatus: []int{200}},
 						Target: "https://example.com",
 					},
 				},
@@ -521,6 +523,7 @@ func TestValidate_HTTPConfigDefaults(t *testing.T) {
 			{
 				Name:   "HTTP Soul",
 				Type:   CheckHTTP,
+				HTTP:   &HTTPConfig{Method: "GET", ValidStatus: []int{200}},
 				Target: "https://example.com",
 				// HTTP is nil, validate sets defaults for CheckHTTP type
 			},
@@ -639,13 +642,15 @@ func TestValidate_WithChannels(t *testing.T) {
 			{
 				Name:   "Test Soul",
 				Type:   CheckHTTP,
+				HTTP:   &HTTPConfig{Method: "GET", ValidStatus: []int{200}},
 				Target: "https://example.com",
 			},
 		},
 		Channels: []ChannelConfig{
 			{
-				Name: "Test Channel",
-				Type: "slack",
+				Name:  "Test Channel",
+				Type:  "slack",
+				Slack: &SlackConfig{WebhookURL: "https://hooks.slack.com/xxx"},
 			},
 		},
 	}
@@ -661,7 +666,8 @@ func TestValidate_ChannelMissingName(t *testing.T) {
 		Souls: []Soul{},
 		Channels: []ChannelConfig{
 			{
-				Type: "slack",
+				Type:  "slack",
+				Slack: &SlackConfig{WebhookURL: "https://hooks.slack.com/services/xxx"},
 				// Name is missing
 			},
 		},
@@ -706,6 +712,7 @@ func TestValidate_MissingRuleName(t *testing.T) {
 			{
 				Name:   "Test Soul",
 				Type:   CheckHTTP,
+				HTTP:   &HTTPConfig{Method: "GET", ValidStatus: []int{200}},
 				Target: "https://example.com",
 			},
 		},
@@ -732,6 +739,7 @@ func TestValidate_EmptyConditions(t *testing.T) {
 			{
 				Name:   "Test Soul",
 				Type:   CheckHTTP,
+				HTTP:   &HTTPConfig{Method: "GET", ValidStatus: []int{200}},
 				Target: "https://example.com",
 			},
 		},
@@ -758,6 +766,7 @@ func TestValidate_MissingConditionType(t *testing.T) {
 			{
 				Name:   "Test Soul",
 				Type:   CheckHTTP,
+				HTTP:   &HTTPConfig{Method: "GET", ValidStatus: []int{200}},
 				Target: "https://example.com",
 			},
 		},
@@ -786,6 +795,7 @@ func TestValidate_MissingChannels(t *testing.T) {
 			{
 				Name:   "Test Soul",
 				Type:   CheckHTTP,
+				HTTP:   &HTTPConfig{Method: "GET", ValidStatus: []int{200}},
 				Target: "https://example.com",
 			},
 		},
@@ -989,6 +999,7 @@ func TestLoadConfig_ValidJSON(t *testing.T) {
 			{
 				"name": "Test",
 				"type": "http",
+				"http": {"method": "GET", "valid_status": [200]},
 				"target": "https://example.com"
 			}
 		]
@@ -1034,5 +1045,600 @@ souls:
 	_, err = LoadConfig(tmpfile.Name())
 	if err == nil {
 		t.Error("Expected error for config with validation failure")
+	}
+}
+
+// New validation tests for comprehensive coverage
+func TestServerConfigValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		config    ServerConfig
+		wantError bool
+	}{
+		{
+			name:      "valid config",
+			config:    ServerConfig{Host: "0.0.0.0", Port: 8080},
+			wantError: false,
+		},
+		{
+			name:      "port too low",
+			config:    ServerConfig{Host: "0.0.0.0", Port: 0},
+			wantError: true,
+		},
+		{
+			name:      "port too high",
+			config:    ServerConfig{Host: "0.0.0.0", Port: 70000},
+			wantError: true,
+		},
+		{
+			name:      "TLS without cert or autocert",
+			config:    ServerConfig{Host: "0.0.0.0", Port: 8443, TLS: TLSServerConfig{Enabled: true}},
+			wantError: true,
+		},
+		{
+			name: "TLS with autocert but no domains",
+			config: ServerConfig{Host: "0.0.0.0", Port: 8443, TLS: TLSServerConfig{
+				Enabled:  true,
+				AutoCert: true,
+			}},
+			wantError: true,
+		},
+		{
+			name: "TLS with autocert and domains",
+			config: ServerConfig{Host: "0.0.0.0", Port: 8443, TLS: TLSServerConfig{
+				Enabled:     true,
+				AutoCert:    true,
+				ACMEDomains: []string{"example.com"},
+			}},
+			wantError: false,
+		},
+		{
+			name: "TLS with cert/key",
+			config: ServerConfig{Host: "0.0.0.0", Port: 8443, TLS: TLSServerConfig{
+				Enabled: true,
+				Cert:    "/path/to/cert.pem",
+				Key:     "/path/to/key.pem",
+			}},
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.validate()
+			if (err != nil) != tt.wantError {
+				t.Errorf("validate() error = %v, wantError = %v", err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestStorageConfigValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		config    StorageConfig
+		wantError bool
+	}{
+		{
+			name:      "valid config",
+			config:    StorageConfig{Path: "/data"},
+			wantError: false,
+		},
+		{
+			name:      "missing path",
+			config:    StorageConfig{},
+			wantError: true,
+		},
+		{
+			name: "encryption enabled without key",
+			config: StorageConfig{
+				Path:       "/data",
+				Encryption: EncryptionConfig{Enabled: true},
+			},
+			wantError: true,
+		},
+		{
+			name: "encryption enabled with key",
+			config: StorageConfig{
+				Path:       "/data",
+				Encryption: EncryptionConfig{Enabled: true, Key: "secret"},
+			},
+			wantError: false,
+		},
+		{
+			name: "invalid btree order",
+			config: StorageConfig{
+				Path:       "/data",
+				BTreeOrder: 2,
+			},
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.validate()
+			if (err != nil) != tt.wantError {
+				t.Errorf("validate() error = %v, wantError = %v", err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestAuthConfigValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		config    AuthConfig
+		wantError bool
+	}{
+		{
+			name:      "valid local auth",
+			config:    AuthConfig{Type: "local"},
+			wantError: false,
+		},
+		{
+			name:      "missing type",
+			config:    AuthConfig{},
+			wantError: true,
+		},
+		{
+			name:      "invalid type",
+			config:    AuthConfig{Type: "invalid"},
+			wantError: true,
+		},
+		{
+			name:      "OIDC without issuer",
+			config:    AuthConfig{Type: "oidc", OIDC: OIDCAuth{ClientID: "id", ClientSecret: "secret"}},
+			wantError: true,
+		},
+		{
+			name:      "OIDC without client_id",
+			config:    AuthConfig{Type: "oidc", OIDC: OIDCAuth{Issuer: "https://example.com", ClientSecret: "secret"}},
+			wantError: true,
+		},
+		{
+			name:      "OIDC without client_secret",
+			config:    AuthConfig{Type: "oidc", OIDC: OIDCAuth{Issuer: "https://example.com", ClientID: "id"}},
+			wantError: true,
+		},
+		{
+			name:      "valid OIDC",
+			config:    AuthConfig{Type: "oidc", OIDC: OIDCAuth{Issuer: "https://example.com", ClientID: "id", ClientSecret: "secret"}},
+			wantError: false,
+		},
+		{
+			name:      "LDAP without URL",
+			config:    AuthConfig{Type: "ldap", LDAP: LDAPAuth{BaseDN: "dc=example,dc=com"}},
+			wantError: true,
+		},
+		{
+			name:      "LDAP without base_dn",
+			config:    AuthConfig{Type: "ldap", LDAP: LDAPAuth{URL: "ldap://example.com"}},
+			wantError: true,
+		},
+		{
+			name:      "valid LDAP",
+			config:    AuthConfig{Type: "ldap", LDAP: LDAPAuth{URL: "ldap://example.com", BaseDN: "dc=example,dc=com"}},
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.validate()
+			if (err != nil) != tt.wantError {
+				t.Errorf("validate() error = %v, wantError = %v", err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestLoggingConfigValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		config    LoggingConfig
+		wantError bool
+	}{
+		{
+			name:      "valid config",
+			config:    LoggingConfig{Level: "info", Format: "json", Output: "stdout"},
+			wantError: false,
+		},
+		{
+			name:      "invalid level",
+			config:    LoggingConfig{Level: "invalid", Format: "json", Output: "stdout"},
+			wantError: true,
+		},
+		{
+			name:      "invalid format",
+			config:    LoggingConfig{Level: "info", Format: "xml", Output: "stdout"},
+			wantError: true,
+		},
+		{
+			name:      "invalid output",
+			config:    LoggingConfig{Level: "info", Format: "json", Output: "syslog"},
+			wantError: true,
+		},
+		{
+			name:      "file output without path",
+			config:    LoggingConfig{Level: "info", Format: "json", Output: "file"},
+			wantError: true,
+		},
+		{
+			name:      "file output with path",
+			config:    LoggingConfig{Level: "info", Format: "json", Output: "file", File: "/var/log/anubis.log"},
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.config.validate()
+			if (err != nil) != tt.wantError {
+				t.Errorf("validate() error = %v, wantError = %v", err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestSoulValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		soul      Soul
+		wantError bool
+	}{
+		{
+			name:      "valid HTTP soul",
+			soul:      Soul{Name: "Test", Type: CheckHTTP, Target: "https://example.com", HTTP: &HTTPConfig{Method: "GET", ValidStatus: []int{200}}},
+			wantError: false,
+		},
+		{
+			name:      "missing name",
+			soul:      Soul{Type: CheckHTTP, Target: "https://example.com"},
+			wantError: true,
+		},
+		{
+			name:      "missing target",
+			soul:      Soul{Name: "Test", Type: CheckHTTP},
+			wantError: true,
+		},
+		{
+			name:      "missing type",
+			soul:      Soul{Name: "Test", Target: "https://example.com"},
+			wantError: true,
+		},
+		{
+			name:      "invalid type",
+			soul:      Soul{Name: "Test", Type: "invalid", Target: "https://example.com"},
+			wantError: true,
+		},
+		{
+			name:      "negative interval",
+			soul:      Soul{Name: "Test", Type: CheckHTTP, Target: "https://example.com", Weight: Duration{-1 * time.Second}},
+			wantError: true,
+		},
+		{
+			name:      "HTTP without http config",
+			soul:      Soul{Name: "Test", Type: CheckHTTP, Target: "https://example.com"},
+			wantError: true,
+		},
+		{
+			name:      "HTTP with invalid method",
+			soul:      Soul{Name: "Test", Type: CheckHTTP, Target: "https://example.com", HTTP: &HTTPConfig{Method: "INVALID"}},
+			wantError: true,
+		},
+		{
+			name:      "HTTP without valid status",
+			soul:      Soul{Name: "Test", Type: CheckHTTP, Target: "https://example.com", HTTP: &HTTPConfig{Method: "GET"}},
+			wantError: true,
+		},
+		{
+			name:      "valid TCP soul",
+			soul:      Soul{Name: "Test", Type: CheckTCP, Target: "localhost:80", TCP: &TCPConfig{}},
+			wantError: false,
+		},
+		{
+			name:      "TCP without tcp config",
+			soul:      Soul{Name: "Test", Type: CheckTCP, Target: "localhost:80"},
+			wantError: true,
+		},
+		{
+			name:      "valid DNS soul",
+			soul:      Soul{Name: "Test", Type: CheckDNS, Target: "example.com", DNS: &DNSConfig{RecordType: "A"}},
+			wantError: false,
+		},
+		{
+			name:      "DNS without dns config",
+			soul:      Soul{Name: "Test", Type: CheckDNS, Target: "example.com"},
+			wantError: true,
+		},
+		{
+			name:      "DNS without record type",
+			soul:      Soul{Name: "Test", Type: CheckDNS, Target: "example.com", DNS: &DNSConfig{}},
+			wantError: true,
+		},
+		{
+			name:      "DNS with invalid record type",
+			soul:      Soul{Name: "Test", Type: CheckDNS, Target: "example.com", DNS: &DNSConfig{RecordType: "INVALID"}},
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.soul.validate(0)
+			if (err != nil) != tt.wantError {
+				t.Errorf("validate() error = %v, wantError = %v", err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestChannelConfigValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		channel   ChannelConfig
+		wantError bool
+	}{
+		{
+			name:      "valid webhook",
+			channel:   ChannelConfig{Name: "Test", Type: "webhook", Webhook: &WebhookConfig{URL: "https://example.com/webhook"}},
+			wantError: false,
+		},
+		{
+			name:      "missing name",
+			channel:   ChannelConfig{Type: "webhook"},
+			wantError: true,
+		},
+		{
+			name:      "missing type",
+			channel:   ChannelConfig{Name: "Test"},
+			wantError: true,
+		},
+		{
+			name:      "invalid type",
+			channel:   ChannelConfig{Name: "Test", Type: "invalid"},
+			wantError: true,
+		},
+		{
+			name:      "webhook without config",
+			channel:   ChannelConfig{Name: "Test", Type: "webhook"},
+			wantError: true,
+		},
+		{
+			name:      "webhook without URL",
+			channel:   ChannelConfig{Name: "Test", Type: "webhook", Webhook: &WebhookConfig{}},
+			wantError: true,
+		},
+		{
+			name:      "valid slack",
+			channel:   ChannelConfig{Name: "Test", Type: "slack", Slack: &SlackConfig{WebhookURL: "https://hooks.slack.com/xxx"}},
+			wantError: false,
+		},
+		{
+			name:      "slack without webhook URL",
+			channel:   ChannelConfig{Name: "Test", Type: "slack", Slack: &SlackConfig{}},
+			wantError: true,
+		},
+		{
+			name:      "valid telegram",
+			channel:   ChannelConfig{Name: "Test", Type: "telegram", Telegram: &TelegramConfig{BotToken: "token", ChatID: "12345"}},
+			wantError: false,
+		},
+		{
+			name:      "telegram without token",
+			channel:   ChannelConfig{Name: "Test", Type: "telegram", Telegram: &TelegramConfig{ChatID: "12345"}},
+			wantError: true,
+		},
+		{
+			name:      "telegram without chat_id",
+			channel:   ChannelConfig{Name: "Test", Type: "telegram", Telegram: &TelegramConfig{BotToken: "token"}},
+			wantError: true,
+		},
+		{
+			name:      "valid email",
+			channel:   ChannelConfig{Name: "Test", Type: "email", Email: &EmailConfig{SMTPHost: "smtp.example.com", From: "alert@example.com", To: []string{"admin@example.com"}}},
+			wantError: false,
+		},
+		{
+			name:      "email without smtp_host",
+			channel:   ChannelConfig{Name: "Test", Type: "email", Email: &EmailConfig{From: "alert@example.com", To: []string{"admin@example.com"}}},
+			wantError: true,
+		},
+		{
+			name:      "email without recipients",
+			channel:   ChannelConfig{Name: "Test", Type: "email", Email: &EmailConfig{SMTPHost: "smtp.example.com", From: "alert@example.com"}},
+			wantError: true,
+		},
+		{
+			name:      "valid pagerduty",
+			channel:   ChannelConfig{Name: "Test", Type: "pagerduty", PagerDuty: &PagerDutyConfig{IntegrationKey: "key123"}},
+			wantError: false,
+		},
+		{
+			name:      "pagerduty without key",
+			channel:   ChannelConfig{Name: "Test", Type: "pagerduty", PagerDuty: &PagerDutyConfig{}},
+			wantError: true,
+		},
+		{
+			name:      "valid ntfy",
+			channel:   ChannelConfig{Name: "Test", Type: "ntfy", Ntfy: &NtfyConfig{Topic: "alerts"}},
+			wantError: false,
+		},
+		{
+			name:      "ntfy without topic",
+			channel:   ChannelConfig{Name: "Test", Type: "ntfy", Ntfy: &NtfyConfig{}},
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.channel.validate(0)
+			if (err != nil) != tt.wantError {
+				t.Errorf("validate() error = %v, wantError = %v", err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestAlertRuleValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		rule      AlertRule
+		wantError bool
+	}{
+		{
+			name: "valid rule",
+			rule: AlertRule{
+				Name:       "Test Rule",
+				Conditions: []AlertCondition{{Type: "consecutive_failures", Threshold: 3}},
+				Channels:   []string{"channel-1"},
+			},
+			wantError: false,
+		},
+		{
+			name: "missing name",
+			rule: AlertRule{
+				Conditions: []AlertCondition{{Type: "consecutive_failures", Threshold: 3}},
+				Channels:   []string{"channel-1"},
+			},
+			wantError: true,
+		},
+		{
+			name: "empty conditions",
+			rule: AlertRule{
+				Name:       "Test Rule",
+				Conditions: []AlertCondition{},
+				Channels:   []string{"channel-1"},
+			},
+			wantError: true,
+		},
+		{
+			name: "empty channels",
+			rule: AlertRule{
+				Name:       "Test Rule",
+				Conditions: []AlertCondition{{Type: "consecutive_failures", Threshold: 3}},
+				Channels:   []string{},
+			},
+			wantError: true,
+		},
+		{
+			name: "missing condition type",
+			rule: AlertRule{
+				Name:       "Test Rule",
+				Conditions: []AlertCondition{{Threshold: 3}},
+				Channels:   []string{"channel-1"},
+			},
+			wantError: true,
+		},
+		{
+			name: "invalid condition type",
+			rule: AlertRule{
+				Name:       "Test Rule",
+				Conditions: []AlertCondition{{Type: "invalid", Threshold: 3}},
+				Channels:   []string{"channel-1"},
+			},
+			wantError: true,
+		},
+		{
+			name: "negative threshold",
+			rule: AlertRule{
+				Name:       "Test Rule",
+				Conditions: []AlertCondition{{Type: "consecutive_failures", Threshold: -1}},
+				Channels:   []string{"channel-1"},
+			},
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.rule.validate(0)
+			if (err != nil) != tt.wantError {
+				t.Errorf("validate() error = %v, wantError = %v", err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestFeatherConfigValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		feather   FeatherConfig
+		wantError bool
+	}{
+		{
+			name:      "valid config",
+			feather:   FeatherConfig{Name: "Test", Scope: "tag:api", ViolationThreshold: 3},
+			wantError: false,
+		},
+		{
+			name:      "missing name",
+			feather:   FeatherConfig{Scope: "tag:api", ViolationThreshold: 3},
+			wantError: true,
+		},
+		{
+			name:      "missing scope",
+			feather:   FeatherConfig{Name: "Test", ViolationThreshold: 3},
+			wantError: true,
+		},
+		{
+			name:      "zero threshold",
+			feather:   FeatherConfig{Name: "Test", Scope: "tag:api", ViolationThreshold: 0},
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.feather.validate(0)
+			if (err != nil) != tt.wantError {
+				t.Errorf("validate() error = %v, wantError = %v", err, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestJourneyConfigValidate(t *testing.T) {
+	tests := []struct {
+		name      string
+		journey   JourneyConfig
+		wantError bool
+	}{
+		{
+			name:      "valid journey",
+			journey:   JourneyConfig{Name: "Test", Steps: []JourneyStep{{Name: "Step 1", Target: "https://example.com"}}},
+			wantError: false,
+		},
+		{
+			name:      "missing name",
+			journey:   JourneyConfig{Steps: []JourneyStep{{Name: "Step 1", Target: "https://example.com"}}},
+			wantError: true,
+		},
+		{
+			name:      "empty steps",
+			journey:   JourneyConfig{Name: "Test", Steps: []JourneyStep{}},
+			wantError: true,
+		},
+		{
+			name:      "step missing name",
+			journey:   JourneyConfig{Name: "Test", Steps: []JourneyStep{{Target: "https://example.com"}}},
+			wantError: true,
+		},
+		{
+			name:      "step missing target",
+			journey:   JourneyConfig{Name: "Test", Steps: []JourneyStep{{Name: "Step 1"}}},
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.journey.validate(0)
+			if (err != nil) != tt.wantError {
+				t.Errorf("validate() error = %v, wantError = %v", err, tt.wantError)
+			}
+		})
 	}
 }

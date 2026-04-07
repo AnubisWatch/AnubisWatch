@@ -421,6 +421,13 @@ func (e *Engine) Stop() {
 	e.logger.Info("probe engine stopped")
 }
 
+// SetOnJudgment sets the callback function for judgment events
+func (e *Engine) SetOnJudgment(fn func(*core.Judgment)) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.onJudgment = fn
+}
+
 // Stats returns engine statistics
 func (e *Engine) Stats() map[string]interface{} {
 	e.mu.RLock()

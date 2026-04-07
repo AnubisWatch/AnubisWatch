@@ -158,7 +158,7 @@ func TestAlertFilter_Matches_Details(t *testing.T) {
 		Status:   SoulDead,
 		Severity: SeverityCritical,
 		Details: map[string]string{
-			"custom_field": "custom_value",
+			"custom_field":  "custom_value",
 			"response_time": "500ms",
 		},
 	}

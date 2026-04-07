@@ -1,0 +1,428 @@
+/* Ancient Egypt Theme - AnubisWatch */
+
+/* Font Families */
+.font-cinzel {
+  font-family: 'Cinzel', serif;
+}
+
+.font-cormorant {
+  font-family: 'Cormorant Garamond', serif;
+}
+
+.font-philosopher {
+  font-family: 'Philosopher', sans-serif;
+}
+
+.font-inter {
+  font-family: 'Inter', sans-serif;
+}
+
+/* Ancient Egypt Color Palette */
+:root {
+  --egypt-gold: #D4AF37;
+  --egypt-gold-light: #F4D03F;
+  --egypt-gold-dark: #B8860B;
+  --egypt-lapis: #1E3A5F;
+  --egypt-lapis-light: #2E5984;
+  --egypt-turquoise: #40E0D0;
+  --egypt-turquoise-dark: #20B2AA;
+  --egypt-carnelian: #B7410E;
+  --egypt-papyrus: #F5F5DC;
+  --egypt-sand: #C2B280;
+  --egypt-shadow: #0a0a0f;
+  --egypt-nile: #1E4D2B;
+}
+
+/* Gold Text Effects */
+.text-gold {
+  color: var(--egypt-gold);
+}
+
+.text-gold-light {
+  color: var(--egypt-gold-light);
+}
+
+.text-turquoise {
+  color: var(--egypt-turquoise);
+}
+
+.text-lapis {
+  color: var(--egypt-lapis-light);
+}
+
+/* Gold Gradient Text */
+.gradient-gold {
+  background: linear-gradient(
+    135deg,
+    #D4AF37 0%,
+    #F4D03F 25%,
+    #FFF8DC 50%,
+    #F4D03F 75%,
+    #D4AF37 100%
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  text-shadow: 0 0 30px rgba(212, 175, 55, 0.3);
+}
+
+.gradient-gold-shine {
+  background: linear-gradient(
+    90deg,
+    #B8860B 0%,
+    #D4AF37 25%,
+    #FFF8DC 45%,
+    #FFF8DC 55%,
+    #D4AF37 75%,
+    #B8860B 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: gold-shine 3s linear infinite;
+}
+
+@keyframes gold-shine {
+  0% { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+
+/* Ancient Egypt Border Styles */
+.border-egypt-gold {
+  border-color: var(--egypt-gold);
+}
+
+.border-egypt-gold/30 {
+  border-color: rgba(212, 175, 55, 0.3);
+}
+
+/* Decorative Hieroglyphic Pattern */
+.hieroglyph-pattern {
+  background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23D4AF37' fill-opacity='0.05'%3E%3Cpath d='M30 0L31.5 1.5L30 3L28.5 1.5L30 0ZM30 57L31.5 58.5L30 60L28.5 58.5L30 57ZM0 30L1.5 31.5L3 30L1.5 28.5L0 30ZM57 30L58.5 31.5L60 30L58.5 28.5L57 30Z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+}
+
+/* Ankh Symbol Decorative Element */
+.ankh-decoration::before {
+  content: '☥';
+  font-size: 1.2em;
+  margin-right: 0.5em;
+  color: var(--egypt-gold);
+  opacity: 0.8;
+}
+
+/* Scarab Icon */
+.scarab-icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23D4AF37'%3E%3Cpath d='M12 2C10 2 8.5 3.5 8.5 5.5C8.5 6.5 9 7.5 10 8.2V9H7C5.5 9 4.5 10 4.5 11.5C4.5 13 5.5 14 7 14H10V15H6C4.5 15 3.5 16 3.5 17.5C3.5 19 4.5 20 6 20H10V21C10 22.1 10.9 23 12 23C13.1 23 14 22.1 14 21V20H18C19.5 20 20.5 19 20.5 17.5C20.5 16 19.5 15 18 15H14V14H17C18.5 14 19.5 13 19.5 11.5C19.5 10 18.5 9 17 9H14V8.2C15 7.5 15.5 6.5 15.5 5.5C15.5 3.5 14 2 12 2Z'/%3E%3C/svg%3E");
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+/* Eye of Horus Icon */
+.eye-of-horus::before {
+  content: '𓂀';
+  font-size: 1.5em;
+  color: var(--egypt-gold);
+}
+
+/* Papyrus Scroll Effect */
+.papyrus-scroll {
+  background: linear-gradient(
+    to bottom,
+    #F5F5DC 0%,
+    #EDE8D0 50%,
+    #F5F5DC 100%
+  );
+  border-left: 3px solid var(--egypt-gold-dark);
+  border-right: 3px solid var(--egypt-gold-dark);
+  box-shadow:
+    inset 0 0 60px rgba(184, 134, 11, 0.1),
+    0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+/* Cartouche Style */
+.cartouche {
+  position: relative;
+  padding: 0.5rem 1.5rem;
+  border: 2px solid var(--egypt-gold);
+  border-radius: 4px 20px 20px 4px;
+  background: linear-gradient(
+    135deg,
+    rgba(212, 175, 55, 0.1) 0%,
+    rgba(30, 58, 95, 0.3) 100%
+  );
+}
+
+.cartouche::before,
+.cartouche::after {
+  content: '';
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: var(--egypt-gold);
+  border-radius: 50%;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.cartouche::before {
+  left: -4px;
+}
+
+.cartouche::after {
+  right: -4px;
+}
+
+/* Obelisk Shape */
+.obelisk {
+  clip-path: polygon(
+    45% 0%,
+    55% 0%,
+    60% 10%,
+    65% 100%,
+    35% 100%,
+    40% 10%
+  );
+  background: linear-gradient(
+    90deg,
+    #2a2a3a 0%,
+    #3a3a4a 30%,
+    #4a4a5a 50%,
+    #3a3a4a 70%,
+    #2a2a3a 100%
+  );
+}
+
+/* Gold Glow Effect */
+.glow-gold {
+  box-shadow:
+    0 0 5px rgba(212, 175, 55, 0.5),
+    0 0 20px rgba(212, 175, 55, 0.3),
+    0 0 40px rgba(212, 175, 55, 0.1);
+}
+
+.glow-gold-strong {
+  box-shadow:
+    0 0 10px rgba(212, 175, 55, 0.8),
+    0 0 30px rgba(212, 175, 55, 0.5),
+    0 0 60px rgba(212, 175, 55, 0.3);
+}
+
+/* Temple Column Effect */
+.temple-column {
+  background: linear-gradient(
+    90deg,
+    #1a1a2e 0%,
+    #2a2a3e 20%,
+    #3a3a4e 40%,
+    #4a4a5e 50%,
+    #3a3a4e 60%,
+    #2a2a3e 80%,
+    #1a1a2e 100%
+  );
+  border-top: 4px solid var(--egypt-gold);
+  border-bottom: 4px solid var(--egypt-gold);
+}
+
+/* Ancient Paper Texture */
+.papyrus-texture {
+  background-color: #F5F5DC;
+  background-image:
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(139, 119, 101, 0.03) 2px,
+      rgba(139, 119, 101, 0.03) 4px
+    );
+}
+
+/* Button Styles */
+.btn-egypt {
+  position: relative;
+  background: linear-gradient(
+    135deg,
+    rgba(212, 175, 55, 0.2) 0%,
+    rgba(30, 58, 95, 0.4) 100%
+  );
+  border: 1px solid var(--egypt-gold);
+  color: var(--egypt-gold);
+  padding: 0.75rem 1.5rem;
+  font-family: 'Cinzel', serif;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  transition: all 0.3s ease;
+  overflow: hidden;
+}
+
+.btn-egypt::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(212, 175, 55, 0.3),
+    transparent
+  );
+  transition: left 0.5s ease;
+}
+
+.btn-egypt:hover::before {
+  left: 100%;
+}
+
+.btn-egypt:hover {
+  box-shadow:
+    0 0 20px rgba(212, 175, 55, 0.4),
+    inset 0 0 20px rgba(212, 175, 55, 0.1);
+  transform: translateY(-1px);
+}
+
+/* Divider with Hieroglyphs */
+.divider-egypt {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 2rem 0;
+}
+
+.divider-egypt::before,
+.divider-egypt::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--egypt-gold),
+    transparent
+  );
+}
+
+.divider-egypt span {
+  color: var(--egypt-gold);
+  font-size: 1.5rem;
+  opacity: 0.6;
+}
+
+/* Card with Egyptian Border */
+.card-egypt {
+  position: relative;
+  background: rgba(10, 10, 15, 0.8);
+  border: 1px solid rgba(212, 175, 55, 0.3);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.card-egypt::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--egypt-gold) 20%,
+    var(--egypt-gold-light) 50%,
+    var(--egypt-gold) 80%,
+    transparent 100%
+  );
+}
+
+/* Lotus Flower Decoration */
+.lotus-decoration {
+  position: relative;
+}
+
+.lotus-decoration::after {
+  content: '𓆼';
+  position: absolute;
+  bottom: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 2rem;
+  color: var(--egypt-turquoise);
+  opacity: 0.5;
+}
+
+/* Animated Scarab */
+@keyframes scarab-crawl {
+  0% { transform: translateX(-100%) rotate(0deg); }
+  25% { transform: translateX(25%) rotate(5deg); }
+  50% { transform: translateX(50%) rotate(0deg); }
+  75% { transform: translateX(75%) rotate(-5deg); }
+  100% { transform: translateX(100%) rotate(0deg); }
+}
+
+.scarab-crawl {
+  animation: scarab-crawl 8s linear infinite;
+}
+
+/* Pharaoh Crown Effect */
+.crown-effect {
+  position: relative;
+}
+
+.crown-effect::before {
+  content: '';
+  position: absolute;
+  top: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40px;
+  height: 20px;
+  background: linear-gradient(
+    135deg,
+    var(--egypt-gold) 0%,
+    var(--egypt-gold-light) 50%,
+    var(--egypt-gold) 100%
+  );
+  clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+}
+
+/* Nile Wave Animation */
+@keyframes nile-flow {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 100% 50%; }
+}
+
+.nile-wave {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(64, 224, 208, 0.1) 25%,
+    rgba(64, 224, 208, 0.2) 50%,
+    rgba(64, 224, 208, 0.1) 75%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: nile-flow 4s linear infinite;
+}
+
+/* Shadow of the Pyramids */
+.pyramid-shadow {
+  background: linear-gradient(
+    180deg,
+    rgba(10, 10, 15, 0.95) 0%,
+    rgba(20, 20, 30, 0.9) 50%,
+    rgba(30, 30, 45, 0.85) 100%
+  );
+}
+
+/* Sacred Geometry Pattern */
+.sacred-geometry {
+  background-image:
+    radial-gradient(circle at 20% 50%, rgba(212, 175, 55, 0.03) 0%, transparent 50%),
+    radial-gradient(circle at 80% 50%, rgba(64, 224, 208, 0.03) 0%, transparent 50%),
+    radial-gradient(circle at 50% 50%, rgba(30, 58, 95, 0.05) 0%, transparent 70%);
+}

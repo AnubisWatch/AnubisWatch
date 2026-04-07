@@ -243,55 +243,82 @@ func (c *Config) setDefaults() {
 	if c.Dashboard.Branding.Theme == "" {
 		c.Dashboard.Branding.Theme = "auto"
 	}
+
+	// Auth defaults
+	if c.Auth.Type == "" {
+		c.Auth.Type = "local"
+	}
+	// Auto-enable auth if credentials are configured
+	if !c.Auth.Enabled {
+		if c.Auth.Type == "local" && c.Auth.Local.AdminEmail != "" && c.Auth.Local.AdminPassword != "" {
+			c.Auth.Enabled = true
+		}
+		if c.Auth.Type == "oidc" && c.Auth.OIDC.Issuer != "" {
+			c.Auth.Enabled = true
+		}
+		if c.Auth.Type == "ldap" && c.Auth.LDAP.URL != "" {
+			c.Auth.Enabled = true
+		}
+	}
 }
 
 func (c *Config) validate() error {
-	// Validate souls have required fields
+	// Ensure defaults are set before validation
+	c.setDefaults()
+
+	// Validate server config
+	if err := c.Server.validate(); err != nil {
+		return err
+	}
+
+	// Validate storage config
+	if err := c.Storage.validate(); err != nil {
+		return err
+	}
+
+	// Validate auth config
+	if err := c.Auth.validate(); err != nil {
+		return err
+	}
+
+	// Validate souls
 	for i, soul := range c.Souls {
-		if soul.Name == "" {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].name", i), Message: "name is required"}
-		}
-		if soul.Target == "" {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].target", i), Message: "target is required"}
-		}
-		if soul.Type == "" {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].type", i), Message: "type is required"}
-		}
-		// Validate type-specific config
-		switch soul.Type {
-		case CheckHTTP:
-			if soul.HTTP == nil {
-				soul.HTTP = &HTTPConfig{Method: "GET", ValidStatus: []int{200}}
-			}
+		if err := soul.validate(i); err != nil {
+			return err
 		}
 	}
 
-	// Validate channels have required fields
+	// Validate channels
 	for i, ch := range c.Channels {
-		if ch.Name == "" {
-			return &ConfigError{Field: fmt.Sprintf("channels[%d].name", i), Message: "name is required"}
-		}
-		if ch.Type == "" {
-			return &ConfigError{Field: fmt.Sprintf("channels[%d].type", i), Message: "type is required"}
+		if err := ch.validate(i); err != nil {
+			return err
 		}
 	}
 
 	// Validate alert rules
 	for i, rule := range c.Verdicts.Rules {
-		if rule.Name == "" {
-			return &ConfigError{Field: fmt.Sprintf("verdicts.rules[%d].name", i), Message: "name is required"}
+		if err := rule.validate(i); err != nil {
+			return err
 		}
-		if len(rule.Conditions) == 0 {
-			return &ConfigError{Field: fmt.Sprintf("verdicts.rules[%d].conditions", i), Message: "at least one condition is required"}
+	}
+
+	// Validate feathers
+	for i, feather := range c.Feathers {
+		if err := feather.validate(i); err != nil {
+			return err
 		}
-		for j, cond := range rule.Conditions {
-			if cond.Type == "" {
-				return &ConfigError{Field: fmt.Sprintf("verdicts.rules[%d].conditions[%d].type", i, j), Message: "condition type is required"}
-			}
+	}
+
+	// Validate journeys
+	for i, journey := range c.Journeys {
+		if err := journey.validate(i); err != nil {
+			return err
 		}
-		if len(rule.Channels) == 0 {
-			return &ConfigError{Field: fmt.Sprintf("verdicts.rules[%d].channels", i), Message: "at least one channel is required"}
-		}
+	}
+
+	// Validate logging config
+	if err := c.Logging.validate(); err != nil {
+		return err
 	}
 
 	return nil

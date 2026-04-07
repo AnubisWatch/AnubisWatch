@@ -24,25 +24,25 @@ import (
 
 // ServerDependencies holds all dependencies for the server
 type ServerDependencies struct {
-	Config           *core.Config
-	Logger           *slog.Logger
-	Store            *storage.CobaltDB
-	Authenticator    *auth.LocalAuthenticator
-	AlertManager     *alert.Manager
-	ProbeEngine      *probe.Engine
-	JourneyExecutor  *journey.Executor
-	ClusterManager   *cluster.Manager
-	RESTServer       *api.RESTServer
-	StatusPageRepo   *statusPageRepository
-	ACMEManager      interface{}
-	DashboardHandler http.Handler
+	Config            *core.Config
+	Logger            *slog.Logger
+	Store             *storage.CobaltDB
+	Authenticator     *auth.LocalAuthenticator
+	AlertManager      *alert.Manager
+	ProbeEngine       *probe.Engine
+	JourneyExecutor   *journey.Executor
+	ClusterManager    *cluster.Manager
+	RESTServer        *api.RESTServer
+	StatusPageRepo    *statusPageRepository
+	ACMEManager       interface{}
+	DashboardHandler  http.Handler
 	StatusPageHandler http.Handler
-	MCPServer        *api.MCPServer
+	MCPServer         *api.MCPServer
 }
 
 // Server represents the AnubisWatch server
 type Server struct {
-	deps *ServerDependencies
+	deps   *ServerDependencies
 	logger *slog.Logger
 }
 
@@ -214,7 +214,15 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 
 	// Initialize auth
 	sessionPath := filepath.Join(cfg.Storage.Path, "sessions.json")
-	authenticator := auth.NewLocalAuthenticator(sessionPath)
+	adminEmail := "admin@anubis.watch"
+	adminPassword := "admin"
+	if cfg.Auth.Local.AdminEmail != "" {
+		adminEmail = cfg.Auth.Local.AdminEmail
+	}
+	if cfg.Auth.Local.AdminPassword != "" {
+		adminPassword = cfg.Auth.Local.AdminPassword
+	}
+	authenticator := auth.NewLocalAuthenticator(sessionPath, adminEmail, adminPassword)
 
 	// Initialize alert manager
 	alertStorage := &alertStorageAdapter{store: store}
@@ -265,7 +273,10 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	// Initialize MCP server
 	mcpServer := api.NewMCPServer(restStore, probeEngine, alertMgr, logger)
 
-	restServer := api.NewRESTServer(cfg.Server, restStore, probeEngine, alertMgr, authenticator, clusterAdapt, dashboardHandler, statusPageHandler, mcpServer, logger)
+	restServer := api.NewRESTServer(cfg.Server, cfg.Auth, restStore, probeEngine, alertMgr, authenticator, clusterAdapt, dashboardHandler, statusPageHandler, mcpServer, logger)
+
+	// Wire up WebSocket broadcast for real-time judgment updates
+	probeEngine.SetOnJudgment(restServer.OnJudgmentCallback())
 
 	return &ServerDependencies{
 		Config:            cfg,

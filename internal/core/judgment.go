@@ -4,17 +4,18 @@ import "time"
 
 // Judgment is the result of weighing a soul — a single check execution.
 type Judgment struct {
-	ID         string           `json:"id"`
-	SoulID     string           `json:"soul_id"`
-	JackalID   string           `json:"jackal_id"` // which probe node
-	Region     string           `json:"region"`
-	Timestamp  time.Time        `json:"timestamp"`
-	Duration   time.Duration    `json:"duration"` // check latency
-	Status     SoulStatus       `json:"status"`
-	StatusCode int              `json:"status_code"` // protocol-specific
-	Message    string           `json:"message"`
-	Details    *JudgmentDetails `json:"details,omitempty"`
-	TLSInfo    *TLSInfo         `json:"tls_info,omitempty"`
+	ID          string           `json:"id"`
+	SoulID      string           `json:"soul_id"`
+	WorkspaceID string           `json:"workspace_id"` // for routing WebSocket broadcasts
+	JackalID    string           `json:"jackal_id"`    // which probe node
+	Region      string           `json:"region"`
+	Timestamp   time.Time        `json:"timestamp"`
+	Duration    time.Duration    `json:"duration"` // check latency
+	Status      SoulStatus       `json:"status"`
+	StatusCode  int              `json:"status_code"` // protocol-specific
+	Message     string           `json:"message"`
+	Details     *JudgmentDetails `json:"details,omitempty"`
+	TLSInfo     *TLSInfo         `json:"tls_info,omitempty"`
 }
 
 // JudgmentDetails holds protocol-specific result data

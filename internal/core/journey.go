@@ -1,5 +1,7 @@
 package core
 
+import "time"
+
 // JourneyConfig defines a multi-step synthetic check (Duat Journey)
 type JourneyConfig struct {
 	Name              string            `json:"name" yaml:"name"`
@@ -11,20 +13,32 @@ type JourneyConfig struct {
 	Variables         map[string]string `json:"variables" yaml:"variables"` // default variables
 	Steps             []JourneyStep     `json:"steps" yaml:"steps"`
 	Enabled           bool              `json:"enabled" yaml:"enabled"`
+	CreatedAt         time.Time         `json:"created_at" yaml:"-"`
+	UpdatedAt         time.Time         `json:"updated_at" yaml:"-"`
 }
 
 // JourneyStep represents a single step in a journey
 type JourneyStep struct {
-	Name    string                    `json:"name" yaml:"name"`
-	Type    CheckType                 `json:"type" yaml:"type"`     // http, tcp, udp, dns, etc.
-	Target  string                    `json:"target" yaml:"target"` // can use ${variable}
-	Timeout Duration                  `json:"timeout" yaml:"timeout"`
-	HTTP    *HTTPConfig               `json:"http,omitempty" yaml:"http,omitempty"`
-	TCP     *TCPConfig                `json:"tcp,omitempty" yaml:"tcp,omitempty"`
-	UDP     *UDPConfig                `json:"udp,omitempty" yaml:"udp,omitempty"`
-	DNS     *DNSConfig                `json:"dns,omitempty" yaml:"dns,omitempty"`
-	TLS     *TLSConfig                `json:"tls,omitempty" yaml:"tls,omitempty"`
-	Extract map[string]ExtractionRule `json:"extract" yaml:"extract"`
+	Name       string                    `json:"name" yaml:"name"`
+	Type       CheckType                 `json:"type" yaml:"type"`     // http, tcp, udp, dns, etc.
+	Target     string                    `json:"target" yaml:"target"` // can use ${variable}
+	Timeout    Duration                  `json:"timeout" yaml:"timeout"`
+	HTTP       *HTTPConfig               `json:"http,omitempty" yaml:"http,omitempty"`
+	TCP        *TCPConfig                `json:"tcp,omitempty" yaml:"tcp,omitempty"`
+	UDP        *UDPConfig                `json:"udp,omitempty" yaml:"udp,omitempty"`
+	DNS        *DNSConfig                `json:"dns,omitempty" yaml:"dns,omitempty"`
+	TLS        *TLSConfig                `json:"tls,omitempty" yaml:"tls,omitempty"`
+	Extract    map[string]ExtractionRule `json:"extract" yaml:"extract"`
+	Assertions []Assertion               `json:"assertions,omitempty" yaml:"assertions,omitempty"`
+}
+
+// Assertion defines an assertion to verify during a step
+type Assertion struct {
+	Type     string `json:"type" yaml:"type"`                           // status_code, body_contains, json_path, header, response_time, etc.
+	Target   string `json:"target,omitempty" yaml:"target,omitempty"`   // JSON path, header name, etc.
+	Operator string `json:"operator" yaml:"operator"`                   // equals, not_equals, contains, greater_than, less_than, regex
+	Expected string `json:"expected" yaml:"expected"`                   // expected value
+	Message  string `json:"message,omitempty" yaml:"message,omitempty"` // custom error message
 }
 
 // ExtractionRule defines how to extract a variable from a response

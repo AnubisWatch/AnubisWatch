@@ -1,6 +1,7 @@
 package core
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -382,6 +383,91 @@ func (c *AlertChannel) Validate() error {
 	}
 	if c.Type == "" {
 		return &ValidationError{Field: "type", Message: "channel type is required"}
+	}
+	return nil
+}
+
+// validate validates the channel configuration
+func (c ChannelConfig) validate(index int) error {
+	if c.Name == "" {
+		return &ConfigError{Field: fmt.Sprintf("channels[%d].name", index), Message: "name is required"}
+	}
+	if c.Type == "" {
+		return &ConfigError{Field: fmt.Sprintf("channels[%d].type", index), Message: "type is required"}
+	}
+
+	validTypes := map[string]bool{
+		"webhook": true, "slack": true, "discord": true, "telegram": true,
+		"email": true, "pagerduty": true, "opsgenie": true, "sms": true, "ntfy": true,
+	}
+	if !validTypes[c.Type] {
+		return &ConfigError{Field: fmt.Sprintf("channels[%d].type", index), Message: fmt.Sprintf("invalid channel type: %s", c.Type)}
+	}
+
+	// Type-specific validation
+	switch c.Type {
+	case "webhook":
+		if c.Webhook == nil || c.Webhook.URL == "" {
+			return &ConfigError{Field: fmt.Sprintf("channels[%d].webhook.url", index), Message: "webhook URL is required"}
+		}
+	case "slack":
+		if c.Slack == nil || c.Slack.WebhookURL == "" {
+			return &ConfigError{Field: fmt.Sprintf("channels[%d].slack.webhook_url", index), Message: "Slack webhook URL is required"}
+		}
+	case "discord":
+		if c.Discord == nil || c.Discord.WebhookURL == "" {
+			return &ConfigError{Field: fmt.Sprintf("channels[%d].discord.webhook_url", index), Message: "Discord webhook URL is required"}
+		}
+	case "telegram":
+		if c.Telegram == nil || c.Telegram.BotToken == "" || c.Telegram.ChatID == "" {
+			return &ConfigError{Field: fmt.Sprintf("channels[%d].telegram", index), Message: "telegram bot_token and chat_id are required"}
+		}
+	case "email":
+		if c.Email == nil || c.Email.SMTPHost == "" || c.Email.From == "" || len(c.Email.To) == 0 {
+			return &ConfigError{Field: fmt.Sprintf("channels[%d].email", index), Message: "email smtp_host, from, and to are required"}
+		}
+	case "pagerduty":
+		if c.PagerDuty == nil || c.PagerDuty.IntegrationKey == "" {
+			return &ConfigError{Field: fmt.Sprintf("channels[%d].pagerduty.integration_key", index), Message: "PagerDuty integration key is required"}
+		}
+	case "opsgenie":
+		if c.OpsGenie == nil || c.OpsGenie.APIKey == "" {
+			return &ConfigError{Field: fmt.Sprintf("channels[%d].opsgenie.api_key", index), Message: "OpsGenie API key is required"}
+		}
+	case "ntfy":
+		if c.Ntfy == nil || c.Ntfy.Topic == "" {
+			return &ConfigError{Field: fmt.Sprintf("channels[%d].ntfy.topic", index), Message: "ntfy topic is required"}
+		}
+	}
+	return nil
+}
+
+// validate validates the alert rule configuration
+func (r AlertRule) validate(index int) error {
+	if r.Name == "" {
+		return &ConfigError{Field: fmt.Sprintf("verdicts.rules[%d].name", index), Message: "name is required"}
+	}
+	if len(r.Conditions) == 0 {
+		return &ConfigError{Field: fmt.Sprintf("verdicts.rules[%d].conditions", index), Message: "at least one condition is required"}
+	}
+	if len(r.Channels) == 0 {
+		return &ConfigError{Field: fmt.Sprintf("verdicts.rules[%d].channels", index), Message: "at least one channel is required"}
+	}
+
+	validConditionTypes := map[string]bool{
+		"consecutive_failures": true, "threshold": true, "percentage": true,
+		"anomaly": true, "compound": true, "status_change": true, "status_for": true, "failure_rate": true,
+	}
+	for j, cond := range r.Conditions {
+		if cond.Type == "" {
+			return &ConfigError{Field: fmt.Sprintf("verdicts.rules[%d].conditions[%d].type", index, j), Message: "condition type is required"}
+		}
+		if !validConditionTypes[cond.Type] {
+			return &ConfigError{Field: fmt.Sprintf("verdicts.rules[%d].conditions[%d].type", index, j), Message: fmt.Sprintf("invalid condition type: %s", cond.Type)}
+		}
+		if cond.Threshold < 0 {
+			return &ConfigError{Field: fmt.Sprintf("verdicts.rules[%d].conditions[%d].threshold", index, j), Message: "threshold cannot be negative"}
+		}
 	}
 	return nil
 }

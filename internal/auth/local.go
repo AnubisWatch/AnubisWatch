@@ -15,12 +15,14 @@ import (
 
 // LocalAuthenticator implements simple token-based auth
 type LocalAuthenticator struct {
-	mu          sync.RWMutex
-	tokens      map[string]*session
-	users       map[string]*api.User
-	sessionPath string
-	stopCleanup chan struct{}
-	cleanupDone chan struct{}
+	mu            sync.RWMutex
+	tokens        map[string]*session
+	users         map[string]*api.User
+	adminEmail    string
+	adminPassword string
+	sessionPath   string
+	stopCleanup   chan struct{}
+	cleanupDone   chan struct{}
 }
 
 type session struct {
@@ -36,13 +38,28 @@ type sessionData struct {
 
 // NewLocalAuthenticator creates a new local authenticator
 // If sessionPath is provided, sessions are persisted to disk
-func NewLocalAuthenticator(sessionPath string) *LocalAuthenticator {
+func NewLocalAuthenticator(sessionPath, adminEmail, adminPassword string) *LocalAuthenticator {
 	a := &LocalAuthenticator{
-		tokens:      make(map[string]*session),
-		users:       make(map[string]*api.User),
-		sessionPath: sessionPath,
-		stopCleanup: make(chan struct{}),
-		cleanupDone: make(chan struct{}),
+		tokens:        make(map[string]*session),
+		users:         make(map[string]*api.User),
+		adminEmail:    adminEmail,
+		adminPassword: adminPassword,
+		sessionPath:   sessionPath,
+		stopCleanup:   make(chan struct{}),
+		cleanupDone:   make(chan struct{}),
+	}
+
+	// Create admin user if credentials provided
+	if adminEmail != "" && adminPassword != "" {
+		adminUser := &api.User{
+			ID:        generateID(),
+			Email:     adminEmail,
+			Name:      "Administrator",
+			Role:      "admin",
+			Workspace: "default",
+			CreatedAt: time.Now(),
+		}
+		a.users[adminUser.ID] = adminUser
 	}
 
 	// Load persisted sessions if path provided
@@ -191,12 +208,17 @@ func (a *LocalAuthenticator) Login(email, password string) (*api.User, string, e
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// For demo: accept any non-empty credentials
+	// Validate credentials against configured admin
 	if email == "" || password == "" {
 		return nil, "", errors.New("invalid credentials")
 	}
 
-	// Check if user exists by email
+	// Check if credentials match configured admin
+	if email != a.adminEmail || password != a.adminPassword {
+		return nil, "", errors.New("invalid credentials")
+	}
+
+	// Get or create admin user
 	var user *api.User
 	for _, u := range a.users {
 		if u.Email == email {
@@ -205,12 +227,12 @@ func (a *LocalAuthenticator) Login(email, password string) (*api.User, string, e
 		}
 	}
 
-	// Create new user if not found
+	// Create admin user if not found
 	if user == nil {
 		user = &api.User{
 			ID:        generateID(),
 			Email:     email,
-			Name:      email,
+			Name:      "Administrator",
 			Role:      "admin",
 			Workspace: "default",
 			CreatedAt: time.Now(),

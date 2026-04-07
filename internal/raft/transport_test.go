@@ -1588,4 +1588,3 @@ func (m *mockConnWithValidPreVoteResponse) RemoteAddr() net.Addr               {
 func (m *mockConnWithValidPreVoteResponse) SetDeadline(t time.Time) error      { return nil }
 func (m *mockConnWithValidPreVoteResponse) SetReadDeadline(t time.Time) error  { return nil }
 func (m *mockConnWithValidPreVoteResponse) SetWriteDeadline(t time.Time) error { return nil }
-

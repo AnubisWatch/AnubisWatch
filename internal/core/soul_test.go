@@ -19,6 +19,7 @@ func TestSoulValidation(t *testing.T) {
 			soul: &Soul{
 				Name:   "Test API",
 				Type:   CheckHTTP,
+				HTTP:   &HTTPConfig{Method: "GET", ValidStatus: []int{200}},
 				Target: "https://api.example.com/health",
 			},
 			wantError: false,
@@ -27,6 +28,7 @@ func TestSoulValidation(t *testing.T) {
 			name: "missing name",
 			soul: &Soul{
 				Type:   CheckHTTP,
+				HTTP:   &HTTPConfig{Method: "GET", ValidStatus: []int{200}},
 				Target: "https://api.example.com",
 			},
 			wantError: true,

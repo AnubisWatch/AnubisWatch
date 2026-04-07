@@ -1,0 +1,95 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e6]:
+      - generic [ref=e7]: 𓃥
+      - generic [ref=e8]:
+        - heading "AnubisWatch" [level=1] [ref=e9]
+        - paragraph [ref=e10]: The Judgment Never Sleeps
+    - navigation [ref=e11]:
+      - button "◈ Dashboard" [ref=e12]:
+        - generic [ref=e13]: ◈
+        - generic [ref=e14]: Dashboard
+      - button "𓃥 Souls" [ref=e15]:
+        - generic [ref=e16]: 𓃥
+        - generic [ref=e17]: Souls
+      - button "⚖ Judgments" [ref=e18]:
+        - generic [ref=e19]: ⚖
+        - generic [ref=e20]: Judgments
+      - button "🔔 Alerts" [ref=e21]:
+        - generic [ref=e22]: 🔔
+        - generic [ref=e23]: Alerts
+      - button "𓂀 Cluster" [ref=e24]:
+        - generic [ref=e25]: 𓂀
+        - generic [ref=e26]: Cluster
+      - button "⚙ Settings" [active] [ref=e27]:
+        - generic [ref=e28]: ⚙
+        - generic [ref=e29]: Settings
+    - generic [ref=e30]:
+      - generic [ref=e33]: Connected
+      - generic [ref=e34]: v0.1.0
+  - generic [ref=e35]:
+    - banner [ref=e36]:
+      - generic [ref=e38]:
+        - generic [ref=e39]:
+          - generic [ref=e40]:
+            - generic [ref=e42]: "Healthy:"
+            - generic [ref=e43]: "0"
+          - generic [ref=e44]:
+            - generic [ref=e46]: "Degraded:"
+            - generic [ref=e47]: "0"
+          - generic [ref=e48]:
+            - generic [ref=e50]: "Dead:"
+            - generic [ref=e51]: "0"
+        - generic [ref=e52]: 21:06:33
+        - button "P" [ref=e53]:
+          - generic [ref=e54]: P
+    - main [ref=e55]:
+      - generic [ref=e272]:
+        - generic [ref=e273]:
+          - generic [ref=e274]:
+            - heading "Settings" [level=2] [ref=e275]
+            - paragraph [ref=e276]: Configure AnubisWatch
+          - button "Save Changes" [ref=e277] [cursor=pointer]
+        - generic [ref=e278]:
+          - navigation [ref=e280]:
+            - button "⚙ General" [ref=e281]:
+              - generic [ref=e282]: ⚙
+              - generic [ref=e283]: General
+            - button "🔔 Notifications" [ref=e284]:
+              - generic [ref=e285]: 🔔
+              - generic [ref=e286]: Notifications
+            - button "𓂀 Cluster" [ref=e287]:
+              - generic [ref=e288]: 𓂀
+              - generic [ref=e289]: Cluster
+            - button "💾 Storage" [ref=e290]:
+              - generic [ref=e291]: 💾
+              - generic [ref=e292]: Storage
+            - button "🔒 Security" [ref=e293]:
+              - generic [ref=e294]: 🔒
+              - generic [ref=e295]: Security
+            - button "🔌 API" [ref=e296]:
+              - generic [ref=e297]: 🔌
+              - generic [ref=e298]: API
+          - generic [ref=e300]:
+            - heading "General Settings" [level=3] [ref=e301]
+            - generic [ref=e302]:
+              - generic [ref=e303]:
+                - generic [ref=e304]: Instance Name
+                - textbox [ref=e305]: AnubisWatch
+              - generic [ref=e306]:
+                - generic [ref=e307]: Region
+                - combobox [ref=e308]:
+                  - option "us-east-1" [selected]
+                  - option "us-west-2"
+                  - option "eu-west-1"
+                  - option "ap-southeast-1"
+              - generic [ref=e309]:
+                - generic [ref=e310]: Timezone
+                - combobox [ref=e311]:
+                  - option "UTC" [selected]
+                  - option "America/New_York"
+                  - option "Europe/London"
+                  - option "Asia/Tokyo"
+              - generic [ref=e312]:
+                - checkbox "Enable anonymous telemetry" [ref=e313]
+                - generic [ref=e314]: Enable anonymous telemetry

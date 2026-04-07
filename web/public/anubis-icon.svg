@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <defs>
+    <linearGradient id="goldGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#D4AF37"/>
+      <stop offset="50%" style="stop-color:#F4D03F"/>
+      <stop offset="100%" style="stop-color:#D4AF37"/>
+    </linearGradient>
+    <linearGradient id="darkGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#2a2a3a"/>
+      <stop offset="100%" style="stop-color:#1a1a2e"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background Circle -->
+  <circle cx="50" cy="50" r="45" fill="url(#darkGradient)" stroke="url(#goldGradient)" stroke-width="2"/>
+
+  <!-- Jackal Head Silhouette -->
+  <g fill="url(#goldGradient)" filter="url(#glow)">
+    <!-- Ears -->
+    <path d="M30 25 L25 5 L35 15 L45 20 Z"/>
+    <path d="M70 25 L75 5 L65 15 L55 20 Z"/>
+
+    <!-- Head Shape -->
+    <path d="M35 20 Q50 15 65 20 L65 35 Q70 40 70 50 Q70 60 60 65 L50 70 L40 65 Q30 60 30 50 Q30 40 35 35 Z"/>
+
+    <!-- Snout -->
+    <path d="M45 55 L50 75 L55 55 Z"/>
+
+    <!-- Eyes -->
+    <ellipse cx="42" cy="42" rx="5" ry="4" fill="#1a1a2e"/>
+    <ellipse cx="58" cy="42" rx="5" ry="4" fill="#1a1a2e"/>
+    <circle cx="43" cy="41" r="1.5" fill="#40E0D0"/>
+    <circle cx="59" cy="41" r="1.5" fill="#40E0D0"/>
+
+    <!-- Nose -->
+    <ellipse cx="50" cy="58" rx="3" ry="2" fill="#1a1a2e"/>
+
+    <!-- Nemes (Headdress) stripes -->
+    <path d="M25 15 Q35 25 35 35 L30 35 Q30 25 22 18 Z" opacity="0.7"/>
+    <path d="M75 15 Q65 25 65 35 L70 35 Q70 25 78 18 Z" opacity="0.7"/>
+  </g>
+
+  <!-- Decorative border elements -->
+  <circle cx="50" cy="50" r="42" fill="none" stroke="url(#goldGradient)" stroke-width="0.5" stroke-dasharray="5,5" opacity="0.5"/>
+</svg>

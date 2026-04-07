@@ -1,0 +1,92 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e6]:
+      - generic [ref=e7]: 𓃥
+      - generic [ref=e8]:
+        - heading "AnubisWatch" [level=1] [ref=e9]
+        - paragraph [ref=e10]: The Judgment Never Sleeps
+    - navigation [ref=e11]:
+      - button "◈ Dashboard" [ref=e12]:
+        - generic [ref=e13]: ◈
+        - generic [ref=e14]: Dashboard
+      - button "𓃥 Souls" [ref=e15]:
+        - generic [ref=e16]: 𓃥
+        - generic [ref=e17]: Souls
+      - button "⚖ Judgments" [ref=e18]:
+        - generic [ref=e19]: ⚖
+        - generic [ref=e20]: Judgments
+      - button "🔔 Alerts" [ref=e21]:
+        - generic [ref=e22]: 🔔
+        - generic [ref=e23]: Alerts
+      - button "𓂀 Cluster" [ref=e24]:
+        - generic [ref=e25]: 𓂀
+        - generic [ref=e26]: Cluster
+      - button "⚙ Settings" [ref=e27]:
+        - generic [ref=e28]: ⚙
+        - generic [ref=e29]: Settings
+    - generic [ref=e30]:
+      - generic [ref=e33]: Connected
+      - generic [ref=e34]: v0.1.0
+  - generic [ref=e35]:
+    - banner [ref=e36]:
+      - generic [ref=e38]:
+        - generic [ref=e39]:
+          - generic [ref=e40]:
+            - generic [ref=e42]: "Healthy:"
+            - generic [ref=e43]: "0"
+          - generic [ref=e44]:
+            - generic [ref=e46]: "Degraded:"
+            - generic [ref=e47]: "0"
+          - generic [ref=e48]:
+            - generic [ref=e50]: "Dead:"
+            - generic [ref=e51]: "0"
+        - generic [ref=e52]: 21:43:05
+        - button "P" [ref=e53]:
+          - generic [ref=e54]: P
+    - main [ref=e55]:
+      - generic [ref=e153]:
+        - generic [ref=e154]:
+          - generic [ref=e155]:
+            - heading "Settings" [level=2] [ref=e156]
+            - paragraph [ref=e157]: Configure AnubisWatch
+          - button "Save Changes" [ref=e158] [cursor=pointer]
+        - generic [ref=e159]:
+          - navigation [ref=e161]:
+            - button "⚙ General" [ref=e162]:
+              - generic [ref=e163]: ⚙
+              - generic [ref=e164]: General
+            - button "🔔 Notifications" [active] [ref=e165]:
+              - generic [ref=e166]: 🔔
+              - generic [ref=e167]: Notifications
+            - button "𓂀 Cluster" [ref=e168]:
+              - generic [ref=e169]: 𓂀
+              - generic [ref=e170]: Cluster
+            - button "💾 Storage" [ref=e171]:
+              - generic [ref=e172]: 💾
+              - generic [ref=e173]: Storage
+            - button "🔒 Security" [ref=e174]:
+              - generic [ref=e175]: 🔒
+              - generic [ref=e176]: Security
+            - button "🔌 API" [ref=e177]:
+              - generic [ref=e178]: 🔌
+              - generic [ref=e179]: API
+          - generic [ref=e181]:
+            - heading "Notification Settings" [level=3] [ref=e182]
+            - generic [ref=e183]:
+              - generic [ref=e184]:
+                - generic [ref=e185]:
+                  - heading "Email Notifications" [level=4] [ref=e186]
+                  - paragraph [ref=e187]: Receive alerts via email
+                - checkbox [checked] [ref=e188]
+              - generic [ref=e189]:
+                - generic [ref=e190]:
+                  - heading "Digest Mode" [level=4] [ref=e191]
+                  - paragraph [ref=e192]: Group alerts into periodic digests
+                - checkbox [ref=e193]
+              - generic [ref=e194]:
+                - generic [ref=e195]: Digest Frequency
+                - combobox [ref=e196]:
+                  - option "Every 5 minutes" [selected]
+                  - option "Every 15 minutes"
+                  - option "Every hour"
+                  - option "Daily"

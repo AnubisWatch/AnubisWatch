@@ -267,5 +267,3 @@ func TestMCPServer_handleGetPrompt_UnknownPrompt(t *testing.T) {
 		t.Error("Expected error for unknown prompt")
 	}
 }
-
-

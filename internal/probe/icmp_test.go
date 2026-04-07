@@ -743,7 +743,7 @@ func TestICMPChecker_Judge_FeatherThreshold(t *testing.T) {
 		Type:   core.CheckICMP,
 		Target: "8.8.8.8",
 		ICMP: &core.ICMPConfig{
-			Count:  3,
+			Count:   3,
 			Feather: core.Duration{Duration: 1 * time.Microsecond}, // Very low threshold
 		},
 		Timeout: core.Duration{Duration: 5 * time.Second},
@@ -763,9 +763,9 @@ func TestICMPChecker_Judge_PrivilegedMode(t *testing.T) {
 	checker := NewICMPChecker()
 
 	soul := &core.Soul{
-		ID:   "test-icmp-privileged",
-		Name: "Test ICMP Privileged",
-		Type: core.CheckICMP,
+		ID:     "test-icmp-privileged",
+		Name:   "Test ICMP Privileged",
+		Type:   core.CheckICMP,
 		Target: "127.0.0.1",
 		ICMP: &core.ICMPConfig{
 			Count:      1,
@@ -789,9 +789,9 @@ func TestICMPChecker_Judge_MaxLossPercentThreshold(t *testing.T) {
 	checker := NewICMPChecker()
 
 	soul := &core.Soul{
-		ID:   "test-icmp-loss",
-		Name: "Test ICMP Loss",
-		Type: core.CheckICMP,
+		ID:     "test-icmp-loss",
+		Name:   "Test ICMP Loss",
+		Type:   core.CheckICMP,
 		Target: "192.0.2.1", // TEST-NET-1, should not respond
 		ICMP: &core.ICMPConfig{
 			Count:          3,
@@ -814,9 +814,9 @@ func TestICMPChecker_Judge_DefaultCount(t *testing.T) {
 	checker := NewICMPChecker()
 
 	soul := &core.Soul{
-		ID:   "test-icmp-default",
-		Name: "Test ICMP Default",
-		Type: core.CheckICMP,
+		ID:     "test-icmp-default",
+		Name:   "Test ICMP Default",
+		Type:   core.CheckICMP,
 		Target: "8.8.8.8",
 		ICMP: &core.ICMPConfig{
 			Count: 0, // Should default to 3
@@ -839,9 +839,9 @@ func TestICMPChecker_Judge_DefaultInterval(t *testing.T) {
 	checker := NewICMPChecker()
 
 	soul := &core.Soul{
-		ID:   "test-icmp-interval",
-		Name: "Test ICMP Interval",
-		Type: core.CheckICMP,
+		ID:     "test-icmp-interval",
+		Name:   "Test ICMP Interval",
+		Type:   core.CheckICMP,
 		Target: "8.8.8.8",
 		ICMP: &core.ICMPConfig{
 			Count:    2,

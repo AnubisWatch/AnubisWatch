@@ -115,187 +115,92 @@ func getGoVersion() string {
 	return fmt.Sprintf("%s %s/%s", runtime.Version(), runtime.GOOS, runtime.GOARCH)
 }
 
+// initConfig handles the 'init' command with full flag support
 func initConfig() {
-	configPath := "anubis.yaml"
+	// Parse flags
+	interactive := false
+	configLocation := "local" // local, user, system
+	configPath := ""
+
+	for i := 1; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--interactive", "-i":
+			interactive = true
+		case "--location", "-l":
+			if i+1 < len(os.Args) {
+				configLocation = os.Args[i+1]
+				i++
+			}
+		case "--output", "-o":
+			if i+1 < len(os.Args) {
+				configPath = os.Args[i+1]
+				i++
+			}
+		case "--help", "-h":
+			printInitHelp()
+			return
+		}
+	}
+
+	// Determine config path if not explicitly set
+	if configPath == "" {
+		switch configLocation {
+		case "user":
+			configPath = getUserConfigPath()
+		case "system":
+			configPath = getSystemConfigPath()
+		default: // local
+			configPath = "./anubis.json"
+		}
+	}
+
+	// Check if exists
 	if _, err := os.Stat(configPath); err == nil {
-		fmt.Fprintf(os.Stderr, "Config file already exists: %s\n", configPath)
+		fmt.Fprintf(os.Stderr, "⚠️  Config already exists: %s\n", configPath)
+		fmt.Println("   Use --output to specify a different location")
+		fmt.Println("   Or delete the existing file first")
 		os.Exit(1)
 	}
 
-	config := `# ⚖️ AnubisWatch Configuration
-# The Judgment Never Sleeps
-
-server:
-  host: "0.0.0.0"
-  port: 8443
-  tls:
-    enabled: false
-    cert: ""
-    key: ""
-    auto_cert: false
-    acme_email: ""
-
-storage:
-  path: "./data"
-  retention_days: 90
-  encryption_key: ""
-
-necropolis:
-  enabled: false
-  node_name: "jackal-1"
-  region: "default"
-  bind_addr: "0.0.0.0:7946"
-  advertise_addr: ""
-  cluster_secret: ""
-  discovery:
-    mode: "mdns"  # mdns, gossip, or manual
-    seeds: []
-  raft:
-    node_id: "jackal-1"
-    bind_addr: "0.0.0.0:7946"
-    advertise_addr: ""
-    bootstrap: true
-    election_timeout: "1s"
-    heartbeat_timeout: "500ms"
-    commit_timeout: "500ms"
-    snapshot_interval: "120s"
-    snapshot_threshold: 100
-    max_append_entries: 64
-    trailing_logs: 10000
-    peers: []
-
-dashboard:
-  enabled: true
-  theme: "dark"
-
-logging:
-  level: "info"
-  format: "json"
-
-# Souls - Monitored targets
-souls:
-  - name: "Example API"
-    type: http
-    target: "https://httpbin.org/get"
-    weight: 60s
-    timeout: 10s
-    enabled: true
-    tags:
-      - example
-      - external
-    http:
-      method: GET
-      valid_status: [200]
-      feather: 500ms
-
-  - name: "Google DNS"
-    type: dns
-    target: "8.8.8.8:53"
-    weight: 30s
-    timeout: 5s
-    enabled: true
-    tags:
-      - dns
-      - external
-    dns:
-      record_type: A
-      expected_value: ""
-
-  - name: "Local TCP Service"
-    type: tcp
-    target: "localhost:8080"
-    weight: 15s
-    timeout: 5s
-    enabled: false
-    tags:
-      - tcp
-      - local
-    tcp:
-      expect_banner: ""
-
-# Alert Channels
-channels: []
-# Example Slack channel:
-#   - name: "ops-slack"
-#     type: slack
-#     enabled: true
-#     slack:
-#       webhook_url: "${SLACK_WEBHOOK_URL}"
-#       channel: "#ops"
-
-# Example Discord channel:
-#   - name: "ops-discord"
-#     type: discord
-#     enabled: true
-#     discord:
-#       webhook_url: "${DISCORD_WEBHOOK_URL}"
-
-# Example Email channel:
-#   - name: "ops-email"
-#     type: email
-#     enabled: true
-#     email:
-#       smtp_host: "smtp.example.com"
-#       smtp_port: 587
-#       username: "${SMTP_USER}"
-#       password: "${SMTP_PASS}"
-#       from: "anubis@example.com"
-#       to: ["ops@example.com"]
-
-# Verdicts - Alert rules
-verdicts:
-  rules: []
-# Example alert rule:
-#   - name: "Service Down"
-#     enabled: true
-#     condition:
-#       type: consecutive_failures
-#       threshold: 3
-#     severity: critical
-#     channels: ["ops-slack"]
-#     cooldown: 5m
-
-# Synthetic Monitoring Journeys
-journeys: []
-# Example journey:
-#   - name: "Login Flow"
-#     enabled: false
-#     weight: 5m
-#     timeout: 60s
-#     variables:
-#       base_url: "https://example.com"
-#     steps:
-#       - name: "Get login page"
-#         type: http
-#         target: "${base_url}/login"
-#         http:
-#           method: GET
-#           valid_status: [200]
-#         extract:
-#           csrf_token:
-#             from: body
-#             path: "input[name='csrf'].value"
-#       - name: "Submit login"
-#         type: http
-#         target: "${base_url}/login"
-#         http:
-#           method: POST
-#           valid_status: [302]
-#           headers:
-#             Content-Type: "application/x-www-form-urlencoded"
-#           body: "csrf=${csrf_token}&username=test&password=test"
-`
-
-	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create config: %v\n", err)
+	// Ensure directory exists
+	if err := ensureConfigDir(configPath); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Cannot create config directory: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("✓ Created config file: %s\n", configPath)
-	fmt.Println("\nNext steps:")
-	fmt.Println("  1. Edit anubis.yaml to configure your souls, channels, and verdicts")
-	fmt.Println("  2. Run 'anubis serve' to start the server")
-	fmt.Println("  3. Access the dashboard at https://localhost:8443")
+	if interactive {
+		initInteractiveWithPath(configPath)
+	} else {
+		initSimpleWithPath(configPath)
+	}
+}
+
+func printInitHelp() {
+	fmt.Println("Usage: anubis init [OPTIONS]")
+	fmt.Println()
+	fmt.Println("Initialize a new AnubisWatch instance")
+	fmt.Println()
+	fmt.Println("Options:")
+	fmt.Println("  --interactive, -i     Interactive configuration wizard")
+	fmt.Println("  --location, -l        Config location: local, user, system (default: local)")
+	fmt.Println("  --output, -o          Specific config file path")
+	fmt.Println("  --help, -h            Show this help")
+	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  anubis init                          # Quick local setup")
+	fmt.Println("  anubis init --interactive            # Full wizard")
+	fmt.Println("  anubis init -l user                  # User-wide config")
+	fmt.Println("  anubis init -o /etc/anubis/prod.json # Specific path")
+	fmt.Println()
+	fmt.Println("Config locations:")
+	fmt.Printf("  local:  ./anubis.json\n")
+	fmt.Printf("  user:   %s\n", getUserConfigPath())
+	fmt.Printf("  system: %s\n", getSystemConfigPath())
+	fmt.Println()
+	fmt.Println("Multiple instances:")
+	fmt.Println("  anubis init -o ./anubis-prod.json    # Production instance")
+	fmt.Println("  anubis init -o ./anubis-staging.json # Staging instance")
+	fmt.Println("  ANUBIS_CONFIG=./anubis-prod.json anubis serve")
 }
 
 func serve() {
@@ -303,14 +208,37 @@ func serve() {
 		Level: getLogLevel(),
 	}))
 
+	// Parse serve flags
+	configFlag := ""
+	for i, arg := range os.Args {
+		if (arg == "--config" || arg == "-c") && i+1 < len(os.Args) {
+			configFlag = os.Args[i+1]
+			break
+		}
+		if strings.HasPrefix(arg, "--config=") {
+			configFlag = strings.TrimPrefix(arg, "--config=")
+			break
+		}
+	}
+
+	// Determine config path
+	configPath := configFlag
+	if configPath == "" {
+		configPath = findConfig()
+	}
+
+	instanceName := getInstanceName(configPath)
+
 	logger.Info("⚖️  AnubisWatch — The Judgment Never Sleeps",
 		"version", Version,
 		"commit", Commit,
+		"instance", instanceName,
+		"config", configPath,
 	)
 
 	// Use the refactored server initialization
 	opts := ServerOptions{
-		ConfigPath: os.Getenv("ANUBIS_CONFIG"),
+		ConfigPath: configPath,
 		Logger:     logger,
 	}
 
@@ -497,6 +425,23 @@ func (a *restStorageAdapter) DeleteStatusPageNoCtx(id string) error {
 	return a.store.DeleteStatusPageNoCtx(id)
 }
 
+// Journey methods
+func (a *restStorageAdapter) GetJourneyNoCtx(id string) (*core.JourneyConfig, error) {
+	return a.store.GetJourneyNoCtx(id)
+}
+
+func (a *restStorageAdapter) ListJourneysNoCtx(workspace string, offset, limit int) ([]*core.JourneyConfig, error) {
+	return a.store.ListJourneysNoCtx(workspace, offset, limit)
+}
+
+func (a *restStorageAdapter) SaveJourneyNoCtx(journey *core.JourneyConfig) error {
+	return a.store.SaveJourneyNoCtx(journey)
+}
+
+func (a *restStorageAdapter) DeleteJourneyNoCtx(id string) error {
+	return a.store.DeleteJourneyNoCtx(id)
+}
+
 // clusterAdapter adapts cluster.Manager to api.ClusterManager interface
 type clusterAdapter struct {
 	mgr *cluster.Manager
@@ -656,6 +601,47 @@ func (r *statusPageRepository) DeleteSubscription(subscriptionID string) error {
 	return r.store.DeleteStatusPageSubscription(subscriptionID)
 }
 
+// storageGetLatestJudgment retrieves the most recent judgment for a soul
+func storageGetLatestJudgment(store *storage.CobaltDB, ctx context.Context, workspaceID, soulID string) (*core.Judgment, error) {
+	if workspaceID == "" {
+		workspaceID = "default"
+	}
+
+	// Scan with prefix to find latest
+	prefix := fmt.Sprintf("%s/judgments/%s/", workspaceID, soulID)
+	results, err := store.PrefixScan(prefix)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(results) == 0 {
+		return nil, &core.NotFoundError{Entity: "judgment", ID: soulID}
+	}
+
+	// Find latest (keys are sorted, so last one is latest)
+	var latest *core.Judgment
+	var latestKey string
+	for key, data := range results {
+		if data == nil {
+			continue
+		}
+		var j core.Judgment
+		if err := json.Unmarshal(data, &j); err != nil {
+			continue
+		}
+		if key > latestKey {
+			latest = &j
+			latestKey = key
+		}
+	}
+
+	if latest == nil {
+		return nil, &core.NotFoundError{Entity: "judgment", ID: soulID}
+	}
+
+	return latest, nil
+}
+
 // initACMEManager initializes the ACME manager for Let's Encrypt
 func initACMEManager(cfg *core.Config, store *storage.CobaltDB, logger *slog.Logger) *acme.Manager {
 	if !cfg.Server.TLS.Enabled || !cfg.Server.TLS.AutoCert {
@@ -695,45 +681,318 @@ func handleListSouls(store *storage.CobaltDB, engine *probe.Engine) http.Handler
 
 func quickWatch() {
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: anubis watch <target> [--name <name>] [--interval <duration>]\n")
+		fmt.Fprintf(os.Stderr, "Usage: anubis watch <target> [--name <name>] [--interval <duration>] [--type <http|tcp|icmp>]\n")
 		os.Exit(1)
 	}
 
 	target := os.Args[2]
 	name := target
+	interval := 60 * time.Second
+	checkType := "http"
 
 	// Parse flags
 	for i := 3; i < len(os.Args); i++ {
-		if os.Args[i] == "--name" && i+1 < len(os.Args) {
-			name = os.Args[i+1]
-			i++
+		switch os.Args[i] {
+		case "--name":
+			if i+1 < len(os.Args) {
+				name = os.Args[i+1]
+				i++
+			}
+		case "--interval", "-i":
+			if i+1 < len(os.Args) {
+				d, err := time.ParseDuration(os.Args[i+1])
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error: invalid interval: %v\n", err)
+					os.Exit(1)
+				}
+				interval = d
+				i++
+			}
+		case "--type", "-t":
+			if i+1 < len(os.Args) {
+				checkType = os.Args[i+1]
+				i++
+			}
 		}
 	}
 
+	// Determine check type from target if not specified
+	if checkType == "http" && (strings.HasPrefix(target, "tcp://") || strings.HasPrefix(target, "tcp+tls://")) {
+		checkType = "tcp"
+	} else if checkType == "http" && strings.HasPrefix(target, "icmp://") {
+		checkType = "icmp"
+	}
+
+	// Clean target prefix
+	target = strings.TrimPrefix(target, "http://")
+	target = strings.TrimPrefix(target, "https://")
+	target = strings.TrimPrefix(target, "tcp://")
+	target = strings.TrimPrefix(target, "tcp+tls://")
+	target = strings.TrimPrefix(target, "icmp://")
+
 	fmt.Printf("⚖️  Adding soul: %s (%s)\n", name, target)
-	fmt.Println("✓ Soul added (not yet implemented - edit anubis.yaml manually)")
+
+	// Try API first (if server is running)
+	apiURL := getAPIURL()
+	token := getAPIToken()
+
+	if token != "" {
+		// Use API
+		soulReq := map[string]interface{}{
+			"name":        name,
+			"target":      target,
+			"type":        checkType,
+			"interval":    interval.String(),
+			"timeout":     "10s",
+			"enabled":     true,
+			"workspaceId": "default",
+		}
+
+		reqBody, _ := json.Marshal(soulReq)
+		resp, err := httpPost(apiURL+"/api/v1/souls", "application/json", reqBody, token)
+		if err == nil && resp.StatusCode == http.StatusCreated {
+			resp.Body.Close()
+			fmt.Println("✓ Soul added successfully via API")
+			return
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+	}
+
+	// Fall back to direct storage access
+	store, err := openLocalStorage()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: cannot connect to API or open storage: %v\n", err)
+		fmt.Println("\nMake sure AnubisWatch is running, or run from the data directory.")
+		os.Exit(1)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+
+	// Determine soul type
+	var soulType core.CheckType
+	switch checkType {
+	case "tcp":
+		soulType = core.CheckTCP
+	case "icmp":
+		soulType = core.CheckICMP
+	case "dns":
+		soulType = core.CheckDNS
+	case "smtp":
+		soulType = core.CheckSMTP
+	case "grpc":
+		soulType = core.CheckGRPC
+	case "websocket":
+		soulType = core.CheckWebSocket
+	case "tls":
+		soulType = core.CheckTLS
+	default:
+		soulType = core.CheckHTTP
+	}
+
+	soul := &core.Soul{
+		ID:          core.GenerateID(),
+		Name:        name,
+		Type:        soulType,
+		Target:      target,
+		Weight:      core.Duration{Duration: interval},
+		Timeout:     core.Duration{Duration: 10 * time.Second},
+		Enabled:     true,
+		WorkspaceID: "default",
+		Tags:        []string{"cli-added"},
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+
+	if err := store.SaveSoul(ctx, soul); err != nil {
+		fmt.Fprintf(os.Stderr, "Error saving soul: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✓ Soul added successfully (ID: %s)\n", soul.ID)
+	fmt.Println("\nNote: The new soul will be picked up on next server restart,")
+	fmt.Println("      or immediately if the server is running with hot-reload.")
+}
+
+// openLocalStorage opens storage directly for CLI operations
+func openLocalStorage() (*storage.CobaltDB, error) {
+	dataDir := getDataDir()
+
+	cfg := core.StorageConfig{
+		Path: dataDir,
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelError,
+	}))
+
+	return storage.NewEngine(cfg, logger)
 }
 
 func showJudgments() {
-	fmt.Print(`⚖️  AnubisWatch — The Judgment Never Sleeps
-────────────────────────────────────────────
+	fmt.Println("⚖️  AnubisWatch — The Judgment Never Sleeps")
+	fmt.Println("────────────────────────────────────────────")
+	fmt.Println()
 
-Soul                    Status    Latency   Region      Last Judged
-──────────────────────  ────────  ────────  ──────────  ───────────
+	// Try API first
+	apiURL := getAPIURL()
+	token := getAPIToken()
 
-  No souls configured yet.
-  Run 'anubis watch <target>' to add your first soul.
-`)
+	var souls []*core.Soul
+
+	if token != "" {
+		resp, err := httpGet(apiURL+"/api/v1/souls", token)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			if err := json.NewDecoder(resp.Body).Decode(&souls); err != nil {
+				souls = nil
+			}
+			resp.Body.Close()
+		}
+	}
+
+	// Fall back to direct storage access
+	var store *storage.CobaltDB
+	if souls == nil {
+		var err error
+		store, err = openLocalStorage()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: cannot connect to API or open storage: %v\n", err)
+			fmt.Println("\nMake sure AnubisWatch is running, or run from the data directory.")
+			os.Exit(1)
+		}
+		defer store.Close()
+
+		ctx := context.Background()
+		souls, err = store.ListSouls(ctx, "default", 0, 100)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error listing souls: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	if len(souls) == 0 {
+		fmt.Println("No souls configured yet.")
+		fmt.Println("Run 'anubis watch <target>' to add your first soul.")
+		return
+	}
+
+	// Print header
+	fmt.Printf("%-24s %-10s %-10s %-12s %-20s\n", "Soul", "Status", "Latency", "Region", "Last Judged")
+	fmt.Println("──────────────────────── ────────── ────────── ──────────── ────────────────────")
+
+	// Get latest judgments for each soul
+	ctx := context.Background()
+
+	for _, soul := range souls {
+		status := "unknown"
+		latency := "-"
+		region := soul.Region
+		if region == "" {
+			region = "default"
+		}
+		lastJudged := "never"
+
+		// Try to get latest judgment
+		if store != nil {
+			j, err := storageGetLatestJudgment(store, ctx, soul.WorkspaceID, soul.ID)
+			if err == nil {
+				status = string(j.Status)
+				latency = j.Duration.String()
+				if j.Region != "" {
+					region = j.Region
+				}
+				lastJudged = time.Since(j.Timestamp).Round(time.Second).String() + " ago"
+			}
+		}
+
+		// Color status (using simple text indicators)
+		statusIcon := "○"
+		switch status {
+		case "alive":
+			statusIcon = "✓"
+		case "dead":
+			statusIcon = "✗"
+		case "degraded":
+			statusIcon = "~"
+		}
+
+		name := truncate(soul.Name, 22)
+		fmt.Printf("%-24s %s %-8s %-10s %-12s %-20s\n", name, statusIcon, status, latency, region, lastJudged)
+	}
+
+	fmt.Println()
+	fmt.Printf("Total souls: %d\n", len(souls))
 }
 
 func summonNode() {
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: anubis summon <address>\n")
+		fmt.Fprintf(os.Stderr, "Usage: anubis summon <address> [--name <node-id>] [--region <region>]\n")
 		os.Exit(1)
 	}
+
 	addr := os.Args[2]
+	nodeID := ""
+	region := "default"
+
+	// Parse flags
+	for i := 3; i < len(os.Args); i++ {
+		switch os.Args[i] {
+		case "--name":
+			if i+1 < len(os.Args) {
+				nodeID = os.Args[i+1]
+				i++
+			}
+		case "--region", "-r":
+			if i+1 < len(os.Args) {
+				region = os.Args[i+1]
+				i++
+			}
+		}
+	}
+
+	// Generate node ID from address if not provided
+	if nodeID == "" {
+		nodeID = strings.ReplaceAll(addr, ":", "-")
+		nodeID = strings.ReplaceAll(nodeID, ".", "-")
+	}
+
 	fmt.Printf("⚖️  Summoning Jackal at %s...\n", addr)
-	fmt.Println("✓ Node added to cluster (not yet implemented)")
+
+	// Try API first
+	apiURL := getAPIURL()
+	token := getAPIToken()
+
+	if token != "" {
+		reqBody := fmt.Sprintf(`{"node_id": "%s", "address": "%s", "region": "%s"}`, nodeID, addr, region)
+		resp, err := httpPost(apiURL+"/api/v1/cluster/nodes", "application/json", []byte(reqBody), token)
+		if err == nil && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated) {
+			resp.Body.Close()
+			fmt.Printf("✓ Node '%s' added to cluster successfully via API\n", nodeID)
+			return
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+	}
+
+	// Fall back to direct storage
+	store, err := openLocalStorage()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening storage: %v\n", err)
+		os.Exit(1)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	if err := store.SaveJackal(ctx, nodeID, addr, region); err != nil {
+		fmt.Fprintf(os.Stderr, "Error saving node: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✓ Node '%s' added to cluster configuration\n", nodeID)
+	fmt.Println("\nNote: Cluster changes require a server restart to take full effect.")
 }
 
 func banishNode() {
@@ -741,27 +1000,147 @@ func banishNode() {
 		fmt.Fprintf(os.Stderr, "Usage: anubis banish <node-id>\n")
 		os.Exit(1)
 	}
-	id := os.Args[2]
-	fmt.Printf("⚖️  Banishing Jackal %s...\n", id)
-	fmt.Println("✓ Node removed from cluster (not yet implemented)")
+
+	nodeID := os.Args[2]
+	fmt.Printf("⚖️  Banishing Jackal %s...\n", nodeID)
+
+	// Try API first
+	apiURL := getAPIURL()
+	token := getAPIToken()
+
+	if token != "" {
+		req, err := http.NewRequest("DELETE", apiURL+"/api/v1/cluster/nodes/"+nodeID, nil)
+		if err == nil {
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := http.DefaultClient.Do(req)
+			if err == nil && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent) {
+				resp.Body.Close()
+				fmt.Printf("✓ Node '%s' removed from cluster via API\n", nodeID)
+				return
+			}
+			if resp != nil {
+				resp.Body.Close()
+			}
+		}
+	}
+
+	// Fall back to direct storage
+	store, err := openLocalStorage()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error opening storage: %v\n", err)
+		os.Exit(1)
+	}
+	defer store.Close()
+
+	// Delete the node from storage
+	key := fmt.Sprintf("system/jackals/%s", nodeID)
+	if err := store.Delete(key); err != nil {
+		fmt.Fprintf(os.Stderr, "Error removing node: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✓ Node '%s' removed from cluster configuration\n", nodeID)
+	fmt.Println("\nNote: Cluster changes require a server restart to take full effect.")
 }
 
 func showCluster() {
-	fmt.Print(`⚖️  AnubisWatch Necropolis — Cluster Status
-────────────────────────────────────────────
+	fmt.Println("⚖️  AnubisWatch Necropolis — Cluster Status")
+	fmt.Println("────────────────────────────────────────────")
+	fmt.Println()
 
-Raft State:     Single Node
-Current Leader: this node
-Term:           1
-Nodes:          1
+	// Try API first
+	apiURL := getAPIURL()
+	token := getAPIToken()
 
-Jackals:
-  ID              Region    Status    Role      Last Contact
-  ──────────────  ────────  ────────  ────────  ────────────
-  (this node)     default   healthy   Pharaoh   now
+	var clusterData map[string]interface{}
+	useAPI := false
 
-  Cluster mode not enabled. Run with --cluster to form a Necropolis.
-`)
+	if token != "" {
+		resp, err := httpGet(apiURL+"/api/v1/cluster/status", token)
+		if err == nil && resp.StatusCode == http.StatusOK {
+			if err := json.NewDecoder(resp.Body).Decode(&clusterData); err == nil {
+				useAPI = true
+			}
+			resp.Body.Close()
+		}
+	}
+
+	if useAPI {
+		// Display API data
+		isClustered, _ := clusterData["is_clustered"].(bool)
+		nodeID, _ := clusterData["node_id"].(string)
+		state, _ := clusterData["state"].(string)
+		leader, _ := clusterData["leader"].(string)
+		term, _ := clusterData["term"].(float64)
+		peerCount, _ := clusterData["peer_count"].(float64)
+
+		fmt.Printf("%-16s %s\n", "Raft State:", state)
+		fmt.Printf("%-16s %s\n", "Current Node:", nodeID)
+		fmt.Printf("%-16s %s\n", "Current Leader:", leader)
+		fmt.Printf("%-16s %.0f\n", "Term:", term)
+		fmt.Printf("%-16s %.0f\n", "Peer Count:", peerCount)
+		fmt.Printf("%-16s %v\n", "Clustered:", isClustered)
+	} else {
+		// Fall back to storage
+		store, err := openLocalStorage()
+		if err != nil {
+			fmt.Println("Raft State:     Standalone")
+			fmt.Println("Current Leader: this node")
+			fmt.Println("Term:           1")
+			fmt.Println("Nodes:          1")
+			fmt.Println()
+			fmt.Println("Jackals:")
+			fmt.Println("  ID              Region    Address           Role")
+			fmt.Println("  ──────────────  ────────  ────────────────  ────────")
+			fmt.Println("  (this node)     default   localhost:7946    Pharaoh")
+			return
+		}
+		defer store.Close()
+
+		ctx := context.Background()
+		jackals, err := store.ListJackals(ctx)
+		if err != nil {
+			jackals = make(map[string]map[string]string)
+		}
+
+		// Get Raft state if available
+		currentTerm, votedFor, _ := store.GetRaftState(ctx)
+		if currentTerm == 0 {
+			currentTerm = 1
+		}
+
+		nodeCount := len(jackals) + 1 // +1 for this node
+
+		fmt.Printf("%-16s %s\n", "Raft State:", "Standalone")
+		fmt.Printf("%-16s %d\n", "Term:", currentTerm)
+		fmt.Printf("%-16s %d\n", "Nodes:", nodeCount)
+		if votedFor != "" {
+			fmt.Printf("%-16s %s\n", "Voted For:", votedFor)
+		}
+		fmt.Println()
+		fmt.Println("Jackals:")
+		fmt.Println("  ID              Region    Address           Role")
+		fmt.Println("  ──────────────  ────────  ────────────────  ────────")
+
+		// Show this node
+		fmt.Printf("  %-14s  %-8s  %-16s  %-8s\n", "(this node)", "default", "localhost:7946", "Pharaoh")
+
+		// Show other nodes
+		for id, node := range jackals {
+			region := node["region"]
+			if region == "" {
+				region = "default"
+			}
+			address := node["address"]
+			if address == "" {
+				address = "unknown"
+			}
+			fmt.Printf("  %-14s  %-8s  %-16s  %-8s\n", truncate(id, 14), region, address, "Jackal")
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("Use 'anubis summon <address>' to add nodes to the cluster.")
 }
 
 func selfHealth() {

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -184,7 +185,7 @@ func TestInitConfig_AlreadyExists(t *testing.T) {
 }
 
 func TestHandleLogin(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("")
+	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "admin")
 
 	handler := handleLogin(authenticator)
 
@@ -202,7 +203,7 @@ func TestHandleLogin(t *testing.T) {
 }
 
 func TestHandleLogout(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("")
+	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "admin")
 	handler := handleLogout(authenticator)
 
 	req := httptest.NewRequest("POST", "/logout", nil)
@@ -416,30 +417,31 @@ func TestInitConfig_Success(t *testing.T) {
 	defer os.Chdir(oldDir)
 
 	// Remove any existing config
-	os.Remove("anubis.yaml")
+	configPath := filepath.Join(tmpDir, "test_config.json")
 
 	oldArgs := os.Args
-	os.Args = []string{"anubis", "init"}
+	os.Args = []string{"anubis", "init", "--output", configPath}
 	defer func() { os.Args = oldArgs }()
 
 	// This will call os.Exit(0) on success
 	// We test that the file gets created
-	initConfig()
+	initSimpleWithPath(configPath)
 
 	// Check file was created
-	if _, err := os.Stat("anubis.yaml"); os.IsNotExist(err) {
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		t.Error("Expected config file to be created")
 	}
 }
 
 func TestConfigInitCommand(t *testing.T) {
 	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "test_config.json")
 	oldDir, _ := os.Getwd()
 	os.Chdir(tmpDir)
 	defer os.Chdir(oldDir)
 
 	oldArgs := os.Args
-	os.Args = []string{"anubis", "init"}
+	os.Args = []string{"anubis", "init", "--output", configPath}
 	defer func() { os.Args = oldArgs }()
 
 	oldStdout := os.Stdout
@@ -455,26 +457,27 @@ func TestConfigInitCommand(t *testing.T) {
 	io.Copy(&buf, r)
 
 	// Check config was created
-	if _, err := os.Stat("anubis.yaml"); os.IsNotExist(err) {
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		t.Error("Expected config file to be created by init command")
 	}
 }
 
 func TestInitConfig_AlreadyExists_CLI(t *testing.T) {
 	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "anubis.json")
 	oldDir, _ := os.Getwd()
 	os.Chdir(tmpDir)
 	defer os.Chdir(oldDir)
 
 	// Create config first and close it
-	f, err := os.Create("anubis.yaml")
+	f, err := os.Create("anubis.json")
 	if err != nil {
 		t.Fatalf("Failed to create config: %v", err)
 	}
 	f.Close()
 
 	oldArgs := os.Args
-	os.Args = []string{"anubis", "init"}
+	os.Args = []string{"anubis", "init", "--output", configPath}
 	defer func() { os.Args = oldArgs }()
 
 	// This should fail and exit
@@ -483,7 +486,7 @@ func TestInitConfig_AlreadyExists_CLI(t *testing.T) {
 
 // Test handleLogin with empty body
 func TestHandleLogin_EmptyBody(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("")
+	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "admin")
 	handler := handleLogin(authenticator)
 
 	req := httptest.NewRequest("POST", "/login", strings.NewReader(""))
@@ -499,7 +502,7 @@ func TestHandleLogin_EmptyBody(t *testing.T) {
 
 // Test handleLogin with invalid JSON
 func TestHandleLogin_InvalidJSON(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("")
+	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "admin")
 	handler := handleLogin(authenticator)
 
 	req := httptest.NewRequest("POST", "/login", strings.NewReader("{invalid json}"))
@@ -585,7 +588,7 @@ func TestHTTPPost_NilBody(t *testing.T) {
 
 // Test handleLogout with different methods
 func TestHandleLogout_Methods(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("")
+	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "admin")
 	handler := handleLogout(authenticator)
 
 	methods := []string{"GET", "POST", "DELETE", "PUT"}
@@ -639,7 +642,7 @@ func TestStatusPageRepository(t *testing.T) {
 
 // Test handleLogin with different scenarios
 func TestHandleLogin_Success(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("")
+	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "admin")
 	handler := handleLogin(authenticator)
 
 	reqBody := `{"email":"admin@example.com","password":"password"}`
@@ -652,7 +655,7 @@ func TestHandleLogin_Success(t *testing.T) {
 }
 
 func TestHandleLogin_WrongMethod(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("")
+	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "admin")
 	handler := handleLogin(authenticator)
 
 	req := httptest.NewRequest("GET", "/login", nil)
@@ -666,7 +669,7 @@ func TestHandleLogin_WrongMethod(t *testing.T) {
 }
 
 func TestHandleLogout_Success(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("")
+	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "admin")
 	handler := handleLogout(authenticator)
 
 	req := httptest.NewRequest("POST", "/logout", nil)
@@ -1229,7 +1232,7 @@ func TestHTTPPost_ServerError(t *testing.T) {
 
 // Test handleLogin with missing fields
 func TestHandleLogin_MissingFields(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("")
+	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "admin")
 	handler := handleLogin(authenticator)
 
 	// Test with empty username
@@ -1792,7 +1795,7 @@ func TestHTTPPost_NoToken(t *testing.T) {
 
 // Test handleLogin with valid credentials format
 func TestHandleLogin_ValidFormat(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("")
+	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "admin")
 	handler := handleLogin(authenticator)
 
 	// Test with email format (as used by authenticator)
@@ -1811,7 +1814,7 @@ func TestHandleLogin_ValidFormat(t *testing.T) {
 
 // Test handleLogout without authorization header
 func TestHandleLogout_NoAuthHeader(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("")
+	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "admin")
 	handler := handleLogout(authenticator)
 
 	req := httptest.NewRequest("POST", "/logout", nil)
@@ -1828,7 +1831,7 @@ func TestHandleLogout_NoAuthHeader(t *testing.T) {
 
 // Test handleLogout with malformed authorization header
 func TestHandleLogout_MalformedAuth(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("")
+	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "admin")
 	handler := handleLogout(authenticator)
 
 	req := httptest.NewRequest("POST", "/logout", nil)
@@ -2125,13 +2128,13 @@ func TestAdapterStructInitialization(t *testing.T) {
 
 // Test handleLogin with various content types
 func TestHandleLogin_ContentTypes(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("")
+	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "admin")
 	handler := handleLogin(authenticator)
 
 	tests := []struct {
-		name      string
-		body      string
-		wantCode  int
+		name     string
+		body     string
+		wantCode int
 	}{
 		{
 			name:     "valid JSON",
@@ -2172,7 +2175,7 @@ func TestHandleLogin_ContentTypes(t *testing.T) {
 
 // Test handleLogout with bearer token extraction
 func TestHandleLogout_BearerExtraction(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("")
+	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "admin")
 	handler := handleLogout(authenticator)
 
 	tests := []struct {
@@ -2299,10 +2302,10 @@ func TestRestStorageAdapter_WithRealDB_GetSoul(t *testing.T) {
 
 	// Save a soul first
 	soul := &core.Soul{
-		ID:          "test-soul-1",
+		ID: "test-soul-1",
 		// WorkspaceID not supported
-		Name:        "Test Soul",
-		Target:      "https://example.com",
+		Name:   "Test Soul",
+		Target: "https://example.com",
 	}
 
 	if err := adapter.SaveSoul(ctx, soul); err != nil {
@@ -2336,10 +2339,10 @@ func TestRestStorageAdapter_WithRealDB_ListSouls(t *testing.T) {
 	// Save multiple souls
 	for i := 1; i <= 3; i++ {
 		soul := &core.Soul{
-			ID:          fmt.Sprintf("test-soul-%d", i),
+			ID: fmt.Sprintf("test-soul-%d", i),
 			// WorkspaceID not supported
-			Name:        fmt.Sprintf("Test Soul %d", i),
-			Target:      "https://example.com",
+			Name:   fmt.Sprintf("Test Soul %d", i),
+			Target: "https://example.com",
 		}
 		if err := adapter.SaveSoul(ctx, soul); err != nil {
 			t.Fatalf("SaveSoul failed: %v", err)
@@ -2366,10 +2369,10 @@ func TestRestStorageAdapter_WithRealDB_DeleteSoul(t *testing.T) {
 
 	// Save and then delete
 	soul := &core.Soul{
-		ID:          "delete-test-soul",
+		ID: "delete-test-soul",
 		// WorkspaceID not supported
-		Name:        "Delete Test",
-		Target:      "https://example.com",
+		Name:   "Delete Test",
+		Target: "https://example.com",
 	}
 
 	if err := adapter.SaveSoul(ctx, soul); err != nil {
@@ -2411,11 +2414,11 @@ func TestRestStorageAdapter_Channel(t *testing.T) {
 
 	// Save a channel
 	channel := &core.AlertChannel{
-		ID:          "test-channel-1",
+		ID: "test-channel-1",
 		// WorkspaceID not supported
-		Name:        "Test Channel",
-		Type:        "slack",
-		Enabled:     true,
+		Name:    "Test Channel",
+		Type:    "slack",
+		Enabled: true,
 	}
 
 	if err := adapter.SaveChannelNoCtx(channel); err != nil {
@@ -2455,10 +2458,10 @@ func TestRestStorageAdapter_Rule(t *testing.T) {
 
 	// Save a rule
 	rule := &core.AlertRule{
-		ID:          "test-rule-1",
+		ID: "test-rule-1",
 		// WorkspaceID not supported
-		Name:        "Test Rule",
-		Enabled:     true,
+		Name:    "Test Rule",
+		Enabled: true,
 	}
 
 	if err := adapter.SaveRuleNoCtx(rule); err != nil {
@@ -2539,9 +2542,9 @@ func TestRestStorageAdapter_StatusPage(t *testing.T) {
 
 	// Save a status page
 	page := &core.StatusPage{
-		ID:     "test-page-1",
-		Name:   "Test Status Page",
-		Slug:   "test-page",
+		ID:           "test-page-1",
+		Name:         "Test Status Page",
+		Slug:         "test-page",
 		CustomDomain: "status.example.com",
 	}
 
@@ -3502,7 +3505,6 @@ func TestGetAPIURL_CustomEnv(t *testing.T) {
 	}
 }
 
-
 // TestHttpGet_InvalidURL tests httpGet with invalid URL
 func TestHttpGet_InvalidURL(t *testing.T) {
 	_, err := httpGet("://invalid-url", "token")
@@ -3535,5 +3537,3 @@ func TestHttpPost_NetworkError(t *testing.T) {
 		t.Error("Expected network error")
 	}
 }
-
-

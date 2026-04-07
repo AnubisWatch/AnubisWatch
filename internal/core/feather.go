@@ -1,5 +1,7 @@
 package core
 
+import "fmt"
+
 // FeatherConfig defines a performance budget (Feather of Ma'at)
 type FeatherConfig struct {
 	Name               string       `json:"name" yaml:"name"`
@@ -124,6 +126,7 @@ type RaftConfig struct {
 	NodeID            string         `json:"node_id" yaml:"node_id"`
 	BindAddr          string         `json:"bind_addr" yaml:"bind_addr"`
 	AdvertiseAddr     string         `json:"advertise_addr" yaml:"advertise_addr"`
+	Region            string         `json:"region" yaml:"region"`
 	Bootstrap         bool           `json:"bootstrap" yaml:"bootstrap"`
 	ElectionTimeout   Duration       `json:"election_timeout" yaml:"election_timeout"`
 	HeartbeatTimeout  Duration       `json:"heartbeat_timeout" yaml:"heartbeat_timeout"`
@@ -211,10 +214,11 @@ type DashboardBranding struct {
 
 // AuthConfig defines authentication settings
 type AuthConfig struct {
-	Type  string    `json:"type" yaml:"type"` // local, oidc, ldap
-	Local LocalAuth `json:"local" yaml:"local"`
-	OIDC  OIDCAuth  `json:"oidc" yaml:"oidc"`
-	LDAP  LDAPAuth  `json:"ldap" yaml:"ldap"`
+	Enabled bool      `json:"enabled" yaml:"enabled"` // auth enabled/disabled
+	Type    string    `json:"type" yaml:"type"`       // local, oidc, ldap
+	Local   LocalAuth `json:"local" yaml:"local"`
+	OIDC    OIDCAuth  `json:"oidc" yaml:"oidc"`
+	LDAP    LDAPAuth  `json:"ldap" yaml:"ldap"`
 }
 
 // LocalAuth defines local authentication
@@ -250,6 +254,121 @@ func (c *RaftConfig) Validate() error {
 	}
 	if c.AdvertiseAddr == "" {
 		c.AdvertiseAddr = c.BindAddr
+	}
+	return nil
+}
+
+// validate validates the server configuration
+func (c ServerConfig) validate() error {
+	if c.Port < 1 || c.Port > 65535 {
+		return &ConfigError{Field: "server.port", Message: "port must be between 1 and 65535"}
+	}
+	if c.TLS.Enabled {
+		if !c.TLS.AutoCert && (c.TLS.Cert == "" || c.TLS.Key == "") {
+			return &ConfigError{Field: "server.tls", Message: "TLS is enabled but neither auto_cert nor cert/key provided"}
+		}
+		if c.TLS.AutoCert && len(c.TLS.ACMEDomains) == 0 {
+			return &ConfigError{Field: "server.tls.acme_domains", Message: "auto_cert requires at least one domain"}
+		}
+	}
+	return nil
+}
+
+// validate validates the storage configuration
+func (c StorageConfig) validate() error {
+	if c.Path == "" {
+		return &ConfigError{Field: "storage.path", Message: "storage path is required"}
+	}
+	if c.Encryption.Enabled && c.Encryption.Key == "" {
+		return &ConfigError{Field: "storage.encryption.key", Message: "encryption key is required when encryption is enabled"}
+	}
+	if c.BTreeOrder < 3 && c.BTreeOrder != 0 {
+		return &ConfigError{Field: "storage.btree_order", Message: "btree_order must be at least 3"}
+	}
+	return nil
+}
+
+// validate validates the auth configuration
+func (c AuthConfig) validate() error {
+	validTypes := map[string]bool{"local": true, "oidc": true, "ldap": true}
+	if c.Type == "" {
+		return &ConfigError{Field: "auth.type", Message: "auth type is required"}
+	}
+	if !validTypes[c.Type] {
+		return &ConfigError{Field: "auth.type", Message: fmt.Sprintf("invalid auth type: %s", c.Type)}
+	}
+
+	switch c.Type {
+	case "oidc":
+		if c.OIDC.Issuer == "" {
+			return &ConfigError{Field: "auth.oidc.issuer", Message: "OIDC issuer is required"}
+		}
+		if c.OIDC.ClientID == "" {
+			return &ConfigError{Field: "auth.oidc.client_id", Message: "OIDC client ID is required"}
+		}
+		if c.OIDC.ClientSecret == "" {
+			return &ConfigError{Field: "auth.oidc.client_secret", Message: "OIDC client secret is required"}
+		}
+	case "ldap":
+		if c.LDAP.URL == "" {
+			return &ConfigError{Field: "auth.ldap.url", Message: "LDAP URL is required"}
+		}
+		if c.LDAP.BaseDN == "" {
+			return &ConfigError{Field: "auth.ldap.base_dn", Message: "LDAP base DN is required"}
+		}
+	}
+	return nil
+}
+
+// validate validates the feather configuration
+func (c FeatherConfig) validate(index int) error {
+	if c.Name == "" {
+		return &ConfigError{Field: fmt.Sprintf("feathers[%d].name", index), Message: "name is required"}
+	}
+	if c.Scope == "" {
+		return &ConfigError{Field: fmt.Sprintf("feathers[%d].scope", index), Message: "scope is required"}
+	}
+	if c.ViolationThreshold < 1 {
+		return &ConfigError{Field: fmt.Sprintf("feathers[%d].violation_threshold", index), Message: "violation_threshold must be at least 1"}
+	}
+	return nil
+}
+
+// validate validates the journey configuration
+func (c JourneyConfig) validate(index int) error {
+	if c.Name == "" {
+		return &ConfigError{Field: fmt.Sprintf("journeys[%d].name", index), Message: "name is required"}
+	}
+	if len(c.Steps) == 0 {
+		return &ConfigError{Field: fmt.Sprintf("journeys[%d].steps", index), Message: "at least one step is required"}
+	}
+	for i, step := range c.Steps {
+		if step.Name == "" {
+			return &ConfigError{Field: fmt.Sprintf("journeys[%d].steps[%d].name", index, i), Message: "step name is required"}
+		}
+		if step.Target == "" {
+			return &ConfigError{Field: fmt.Sprintf("journeys[%d].steps[%d].target", index, i), Message: "step target is required"}
+		}
+	}
+	return nil
+}
+
+// validate validates the logging configuration
+func (c LoggingConfig) validate() error {
+	validLevels := map[string]bool{"debug": true, "info": true, "warn": true, "error": true}
+	if !validLevels[c.Level] {
+		return &ConfigError{Field: "logging.level", Message: fmt.Sprintf("invalid log level: %s", c.Level)}
+	}
+	validFormats := map[string]bool{"json": true, "text": true}
+	if !validFormats[c.Format] {
+		return &ConfigError{Field: "logging.format", Message: fmt.Sprintf("invalid log format: %s", c.Format)}
+	}
+	validOutputs := map[string]bool{"stdout": true, "file": true}
+	if !validOutputs[c.Output] {
+		return &ConfigError{Field: "logging.output", Message: fmt.Sprintf("invalid log output: %s", c.Output)}
+	}
+	if c.Output == "file" && c.File == "" {
+		return &ConfigError{Field: "logging.file", Message: "log file path is required when output is file"}
 	}
 	return nil
 }

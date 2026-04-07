@@ -4214,10 +4214,10 @@ func TestTimeSeriesStore_RunCompaction_AllResolutions(t *testing.T) {
 
 	config := core.TimeSeriesConfig{
 		Compaction: core.CompactionConfig{
-			RawToMinute:   core.Duration{Duration: time.Nanosecond},
-			MinuteToFive:  core.Duration{Duration: time.Nanosecond},
-			FiveToHour:    core.Duration{Duration: time.Nanosecond},
-			HourToDay:     core.Duration{Duration: time.Nanosecond},
+			RawToMinute:  core.Duration{Duration: time.Nanosecond},
+			MinuteToFive: core.Duration{Duration: time.Nanosecond},
+			FiveToHour:   core.Duration{Duration: time.Nanosecond},
+			HourToDay:    core.Duration{Duration: time.Nanosecond},
 		},
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -4746,9 +4746,9 @@ func TestTimeSeriesStore_SaveJudgment_WithDetails(t *testing.T) {
 
 	// Test with different statuses and details
 	tests := []struct {
-		name      string
-		status    core.SoulStatus
-		duration  time.Duration
+		name       string
+		status     core.SoulStatus
+		duration   time.Duration
 		packetLoss float64
 	}{
 		{"alive", core.SoulAlive, 100 * time.Millisecond, 0.5},

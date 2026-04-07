@@ -130,12 +130,14 @@ func (m *mockStorage) GetStatusPageNoCtx(id string) (*core.StatusPage, error) { 
 func (m *mockStorage) ListStatusPagesNoCtx() ([]*core.StatusPage, error) {
 	return []*core.StatusPage{}, nil
 }
-func (m *mockStorage) SaveStatusPageNoCtx(page *core.StatusPage) error { return nil }
-func (m *mockStorage) DeleteStatusPageNoCtx(id string) error           { return nil }
+func (m *mockStorage) SaveStatusPageNoCtx(page *core.StatusPage) error        { return nil }
+func (m *mockStorage) DeleteStatusPageNoCtx(id string) error                  { return nil }
 func (m *mockStorage) GetJourneyNoCtx(id string) (*core.JourneyConfig, error) { return nil, nil }
-func (m *mockStorage) ListJourneysNoCtx(ws string, offset, limit int) ([]*core.JourneyConfig, error) { return nil, nil }
+func (m *mockStorage) ListJourneysNoCtx(ws string, offset, limit int) ([]*core.JourneyConfig, error) {
+	return nil, nil
+}
 func (m *mockStorage) SaveJourneyNoCtx(j *core.JourneyConfig) error { return nil }
-func (m *mockStorage) DeleteJourneyNoCtx(id string) error { return nil }
+func (m *mockStorage) DeleteJourneyNoCtx(id string) error           { return nil }
 
 // mockProbeEngine implements ProbeEngine interface
 type mockProbeEngine struct {

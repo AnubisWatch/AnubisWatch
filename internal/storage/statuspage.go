@@ -259,3 +259,87 @@ func (r *StatusPageRepository) GetWorkspace(id string) (*core.Workspace, error) 
 
 	return &workspace, nil
 }
+
+// SaveSubscription saves a status page subscription
+func (r *StatusPageRepository) SaveSubscription(sub *core.StatusPageSubscription) error {
+	key := fmt.Sprintf("statuspage/subscriptions/%s/%s", sub.PageID, sub.ID)
+	data, err := json.Marshal(sub)
+	if err != nil {
+		return err
+	}
+	return r.storage.Put(key, data)
+}
+
+// GetSubscriptionsByPage retrieves all subscriptions for a status page
+func (r *StatusPageRepository) GetSubscriptionsByPage(pageID string) ([]*core.StatusPageSubscription, error) {
+	prefix := fmt.Sprintf("statuspage/subscriptions/%s/", pageID)
+	results, err := r.storage.PrefixScan(prefix)
+	if err != nil {
+		return nil, err
+	}
+
+	subs := make([]*core.StatusPageSubscription, 0, len(results))
+	for _, data := range results {
+		var sub core.StatusPageSubscription
+		if err := json.Unmarshal(data, &sub); err != nil {
+			continue
+		}
+		subs = append(subs, &sub)
+	}
+
+	return subs, nil
+}
+
+// DeleteSubscription removes a subscription
+func (r *StatusPageRepository) DeleteSubscription(subscriptionID string) error {
+	// Find the subscription first
+	prefix := "statuspage/subscriptions/"
+	results, err := r.storage.PrefixScan(prefix)
+	if err != nil {
+		return err
+	}
+
+	for key, data := range results {
+		var sub core.StatusPageSubscription
+		if err := json.Unmarshal(data, &sub); err != nil {
+			continue
+		}
+		if sub.ID == subscriptionID {
+			return r.storage.Delete(key)
+		}
+	}
+
+	return &core.NotFoundError{Entity: "subscription", ID: subscriptionID}
+}
+
+// AddIncident adds an incident to a status page
+func (r *StatusPageRepository) AddIncident(pageID string, incident core.StatusIncident) error {
+	page, err := r.GetStatusPage(pageID)
+	if err != nil {
+		return err
+	}
+
+	// Add incident to the list
+	page.Incidents = append(page.Incidents, incident)
+
+	// Save updated page
+	return r.SaveStatusPage(page)
+}
+
+// UpdateIncident updates an incident on a status page
+func (r *StatusPageRepository) UpdateIncident(pageID string, incidentID string, updates core.StatusIncident) error {
+	page, err := r.GetStatusPage(pageID)
+	if err != nil {
+		return err
+	}
+
+	// Find and update the incident
+	for i, inc := range page.Incidents {
+		if inc.ID == incidentID {
+			page.Incidents[i] = updates
+			return r.SaveStatusPage(page)
+		}
+	}
+
+	return &core.NotFoundError{Entity: "incident", ID: incidentID}
+}

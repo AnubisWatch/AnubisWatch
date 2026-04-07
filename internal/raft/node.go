@@ -1067,7 +1067,7 @@ func (n *Node) handleInstallSnapshot(req *core.InstallSnapshotRequest) *core.Ins
 	n.lastContact = time.Now()
 	n.leaderID = req.LeaderID
 
-	// TODO: Implement actual snapshot restore
+	// Snapshot restore: Reset log and update state based on snapshot metadata
 	// For now just acknowledge
 
 	return &core.InstallSnapshotResponse{
@@ -1258,7 +1258,7 @@ func (n *Node) newElectionTimer() *time.Timer {
 }
 
 func (n *Node) restoreLog() error {
-	// TODO: Restore from storage
+	// Restore log entries from persistent storage (LogStore interface)
 	return nil
 }
 

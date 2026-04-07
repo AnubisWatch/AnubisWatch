@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,14 +22,29 @@ type Executor struct {
 	logger  *slog.Logger
 	mu      sync.RWMutex
 	running map[string]context.CancelFunc // journey ID -> cancel function
+	nodeID  string                        // identifier of this jackal node
+	region  string                        // region of this jackal node
 }
 
 // NewExecutor creates a new Journey executor
 func NewExecutor(db *storage.CobaltDB, logger *slog.Logger) *Executor {
+	return NewExecutorWithNodeID(db, logger, "local", "default")
+}
+
+// NewExecutorWithNodeID creates a new Journey executor with node identification
+func NewExecutorWithNodeID(db *storage.CobaltDB, logger *slog.Logger, nodeID, region string) *Executor {
+	if nodeID == "" {
+		nodeID = "local"
+	}
+	if region == "" {
+		region = "default"
+	}
 	return &Executor{
 		db:      db,
 		logger:  logger.With("component", "duat"),
 		running: make(map[string]context.CancelFunc),
+		nodeID:  nodeID,
+		region:  region,
 	}
 }
 
@@ -105,8 +121,8 @@ func (e *Executor) executeJourney(ctx context.Context, journey *core.JourneyConf
 		ID:          core.GenerateID(),
 		JourneyID:   journey.ID,
 		WorkspaceID: journey.WorkspaceID,
-		JackalID:    "local", // TODO: Get actual jackal ID
-		Region:      "default",
+		JackalID:    e.nodeID,
+		Region:      e.region,
 		StartedAt:   startTime.UnixMilli(),
 		Variables:   make(map[string]string),
 		Steps:       make([]core.JourneyStepResult, 0, len(journey.Steps)),
@@ -219,6 +235,24 @@ func (e *Executor) executeStep(ctx context.Context, step core.JourneyStep, varia
 	// Extract variables if configured
 	if len(step.Extract) > 0 {
 		result.Extracted = e.extractVariables(judgment, step.Extract)
+	}
+
+	// Run assertions if configured
+	if len(step.Assertions) > 0 {
+		assertionResults := e.runAssertions(judgment, step.Assertions)
+		failedAssertions := 0
+		for _, ar := range assertionResults {
+			if !ar.Passed {
+				failedAssertions++
+				if result.Message == "" {
+					result.Message = ar.Message
+				}
+			}
+		}
+		if failedAssertions > 0 {
+			result.Status = core.SoulDead
+			result.Message = fmt.Sprintf("%d of %d assertions failed", failedAssertions, len(step.Assertions))
+		}
 	}
 
 	return result
@@ -375,4 +409,114 @@ func (e *Executor) GetRun(ctx context.Context, workspaceID, runID string) (*core
 	// This would need a GetJourneyRun method in storage
 	// For now, return not implemented
 	return nil, fmt.Errorf("not implemented")
+}
+
+// AssertionResult represents the result of a single assertion
+type AssertionResult struct {
+	Passed  bool   `json:"passed"`
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
+// runAssertions runs all assertions against a judgment
+func (e *Executor) runAssertions(judgment *core.Judgment, assertions []core.Assertion) []AssertionResult {
+	results := make([]AssertionResult, 0, len(assertions))
+
+	for _, assertion := range assertions {
+		result := e.runAssertion(judgment, assertion)
+		results = append(results, result)
+	}
+
+	return results
+}
+
+// runAssertion runs a single assertion
+func (e *Executor) runAssertion(judgment *core.Judgment, assertion core.Assertion) AssertionResult {
+	ar := AssertionResult{
+		Passed: false,
+		Type:   assertion.Type,
+	}
+
+	var actual string
+	var passed bool
+
+	switch assertion.Type {
+	case "status_code":
+		actual = fmt.Sprintf("%d", judgment.StatusCode)
+		passed = e.compareValues(actual, assertion.Operator, assertion.Expected)
+
+	case "response_time":
+		actual = fmt.Sprintf("%d", judgment.Duration.Milliseconds())
+		passed = e.compareValues(actual, assertion.Operator, assertion.Expected)
+
+	case "body_contains":
+		if judgment.Details != nil {
+			actual = judgment.Details.ResponseBody
+			passed = strings.Contains(actual, assertion.Expected)
+		}
+
+	case "header":
+		if judgment.Details != nil && assertion.Target != "" {
+			actual = judgment.Details.ResponseHeaders[assertion.Target]
+			passed = e.compareValues(actual, assertion.Operator, assertion.Expected)
+		}
+
+	case "json_path":
+		if judgment.Details != nil && assertion.Target != "" {
+			actual = e.extractJSONPath(judgment.Details.ResponseBody, assertion.Target)
+			passed = e.compareValues(actual, assertion.Operator, assertion.Expected)
+		}
+
+	case "regex":
+		if judgment.Details != nil && assertion.Target != "" {
+			matched := e.extractRegex(judgment.Details.ResponseBody, assertion.Expected)
+			passed = matched != ""
+		}
+
+	default:
+		ar.Message = fmt.Sprintf("unknown assertion type: %s", assertion.Type)
+		return ar
+	}
+
+	ar.Passed = passed
+	if !passed {
+		if assertion.Message != "" {
+			ar.Message = assertion.Message
+		} else {
+			ar.Message = fmt.Sprintf("assertion failed: expected %s %s %s, got %s",
+				assertion.Type, assertion.Operator, assertion.Expected, actual)
+		}
+	}
+
+	return ar
+}
+
+// compareValues compares two values using the given operator
+func (e *Executor) compareValues(actual, operator, expected string) bool {
+	switch operator {
+	case "equals", "eq", "==":
+		return actual == expected
+	case "not_equals", "ne", "!=":
+		return actual != expected
+	case "contains":
+		return strings.Contains(actual, expected)
+	case "greater_than", "gt", ">":
+		actualNum, _ := strconv.ParseFloat(actual, 64)
+		expectedNum, _ := strconv.ParseFloat(expected, 64)
+		return actualNum > expectedNum
+	case "less_than", "lt", "<":
+		actualNum, _ := strconv.ParseFloat(actual, 64)
+		expectedNum, _ := strconv.ParseFloat(expected, 64)
+		return actualNum < expectedNum
+	case "greater_equals", "ge", ">=":
+		actualNum, _ := strconv.ParseFloat(actual, 64)
+		expectedNum, _ := strconv.ParseFloat(expected, 64)
+		return actualNum >= expectedNum
+	case "less_equals", "le", "<=":
+		actualNum, _ := strconv.ParseFloat(actual, 64)
+		expectedNum, _ := strconv.ParseFloat(expected, 64)
+		return actualNum <= expectedNum
+	default:
+		return actual == expected
+	}
 }

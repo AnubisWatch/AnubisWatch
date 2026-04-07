@@ -17,12 +17,14 @@ import (
 // RESTServer implements the HTTP REST API
 // The scribes record the judgments on papyrus scrolls
 type RESTServer struct {
-	mu     sync.RWMutex
-	config core.ServerConfig
-	router *Router
-	http   *http.Server
-	logger *slog.Logger
-	mcp    *MCPServer
+	mu         sync.RWMutex
+	config     core.ServerConfig
+	authConfig core.AuthConfig
+	router     *Router
+	http       *http.Server
+	logger     *slog.Logger
+	mcp        *MCPServer
+	ws         *WebSocketServer
 
 	// Dependencies
 	store      Storage
@@ -119,10 +121,17 @@ type Storage interface {
 	ListStatusPagesNoCtx() ([]*core.StatusPage, error)
 	SaveStatusPageNoCtx(page *core.StatusPage) error
 	DeleteStatusPageNoCtx(id string) error
+
+	// Journey methods
+	GetJourneyNoCtx(id string) (*core.JourneyConfig, error)
+	ListJourneysNoCtx(workspace string, offset, limit int) ([]*core.JourneyConfig, error)
+	SaveJourneyNoCtx(journey *core.JourneyConfig) error
+	DeleteJourneyNoCtx(id string) error
 }
 
 // ProbeEngine interface for probe operations
 type ProbeEngine interface {
+	AssignSouls(souls []*core.Soul)
 	GetStatus() *core.ProbeStatus
 	ForceCheck(soulID string) (*core.Judgment, error)
 }
@@ -176,9 +185,12 @@ type User struct {
 }
 
 // NewRESTServer creates a new REST server
-func NewRESTServer(config core.ServerConfig, store Storage, probe ProbeEngine, alert AlertManager, auth Authenticator, cluster ClusterManager, dashboard http.Handler, statusPage http.Handler, mcp *MCPServer, logger *slog.Logger) *RESTServer {
+func NewRESTServer(config core.ServerConfig, authConfig core.AuthConfig, store Storage, probe ProbeEngine, alert AlertManager, auth Authenticator, cluster ClusterManager, dashboard http.Handler, statusPage http.Handler, mcp *MCPServer, logger *slog.Logger) *RESTServer {
+	wsServer := NewWebSocketServer(logger)
+
 	s := &RESTServer{
-		config: config,
+		config:     config,
+		authConfig: authConfig,
 		router: &Router{
 			routes:     make(map[string]map[string]Handler),
 			dashboard:  dashboard,
@@ -191,11 +203,13 @@ func NewRESTServer(config core.ServerConfig, store Storage, probe ProbeEngine, a
 		auth:       auth,
 		cluster:    cluster,
 		mcp:        mcp,
+		ws:         wsServer,
 		dashboard:  dashboard,
 		statusPage: statusPage,
 	}
 
 	s.setupRoutes()
+	wsServer.Start()
 	return s
 }
 
@@ -211,6 +225,12 @@ func (s *RESTServer) setupRoutes() {
 	// Health
 	s.router.Handle("GET", "/health", s.handleHealth)
 	s.router.Handle("GET", "/ready", s.handleReady)
+	s.router.Handle("GET", "/metrics", s.handleMetrics)
+
+	// Public Status Pages (no auth required)
+	s.router.Handle("GET", "/status", s.handleStatusPage)
+	s.router.Handle("GET", "/status.html", s.handleStatusPageHTML)
+	s.router.Handle("GET", "/public/status", s.handlePublicStatus)
 
 	// Auth
 	s.router.Handle("POST", "/api/v1/auth/login", s.handleLogin)
@@ -274,6 +294,43 @@ func (s *RESTServer) setupRoutes() {
 
 	// MCP (Model Context Protocol)
 	s.router.Handle("POST", "/api/v1/mcp", s.handleMCP)
+
+	// Alerts aliases for frontend compatibility
+	s.router.Handle("GET", "/api/v1/alerts/channels", s.requireAuth(s.handleListChannels))
+	s.router.Handle("POST", "/api/v1/alerts/channels", s.requireAuth(s.handleCreateChannel))
+	s.router.Handle("GET", "/api/v1/alerts/channels/:id", s.requireAuth(s.handleGetChannel))
+	s.router.Handle("PUT", "/api/v1/alerts/channels/:id", s.requireAuth(s.handleUpdateChannel))
+	s.router.Handle("DELETE", "/api/v1/alerts/channels/:id", s.requireAuth(s.handleDeleteChannel))
+	s.router.Handle("POST", "/api/v1/alerts/channels/:id/test", s.requireAuth(s.handleTestChannel))
+
+	s.router.Handle("GET", "/api/v1/alerts/rules", s.requireAuth(s.handleListRules))
+	s.router.Handle("POST", "/api/v1/alerts/rules", s.requireAuth(s.handleCreateRule))
+	s.router.Handle("GET", "/api/v1/alerts/rules/:id", s.requireAuth(s.handleGetRule))
+	s.router.Handle("PUT", "/api/v1/alerts/rules/:id", s.requireAuth(s.handleUpdateRule))
+	s.router.Handle("DELETE", "/api/v1/alerts/rules/:id", s.requireAuth(s.handleDeleteRule))
+
+	// Users alias
+	s.router.Handle("GET", "/api/v1/users/me", s.requireAuth(s.handleMe))
+
+	// Journeys endpoints
+	s.router.Handle("GET", "/api/v1/journeys", s.requireAuth(s.handleListJourneys))
+	s.router.Handle("POST", "/api/v1/journeys", s.requireAuth(s.handleCreateJourney))
+	s.router.Handle("GET", "/api/v1/journeys/:id", s.requireAuth(s.handleGetJourney))
+	s.router.Handle("PUT", "/api/v1/journeys/:id", s.requireAuth(s.handleUpdateJourney))
+	s.router.Handle("DELETE", "/api/v1/journeys/:id", s.requireAuth(s.handleDeleteJourney))
+	s.router.Handle("POST", "/api/v1/journeys/:id/run", s.requireAuth(s.handleRunJourney))
+
+	// MCP tools endpoint
+	s.router.Handle("GET", "/api/v1/mcp/tools", s.requireAuth(s.handleMCPTools))
+
+	// Soul logs endpoint
+	s.router.Handle("GET", "/api/v1/souls/:id/logs", s.requireAuth(s.handleSoulLogs))
+
+	// WebSocket endpoint
+	s.router.Handle("GET", "/ws", s.handleWebSocket)
+
+	// SSE (Server-Sent Events) endpoint - better fallback support
+	s.router.Handle("GET", "/api/v1/events", s.handleSSE)
 }
 
 // Start starts the REST server
@@ -404,6 +461,11 @@ func (s *RESTServer) handleCreateSoul(ctx *Context) error {
 
 	if err := s.store.SaveSoul(ctx.Request.Context(), &soul); err != nil {
 		return ctx.Error(http.StatusInternalServerError, err.Error())
+	}
+
+	// Assign soul to probe engine for monitoring
+	if s.probe != nil {
+		s.probe.AssignSouls([]*core.Soul{&soul})
 	}
 
 	return ctx.JSON(http.StatusCreated, soul)
@@ -911,10 +973,60 @@ func (s *RESTServer) handleMCP(ctx *Context) error {
 	return nil
 }
 
+func (s *RESTServer) handleWebSocket(ctx *Context) error {
+	if s.ws == nil {
+		return ctx.Error(http.StatusServiceUnavailable, "WebSocket server not initialized")
+	}
+
+	s.ws.HandleConnection(ctx.Response, ctx.Request)
+	return nil
+}
+
+func (s *RESTServer) handleSSE(ctx *Context) error {
+	// Set SSE headers
+	w := ctx.Response
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Send initial connection message
+	fmt.Fprintf(w, "data: %s\n\n", `{"type":"connected","timestamp":`+fmt.Sprintf("%d", time.Now().Unix())+`}`)
+	w.(http.Flusher).Flush()
+
+	// Keep connection alive with heartbeat
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			// Send heartbeat
+			fmt.Fprintf(w, "data: %s\n\n", `{"type":"heartbeat","timestamp":`+fmt.Sprintf("%d", time.Now().Unix())+`}`)
+			w.(http.Flusher).Flush()
+		case <-ctx.Request.Context().Done():
+			return nil
+		}
+	}
+}
+
 // Middleware
 
 func (s *RESTServer) requireAuth(handler Handler) Handler {
 	return func(ctx *Context) error {
+		// Skip auth if disabled
+		if !s.authConfig.Enabled {
+			ctx.User = &User{
+				ID:        "anonymous",
+				Email:     "anonymous@anubis.watch",
+				Name:      "Anonymous",
+				Role:      "admin",
+				Workspace: "default",
+			}
+			ctx.Workspace = "default"
+			return handler(ctx)
+		}
+
 		token := ctx.Request.Header.Get("Authorization")
 		token = strings.TrimPrefix(token, "Bearer ")
 
@@ -1080,6 +1192,15 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	path := req.URL.Path
 	method := req.Method
 
+	// Handle CORS preflight globally (before route matching)
+	if method == "OPTIONS" {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	// Try exact match first
 	if handlers, ok := r.routes[path]; ok {
 		if handler, ok := handlers[method]; ok {
@@ -1121,7 +1242,15 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	// No route found - serve dashboard for non-API routes
-	if r.dashboard != nil && !strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/health") && !strings.HasPrefix(path, "/ready") {
+	// Exclude API, health, metrics, and status page routes
+	isExcluded := strings.HasPrefix(path, "/api/") ||
+		strings.HasPrefix(path, "/health") ||
+		strings.HasPrefix(path, "/ready") ||
+		strings.HasPrefix(path, "/metrics") ||
+		path == "/status" ||
+		path == "/status.html" ||
+		strings.HasPrefix(path, "/public/")
+	if r.dashboard != nil && !isExcluded {
 		r.dashboard.ServeHTTP(w, req)
 		return
 	}
@@ -1165,4 +1294,13 @@ func (c *Context) Error(status int, message string) error {
 
 func (c *Context) Bind(v interface{}) error {
 	return json.NewDecoder(c.Request.Body).Decode(v)
+}
+
+// OnJudgmentCallback returns a callback function for broadcasting judgments via WebSocket
+func (s *RESTServer) OnJudgmentCallback() func(*core.Judgment) {
+	return func(judgment *core.Judgment) {
+		if s.ws != nil {
+			s.ws.BroadcastJudgment(judgment)
+		}
+	}
 }

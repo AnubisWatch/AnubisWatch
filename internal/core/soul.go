@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -79,6 +80,101 @@ func (d *Duration) UnmarshalYAML(unmarshal func(interface{}) error) error {
 
 func (d Duration) MarshalYAML() (interface{}, error) {
 	return d.String(), nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler for Duration
+func (d *Duration) UnmarshalJSON(data []byte) error {
+	// Remove quotes from JSON string
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		dur, err := time.ParseDuration(s)
+		if err != nil {
+			return err
+		}
+		d.Duration = dur
+		return nil
+	}
+
+	// Try parsing as nanoseconds (number)
+	var ns int64
+	if err := json.Unmarshal(data, &ns); err != nil {
+		return err
+	}
+	d.Duration = time.Duration(ns)
+	return nil
+}
+
+// MarshalJSON implements json.Marshaler for Duration
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(d.String())
+}
+
+// validate validates the soul configuration
+func (s Soul) validate(index int) error {
+	if s.Name == "" {
+		return &ConfigError{Field: fmt.Sprintf("souls[%d].name", index), Message: "name is required"}
+	}
+	if s.Target == "" {
+		return &ConfigError{Field: fmt.Sprintf("souls[%d].target", index), Message: "target is required"}
+	}
+	if s.Type == "" {
+		return &ConfigError{Field: fmt.Sprintf("souls[%d].type", index), Message: "type is required"}
+	}
+
+	// Validate type-specific config
+	validTypes := map[CheckType]bool{
+		CheckHTTP: true, CheckTCP: true, CheckUDP: true, CheckDNS: true,
+		CheckSMTP: true, CheckIMAP: true, CheckICMP: true, CheckGRPC: true,
+		CheckWebSocket: true, CheckTLS: true,
+	}
+	if !validTypes[s.Type] {
+		return &ConfigError{Field: fmt.Sprintf("souls[%d].type", index), Message: fmt.Sprintf("invalid type: %s", s.Type)}
+	}
+
+	// Validate interval
+	if s.Weight.Duration < 0 {
+		return &ConfigError{Field: fmt.Sprintf("souls[%d].weight", index), Message: "interval cannot be negative"}
+	}
+
+	// Validate timeout
+	if s.Timeout.Duration < 0 {
+		return &ConfigError{Field: fmt.Sprintf("souls[%d].timeout", index), Message: "timeout cannot be negative"}
+	}
+
+	// Type-specific validation
+	switch s.Type {
+	case CheckHTTP:
+		if s.HTTP == nil {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].http", index), Message: "http configuration is required for HTTP checks"}
+		}
+		if s.HTTP.Method == "" {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].http.method", index), Message: "HTTP method is required"}
+		}
+		validMethods := map[string]bool{"GET": true, "POST": true, "PUT": true, "DELETE": true, "PATCH": true, "HEAD": true, "OPTIONS": true}
+		if !validMethods[s.HTTP.Method] {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].http.method", index), Message: fmt.Sprintf("invalid HTTP method: %s", s.HTTP.Method)}
+		}
+		if len(s.HTTP.ValidStatus) == 0 {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].http.valid_status", index), Message: "at least one valid status code is required"}
+		}
+	case CheckTCP:
+		if s.TCP == nil {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].tcp", index), Message: "tcp configuration is required for TCP checks"}
+		}
+	case CheckDNS:
+		if s.DNS == nil {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].dns", index), Message: "dns configuration is required for DNS checks"}
+		}
+		if s.DNS.RecordType == "" {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].dns.record_type", index), Message: "DNS record type is required"}
+		}
+		validRecordTypes := map[string]bool{"A": true, "AAAA": true, "CNAME": true, "MX": true, "TXT": true, "NS": true, "SOA": true, "PTR": true, "SRV": true}
+		if !validRecordTypes[s.DNS.RecordType] {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].dns.record_type", index), Message: fmt.Sprintf("invalid DNS record type: %s", s.DNS.RecordType)}
+		}
+	}
+
+	return nil
 }
 
 // HTTPConfig defines HTTP/HTTPS check settings

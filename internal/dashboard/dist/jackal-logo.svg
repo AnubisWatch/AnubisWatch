@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
+  <defs>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#D4AF37"/>
+      <stop offset="30%" style="stop-color:#F4D03F"/>
+      <stop offset="50%" style="stop-color:#FFF8DC"/>
+      <stop offset="70%" style="stop-color:#F4D03F"/>
+      <stop offset="100%" style="stop-color:#D4AF37"/>
+    </linearGradient>
+    <linearGradient id="lapisGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#1E3A5F"/>
+      <stop offset="100%" style="stop-color:#0f172a"/>
+    </linearGradient>
+    <linearGradient id="turquoiseGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#40E0D0"/>
+      <stop offset="100%" style="stop-color:#20B2AA"/>
+    </linearGradient>
+    <filter id="goldGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+  </defs>
+
+  <!-- Outer decorative circle -->
+  <circle cx="100" cy="100" r="95" fill="url(#lapisGrad)" stroke="url(#goldGrad)" stroke-width="3"/>
+  <circle cx="100" cy="100" r="88" fill="none" stroke="url(#goldGrad)" stroke-width="1" stroke-dasharray="8,4" opacity="0.6"/>
+
+  <!-- Ankh symbol at top -->
+  <g transform="translate(100, 25) scale(0.6)">
+    <path d="M0 -15 L0 25 M-10 5 L10 5 M0 -15 C-15 -15 -15 -5 0 0 C15 -5 15 -15 0 -15"
+          fill="none" stroke="url(#goldGrad)" stroke-width="4" stroke-linecap="round"/>
+  </g>
+
+  <!-- Jackal Head - Main silhouette -->
+  <g filter="url(#goldGlow)">
+    <!-- Ears - pointed and elegant -->
+    <path d="M60 70 L45 20 L70 50 L85 55 Z" fill="url(#goldGrad)"/>
+    <path d="M140 70 L155 20 L130 50 L115 55 Z" fill="url(#goldGrad)"/>
+
+    <!-- Inner ear detail -->
+    <path d="M65 65 L55 35 L70 55 Z" fill="#B8860B" opacity="0.5"/>
+    <path d="M135 65 L145 35 L130 55 Z" fill="#B8860B" opacity="0.5"/>
+
+    <!-- Main head shape - stylized Egyptian art style -->
+    <path d="M70 55
+             Q100 45 130 55
+             L135 90
+             Q140 110 125 125
+             Q110 135 100 140
+             Q90 135 75 125
+             Q60 110 65 90
+             Z"
+          fill="url(#goldGrad)"/>
+
+    <!-- Nemes headdress stripes -->
+    <path d="M50 50 Q70 60 75 80 L70 80 Q65 65 48 55 Z" fill="#B8860B" opacity="0.6"/>
+    <path d="M150 50 Q130 60 125 80 L130 80 Q135 65 152 55 Z" fill="#B8860B" opacity="0.6"/>
+    <path d="M60 45 Q80 55 85 75 L80 75 Q75 60 58 50 Z" fill="#B8860B" opacity="0.4"/>
+    <path d="M140 45 Q120 55 115 75 L120 75 Q125 60 142 50 Z" fill="#B8860B" opacity="0.4"/>
+
+    <!-- Snout/muzzle -->
+    <path d="M85 110
+             Q100 105 115 110
+             L110 145
+             Q100 155 90 145
+             Z"
+          fill="url(#goldGrad)"/>
+
+    <!-- Nose -->
+    <ellipse cx="100" cy="148" rx="8" ry="5" fill="#1a1a2e"/>
+    <ellipse cx="100" cy="147" rx="3" ry="1.5" fill="#40E0D0" opacity="0.8"/>
+
+    <!-- Eyes - Egyptian style (accentuated) -->
+    <g>
+      <!-- Eye outline - almond shape -->
+      <path d="M75 85 Q85 75 95 85 Q85 95 75 85 Z" fill="#1a1a2e"/>
+      <path d="M105 85 Q115 75 125 85 Q115 95 105 85 Z" fill="#1a1a2e"/>
+
+      <!-- Eye of Horus makeup line -->
+      <path d="M75 85 L70 80 M75 85 L70 90" stroke="#1a1a2e" stroke-width="2"/>
+      <path d="M125 85 L130 80 M125 85 L130 90" stroke="#1a1a2e" stroke-width="2"/>
+
+      <!-- Iris - turquoise (Egyptian favorite) -->
+      <circle cx="85" cy="85" r="4" fill="url(#turquoiseGrad)"/>
+      <circle cx="115" cy="85" r="4" fill="url(#turquoiseGrad)"/>
+
+      <!-- Pupil -->
+      <circle cx="85" cy="85" r="2" fill="#0a0a0f"/>
+      <circle cx="115" cy="85" r="2" fill="#0a0a0f"/>
+
+      <!-- Eye highlight -->
+      <circle cx="86" cy="84" r="1" fill="white" opacity="0.8"/>
+      <circle cx="116" cy="84" r="1" fill="white" opacity="0.8"/>
+    </g>
+
+    <!-- Mouth line -->
+    <path d="M92 135 Q100 138 108 135" fill="none" stroke="#1a1a2e" stroke-width="1.5" opacity="0.5"/>
+  </g>
+
+  <!-- Decorative lotus flowers at bottom -->
+  <g transform="translate(50, 165) scale(0.4)">
+    <path d="M25 0 Q30 -20 35 -15 Q40 -25 35 -35 Q25 -40 15 -35 Q10 -25 15 -15 Q20 -20 25 0"
+          fill="url(#turquoiseGrad)" opacity="0.8"/>
+    <path d="M25 0 Q20 -20 15 -15 Q10 -25 15 -35"
+          fill="none" stroke="#40E0D0" stroke-width="2"/>
+  </g>
+  <g transform="translate(150, 165) scale(0.4) scale(-1, 1)">
+    <path d="M25 0 Q30 -20 35 -15 Q40 -25 35 -35 Q25 -40 15 -35 Q10 -25 15 -15 Q20 -20 25 0"
+          fill="url(#turquoiseGrad)" opacity="0.8"/>
+  </g>
+
+  <!-- Hieroglyphic decorative elements -->
+  <text x="100" y="180" text-anchor="middle" fill="url(#goldGrad)" font-size="12" font-family="serif" opacity="0.6">
+    ⚖ 𓃥 𓂀
+  </text>
+
+  <!-- Inner ring accent -->
+  <circle cx="100" cy="100" r="78" fill="none" stroke="url(#goldGrad)" stroke-width="0.5" opacity="0.3"/>
+</svg>

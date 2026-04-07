@@ -27,9 +27,9 @@ AnubisWatch is a **zero-dependency, single-binary uptime monitoring platform** b
 
 - 🔥 **Zero Dependencies** — Only requires Go stdlib + 4 extended stdlib packages
 - 📦 **Single Binary** — Everything in one `anubis` executable
-- 🌍 **8 Protocols** — HTTP/HTTPS, TCP, UDP, DNS, ICMP, SMTP, gRPC, WebSocket, TLS
+- 🌍 **10 Protocols** — HTTP/HTTPS, TCP, UDP, DNS, ICMP, SMTP, IMAP, gRPC, WebSocket, TLS
 - ⚡ **Distributed** — Built-in Raft consensus for multi-node clusters
-- 🔬 **Synthetic Monitoring** — Multi-step HTTP journeys with variable extraction
+- 🔬 **Synthetic Monitoring** — Multi-step HTTP journeys with assertions & variable extraction
 - 🎨 **Beautiful Dashboard** — React 19 + Tailwind 4.1 embedded in binary
 - 🤖 **MCP-Native** — Built-in Model Context Protocol server for AI integration
 - 🔔 **Rich Alerts** — Slack, Discord, Telegram, Email, PagerDuty, OpsGenie, SMS, Ntfy

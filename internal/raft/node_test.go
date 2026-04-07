@@ -2251,10 +2251,10 @@ func TestNode_HandleAppendEntriesResponse_Success(t *testing.T) {
 	}
 
 	peer := &Peer{
-		ID:        "node-2",
-		Address:   "127.0.0.1:7001",
-		Role:      core.RoleVoter,
-		nextIndex: 3,
+		ID:         "node-2",
+		Address:    "127.0.0.1:7001",
+		Role:       core.RoleVoter,
+		nextIndex:  3,
 		matchIndex: 0,
 	}
 	node.peerMu.Lock()
@@ -2316,9 +2316,9 @@ func TestNode_HandleAppendEntriesResponse_Conflict(t *testing.T) {
 		Entries:      []core.RaftLogEntry{},
 	}
 	resp := &core.AppendEntriesResponse{
-		Term:         1,
-		Success:      false,
-		ConflictTerm: 1,
+		Term:          1,
+		Success:       false,
+		ConflictTerm:  1,
 		ConflictIndex: 3,
 	}
 

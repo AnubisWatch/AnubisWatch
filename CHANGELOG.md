@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Comprehensive configuration validation for all config types
+- Soul configuration validation with protocol-specific checks
+- Channel configuration validation (webhook, slack, telegram, email, etc.)
+- Alert rule validation with condition type checking
+- Server, storage, auth, and logging config validation
+
+### Changed
+- Enhanced `validate()` to automatically call `setDefaults()` before validation
+
+## [0.1.0] - 2026-04-06
+
+### Added
 - MCP server integration at `/api/v1/mcp` endpoint for AI agent integration
 - 8 built-in MCP tools: list_souls, get_soul, force_check, get_judgments, list_incidents, get_stats, acknowledge_incident, create_soul
 - 3 MCP resources: getting-started, api-reference, status/current
@@ -32,10 +44,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Circuit breaker pattern for probe engine (per-soul failure tracking)
 - Concurrency limiting for probe checks (default: 100 concurrent)
 - Region-based probe filtering
+- Health check endpoint at `/health`
+- Workspace context middleware for multi-tenant operations
 
 ### Changed
 - Updated Go version to 1.26
 - Updated CI/CD pipelines with security scanning (gosec)
+- Improved Raft test coverage from 71.7% to 86.0%
+- Dashboard build made optional in Dockerfile
 
 ### Documentation
 - API.md with complete REST API reference
@@ -45,6 +61,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - REST server test compatibility with MCP server integration
+- Status page uptime calculation
+- Soul status tracking
+- WebSocket console errors (disabled in favor of REST polling)
+- MDNS mutex protection for conn field
+- Various lint issues across packages
+- Release workflow artifact handling
 
 ## [0.0.1] - 2026-04-04
 
