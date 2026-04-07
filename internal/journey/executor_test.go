@@ -668,3 +668,213 @@ func TestExecutor_extractVariables_CookieExtraction(t *testing.T) {
 		t.Errorf("Expected session 'xyz789', got %s", extracted["session"])
 	}
 }
+
+func TestExecutor_compareValues(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	executor := NewExecutor(db, newTestLogger())
+
+	tests := []struct {
+		name     string
+		actual   string
+		operator string
+		expected string
+		want     bool
+	}{
+		{"equals", "hello", "equals", "hello", true},
+		{"equals false", "hello", "equals", "world", false},
+		{"eq", "hello", "eq", "hello", true},
+		{"==", "hello", "==", "hello", true},
+		{"not_equals", "hello", "not_equals", "world", true},
+		{"ne", "hello", "ne", "world", true},
+		{"!=", "hello", "!=", "world", true},
+		{"contains", "hello world", "contains", "world", true},
+		{"contains false", "hello world", "contains", "xyz", false},
+		{"greater_than", "100", "greater_than", "50", true},
+		{"gt", "100", "gt", "50", true},
+		{">", "100", ">", "50", true},
+		{"less_than", "50", "less_than", "100", true},
+		{"lt", "50", "lt", "100", true},
+		{"<", "50", "<", "100", true},
+		{"greater_equals", "100", "greater_equals", "100", true},
+		{"ge", "100", "ge", "50", true},
+		{">=", "100", ">=", "100", true},
+		{"less_equals", "50", "less_equals", "50", true},
+		{"le", "50", "le", "100", true},
+		{"<=", "50", "<=", "50", true},
+		{"unknown operator", "value", "unknown", "other", false},
+		{"unknown operator same", "value", "unknown", "value", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := executor.compareValues(tt.actual, tt.operator, tt.expected)
+			if got != tt.want {
+				t.Errorf("compareValues(%q, %q, %q) = %v, want %v", tt.actual, tt.operator, tt.expected, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExecutor_runAssertion(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	executor := NewExecutor(db, newTestLogger())
+
+	tests := []struct {
+		name      string
+		assertion core.Assertion
+		judgment  *core.Judgment
+		wantPass  bool
+	}{
+		{
+			name: "status_code equals pass",
+			assertion: core.Assertion{
+				Type:     "status_code",
+				Operator: "equals",
+				Expected: "200",
+			},
+			judgment: &core.Judgment{
+				StatusCode: 200,
+			},
+			wantPass: true,
+		},
+		{
+			name: "status_code equals fail",
+			assertion: core.Assertion{
+				Type:     "status_code",
+				Operator: "equals",
+				Expected: "200",
+			},
+			judgment: &core.Judgment{
+				StatusCode: 500,
+			},
+			wantPass: false,
+		},
+		{
+			name: "body_contains pass",
+			assertion: core.Assertion{
+				Type:     "body_contains",
+				Expected: "success",
+			},
+			judgment: &core.Judgment{
+				Details: &core.JudgmentDetails{
+					ResponseBody: `{"message": "success"}`,
+				},
+			},
+			wantPass: true,
+		},
+		{
+			name: "body_contains fail",
+			assertion: core.Assertion{
+				Type:     "body_contains",
+				Expected: "error",
+			},
+			judgment: &core.Judgment{
+				Details: &core.JudgmentDetails{
+					ResponseBody: `{"message": "success"}`,
+				},
+			},
+			wantPass: false,
+		},
+		{
+			name: "unknown assertion type",
+			assertion: core.Assertion{
+				Type: "unknown",
+			},
+			judgment: &core.Judgment{},
+			wantPass: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := executor.runAssertion(tt.judgment, tt.assertion)
+			if result.Passed != tt.wantPass {
+				t.Errorf("runAssertion() passed = %v, want %v", result.Passed, tt.wantPass)
+			}
+		})
+	}
+}
+
+func TestExecutor_runAssertions(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	executor := NewExecutor(db, newTestLogger())
+
+	assertions := []core.Assertion{
+		{Type: "status_code", Operator: "equals", Expected: "200"},
+		{Type: "body_contains", Expected: "success"},
+	}
+
+	judgment := &core.Judgment{
+		StatusCode: 200,
+		Details: &core.JudgmentDetails{
+			ResponseBody: `{"message": "success"}`,
+		},
+	}
+
+	results := executor.runAssertions(judgment, assertions)
+
+	if len(results) != 2 {
+		t.Errorf("Expected 2 assertion results, got %d", len(results))
+	}
+
+	for _, result := range results {
+		if !result.Passed {
+			t.Errorf("Expected assertion %s to pass", result.Type)
+		}
+	}
+}
+
+func TestExecutor_executeStep_WithAssertions(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	executor := NewExecutor(db, newTestLogger())
+
+	step := core.JourneyStep{
+		Name:    "Assertion Step",
+		Type:    core.CheckHTTP,
+		Target:  "https://example.com",
+		Timeout: core.Duration{Duration: 5 * time.Second},
+		Assertions: []core.Assertion{
+			{Type: "status_code", Operator: "equals", Expected: "200"},
+		},
+	}
+
+	ctx := context.Background()
+	result := executor.executeStep(ctx, step, map[string]string{}, 0)
+
+	if result.Name != "Assertion Step" {
+		t.Errorf("Expected step name 'Assertion Step', got %s", result.Name)
+	}
+}
+
+func TestNewExecutorWithNodeID(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	logger := newTestLogger()
+
+	// Test with custom node ID and region
+	exec := NewExecutorWithNodeID(db, logger, "node-1", "us-east-1")
+	if exec.nodeID != "node-1" {
+		t.Errorf("Expected nodeID 'node-1', got %s", exec.nodeID)
+	}
+	if exec.region != "us-east-1" {
+		t.Errorf("Expected region 'us-east-1', got %s", exec.region)
+	}
+
+	// Test with empty values (should default)
+	exec2 := NewExecutorWithNodeID(db, logger, "", "")
+	if exec2.nodeID != "local" {
+		t.Errorf("Expected default nodeID 'local', got %s", exec2.nodeID)
+	}
+	if exec2.region != "default" {
+		t.Errorf("Expected default region 'default', got %s", exec2.region)
+	}
+}
