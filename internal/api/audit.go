@@ -241,7 +241,7 @@ func (al *AuditLogger) Query(filter AuditFilter) ([]*AuditEvent, error) {
 // generateRequestID creates a unique request identifier
 func generateRequestID() string {
 	return fmt.Sprintf("%d-%x", time.Now().UnixNano(),
-		[]byte(fmt.Sprintf("%p", time.Now())))[:20]
+		[]byte(fmt.Sprintf("%d", time.Now().UnixNano())))[:20]
 }
 
 // AuditMiddleware creates an HTTP middleware for audit logging
