@@ -328,6 +328,7 @@ const (
 	LogCommand LogEntryType = iota
 	LogNoOp
 	LogConfiguration
+	LogMembershipChange // Joint consensus membership change
 )
 
 func (t LogEntryType) String() string {
@@ -338,9 +339,32 @@ func (t LogEntryType) String() string {
 		return "noop"
 	case LogConfiguration:
 		return "configuration"
+	case LogMembershipChange:
+		return "membership_change"
 	default:
 		return "unknown"
 	}
+}
+
+// MembershipChangeType represents the type of membership change
+type MembershipChangeType uint8
+
+const (
+	MembershipAddPeer MembershipChangeType = iota
+	MembershipRemovePeer
+	MembershipReplacePeer
+)
+
+// MembershipChange represents a joint consensus membership change entry
+// This enables safe cluster membership changes using the Raft joint consensus protocol
+type MembershipChange struct {
+	Type    MembershipChangeType `json:"type"`
+	Peer    RaftPeer             `json:"peer"`
+	OldPeer *RaftPeer            `json:"old_peer,omitempty"` // For replace operations
+	// Joint consensus tracking
+	OldConfig []string `json:"old_config"` // Node IDs in old configuration
+	NewConfig []string `json:"new_config"` // Node IDs in new configuration
+	Phase     string   `json:"phase"`      // "joint" or "final"
 }
 
 // RaftPeerInfo extends RaftPeer with runtime information

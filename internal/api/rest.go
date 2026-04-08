@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -214,11 +215,13 @@ func NewRESTServer(config core.ServerConfig, authConfig core.AuthConfig, store S
 
 // setupRoutes configures API routes
 func (s *RESTServer) setupRoutes() {
-	// Middleware
+	// Middleware - order matters
 	s.router.Use(s.loggingMiddleware)
+	s.router.Use(s.securityHeadersMiddleware) // Add security headers to all responses
 	s.router.Use(s.corsMiddleware)
 	s.router.Use(s.recoveryMiddleware)
 	s.router.Use(s.validateJSONMiddleware)
+	s.router.Use(s.validatePathParams) // Validate path parameters
 	s.router.Use(s.rateLimitMiddleware)
 
 	// Health
@@ -1090,7 +1093,7 @@ func (s *RESTServer) recoveryMiddleware(handler Handler) Handler {
 // validateJSONMiddleware validates Content-Type and JSON body for POST/PUT requests
 func (s *RESTServer) validateJSONMiddleware(handler Handler) Handler {
 	return func(ctx *Context) error {
-		if ctx.Request.Method == "POST" || ctx.Request.Method == "PUT" {
+		if ctx.Request.Method == "POST" || ctx.Request.Method == "PUT" || ctx.Request.Method == "PATCH" {
 			contentType := ctx.Request.Header.Get("Content-Type")
 			if !strings.HasPrefix(contentType, "application/json") {
 				return ctx.Error(http.StatusBadRequest, "Content-Type must be application/json")
@@ -1100,12 +1103,117 @@ func (s *RESTServer) validateJSONMiddleware(handler Handler) Handler {
 			if ctx.Request.ContentLength > 1<<20 { // 1MB limit
 				return ctx.Error(http.StatusRequestEntityTooLarge, "Request body too large (max 1MB)")
 			}
+
+			// Validate JSON body structure to prevent attacks (only if body exists and has content)
+			if ctx.Request.Body != nil && ctx.Request.ContentLength > 0 {
+				bodyBytes, err := io.ReadAll(io.LimitReader(ctx.Request.Body, 1<<20))
+				if err != nil {
+					return ctx.Error(http.StatusBadRequest, "Invalid request body")
+				}
+
+				// Restore body for later handlers
+				ctx.Request.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
+
+				// Only validate non-empty bodies
+				if len(bodyBytes) > 0 {
+					// Check for common injection patterns
+					bodyStr := string(bodyBytes)
+					if containsInjectionPatterns(bodyStr) {
+						s.logger.Warn("Potential injection attack detected",
+							"ip", ctx.Request.RemoteAddr,
+							"path", ctx.Request.URL.Path)
+						return ctx.Error(http.StatusBadRequest, "Invalid characters in request")
+					}
+
+					// Validate it's valid JSON
+					var jsonCheck interface{}
+					if err := json.Unmarshal(bodyBytes, &jsonCheck); err != nil {
+						return ctx.Error(http.StatusBadRequest, "Invalid JSON format")
+					}
+				}
+			}
 		}
 		return handler(ctx)
 	}
 }
 
-// rateLimitMiddleware implements basic rate limiting per IP
+// containsInjectionPatterns checks for common injection attack patterns
+func containsInjectionPatterns(input string) bool {
+	// Check for path traversal
+	if strings.Contains(input, "../") || strings.Contains(input, "..\\") {
+		return true
+	}
+	// Check for null bytes
+	if strings.Contains(input, "\x00") {
+		return true
+	}
+	// Check for common SQL injection patterns
+	sqlPatterns := []string{
+		";--", "/*", "*/", "@@", "@variable",
+		"EXEC(", "SELECT * FROM", "INSERT INTO", "DELETE FROM", "DROP TABLE",
+		"UNION SELECT", "OR 1=1", "' OR '", "'='",
+	}
+	lowerInput := strings.ToLower(input)
+	for _, pattern := range sqlPatterns {
+		if strings.Contains(lowerInput, strings.ToLower(pattern)) {
+			return true
+		}
+	}
+	// Check for script tags (XSS)
+	if strings.Contains(lowerInput, "<script") || strings.Contains(lowerInput, "javascript:") {
+		return true
+	}
+	return false
+}
+
+// securityHeadersMiddleware adds security headers to all responses
+func (s *RESTServer) securityHeadersMiddleware(handler Handler) Handler {
+	return func(ctx *Context) error {
+		// Add security headers
+		ctx.Response.Header().Set("X-Content-Type-Options", "nosniff")
+		ctx.Response.Header().Set("X-Frame-Options", "DENY")
+		ctx.Response.Header().Set("X-XSS-Protection", "1; mode=block")
+		ctx.Response.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		ctx.Response.Header().Set("Content-Security-Policy", "default-src 'self'")
+
+		// Check for required headers on sensitive endpoints
+		if strings.HasPrefix(ctx.Request.URL.Path, "/api/v1/") {
+			// Validate Host header to prevent DNS rebinding
+			if ctx.Request.Host == "" {
+				return ctx.Error(http.StatusBadRequest, "Missing Host header")
+			}
+		}
+
+		return handler(ctx)
+	}
+}
+
+// validatePathParams validates path parameters for common injection patterns
+func (s *RESTServer) validatePathParams(handler Handler) Handler {
+	return func(ctx *Context) error {
+		for key, value := range ctx.Params {
+			// Check for path traversal attempts
+			if strings.Contains(value, "..") || strings.Contains(value, "//") {
+				s.logger.Warn("Path traversal attempt detected",
+					"ip", ctx.Request.RemoteAddr,
+					"param", key,
+					"value", value)
+				return ctx.Error(http.StatusBadRequest, "Invalid path parameter")
+			}
+			// Check parameter length
+			if len(value) > 256 {
+				return ctx.Error(http.StatusBadRequest, "Path parameter too long")
+			}
+			// Check for null bytes
+			if strings.Contains(value, "\x00") {
+				return ctx.Error(http.StatusBadRequest, "Invalid characters in parameter")
+			}
+		}
+		return handler(ctx)
+	}
+}
+
+// rateLimitMiddleware implements rate limiting per IP and per user
 func (s *RESTServer) rateLimitMiddleware(handler Handler) Handler {
 	type clientState struct {
 		count     int
@@ -1113,54 +1221,119 @@ func (s *RESTServer) rateLimitMiddleware(handler Handler) Handler {
 	}
 
 	var (
-		mu      sync.RWMutex
-		clients = make(map[string]*clientState)
-		limit   = 100 // requests per minute
-		window  = time.Minute
+		mu         sync.RWMutex
+		ipClients  = make(map[string]*clientState)
+		userClients= make(map[string]*clientState) // Per-user rate limiting
+		// Different limits for different types of endpoints
+		defaultLimit   = 100 // requests per minute for regular endpoints
+		authLimit      = 10  // stricter limit for auth endpoints
+		sensitiveLimit = 20  // limit for sensitive operations
+		window         = time.Minute
 	)
 
-	cleanup := func() {
+	// Determine limit based on endpoint
+	getLimit := func(path string) int {
+		switch {
+		case strings.HasPrefix(path, "/auth/") || path == "/login" || path == "/register":
+			return authLimit
+		case strings.HasPrefix(path, "/api/v1/souls") && (strings.Contains(path, "delete") || strings.Contains(path, "update")):
+			return sensitiveLimit
+		default:
+			return defaultLimit
+		}
+	}
+
+	// Cleanup old entries periodically
+	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		for range ticker.C {
 			mu.Lock()
 			now := time.Now()
-			for ip, state := range clients {
+			for ip, state := range ipClients {
 				if state.resetTime.Before(now) {
-					delete(clients, ip)
+					delete(ipClients, ip)
+				}
+			}
+			for user, state := range userClients {
+				if state.resetTime.Before(now) {
+					delete(userClients, user)
 				}
 			}
 			mu.Unlock()
 		}
-	}
-	go cleanup()
+	}()
 
 	return func(ctx *Context) error {
+		// Skip rate limiting for health endpoints
+		if strings.HasPrefix(ctx.Request.URL.Path, "/health") ||
+			strings.HasPrefix(ctx.Request.URL.Path, "/ready") ||
+			strings.HasPrefix(ctx.Request.URL.Path, "/metrics") {
+			return handler(ctx)
+		}
+
 		// Get client IP
 		ip := ctx.Request.RemoteAddr
 		if forwarded := ctx.Request.Header.Get("X-Forwarded-For"); forwarded != "" {
 			ip = strings.Split(forwarded, ",")[0]
 		}
 
-		mu.Lock()
-		state, exists := clients[ip]
+		// Get user ID if authenticated
+		userID := ""
+		if ctx.User != nil {
+			userID = ctx.User.ID
+		}
+
+		limit := getLimit(ctx.Request.URL.Path)
 		now := time.Now()
 
-		if !exists || state.resetTime.Before(now) {
-			clients[ip] = &clientState{
+		mu.Lock()
+
+		// Check IP-based rate limit
+		ipState, ipExists := ipClients[ip]
+		if !ipExists || ipState.resetTime.Before(now) {
+			ipClients[ip] = &clientState{
 				count:     1,
 				resetTime: now.Add(window),
 			}
+		} else if ipState.count >= limit {
 			mu.Unlock()
-			return handler(ctx)
+			ctx.Response.Header().Set("Retry-After", strconv.Itoa(int(ipState.resetTime.Sub(now).Seconds())))
+			ctx.Response.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit))
+			ctx.Response.Header().Set("X-RateLimit-Remaining", "0")
+			return ctx.Error(http.StatusTooManyRequests, fmt.Sprintf("Rate limit exceeded (%d requests/minute)", limit))
+		} else {
+			ipState.count++
 		}
 
-		if state.count >= limit {
-			mu.Unlock()
-			ctx.Response.Header().Set("Retry-After", strconv.Itoa(int(state.resetTime.Sub(now).Seconds())))
-			return ctx.Error(http.StatusTooManyRequests, "Rate limit exceeded (100 requests/minute)")
+		// Check user-based rate limit (if authenticated)
+		if userID != "" {
+			userState, userExists := userClients[userID]
+			if !userExists || userState.resetTime.Before(now) {
+				userClients[userID] = &clientState{
+					count:     1,
+					resetTime: now.Add(window),
+				}
+			} else if userState.count >= limit*2 { // User limit is 2x IP limit (shared across IPs)
+				mu.Unlock()
+				ctx.Response.Header().Set("Retry-After", strconv.Itoa(int(userState.resetTime.Sub(now).Seconds())))
+				ctx.Response.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit*2))
+				ctx.Response.Header().Set("X-RateLimit-Remaining", "0")
+				return ctx.Error(http.StatusTooManyRequests, "User rate limit exceeded")
+			} else {
+				userState.count++
+			}
 		}
 
-		state.count++
+		// Set rate limit headers
+		ipState = ipClients[ip]
+		remaining := limit - ipState.count
+		if remaining < 0 {
+			remaining = 0
+		}
+		ctx.Response.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit))
+		ctx.Response.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
+		ctx.Response.Header().Set("X-RateLimit-Reset", strconv.Itoa(int(ipState.resetTime.Unix())))
+
 		mu.Unlock()
 		return handler(ctx)
 	}

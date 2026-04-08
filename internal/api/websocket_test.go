@@ -1,8 +1,11 @@
 package api
 
 import (
+	"net/http"
 	"testing"
 	"time"
+
+	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
 // TestWSClient_JoinRoom tests joining a room
@@ -185,6 +188,188 @@ func TestWebSocketServer_Stop_NoClients(t *testing.T) {
 
 	// Should not panic when stopping with no clients
 	server.Stop()
+}
+
+// TestWebSocketServer_BroadcastIncident tests broadcasting an incident
+func TestWebSocketServer_BroadcastIncident(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+	server.Start()
+	defer server.Stop()
+
+	// Create a test client
+	client := &WSClient{
+		ID:        "test-client",
+		Workspace: "default",
+		Rooms:     make(map[string]bool),
+		send:      make(chan []byte, 10),
+		server:    server,
+	}
+
+	server.mu.Lock()
+	server.clients[client.ID] = client
+	server.mu.Unlock()
+
+	// Broadcast an incident
+	incident := &core.Incident{
+		ID:          "incident-1",
+		SoulID:      "soul-1",
+		Status:      core.IncidentOpen,
+		Severity:    core.SeverityCritical,
+		WorkspaceID: "default",
+	}
+
+	server.BroadcastIncident(incident)
+
+	// Give broadcast time to process
+	time.Sleep(50 * time.Millisecond)
+}
+
+// TestWebSocketServer_BroadcastSoulUpdate tests broadcasting a soul update
+func TestWebSocketServer_BroadcastSoulUpdate(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+	server.Start()
+	defer server.Stop()
+
+	// Create a test client
+	client := &WSClient{
+		ID:        "test-client",
+		Workspace: "default",
+		Rooms:     make(map[string]bool),
+		send:      make(chan []byte, 10),
+		server:    server,
+	}
+
+	server.mu.Lock()
+	server.clients[client.ID] = client
+	server.mu.Unlock()
+
+	// Broadcast a soul update
+	soul := &core.Soul{
+		ID:          "soul-1",
+		Name:        "Test Soul",
+		WorkspaceID: "default",
+	}
+
+	server.BroadcastSoulUpdate(soul)
+
+	// Give broadcast time to process
+	time.Sleep(50 * time.Millisecond)
+}
+
+// TestIsWebSocketRequest tests the WebSocket request detection
+func TestIsWebSocketRequest(t *testing.T) {
+	// Test with WebSocket upgrade header
+	req1, _ := http.NewRequest("GET", "/ws", nil)
+	req1.Header.Set("Upgrade", "websocket")
+	if !IsWebSocketRequest(req1) {
+		t.Error("Expected WebSocket request to be detected")
+	}
+
+	// Test without WebSocket header
+	req2, _ := http.NewRequest("GET", "/ws", nil)
+	if IsWebSocketRequest(req2) {
+		t.Error("Expected non-WebSocket request")
+	}
+
+	// Test with different upgrade value
+	req3, _ := http.NewRequest("GET", "/ws", nil)
+	req3.Header.Set("Upgrade", "h2c")
+	if IsWebSocketRequest(req3) {
+		t.Error("Expected non-WebSocket request for h2c upgrade")
+	}
+}
+
+// TestWebSocketServer_SubscribeClient tests subscribing a client to events
+func TestWebSocketServer_SubscribeClient(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+
+	client := &WSClient{
+		ID:     "test-client",
+		Rooms:  make(map[string]bool),
+		send:   make(chan []byte, 10),
+		server: server,
+	}
+
+	server.mu.Lock()
+	server.clients[client.ID] = client
+	server.mu.Unlock()
+
+	// Subscribe to events
+	server.SubscribeClient(client.ID, []string{"judgment", "alert"})
+
+	// Verify client is in event rooms
+	client.mu.RLock()
+	if !client.Rooms["event:judgment"] {
+		t.Error("Client should be in event:judgment room")
+	}
+	if !client.Rooms["event:alert"] {
+		t.Error("Client should be in event:alert room")
+	}
+	client.mu.RUnlock()
+}
+
+// TestWebSocketServer_UnsubscribeClient tests unsubscribing a client
+func TestWebSocketServer_UnsubscribeClient(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+
+	client := &WSClient{
+		ID:     "test-client",
+		Rooms:  make(map[string]bool),
+		send:   make(chan []byte, 10),
+		server: server,
+	}
+
+	server.mu.Lock()
+	server.clients[client.ID] = client
+	server.mu.Unlock()
+
+	// Subscribe first
+	server.SubscribeClient(client.ID, []string{"judgment"})
+
+	// Then unsubscribe
+	server.UnsubscribeClient(client.ID, []string{"judgment"})
+
+	// Verify client is not in room
+	client.mu.RLock()
+	if client.Rooms["event:judgment"] {
+		t.Error("Client should not be in event:judgment room after unsubscribe")
+	}
+	client.mu.RUnlock()
+}
+
+// TestWebSocketServer_SubscribeNonExistentClient tests subscribing a non-existent client
+func TestWebSocketServer_SubscribeNonExistentClient(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+
+	// Should not panic
+	server.SubscribeClient("non-existent", []string{"judgment"})
+}
+
+// TestWebSocketServer_BroadcastIncident_WithoutWorkspace tests broadcasting without workspace
+func TestWebSocketServer_BroadcastIncident_WithoutWorkspace(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+	server.Start()
+	defer server.Stop()
+
+	// Broadcast an incident without workspace
+	incident := &core.Incident{
+		ID:       "incident-1",
+		SoulID:   "soul-1",
+		Status:   core.IncidentOpen,
+		Severity: core.SeverityCritical,
+		// No WorkspaceID
+	}
+
+	server.BroadcastIncident(incident)
+
+	// Give broadcast time to process
+	time.Sleep(50 * time.Millisecond)
 }
 
 // Helper function

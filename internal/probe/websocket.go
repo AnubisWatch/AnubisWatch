@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -42,6 +43,14 @@ func (c *WebSocketChecker) Validate(soul *core.Soul) error {
 	if u.Scheme != "ws" && u.Scheme != "wss" {
 		return configError("target", "URL must use ws:// or wss:// scheme")
 	}
+
+	// Security warning for disabled TLS verification
+	if soul.WebSocket != nil && soul.WebSocket.InsecureSkipVerify {
+		slog.Warn("SECURITY WARNING: WebSocket check has InsecureSkipVerify enabled. TLS certificate verification is disabled. This should only be used for testing, never in production.",
+			"soul", soul.Name,
+			"soul_id", soul.ID)
+	}
+
 	return nil
 }
 

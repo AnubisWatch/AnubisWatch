@@ -2,6 +2,7 @@ package probe
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -314,10 +315,13 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 		judgment.ID = core.GenerateID()
 	}
 
-	// Persist
+	// Persist with retry
 	if e.store != nil {
-		if err := e.store.SaveJudgment(ctx, judgment); err != nil {
-			e.logger.Error("failed to save judgment", "err", err, "soul", soul.Name)
+		if err := retryWithBackoff(ctx, 3, 100*time.Millisecond, func() error {
+			return e.store.SaveJudgment(ctx, judgment)
+		}); err != nil {
+			e.logger.Error("failed to save judgment after retries", "err", err, "soul", soul.Name)
+			// Continue processing - don't fail the check due to storage issues
 		}
 	}
 
@@ -523,24 +527,26 @@ func (e *Engine) recordFailure(soulID string) {
 // isOpen returns true if the circuit breaker should block checks
 func (cb *circuitBreaker) isOpen(cfg CircuitBreakerConfig) bool {
 	cb.mu.RLock()
-	defer cb.mu.RUnlock()
+	state := cb.state
+	lastChange := cb.lastStateChange
+	cb.mu.RUnlock()
 
-	if cb.state == "closed" {
+	if state == "closed" {
 		return false
 	}
 
-	if cb.state == "open" {
+	if state == "open" {
 		// Check if timeout has elapsed to transition to half-open
-		if time.Since(cb.lastStateChange) >= cfg.Timeout {
-			cb.mu.RUnlock()
+		if time.Since(lastChange) >= cfg.Timeout {
+			// Try to transition to half-open
 			cb.mu.Lock()
+			// Double-check state after acquiring lock
 			if cb.state == "open" {
 				cb.state = "half-open"
 				cb.successes = 0
 				cb.lastStateChange = time.Now()
 			}
 			cb.mu.Unlock()
-			cb.mu.RLock()
 			return false
 		}
 		return true
@@ -548,4 +554,32 @@ func (cb *circuitBreaker) isOpen(cfg CircuitBreakerConfig) bool {
 
 	// half-open: allow checks but monitor results
 	return false
+}
+
+// retryWithBackoff retries an operation with exponential backoff
+func retryWithBackoff(ctx context.Context, maxRetries int, initialDelay time.Duration, op func() error) error {
+	var err error
+	delay := initialDelay
+
+	for i := 0; i < maxRetries; i++ {
+		err = op()
+		if err == nil {
+			return nil
+		}
+
+		// Don't retry on context cancellation
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		// Wait before retrying, but respect context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+			delay *= 2 // Exponential backoff
+		}
+	}
+
+	return fmt.Errorf("failed after %d retries: %w", maxRetries, err)
 }

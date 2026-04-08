@@ -167,9 +167,12 @@ func (e *Executor) executeJourney(ctx context.Context, journey *core.JourneyConf
 		run.Status = core.SoulDead
 	}
 
-	// Save the journey run
-	if err := e.db.SaveJourneyRun(ctx, run); err != nil {
-		e.logger.Error("failed to save journey run", "journey_id", journey.ID, "err", err)
+	// Save the journey run with retry
+	if err := retryWithBackoff(ctx, 3, 100*time.Millisecond, func() error {
+		return e.db.SaveJourneyRun(ctx, run)
+	}); err != nil {
+		e.logger.Error("failed to save journey run after retries", "journey_id", journey.ID, "err", err)
+		// Continue - don't fail the journey execution due to storage issues
 	}
 
 	e.logger.Debug("completed journey execution",
@@ -519,4 +522,32 @@ func (e *Executor) compareValues(actual, operator, expected string) bool {
 	default:
 		return actual == expected
 	}
+}
+
+// retryWithBackoff retries an operation with exponential backoff
+func retryWithBackoff(ctx context.Context, maxRetries int, initialDelay time.Duration, op func() error) error {
+	var err error
+	delay := initialDelay
+
+	for i := 0; i < maxRetries; i++ {
+		err = op()
+		if err == nil {
+			return nil
+		}
+
+		// Don't retry on context cancellation
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		// Wait before retrying, but respect context cancellation
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+			delay *= 2 // Exponential backoff
+		}
+	}
+
+	return fmt.Errorf("failed after %d retries: %w", maxRetries, err)
 }

@@ -312,6 +312,10 @@ func (m *Manager) dispatch(event *core.AlertEvent) {
 	}
 	m.mu.RUnlock()
 
+	// Process channels concurrently with a semaphore to limit goroutines
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 10) // Limit concurrent dispatchers
+
 	for _, channel := range channels {
 		if !channel.ShouldNotify(event) {
 			m.mu.Lock()
@@ -331,21 +335,31 @@ func (m *Manager) dispatch(event *core.AlertEvent) {
 			continue
 		}
 
-		// Send notification
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err := m.sendToChannel(ctx, event, channel)
-		cancel()
+		wg.Add(1)
+		sem <- struct{}{}
 
-		if err != nil {
-			m.logger.Error("Failed to send alert",
-				"channel", channel.ID,
-				"error", err)
-		} else {
-			m.logger.Debug("Alert sent",
-				"channel", channel.ID,
-				"soul_id", event.SoulID)
-		}
+		go func(ch *core.AlertChannel) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			// Send notification
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			err := m.sendToChannel(ctx, event, ch)
+			cancel()
+
+			if err != nil {
+				m.logger.Error("Failed to send alert",
+					"channel", ch.ID,
+					"error", err)
+			} else {
+				m.logger.Debug("Alert sent",
+					"channel", ch.ID,
+					"soul_id", event.SoulID)
+			}
+		}(channel)
 	}
+
+	wg.Wait()
 }
 
 // sendToChannel sends an alert to a specific channel

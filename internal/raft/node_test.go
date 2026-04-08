@@ -265,6 +265,7 @@ func TestNode_AddPeer(t *testing.T) {
 
 	node, _ := NewNode(cfg, storage, snapshot, fsm, newTestRaftLogger())
 
+	// Test that AddPeer requires leader
 	peer := core.RaftPeer{
 		ID:      "new-node",
 		Address: "127.0.0.1:7003",
@@ -273,21 +274,11 @@ func TestNode_AddPeer(t *testing.T) {
 	}
 
 	err := node.AddPeer(peer)
-	if err != nil {
-		t.Fatalf("AddPeer failed: %v", err)
+	if err == nil {
+		t.Error("Expected error when adding peer as non-leader")
 	}
-
-	peers := node.GetPeers()
-	found := false
-	for _, p := range peers {
-		if p.ID == "new-node" {
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		t.Error("Expected new peer to be added")
+	if raftErr, ok := err.(*core.RaftError); !ok || raftErr.Code != core.ErrNotLeader {
+		t.Errorf("Expected NOT_LEADER error, got: %v", err)
 	}
 }
 
@@ -349,14 +340,13 @@ func TestNode_RemovePeer(t *testing.T) {
 
 	node, _ := NewNode(cfg, storage, snapshot, fsm, newTestRaftLogger())
 
+	// Test that RemovePeer requires leader
 	err := node.RemovePeer("node-2")
-	if err != nil {
-		t.Fatalf("RemovePeer failed: %v", err)
+	if err == nil {
+		t.Error("Expected error when removing peer as non-leader")
 	}
-
-	peers := node.GetPeers()
-	if len(peers) != 0 {
-		t.Errorf("Expected 0 peers after removal, got %d", len(peers))
+	if raftErr, ok := err.(*core.RaftError); !ok || raftErr.Code != core.ErrNotLeader {
+		t.Errorf("Expected NOT_LEADER error, got: %v", err)
 	}
 }
 

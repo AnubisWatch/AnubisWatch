@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
@@ -17,7 +19,9 @@ import (
 
 // HTTPChecker implements HTTP/HTTPS health checks
 type HTTPChecker struct {
-	client *http.Client
+	client          *http.Client
+	transportCache  map[string]*http.Transport
+	cacheMu         sync.RWMutex
 }
 
 // NewHTTPChecker creates a new HTTP checker
@@ -26,6 +30,7 @@ func NewHTTPChecker() *HTTPChecker {
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		transportCache: make(map[string]*http.Transport),
 	}
 }
 
@@ -42,10 +47,56 @@ func (c *HTTPChecker) Validate(soul *core.Soul) error {
 	if !strings.HasPrefix(soul.Target, "http://") && !strings.HasPrefix(soul.Target, "https://") {
 		return configError("target", "target must start with http:// or https://")
 	}
+
+	// Security warning for disabled TLS verification
+	if soul.HTTP != nil && soul.HTTP.InsecureSkipVerify {
+		slog.Warn("SECURITY WARNING: HTTP check has InsecureSkipVerify enabled. TLS certificate verification is disabled. This should only be used for testing, never in production.",
+			"soul", soul.Name,
+			"soul_id", soul.ID,
+			"target", soul.Target)
+	}
+
 	return nil
 }
 
-// Judge performs the HTTP health check
+// getTransport returns a cached transport or creates a new one based on soul config
+func (c *HTTPChecker) getTransport(cfg *core.HTTPConfig, timeout time.Duration) *http.Transport {
+	// Create cache key from relevant config options
+	key := fmt.Sprintf("skip_verify=%t:timeout=%s", cfg.InsecureSkipVerify, timeout)
+
+	// Check cache first
+	c.cacheMu.RLock()
+	if transport, ok := c.transportCache[key]; ok {
+		c.cacheMu.RUnlock()
+		return transport
+	}
+	c.cacheMu.RUnlock()
+
+	// Create new transport
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if transport, ok := c.transportCache[key]; ok {
+		return transport
+	}
+
+	transport := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: cfg.InsecureSkipVerify,
+		},
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+	}
+
+	c.transportCache[key] = transport
+	return transport
+}
 func (c *HTTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment, error) {
 	cfg := soul.HTTP
 	if cfg == nil {
@@ -82,18 +133,8 @@ func (c *HTTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		req.Header.Set("Accept", "*/*")
 	}
 
-	// Configure transport
-	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: cfg.InsecureSkipVerify,
-		},
-		DialContext: (&net.Dialer{
-			Timeout:   10 * time.Second,
-			KeepAlive: 0,
-		}).DialContext,
-		DisableKeepAlives: true,
-	}
-
+	// Get cached transport and create client
+	transport := c.getTransport(cfg, soul.Timeout.Duration)
 	client := &http.Client{
 		Transport: transport,
 		Timeout:   soul.Timeout.Duration,

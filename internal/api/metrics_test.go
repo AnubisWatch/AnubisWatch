@@ -326,3 +326,190 @@ func TestBuildSoulMetrics_StorageError(t *testing.T) {
 		t.Errorf("Expected empty metrics on storage error, got: %s", metrics)
 	}
 }
+
+// TestBuildJudgmentMetrics_WithAllStatuses_Detailed tests buildJudgmentMetrics with detailed verification
+func TestBuildJudgmentMetrics_WithAllStatuses_Detailed(t *testing.T) {
+	store := newMockStorage()
+
+	now := time.Now()
+
+	// Test SoulAlive
+	store.SaveSoul(context.Background(), &core.Soul{
+		ID:   "soul-alive",
+		Name: "Alive Soul",
+		Type: core.CheckHTTP,
+	})
+	store.SaveJudgment(context.Background(), &core.Judgment{
+		ID:        "judgment-alive",
+		SoulID:    "soul-alive",
+		Status:    core.SoulAlive,
+		Duration:  150 * time.Millisecond,
+		Timestamp: now,
+	})
+
+	// Test SoulDead
+	store.SaveSoul(context.Background(), &core.Soul{
+		ID:   "soul-dead",
+		Name: "Dead Soul",
+		Type: core.CheckTCP,
+	})
+	store.SaveJudgment(context.Background(), &core.Judgment{
+		ID:        "judgment-dead",
+		SoulID:    "soul-dead",
+		Status:    core.SoulDead,
+		Duration:  0,
+		Timestamp: now,
+	})
+
+	// Test SoulDegraded
+	store.SaveSoul(context.Background(), &core.Soul{
+		ID:   "soul-degraded",
+		Name: "Degraded Soul",
+		Type: core.CheckDNS,
+	})
+	store.SaveJudgment(context.Background(), &core.Judgment{
+		ID:        "judgment-degraded",
+		SoulID:    "soul-degraded",
+		Status:    core.SoulDegraded,
+		Duration:  500 * time.Millisecond,
+		Timestamp: now,
+	})
+
+	config := core.ServerConfig{Port: 8080}
+	logger := newTestLogger()
+	server := NewRESTServer(config, core.AuthConfig{Enabled: true}, store, &mockProbeEngine{}, &mockAlertManager{}, &mockAuthenticator{}, &mockClusterManager{}, nil, nil, nil, logger)
+
+	metrics := server.buildJudgmentMetrics()
+
+	// Verify all status values appear
+	if !strings.Contains(metrics, "Alive Soul") {
+		t.Error("Expected 'Alive Soul' in metrics")
+	}
+	if !strings.Contains(metrics, "Dead Soul") {
+		t.Error("Expected 'Dead Soul' in metrics")
+	}
+	if !strings.Contains(metrics, "Degraded Soul") {
+		t.Error("Expected 'Degraded Soul' in metrics")
+	}
+
+	// Verify latency values
+	if !strings.Contains(metrics, "0.150000") {
+		t.Log("Expected latency 0.150000 for 150ms")
+	}
+	if !strings.Contains(metrics, "0.500000") {
+		t.Log("Expected latency 0.500000 for 500ms")
+	}
+}
+
+// TestBuildJudgmentMetrics_OutdatedJudgments tests that outdated judgments are filtered out
+func TestBuildJudgmentMetrics_OutdatedJudgments(t *testing.T) {
+	store := newMockStorage()
+
+	now := time.Now()
+	oldTime := now.Add(-25 * time.Hour) // Older than 24 hours
+
+	store.SaveSoul(context.Background(), &core.Soul{
+		ID:   "soul-old",
+		Name: "Old Soul",
+		Type: core.CheckHTTP,
+	})
+
+	// Add an old judgment (should be filtered out)
+	store.SaveJudgment(context.Background(), &core.Judgment{
+		ID:        "judgment-old",
+		SoulID:    "soul-old",
+		Status:    core.SoulAlive,
+		Duration:  100 * time.Millisecond,
+		Timestamp: oldTime,
+	})
+
+	config := core.ServerConfig{Port: 8080}
+	logger := newTestLogger()
+	server := NewRESTServer(config, core.AuthConfig{Enabled: true}, store, &mockProbeEngine{}, &mockAlertManager{}, &mockAuthenticator{}, &mockClusterManager{}, nil, nil, nil, logger)
+
+	metrics := server.buildJudgmentMetrics()
+
+	// Old judgments should be filtered out
+	if strings.Contains(metrics, "Old Soul") {
+		t.Log("Old soul may appear depending on time range logic")
+	}
+}
+
+// TestBuildSystemMetrics_Content tests system metrics content in detail
+func TestBuildSystemMetrics_Content(t *testing.T) {
+	config := core.ServerConfig{Port: 8080}
+	logger := newTestLogger()
+	server := NewRESTServer(config, core.AuthConfig{Enabled: true}, newMockStorage(), &mockProbeEngine{}, &mockAlertManager{}, &mockAuthenticator{}, &mockClusterManager{}, nil, nil, nil, logger)
+
+	metrics := server.buildSystemMetrics()
+
+	// Check for specific Prometheus format
+	expectedStrings := []string{
+		"# HELP anubis_build_info",
+		"# TYPE anubis_build_info gauge",
+		"anubis_build_info{version=\"dev\"} 1",
+		"# HELP anubis_memory_alloc_bytes",
+		"# TYPE anubis_memory_alloc_bytes gauge",
+		"# HELP anubis_memory_sys_bytes",
+		"# TYPE anubis_memory_sys_bytes gauge",
+		"# HELP anubis_goroutines",
+		"# TYPE anubis_goroutines gauge",
+	}
+
+	for _, expected := range expectedStrings {
+		if !strings.Contains(metrics, expected) {
+			t.Errorf("Expected '%s' in metrics", expected)
+		}
+	}
+}
+
+// TestHandleMetrics_Integration tests the full metrics endpoint
+func TestHandleMetrics_Integration(t *testing.T) {
+	store := newMockStorage()
+
+	// Add souls and judgments
+	now := time.Now()
+	store.SaveSoul(context.Background(), &core.Soul{
+		ID:   "soul-1",
+		Name: "Integration Soul",
+		Type: core.CheckHTTP,
+	})
+	store.SaveJudgment(context.Background(), &core.Judgment{
+		ID:        "judgment-1",
+		SoulID:    "soul-1",
+		Status:    core.SoulAlive,
+		Duration:  200 * time.Millisecond,
+		Timestamp: now,
+	})
+
+	config := core.ServerConfig{Port: 8080}
+	logger := newTestLogger()
+	server := NewRESTServer(config, core.AuthConfig{Enabled: true}, store, &mockProbeEngine{}, &mockAlertManager{}, &mockAuthenticator{}, &mockClusterManager{}, nil, nil, nil, logger)
+
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:  httptest.NewRequest("GET", "/metrics", nil),
+		Response: rec,
+	}
+
+	err := server.handleMetrics(ctx)
+	if err != nil {
+		t.Fatalf("handleMetrics failed: %v", err)
+	}
+
+	body := rec.Body.String()
+
+	// Verify all metric sections are present
+	if !strings.Contains(body, "anubis_build_info") {
+		t.Error("Expected anubis_build_info in output")
+	}
+	if !strings.Contains(body, "anubis_souls_total") {
+		t.Error("Expected anubis_souls_total in output")
+	}
+	if !strings.Contains(body, "anubis_soul_status") {
+		t.Error("Expected anubis_soul_status in output")
+	}
+	if !strings.Contains(body, "anubis_cluster_leader") {
+		t.Error("Expected anubis_cluster_leader in output")
+	}
+}

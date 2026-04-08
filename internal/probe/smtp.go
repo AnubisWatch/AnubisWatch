@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/textproto"
 	"strconv"
@@ -36,6 +37,14 @@ func (c *SMTPChecker) Validate(soul *core.Soul) error {
 	if _, _, err := net.SplitHostPort(soul.Target); err != nil {
 		return configError("target", "target must be in host:port format")
 	}
+
+	// Security warning for disabled TLS verification
+	if soul.SMTP != nil && soul.SMTP.InsecureSkipVerify {
+		slog.Warn("SECURITY WARNING: SMTP check has InsecureSkipVerify enabled. TLS certificate verification is disabled. This should only be used for testing, never in production.",
+			"soul", soul.Name,
+			"soul_id", soul.ID)
+	}
+
 	return nil
 }
 
@@ -308,6 +317,14 @@ func (c *IMAPChecker) Validate(soul *core.Soul) error {
 	if _, _, err := net.SplitHostPort(soul.Target); err != nil {
 		return configError("target", "target must be in host:port format")
 	}
+
+	// Security warning for disabled TLS verification
+	if soul.IMAP != nil && soul.IMAP.InsecureSkipVerify {
+		slog.Warn("SECURITY WARNING: IMAP check has InsecureSkipVerify enabled. TLS certificate verification is disabled. This should only be used for testing, never in production.",
+			"soul", soul.Name,
+			"soul_id", soul.ID)
+	}
+
 	return nil
 }
 

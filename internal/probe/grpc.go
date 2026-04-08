@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"time"
@@ -37,6 +38,14 @@ func (c *gRPCChecker) Validate(soul *core.Soul) error {
 	if _, _, err := net.SplitHostPort(soul.Target); err != nil {
 		return configError("target", "target must be in host:port format")
 	}
+
+	// Security warning for disabled TLS verification
+	if soul.GRPC != nil && soul.GRPC.InsecureSkipVerify {
+		slog.Warn("SECURITY WARNING: gRPC check has InsecureSkipVerify enabled. TLS certificate verification is disabled. This should only be used for testing, never in production.",
+			"soul", soul.Name,
+			"soul_id", soul.ID)
+	}
+
 	return nil
 }
 

@@ -39,6 +39,17 @@ type Node struct {
 	peers  map[string]*Peer
 	peerMu sync.RWMutex
 
+	// Membership configuration (for joint consensus)
+	membership struct {
+		mu           sync.RWMutex
+		config       []string       // Current configuration (node IDs)
+		oldConfig    []string       // Old configuration during joint consensus
+		newConfig    []string       // New configuration during joint consensus
+		jointState   bool           // True if in joint consensus
+		pendingIndex uint64         // Log index of pending membership change
+		changes      map[uint64]bool // Track applied membership change log indices
+	}
+
 	// Storage
 	storage  LogStore
 	snapshot SnapshotStore
@@ -216,6 +227,13 @@ func NewNode(config core.RaftConfig, storage LogStore, snapshot SnapshotStore, f
 		}
 	}
 
+	// Initialize membership configuration
+	n.membership.config = []string{config.NodeID}
+	for _, p := range config.Peers {
+		n.membership.config = append(n.membership.config, p.ID)
+	}
+	n.membership.changes = make(map[uint64]bool)
+
 	return n, nil
 }
 
@@ -383,57 +401,288 @@ func (n *Node) Apply(cmd core.FSMCommand, timeout time.Duration) (uint64, uint64
 	}
 }
 
-// AddPeer adds a peer to the cluster
+// AddPeer adds a peer to the cluster using joint consensus
+// This is safe for production use and prevents split-brain scenarios
 func (n *Node) AddPeer(peer core.RaftPeer) error {
-	n.peerMu.Lock()
-	defer n.peerMu.Unlock()
+	n.mu.RLock()
+	if n.state != core.StateLeader {
+		n.mu.RUnlock()
+		return &core.RaftError{Code: core.ErrNotLeader, Message: "only leader can add peers"}
+	}
+	n.mu.RUnlock()
 
 	if peer.ID == n.nodeID {
 		return fmt.Errorf("cannot add self as peer")
 	}
 
+	n.peerMu.RLock()
 	if _, exists := n.peers[peer.ID]; exists {
+		n.peerMu.RUnlock()
 		return fmt.Errorf("peer %s already exists", peer.ID)
 	}
+	n.peerMu.RUnlock()
 
-	n.peers[peer.ID] = &Peer{
-		ID:      peer.ID,
-		Address: peer.Address,
-		Region:  peer.Region,
-		Role:    peer.Role,
+	// Get current configuration
+	n.membership.mu.Lock()
+	oldConfig := make([]string, len(n.membership.config))
+	copy(oldConfig, n.membership.config)
+	newConfig := append([]string(nil), n.membership.config...)
+	newConfig = append(newConfig, peer.ID)
+	n.membership.mu.Unlock()
+
+	// Create membership change entry for joint consensus
+	change := core.MembershipChange{
+		Type:      core.MembershipAddPeer,
+		Peer:      peer,
+		OldConfig: oldConfig,
+		NewConfig: newConfig,
+		Phase:     "joint",
 	}
 
-	// Register peer address with transport for connection pooling
+	// Propose the membership change
+	if err := n.proposeMembershipChange(change); err != nil {
+		return fmt.Errorf("failed to propose membership change: %w", err)
+	}
+
+	// Register peer address with transport
 	if tt, ok := n.transport.(*TCPTransport); ok {
 		tt.RegisterPeer(peer.ID, peer.Address)
 	}
 
-	n.logger.Info("Peer added", "peer_id", peer.ID, "address", peer.Address)
+	n.logger.Info("Peer added via joint consensus", "peer_id", peer.ID, "address", peer.Address)
 	return nil
 }
 
-// RemovePeer removes a peer from the cluster
+// RemovePeer removes a peer from the cluster using joint consensus
+// This is safe for production use and prevents quorum loss
 func (n *Node) RemovePeer(peerID string) error {
-	n.peerMu.Lock()
-	defer n.peerMu.Unlock()
+	n.mu.RLock()
+	if n.state != core.StateLeader {
+		n.mu.RUnlock()
+		return &core.RaftError{Code: core.ErrNotLeader, Message: "only leader can remove peers"}
+	}
+	n.mu.RUnlock()
 
 	if peerID == n.nodeID {
 		return fmt.Errorf("cannot remove self")
 	}
 
-	if _, exists := n.peers[peerID]; !exists {
+	n.peerMu.RLock()
+	peer, exists := n.peers[peerID]
+	if !exists {
+		n.peerMu.RUnlock()
 		return fmt.Errorf("peer %s not found", peerID)
 	}
+	n.peerMu.RUnlock()
 
-	delete(n.peers, peerID)
+	// Get current configuration
+	n.membership.mu.Lock()
+	oldConfig := make([]string, len(n.membership.config))
+	copy(oldConfig, n.membership.config)
+	newConfig := make([]string, 0, len(n.membership.config)-1)
+	for _, id := range n.membership.config {
+		if id != peerID {
+			newConfig = append(newConfig, id)
+		}
+	}
+	n.membership.mu.Unlock()
+
+	// Create membership change entry for joint consensus
+	change := core.MembershipChange{
+		Type:      core.MembershipRemovePeer,
+		Peer:      core.RaftPeer{ID: peer.ID, Address: peer.Address, Region: peer.Region, Role: peer.Role},
+		OldConfig: oldConfig,
+		NewConfig: newConfig,
+		Phase:     "joint",
+	}
+
+	// Propose the membership change
+	if err := n.proposeMembershipChange(change); err != nil {
+		return fmt.Errorf("failed to propose membership change: %w", err)
+	}
 
 	// Unregister peer from transport
 	if tt, ok := n.transport.(*TCPTransport); ok {
 		tt.UnregisterPeer(peerID)
 	}
 
-	n.logger.Info("Peer removed", "peer_id", peerID)
+	n.logger.Info("Peer removed via joint consensus", "peer_id", peerID)
 	return nil
+}
+
+// proposeMembershipChange proposes a membership change to the cluster
+func (n *Node) proposeMembershipChange(change core.MembershipChange) error {
+	data, err := json.Marshal(change)
+	if err != nil {
+		return fmt.Errorf("failed to marshal membership change: %w", err)
+	}
+
+	entry := core.RaftLogEntry{
+		Index: uint64(len(n.log)),
+		Term:  n.currentTerm,
+		Type:  core.LogMembershipChange,
+		Data:  data,
+	}
+
+	// Append to log
+	n.mu.Lock()
+	entry.Index = uint64(len(n.log))
+	entry.Term = n.currentTerm
+	n.log = append(n.log, entry)
+	n.mu.Unlock()
+
+	// Replicate to followers
+	n.replicateLog()
+
+	// Wait for the entry to be committed
+	timeout := time.After(30 * time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-timeout:
+			return fmt.Errorf("timeout waiting for membership change to commit")
+		case <-ticker.C:
+			n.mu.RLock()
+			committed := n.commitIndex >= entry.Index
+			n.mu.RUnlock()
+			if committed {
+				// Apply the membership change
+				n.applyMembershipChange(change, entry.Index)
+				return nil
+			}
+		}
+	}
+}
+
+// applyMembershipChange applies a committed membership change
+func (n *Node) applyMembershipChange(change core.MembershipChange, index uint64) {
+	n.membership.mu.Lock()
+	defer n.membership.mu.Unlock()
+
+	switch change.Phase {
+	case "joint":
+		// Enter joint consensus
+		n.membership.oldConfig = change.OldConfig
+		n.membership.newConfig = change.NewConfig
+		n.membership.jointState = true
+		n.membership.pendingIndex = index
+
+		// Add the peer to our local map (for AddPeer)
+		if change.Type == core.MembershipAddPeer {
+			n.peerMu.Lock()
+			n.peers[change.Peer.ID] = &Peer{
+				ID:      change.Peer.ID,
+				Address: change.Peer.Address,
+				Region:  change.Peer.Region,
+				Role:    change.Peer.Role,
+			}
+			n.peerMu.Unlock()
+		}
+
+		n.logger.Info("Entered joint consensus for membership change",
+			"type", change.Type,
+			"peer", change.Peer.ID,
+			"old_config", change.OldConfig,
+			"new_config", change.NewConfig)
+
+		// Schedule transition to final configuration
+		go n.transitionToFinalConfig(change, index)
+
+	case "final":
+		// Exit joint consensus, use new configuration
+		n.membership.config = change.NewConfig
+		n.membership.oldConfig = nil
+		n.membership.newConfig = nil
+		n.membership.jointState = false
+		n.membership.pendingIndex = 0
+		n.membership.changes[index] = true
+
+		// Remove the peer from our local map (for RemovePeer)
+		if change.Type == core.MembershipRemovePeer {
+			n.peerMu.Lock()
+			delete(n.peers, change.Peer.ID)
+			n.peerMu.Unlock()
+		}
+
+		n.logger.Info("Membership change completed",
+			"type", change.Type,
+			"peer", change.Peer.ID,
+			"config", change.NewConfig)
+	}
+}
+
+// transitionToFinalConfig transitions from joint consensus to final configuration
+func (n *Node) transitionToFinalConfig(change core.MembershipChange, jointIndex uint64) {
+	// Wait a bit to ensure joint consensus entry is committed
+	time.Sleep(2 * time.Second)
+
+	n.mu.RLock()
+	if n.state != core.StateLeader {
+		n.mu.RUnlock()
+		return
+	}
+	term := n.currentTerm
+	n.mu.RUnlock()
+
+	// Create final phase entry
+	finalChange := change
+	finalChange.Phase = "final"
+	finalChange.OldConfig = nil
+
+	data, err := json.Marshal(finalChange)
+	if err != nil {
+		n.logger.Error("Failed to marshal final membership change", "error", err)
+		return
+	}
+
+	entry := core.RaftLogEntry{
+		Index: uint64(len(n.log)),
+		Term:  term,
+		Type:  core.LogMembershipChange,
+		Data:  data,
+	}
+
+	n.mu.Lock()
+	entry.Index = uint64(len(n.log))
+	entry.Term = n.currentTerm
+	n.log = append(n.log, entry)
+	n.mu.Unlock()
+
+	n.replicateLog()
+
+	n.logger.Info("Proposed final configuration", "peer", change.Peer.ID, "index", entry.Index)
+}
+
+// replicateLog triggers log replication to all peers
+func (n *Node) replicateLog() {
+	n.peerMu.RLock()
+	peers := make([]*Peer, 0, len(n.peers))
+	for _, p := range n.peers {
+		peers = append(peers, p)
+	}
+	n.peerMu.RUnlock()
+
+	for _, peer := range peers {
+		go func(p *Peer) {
+			req := &core.AppendEntriesRequest{
+				Term:         n.currentTerm,
+				LeaderID:     n.nodeID,
+				PrevLogIndex: p.matchIndex,
+				PrevLogTerm:  n.getLogTerm(p.matchIndex),
+				Entries:      n.getEntriesAfter(p.nextIndex, n.config.MaxAppendEntries),
+				LeaderCommit: n.commitIndex,
+			}
+
+			resp, err := n.transport.SendAppendEntries(p.ID, req)
+			if err != nil {
+				return
+			}
+
+			n.handleAppendEntriesResponse(p, req, resp)
+		}(peer)
+	}
 }
 
 // GetPeers returns the current peers
@@ -1147,21 +1396,102 @@ func (n *Node) checkCommit() {
 			continue
 		}
 
-		count := 1 // Leader has it
-		n.peerMu.RLock()
-		for _, p := range n.peers {
-			if n.matchIndex[p.ID] >= N {
-				count++
-			}
+		// Check if this is a membership change entry
+		isCommitted := false
+		if n.log[N].Type == core.LogMembershipChange {
+			isCommitted = n.checkJointConsensusCommit(N)
+		} else {
+			isCommitted = n.checkStandardCommit(N)
 		}
-		n.peerMu.RUnlock()
 
-		if count > (len(n.peers)+1)/2 {
+		if isCommitted {
 			n.commitIndex = N
 			n.commitCh <- n.commitIndex
 			break
 		}
 	}
+}
+
+// checkStandardCommit checks if an entry is committed under standard rules
+func (n *Node) checkStandardCommit(index uint64) bool {
+	count := 1 // Leader has it
+
+	n.membership.mu.RLock()
+	config := n.membership.config
+	n.membership.mu.RUnlock()
+
+	n.peerMu.RLock()
+	for _, nodeID := range config {
+		if nodeID == n.nodeID {
+			continue
+		}
+		if p, ok := n.peers[nodeID]; ok && n.matchIndex[p.ID] >= index {
+			count++
+		}
+	}
+	n.peerMu.RUnlock()
+
+	return count > len(config)/2
+}
+
+// checkJointConsensusCommit checks if an entry is committed under joint consensus
+// During joint consensus, an entry needs majority in BOTH old and new configs
+func (n *Node) checkJointConsensusCommit(index uint64) bool {
+	n.membership.mu.RLock()
+	oldConfig := n.membership.oldConfig
+	newConfig := n.membership.newConfig
+	jointState := n.membership.jointState
+	n.membership.mu.RUnlock()
+
+	// If not in joint consensus, use standard commit rules
+	if !jointState {
+		return n.checkStandardCommit(index)
+	}
+
+	// Check old configuration
+	oldCount := 0
+	if containsString(oldConfig, n.nodeID) {
+		oldCount = 1 // Leader is in old config
+	}
+
+	n.peerMu.RLock()
+	for _, nodeID := range oldConfig {
+		if nodeID == n.nodeID {
+			continue
+		}
+		if p, ok := n.peers[nodeID]; ok && n.matchIndex[p.ID] >= index {
+			oldCount++
+		}
+	}
+
+	// Check new configuration
+	newCount := 0
+	if containsString(newConfig, n.nodeID) {
+		newCount = 1 // Leader is in new config
+	}
+
+	for _, nodeID := range newConfig {
+		if nodeID == n.nodeID {
+			continue
+		}
+		if p, ok := n.peers[nodeID]; ok && n.matchIndex[p.ID] >= index {
+			newCount++
+		}
+	}
+	n.peerMu.RUnlock()
+
+	// Both configurations must have majority
+	return oldCount > len(oldConfig)/2 && newCount > len(newConfig)/2
+}
+
+// containsString checks if a string is in a slice
+func containsString(slice []string, s string) bool {
+	for _, item := range slice {
+		if item == s {
+			return true
+		}
+	}
+	return false
 }
 
 // processCommitted applies committed entries to FSM
@@ -1176,8 +1506,16 @@ func (n *Node) processCommitted(commitIndex uint64) {
 		entry := n.log[n.lastApplied]
 		n.mu.Unlock()
 
-		// Apply to FSM
-		n.fsm.Apply(&entry)
+		// Handle membership changes
+		if entry.Type == core.LogMembershipChange {
+			var change core.MembershipChange
+			if err := json.Unmarshal(entry.Data, &change); err == nil {
+				n.applyMembershipChange(change, entry.Index)
+			}
+		} else {
+			// Apply to FSM
+			n.fsm.Apply(&entry)
+		}
 
 		// Notify waiters
 		n.notifyApply(entry.Index, entry.Term, nil)

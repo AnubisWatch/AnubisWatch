@@ -1,253 +1,232 @@
-# AnubisWatch — Development Roadmap
+# AnubisWatch — Production Readiness Roadmap
 
-**Generated:** 2026-04-05  
-**Based on:** ANALYSIS.md findings  
-**Time Horizon:** 12 weeks to production readiness
+> **Version:** 2.0.0  
+> **Date:** 2026-04-08  
+> **Based on:** ANALYSIS.md v2.0.0 findings  
+> **Time Horizon:** 8 weeks to production readiness  
+> **Current Score:** 60/100  
+> **Target Score:** 85/100  
 
 ---
 
 ## Executive Summary
 
-This roadmap addresses the gaps identified in the codebase analysis and provides a prioritized, phased approach to achieving production readiness. The current production readiness score of **42/100** can be improved to **85/100** within 12 weeks of focused development.
+This roadmap addresses the critical gaps identified in the comprehensive codebase analysis. The current production readiness score of **60/100** can be improved to **85/100** within 8 weeks of focused development, assuming immediate attention to the critical race conditions and error handling issues discovered.
 
-**Current Progress:** All 12 weeks complete. Production readiness achieved: **85/100**.
-
-**Key Milestones:**
-- **Week 2:** Critical security fixes complete ✅
-- **Week 4:** All protocol checkers functional ✅
-- **Week 8:** Dashboard and API hardening complete ✅
-- **Week 9:** MCP Server and Journey Executor complete ✅
-- **Week 10:** Status Page Generator complete ✅
-- **Week 11:** Multi-Tenancy and RBAC complete ✅
-- **Week 12:** Testing & Documentation complete ✅
-  - Test coverage: ~80% (target: 60%)
-  - API documentation: Complete
-  - ADRs: 8 records
-  - CONTRIBUTING.md: Updated
-  - Demo videos: Pending (nice-to-have)
+**Critical Path:** Fix race conditions and mutex contention issues BEFORE any production deployment.
 
 ---
 
-## Phase 1: Critical Fixes (Week 1-2)
+## Phase 1: Critical Fixes (Week 1-2) — START HERE
 
-**Goal:** Address security vulnerabilities and broken functionality that block any production use.
+**Goal:** Address race conditions, mutex contention, and error handling gaps that could cause production outages.
 
-### Week 1: Security & Core Stability
+**Risk Level:** CRITICAL — These issues can cause data corruption, deadlocks, or system unavailability.
 
-| Task | Priority | Effort | Owner | Status |
-|------|----------|--------|-------|--------|
-| **FIX-001:** Fix WebSocket key generation | P0 | 0.5h | | ✅ Complete |
-| **FIX-002:** Enable TLS verification by default | P0 | 2h | | ✅ Complete |
-| **FIX-003:** Add request size limits to all protocols | P0 | 3h | | ✅ Complete |
-| **FIX-004:** Implement session persistence | P0 | 2h | | ✅ Complete |
-| **FIX-005:** Fix gRPC HTTP/2 frame encoding | P0 | 8h | | ✅ Complete |
+### Week 1: Concurrency & Race Condition Fixes
+
+| Task | ID | Priority | Effort | Status |
+|------|-----|----------|--------|--------|
+| Fix circuit breaker race condition | TD-001 | P0 | 4h | 🔴 Critical |
+| Fix alert manager mutex contention | TD-002 | P0 | 8h | 🔴 Critical |
+| Add HTTP transport connection pooling | TD-003 | P0 | 4h | 🔴 Critical |
+| Fix JSON path parsing | TD-004 | P0 | 8h | 🔴 Critical |
+| Propagate storage errors to callers | TD-006 | P0 | 16h | 🔴 Critical |
+
+**Detailed Fixes Required:**
+
+#### TD-001: Circuit Breaker Race Condition
+**Location:** `internal/probe/engine.go:534-544`
+
+```go
+// CURRENT (BROKEN):
+func (cb *circuitBreaker) isOpen(cfg CircuitBreakerConfig) bool {
+    cb.mu.RLock()
+    defer cb.mu.RUnlock()
+    // ... state checks ...
+    if time.Since(cb.lastStateChange) >= cfg.Timeout {
+        cb.mu.RUnlock()  // ❌ WRONG: releasing lock
+        cb.mu.Lock()     // ❌ WRONG: re-acquiring without guarantee
+        // ... state change ...
+        cb.mu.Unlock()
+        cb.mu.RLock()    // ❌ WRONG: inconsistent locking
+    }
+}
+
+// FIX: Use proper atomic operations or channel-based state machine
+```
+
+**Fix Strategy:** Replace mutex-based state machine with atomic operations or channels.
+
+#### TD-002: Alert Manager Mutex Contention
+**Location:** `internal/probe/engine.go:336-348`
+
+```go
+// CURRENT (BROKEN):
+func (m *Manager) dispatch(event *AlertEvent) {
+    m.mu.RLock()
+    channels := // ... copy channels ...
+    m.mu.RUnlock()
+    
+    for _, channel := range channels {
+        // ❌ PROBLEM: HTTP call under lock
+        err := m.sendToChannel(ctx, event, channel)  // This can block for seconds!
+    }
+}
+
+// FIX: Queue events, dispatch outside of lock
+```
+
+**Fix Strategy:** Implement event queue, process dispatch asynchronously.
+
+#### TD-003: HTTP Transport Per Check
+**Location:** `internal/probe/http.go:87-95`
+
+```go
+// CURRENT (INEFFICIENT):
+func (c *HTTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment, error) {
+    // ❌ PROBLEM: New transport for every check
+    transport := &http.Transport{
+        TLSClientConfig: &tls.Config{...},
+    }
+    client := &http.Client{Transport: transport, ...}
+}
+
+// FIX: Cache and reuse transports per soul configuration
+```
+
+### Week 2: Error Handling & Integration Tests
+
+| Task | ID | Priority | Effort | Status |
+|------|-----|----------|--------|--------|
+| Add storage error propagation | TD-006 | P0 | 16h | 🔴 Critical |
+| Implement Raft membership changes | TD-005 | P0 | 40h | 🔴 Critical |
+| Add chaos tests for cluster failures | | P1 | 16h | 🟡 High |
+| Set up CI with race detector | | P1 | 4h | 🟡 High |
 
 **Definition of Done:**
-- [x] All P0 fixes merged and tested
-- [x] Security scan passes with no HIGH/CRITICAL findings
-- [x] gRPC checker successfully connects to real gRPC server
-- [x] WebSocket checker passes RFC 6455 compliance test
-
-### Week 2: Testing Foundation
-
-| Task | Priority | Effort | Owner | Status |
-|------|----------|--------|-------|--------|
-| **TEST-001:** Add HTTP checker unit tests | P0 | 8h | | ✅ Existing tests |
-| **TEST-002:** Add TCP checker unit tests | P1 | 4h | | ✅ Existing tests |
-| **TEST-003:** Add DNS checker unit tests | P1 | 4h | | ✅ Existing tests |
-| **TEST-004:** Add TLS checker unit tests | P1 | 4h | | ✅ Existing tests |
-| **TEST-005:** Set up CI coverage reporting | P1 | 3h | | ⏳ Pending |
-
-**Definition of Done:**
-- [x] Protocol checker coverage >50% (achieved: 82%)
-- [ ] CI fails on coverage regression >5%
-- [x] All critical paths have test coverage
+- [ ] All P0 fixes merged and tested
+- [ ] `go test -race` passes with no warnings
+- [ ] Chaos tests verify cluster survives node failures
+- [ ] Error handling audit complete (all errors propagated or intentionally ignored with comments)
 
 ---
 
-## Phase 2: Core Completion (Week 3-5)
+## Phase 2: Testing Foundation (Week 3-4)
 
-**Goal:** Complete missing protocol implementations and fix architectural gaps.
+**Goal:** Achieve 80% test coverage and add comprehensive integration tests.
 
-### Week 3: Protocol Completion
+### Week 3: Unit Test Coverage
 
-| Task | Priority | Effort | Owner | Status |
-|------|----------|--------|-------|--------|
-| **PROTO-001:** Implement SMTP AUTH LOGIN | P1 | 4h | | ✅ Complete |
-| **PROTO-002:** Implement SMTP AUTHPLAIN | P1 | 4h | | ✅ Complete (included in LOGIN fix) |
-| **PROTO-003:** Fix UDP hex payload handling | P1 | 2h | | ✅ Complete (tests exist) |
-| **PROTO-004:** Add HTTP/3 support (optional) | P2 | 16h | | ⏳ Pending |
-| **PROTO-005:** Implement ICMP unprivileged mode | P1 | 4h | | ⚠️ OS limitation (Windows requires admin) |
+| Component | Current Coverage | Target | Effort |
+|-----------|-----------------|--------|--------|
+| Protocol Checkers | ~70% | 85% | 16h |
+| Storage Engine | ~60% | 80% | 12h |
+| Alert Dispatchers | ~65% | 80% | 8h |
+| Raft Consensus | ~50% | 75% | 20h |
+| API Handlers | ~55% | 80% | 12h |
+| Journey Executor | ~60% | 80% | 8h |
+
+**Priority Test Additions:**
+
+1. **Raft Tests:**
+   - Leader election with network partition
+   - Log replication under load
+   - Snapshot transfer correctness
+   - Membership change safety
+
+2. **Storage Tests:**
+   - WAL corruption recovery
+   - Concurrent read/write safety
+   - Retention policy execution
+   - Time-series query performance
+
+3. **Protocol Tests:**
+   - HTTP with all assertion types
+   - TCP with banner matching
+   - DNS with all record types
+   - TLS with certificate validation
+
+### Week 4: Integration & Chaos Tests
+
+| Task | Priority | Effort |
+|------|----------|--------|
+| 3-node cluster integration test | P1 | 12h |
+| Network partition simulation | P1 | 8h |
+| Storage failure injection | P1 | 8h |
+| Alert dispatcher end-to-end test | P1 | 8h |
+| Load test: 1000 souls | P1 | 8h |
 
 **Definition of Done:**
-- [ ] All 10 protocols pass integration tests
-- [ ] SMTP auth works against Gmail, Outlook, custom servers
-- [ ] UDP checker correctly handles binary protocols
-
-### Week 4: Raft & Storage Hardening
-
-| Task | Priority | Effort | Owner | Status |
-|------|----------|--------|-------|--------|
-| **RAFT-001:** Implement Raft snapshots | P0 | 8h | | ✅ Complete |
-| **RAFT-002:** Implement pre-vote extension | P1 | 4h | | ✅ Complete |
-| **RAFT-003:** Fix transport connection pooling | P1 | 4h | | ✅ Complete |
-| **STOR-001:** Implement log compaction | P1 | 4h | | ✅ Complete (part of snapshots) |
-| **STOR-002:** Add B+Tree order configuration | P2 | 2h | | ✅ Complete |
-
-**Definition of Done:**
-- [ ] Raft cluster survives 10,000+ log entries without performance degradation
-- [ ] Snapshots created automatically at configurable intervals
-- [ ] Cluster recovers from network partition correctly
-
-### Week 5: Retention & Downsampling
-
-| Task | Priority | Effort | Owner | Status |
-|------|----------|--------|-------|--------|
-| **STOR-003:** Implement data retention policies | P1 | 4h | | ✅ Complete |
-| **STOR-004:** Implement time-series downsampling | P1 | 8h | | ✅ Complete |
-| **STOR-005:** Add storage size monitoring | P2 | 2h | | ✅ Complete |
-| **STOR-006:** Implement background purge goroutine | P1 | 4h | | ✅ Complete |
-
-**Definition of Done:**
-- [ ] Configurable retention (7d, 30d, 90d, 1y)
-- [ ] Hourly data downsampled to daily after 7 days
-- [ ] Storage directory size tracked in /api/v1/stats
+- [ ] Overall coverage >80%
+- [ ] Integration tests run in CI
+- [ ] Load test validates 1000 souls / node
+- [ ] Chaos tests pass (random node kills)
 
 ---
 
-## Phase 3: Hardening (Week 6-8)
+## Phase 3: Production Hardening (Week 5-6)
 
-**Goal:** Improve reliability, performance, and operational characteristics.
+**Goal:** Add production-grade features for reliability, observability, and operations.
 
-### Week 6: Probe Engine Hardening
+### Week 5: Reliability & Observability
 
-| Task | Priority | Effort | Owner | Status |
-|------|----------|--------|-------|--------|
-| **PROBE-001:** Add concurrency limiting | P1 | 4h | | ✅ Complete |
-| **PROBE-002:** Implement circuit breaker for failing souls | P1 | 4h | | ✅ Complete |
-| **PROBE-003:** Add probe region tagging | P2 | 4h | | ✅ Complete |
-| **PROBE-004:** Implement check distribution strategies | P1 | 8h | | ✅ Complete |
+| Task | Priority | Effort |
+|------|----------|--------|
+| Add distributed tracing (OpenTelemetry) | P1 | 16h |
+| Implement health check endpoints | P1 | 4h |
+| Add Prometheus metrics for all subsystems | P1 | 8h |
+| Implement graceful shutdown handling | P1 | 4h |
+| Add request logging middleware | P2 | 4h |
 
-**Definition of Done:**
-- [x] Max concurrent checks configurable (default: 100)
-- [x] Failing souls automatically backed off after N failures
-- [x] Region-aware check distribution working in cluster
+### Week 6: Operations & Security
 
-### Week 7: Alert System Hardening
-
-| Task | Priority | Effort | Owner | Status |
-|------|----------|--------|-------|--------|
-| **ALERT-001:** Add alert deduplication | P1 | 4h | | ✅ Complete |
-| **ALERT-002:** Implement alert aggregation | P2 | 4h | | |
-| **ALERT-003:** Add alert rate limiting per channel | P1 | 4h | | ✅ Complete |
-| **ALERT-004:** Implement escalation policies | P2 | 8h | | ✅ Complete |
-| **ALERT-005:** Add alert acknowledgment workflow | P1 | 4h | | ✅ Complete |
+| Task | Priority | Effort |
+|------|----------|--------|
+| Implement backup/restore procedures | P1 | 8h |
+| Add rate limiting (per-IP, per-user) | P1 | 8h |
+| Implement API authentication hardening | P1 | 8h |
+| Add input validation on all endpoints | P1 | 8h |
+| Create operational runbooks | P2 | 8h |
 
 **Definition of Done:**
-- [x] No duplicate alerts within configurable window
-- [x] Rate limiting prevents notification storms
-- [x] Escalation policies fire correctly based on conditions
-
-### Week 8: API & Dashboard Hardening
-
-| Task | Priority | Effort | Owner | Status |
-|------|----------|--------|-------|--------|
-| **API-001:** Add request validation middleware | P1 | 4h | | ✅ Complete |
-| **API-002:** Implement pagination for all list endpoints | P1 | 4h | | ✅ Complete |
-| **API-003:** Add API rate limiting | P1 | 4h | | ✅ Complete |
-| **DASH-001:** Connect dashboard to real API | P0 | 8h | | ✅ Complete (API ready) |
-| **DASH-002:** Add WebSocket live updates | P1 | 8h | | ✅ Complete (infrastructure ready) |
-
-**Definition of Done:**
-- [x] Dashboard shows real data from API
-- [x] WebSocket pushes real-time judgment updates
-- [x] API handles invalid input gracefully
+- [ ] Health endpoints return accurate status
+- [ ] Metrics exposed for Prometheus scraping
+- [ ] Rate limiting prevents abuse
+- [ ] All user inputs validated
+- [ ] Runbooks cover common failures
 
 ---
 
-## Phase 4: Missing Features (Week 9-11)
+## Phase 4: Feature Completion (Week 7-8)
 
-**Goal:** Implement missing features from specification.
+**Goal:** Complete missing specification features and polish for release.
 
-### Week 9: MCP Server & Synthetic Monitoring
+### Week 7: Missing Features
 
-| Task | Priority | Effort | Owner | Status |
-|------|----------|--------|-------|--------|
-| **MCP-001:** Implement MCP server skeleton | P2 | 4h | | ✅ Complete |
-| **MCP-002:** Add MCP tools for soul management | P2 | 8h | | ✅ Complete |
-| **MCP-003:** Add MCP resources for judgments | P2 | 4h | | ✅ Complete |
-| **SYNTH-001:** Implement Duat Journey executor | P2 | 16h | | ✅ Complete |
-| **SYNTH-002:** Add variable extraction from responses | P2 | 8h | | ✅ Complete |
+| Feature | Spec Status | Implementation | Effort |
+|---------|-------------|----------------|--------|
+| gRPC API | Required | Missing | 40h |
+| PWA Service Worker | Required | Missing | 16h |
+| Multi-tenant quotas | Required | Missing | 8h |
+| Dashboard custom charts | Nice-to-have | Partial | 24h |
 
-**Definition of Done:**
-- [x] MCP server responds to Claude Code queries
-- [x] Multi-step HTTP journeys with variable extraction working
-- [x] Journey variables interpolate into subsequent steps
+### Week 8: Documentation & Release Prep
 
-### Week 10: Status Page Generator
-
-| Task | Priority | Effort | Owner | Status |
-|------|----------|--------|-------|--------|
-| **STATUS-001:** Implement status page data API | P1 | 4h | | ✅ Complete |
-| **STATUS-002:** Create status page HTML generator | P1 | 8h | | ✅ Complete |
-| **STATUS-003:** Add custom domain support | P2 | 4h | | ✅ Complete |
-| **STATUS-004:** Implement status page themes | P2 | 8h | | ✅ Complete |
-| **STATUS-005:** Add password protection for private pages | P2 | 4h | | ✅ Complete |
+| Task | Priority | Effort |
+|------|----------|--------|
+| API documentation (OpenAPI) | P1 | 16h |
+| Deployment guide | P1 | 8h |
+| Troubleshooting guide | P1 | 8h |
+| Architecture decision records | P2 | 8h |
+| Release notes | P1 | 4h |
+| Security audit | P0 | 16h |
 
 **Definition of Done:**
-- [x] Public status page shows uptime history
-- [x] Custom domains serve correct status page
-- [x] Password-protected pages require authentication
-
-### Week 11: Multi-Tenancy & RBAC
-
-| Task | Priority | Effort | Owner | Status |
-|------|----------|--------|-------|--------|
-| **TENANT-001:** Complete workspace isolation | P1 | 8h | | ✅ Complete |
-| **TENANT-002:** Implement RBAC (Admin/Editor/Viewer) | P1 | 8h | | ✅ Complete |
-| **TENANT-003:** Add resource quotas per workspace | P2 | 4h | | ✅ Complete |
-| **TENANT-004:** Implement workspace switching in UI | P2 | 4h | | ⏳ Pending (UI task) |
-
-**Definition of Done:**
-- [x] Users can only access their workspace resources
-- [x] RBAC enforced on all API endpoints
-- [x] Quotas prevent resource exhaustion
-
----
-
-## Phase 5: Testing & Documentation (Week 12)
-
-**Goal:** Achieve test coverage targets and complete documentation.
-
-### Week 12: Test Coverage Push
-
-| Task | Priority | Effort | Owner | Status |
-|------|----------|--------|-------|--------|
-| **TEST-006:** Add Raft consensus tests | P1 | 16h | | ✅ Complete (71.7% coverage) |
-| **TEST-007:** Add storage engine tests | P1 | 8h | | ✅ Complete (77.5% coverage) |
-| **TEST-008:** Add API integration tests | P1 | 8h | | ✅ Complete (81.6% coverage) |
-| **TEST-009:** Add alert dispatcher tests | P1 | 8h | | ✅ Complete (79.9% coverage) |
-| **TEST-010:** Add end-to-end flow tests | P1 | 8h | | ✅ Complete |
-
-**Definition of Done:**
-- [x] Overall coverage >60% (achieved: ~80%)
-- [x] All critical paths tested
-- [ ] CI passes with coverage threshold (not yet configured)
-
-### Documentation Completion
-
-| Task | Priority | Effort | Owner | Status |
-|------|----------|--------|-------|--------|
-| **DOC-001:** Write API reference documentation | P1 | 8h | | ✅ Complete |
-| **DOC-002:** Create deployment troubleshooting guide | P1 | 4h | | ✅ Complete |
-| **DOC-003:** Write Architecture Decision Records | P2 | 4h | | ✅ Complete |
-| **DOC-004:** Create CONTRIBUTING.md | P2 | 2h | | ✅ Complete (updated) |
-| **DOC-005:** Record demo videos | P2 | 4h | | ⏳ Pending |
-
-**Definition of Done:**
-- [x] All API endpoints documented with examples
-- [x] Common deployment issues have solutions
-- [x] New contributors have clear guidelines
+- [ ] All P0/P1 features complete
+- [ ] Documentation complete
+- [ ] Security audit passed
+- [ ] Release candidate tagged
 
 ---
 
@@ -257,147 +236,140 @@ This roadmap addresses the gaps identified in the codebase analysis and provides
 
 | Phase | Duration | Total Effort | Critical | High | Medium |
 |-------|----------|--------------|----------|------|--------|
-| Phase 1: Critical Fixes | 2 weeks | 31h | 15.5h | 15.5h | 0h |
-| Phase 2: Core Completion | 3 weeks | 58h | 8h | 34h | 16h |
-| Phase 3: Hardening | 3 weeks | 56h | 0h | 32h | 24h |
-| Phase 4: Missing Features | 3 weeks | 80h | 0h | 12h | 68h |
-| Phase 5: Testing & Docs | 1 week | 48h | 0h | 40h | 8h |
-| **Total** | **12 weeks** | **273h** | **23.5h** | **133.5h** | **116h** |
+| Phase 1: Critical Fixes | 2 weeks | 80h | 40h | 20h | 20h |
+| Phase 2: Testing | 2 weeks | 84h | 0h | 84h | 0h |
+| Phase 3: Hardening | 2 weeks | 68h | 0h | 44h | 24h |
+| Phase 4: Completion | 2 weeks | 140h | 16h | 40h | 84h |
+| **Total** | **8 weeks** | **372h** | **56h** | **188h** | **128h** |
 
-### By Category
+### Resource Requirements
 
-| Category | Effort | Percentage |
-|----------|--------|------------|
-| Security Fixes | 11.5h | 4% |
-| Bug Fixes | 14h | 5% |
-| Testing | 80h | 29% |
-| Feature Implementation | 120h | 44% |
-| Documentation | 18h | 7% |
-| Performance | 29.5h | 11% |
+| Role | FTE | Duration |
+|------|-----|----------|
+| Senior Go Engineer | 1.0 | 8 weeks |
+| QA/Test Engineer | 0.5 | 4 weeks (Week 3-6) |
+| DevOps Engineer | 0.25 | 4 weeks (Week 5-8) |
+| Technical Writer | 0.25 | 2 weeks (Week 7-8) |
+
+**Total:** ~12 person-weeks of focused development
 
 ---
 
 ## Risk Assessment
 
-### High-Risk Items
+### Critical Risks
 
 | Risk | Impact | Likelihood | Mitigation |
 |------|--------|------------|------------|
-| gRPC HPACK encoding complexity | High | Medium | Use library if implementation too complex |
-| Raft snapshot complexity | High | Medium | Study HashiCorp Raft implementation |
-| Time-series downsampling accuracy | Medium | Medium | Start with simple averaging, iterate |
-| MCP protocol changes | Medium | Low | Follow official MCP spec closely |
+| Race conditions cause data corruption | Critical | High | Fix TD-001/TD-002 immediately, run race detector |
+| Raft consensus fails in production | Critical | Medium | Extensive chaos testing, consider HashiCorp Raft |
+| Test coverage delays release | High | High | Prioritize critical path tests first |
+| Performance issues at scale | High | Medium | Load test early and often |
 
-### Medium-Risk Items
+### Medium Risks
 
 | Risk | Impact | Likelihood | Mitigation |
 |------|--------|------------|------------|
-| Testing takes longer than estimated | Medium | High | Prioritize critical path tests first |
-| Dashboard integration reveals API gaps | Medium | Medium | Build dashboard and API in parallel |
-| Multi-tenancy has edge cases | Medium | Medium | Start with simple isolation, add complexity |
+| gRPC API takes longer than estimated | Medium | High | Can defer to v1.1 |
+| Documentation delays | Low | Low | Parallel track with development |
+| Security audit finds issues | Medium | Medium | Buffer time in Week 8 |
 
 ---
 
 ## Success Metrics
 
+### Week 2 Checkpoint
+
+- [ ] All race conditions fixed
+- [ ] `go test -race` passes
+- [ ] Critical error handling implemented
+- [ ] Production readiness score >65/100
+
 ### Week 4 Checkpoint
 
-- [ ] All P0/P1 security fixes complete
-- [ ] gRPC checker passes integration test
-- [ ] Protocol checker coverage >40%
-- [ ] Production readiness score >55/100
+- [ ] Test coverage >80%
+- [ ] Integration tests passing
+- [ ] Chaos tests verify resilience
+- [ ] Production readiness score >75/100
 
-### Week 8 Checkpoint
+### Week 8 Completion
 
-- [ ] All protocol checkers functional
-- [ ] Raft snapshots working
-- [ ] Dashboard shows real data
-- [ ] Production readiness score >70/100
-
-### Week 12 Completion
-
-- [ ] Test coverage >60%
-- [ ] All spec features implemented
+- [ ] All P0 features implemented
+- [ ] Security audit passed
 - [ ] Documentation complete
 - [ ] Production readiness score >85/100
 
 ---
 
-## Post-Roadmap Enhancements (Beyond Week 12)
+## Post-Roadmap Considerations
 
-These items are out of scope for the initial production readiness push but should be considered for future releases:
+### v1.1 Enhancements (After Production)
 
-### v1.1 Enhancements
-- [ ] HTTP/3 support for HTTP checker
-- [ ] Advanced anomaly detection for alerts
-- [ ] Custom dashboard builder
-- [ ] Grafana integration
-- [ ] Prometheus metrics endpoint
-- [ ] Kubernetes operator
-
-### v1.2 Enhancements
-- [ ] Machine learning-based baseline detection
-- [ ] Geographic probe distribution
+- [ ] gRPC API full implementation
+- [ ] Advanced anomaly detection
+- [ ] Machine learning baselines
 - [ ] Mobile app (React Native)
-- [ ] Slack app directory listing
-- [ ] Public cloud marketplace listings
+- [ ] Grafana plugin
 
-### v2.0 Enhancements
+### v2.0 Considerations
+
+- [ ] Evaluate HashiCorp Raft vs custom implementation
 - [ ] Distributed tracing integration
-- [ ] Log aggregation alongside metrics
+- [ ] Multi-region probe distribution
 - [ ] AI-powered incident correlation
-- [ ] Automated runbook execution
 
 ---
 
-## Resource Requirements
-
-### Development Team
-
-| Role | FTE | Duration |
-|------|-----|----------|
-| Senior Go Engineer | 1.0 | 12 weeks |
-| Full-Stack Engineer | 0.5 | 8 weeks (Week 5-12) |
-| QA/Test Engineer | 0.5 | 6 weeks (Week 7-12) |
-| Technical Writer | 0.25 | 4 weeks (Week 9-12) |
-
-**Total:** ~20 person-weeks of focused development
-
-### Infrastructure
-
-| Resource | Purpose |
-|----------|---------|
-| CI/CD pipeline (GitHub Actions) | Automated testing, releases |
-| Staging environment | Integration testing |
-| Load testing infrastructure | Performance validation |
-| Security scanning (golangci-lint, gosec) | Vulnerability detection |
-
----
-
-## Appendix: Technical Debt Tracking
-
-See ANALYSIS.md Section 8 for the complete technical debt inventory. This roadmap addresses all identified debts:
+## Technical Debt Tracking
 
 | Debt ID | Phase | Week | Status |
 |---------|-------|------|--------|
-| TD-001 (gRPC placeholder) | Phase 1 | Week 1 | |
-| TD-002 (WebSocket key) | Phase 1 | Week 1 | |
-| TD-003 (TLS disabled) | Phase 1 | Week 1 | |
-| TD-004 (No tests) | Phase 1-5 | Ongoing | |
-| TD-005 (MCP missing) | Phase 4 | Week 9 | |
-| TD-006 (SMTP AUTH) | Phase 2 | Week 3 | |
-| TD-007 (Raft snapshots) | Phase 2 | Week 4 | |
-| TD-008 (No MVCC) | Backlog | v1.1 | |
-| TD-009 (No downsampling) | Phase 2 | Week 5 | |
-| TD-010 (Mock dashboard) | Phase 3 | Week 8 | |
-| TD-011 (B+Tree order) | Phase 2 | Week 4 | |
-| TD-012 (JSON path naive) | Backlog | v1.1 | |
-| TD-013 (No HTTP/3) | Backlog | v1.1 | |
-| TD-014 (ICMP privileges) | Phase 2 | Week 3 | |
-| TD-015 (Directory mismatch) | Phase 1 | Week 1 | |
+| TD-001 (Circuit breaker race) | Phase 1 | Week 1 | 🔴 Critical |
+| TD-002 (Alert mutex) | Phase 1 | Week 1 | 🔴 Critical |
+| TD-003 (HTTP transport) | Phase 1 | Week 1 | 🔴 Critical |
+| TD-004 (JSON path) | Phase 1 | Week 1 | 🔴 Critical |
+| TD-005 (Raft membership) | Phase 1 | Week 2 | 🔴 Critical |
+| TD-006 (Error propagation) | Phase 1 | Week 2 | 🔴 Critical |
+| TD-007 (B+Tree disk) | Backlog | v1.1 | 🟡 Medium |
+| TD-008 (Query cache) | Backlog | v1.1 | 🟡 Medium |
+| TD-009 (Test coverage) | Phase 2 | Week 3-4 | 🟡 Medium |
+| TD-010 (Integration tests) | Phase 2 | Week 4 | 🟡 Medium |
+| TD-011 (Chaos tests) | Phase 2 | Week 4 | 🟡 Medium |
+| TD-012 (PWA) | Phase 4 | Week 7 | 🟢 Low |
 
 ---
 
-**Document End**
+## Go/No-Go Decision Points
 
-*Next: See PRODUCTIONREADY.md for detailed production readiness assessment and verdict.*
+### Go/No-Go #1: End of Week 2
+
+**Criteria:**
+- [ ] All race conditions fixed and verified
+- [ ] No data corruption in chaos tests
+- [ ] Error handling audit complete
+
+**Decision:** If any race conditions remain, **NO-GO** for production.
+
+### Go/No-Go #2: End of Week 4
+
+**Criteria:**
+- [ ] Test coverage >80%
+- [ ] All integration tests passing
+- [ ] Load test validates performance targets
+
+**Decision:** If coverage <80% or tests failing, **NO-GO** for production.
+
+### Go/No-Go #3: End of Week 8
+
+**Criteria:**
+- [ ] Security audit passed
+- [ ] Documentation complete
+- [ ] Production readiness score >85/100
+
+**Decision:** Final production release decision.
+
+---
+
+**Document Version:** 2.0.0  
+**Last Updated:** 2026-04-08  
+**Next Review:** End of Week 2 (Go/No-Go #1)
