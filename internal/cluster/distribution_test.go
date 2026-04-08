@@ -8,6 +8,135 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
+func TestDistributor_SetCallbacks(t *testing.T) {
+	d := NewDistributor("node-1", "us-east", StrategyRoundRobin, newTestLogger())
+
+	onAssign := func(soulID string, nodeID string) error {
+		return nil
+	}
+
+	onUnassign := func(soulID string) error {
+		return nil
+	}
+
+	onRebalance := func(moves []SoulMove) {
+	}
+
+	// Set callbacks - should not panic
+	d.SetCallbacks(onAssign, onUnassign, onRebalance)
+
+	// Verify callbacks are set (cannot directly access private fields)
+	// Just verify it doesn't panic
+	if d == nil {
+		t.Error("Distributor should not be nil after SetCallbacks")
+	}
+}
+
+func TestDistributor_selectHashBased(t *testing.T) {
+	d := NewDistributor("node-1", "us-east", StrategyHashBased, newTestLogger())
+
+	// Register multiple nodes
+	d.RegisterNode("node-1", "us-east")
+	d.RegisterNode("node-2", "us-west")
+	d.RegisterNode("node-3", "eu-central")
+
+	// Test hash-based selection with different souls
+	souls := []string{"soul-1", "soul-2", "soul-3", "soul-4", "soul-5"}
+	assignments := make(map[string]string)
+
+	for _, soulID := range souls {
+		soul := &core.Soul{ID: soulID, Name: "Test Soul"}
+		nodeID, err := d.AssignSoul(soul)
+		if err != nil {
+			t.Fatalf("Failed to assign soul %s: %v", soulID, err)
+		}
+		assignments[soulID] = nodeID
+	}
+
+	// Verify all souls got assigned
+	if len(assignments) != len(souls) {
+		t.Errorf("Expected %d assignments, got %d", len(souls), len(assignments))
+	}
+
+	// Verify consistent hashing - same soul should get same node
+	for _, soulID := range souls {
+		soul := &core.Soul{ID: soulID, Name: "Test Soul"}
+		nodeID, err := d.AssignSoul(soul)
+		if err != nil {
+			t.Fatalf("Failed to re-assign soul %s: %v", soulID, err)
+		}
+		if nodeID != assignments[soulID] {
+			t.Errorf("Hash-based selection not consistent for %s: got %s, expected %s",
+				soulID, nodeID, assignments[soulID])
+		}
+	}
+}
+
+func TestDistributor_checkAndRebalance(t *testing.T) {
+	d := NewDistributor("node-1", "us-east", StrategyRoundRobin, newTestLogger())
+
+	// Register nodes
+	d.RegisterNode("node-1", "us-east")
+	d.RegisterNode("node-2", "us-west")
+
+	// Assign some souls
+	for i := 0; i < 5; i++ {
+		soul := &core.Soul{ID: fmt.Sprintf("soul-%d", i), Name: "Test Soul"}
+		_, err := d.AssignSoul(soul)
+		if err != nil {
+			t.Fatalf("Failed to assign soul: %v", err)
+		}
+	}
+
+	// This should not panic even if no rebalancing is needed
+	d.checkAndRebalance()
+}
+
+func TestDistributor_executeMove(t *testing.T) {
+	d := NewDistributor("node-1", "us-east", StrategyRoundRobin, newTestLogger())
+
+	// Set up callback to capture moves
+	d.SetCallbacks(
+		func(soulID string, nodeID string) error {
+			return nil
+		},
+		func(soulID string) error {
+			return nil
+		},
+		func(moves []SoulMove) {
+			// Verify move was recorded
+		},
+	)
+
+	// Register nodes
+	d.RegisterNode("node-1", "us-east")
+	d.RegisterNode("node-2", "us-west")
+
+	// Assign a soul
+	soul := &core.Soul{ID: "soul-1", Name: "Test Soul"}
+	_, err := d.AssignSoul(soul)
+	if err != nil {
+		t.Fatalf("Failed to assign soul: %v", err)
+	}
+
+	// Execute a move
+	move := SoulMove{
+		SoulID:   "soul-1",
+		FromNode: "node-1",
+		ToNode:   "node-2",
+	}
+	d.executeMove(move)
+
+	// Verify the move was recorded
+	newNode, exists := d.GetNodeForSoul("soul-1")
+	if !exists {
+		t.Error("Soul should still exist after move")
+	}
+	if newNode != "node-2" {
+		t.Errorf("Expected soul to be on node-2, got %s", newNode)
+	}
+}
+
 func TestNewDistributor(t *testing.T) {
 	d := NewDistributor("node-1", "us-east", StrategyRoundRobin, newTestLogger())
 

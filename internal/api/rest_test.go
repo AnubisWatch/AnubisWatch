@@ -132,13 +132,15 @@ func (m *mockStorage) GetStatusPageNoCtx(id string) (*core.StatusPage, error) { 
 func (m *mockStorage) ListStatusPagesNoCtx() ([]*core.StatusPage, error) {
 	return []*core.StatusPage{}, nil
 }
-func (m *mockStorage) SaveStatusPageNoCtx(page *core.StatusPage) error        { return nil }
-func (m *mockStorage) DeleteStatusPageNoCtx(id string) error                  { return nil }
-func (m *mockStorage) GetJourneyNoCtx(id string) (*core.JourneyConfig, error) { return m.journeys[id], nil }
+func (m *mockStorage) SaveStatusPageNoCtx(page *core.StatusPage) error { return nil }
+func (m *mockStorage) DeleteStatusPageNoCtx(id string) error           { return nil }
+func (m *mockStorage) GetJourneyNoCtx(id string) (*core.JourneyConfig, error) {
+	return m.journeys[id], nil
+}
 func (m *mockStorage) ListJourneysNoCtx(ws string, offset, limit int) ([]*core.JourneyConfig, error) {
 	return nil, nil
 }
-func (m *mockStorage) SaveJourneyNoCtx(j *core.JourneyConfig) error { return nil }
+func (m *mockStorage) SaveJourneyNoCtx(j *core.JourneyConfig) error { m.journeys[j.ID] = j; return nil }
 func (m *mockStorage) DeleteJourneyNoCtx(id string) error           { return nil }
 
 // mockProbeEngine implements ProbeEngine interface
@@ -3359,4 +3361,46 @@ func TestHandleMCP_Unauthorized(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("Expected status %d, got %d", http.StatusUnauthorized, rec.Code)
 	}
+}
+
+// TestOnJudgmentCallback_WithoutWebSocket tests OnJudgmentCallback without WebSocket
+func TestOnJudgmentCallback_WithoutWebSocket(t *testing.T) {
+	store := newMockStorage()
+	config := core.ServerConfig{Port: 8080}
+	logger := newTestLogger()
+	server := NewRESTServer(config, core.AuthConfig{Enabled: true}, store, &mockProbeEngine{}, &mockAlertManager{}, &mockAuthenticator{}, &mockClusterManager{}, nil, nil, nil, logger)
+
+	// Get callback without WebSocket
+	callback := server.OnJudgmentCallback()
+
+	// Should not panic when calling callback without WebSocket
+	judgment := &core.Judgment{
+		ID:     "test-judgment",
+		SoulID: "test-soul",
+		Status: core.SoulAlive,
+	}
+	callback(judgment)
+}
+
+// TestOnJudgmentCallback_WithWebSocket tests OnJudgmentCallback with WebSocket server
+func TestOnJudgmentCallback_WithWebSocket(t *testing.T) {
+	store := newMockStorage()
+	config := core.ServerConfig{Port: 8080}
+	logger := newTestLogger()
+	server := NewRESTServer(config, core.AuthConfig{Enabled: true}, store, &mockProbeEngine{}, &mockAlertManager{}, &mockAuthenticator{}, &mockClusterManager{}, nil, nil, nil, logger)
+
+	// Set WebSocket server manually
+	wsServer := NewWebSocketServer(logger)
+	server.ws = wsServer
+
+	// Get callback with WebSocket
+	callback := server.OnJudgmentCallback()
+
+	// Should not panic when calling callback with WebSocket
+	judgment := &core.Judgment{
+		ID:     "test-judgment",
+		SoulID: "test-soul",
+		Status: core.SoulAlive,
+	}
+	callback(judgment)
 }

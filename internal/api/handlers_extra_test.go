@@ -170,6 +170,35 @@ func TestHandleDeleteJourney(t *testing.T) {
 	_ = server.handleDeleteJourney(ctx)
 }
 
+// TestHandleGetJourney tests handleGetJourney
+func TestHandleGetJourney(t *testing.T) {
+	store := newMockStorage()
+	server := newTestServerWithStorage(store)
+
+	// Create a journey first
+	store.SaveJourneyNoCtx(&core.JourneyConfig{
+		ID:   "journey-1",
+		Name: "Test Journey",
+	})
+
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:  httptest.NewRequest("GET", "/api/v1/journeys/journey-1", nil),
+		Response: rec,
+		Params:   map[string]string{"id": "journey-1"},
+		Workspace: "default",
+	}
+
+	err := server.handleGetJourney(ctx)
+	if err != nil {
+		t.Fatalf("handleGetJourney failed: %v", err)
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+}
+
 // TestHandleMCPTools tests handleMCPTools
 func TestHandleMCPTools(t *testing.T) {
 	store := newMockStorage()
@@ -197,6 +226,116 @@ func TestHandleMCPTools(t *testing.T) {
 
 	if len(result) == 0 {
 		t.Error("Expected at least one tool")
+	}
+}
+
+// TestHandleRunJourney tests handleRunJourney
+func TestHandleRunJourney(t *testing.T) {
+	store := newMockStorage()
+	server := newTestServerWithStorage(store)
+
+	// Create a journey first
+	store.SaveJourneyNoCtx(&core.JourneyConfig{
+		ID:   "journey-1",
+		Name: "Test Journey",
+		Steps: []core.JourneyStep{
+			{Name: "Step 1", Target: "http://example.com"},
+		},
+	})
+
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:  httptest.NewRequest("POST", "/api/v1/journeys/journey-1/run", nil),
+		Response: rec,
+		Params:   map[string]string{"id": "journey-1"},
+	}
+
+	err := server.handleRunJourney(ctx)
+	if err != nil {
+		t.Fatalf("handleRunJourney failed: %v", err)
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+
+	if result["journey_id"] != "journey-1" {
+		t.Errorf("Expected journey_id journey-1, got %s", result["journey_id"])
+	}
+
+	if result["status"] != "execution_requested" {
+		t.Errorf("Expected status execution_requested, got %s", result["status"])
+	}
+}
+
+// TestHandleRunJourney_NotFound tests handleRunJourney with non-existent journey
+func TestHandleRunJourney_NotFound(t *testing.T) {
+	store := newMockStorage()
+	server := newTestServerWithStorage(store)
+
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:  httptest.NewRequest("POST", "/api/v1/journeys/nonexistent/run", nil),
+		Response: rec,
+		Params:   map[string]string{"id": "nonexistent"},
+	}
+
+	err := server.handleRunJourney(ctx)
+	// Error may be returned or set in context, check both
+	if err == nil && rec.Code != http.StatusNotFound {
+		t.Error("Expected error for non-existent journey")
+	}
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Expected status %d, got %d", http.StatusNotFound, rec.Code)
+	}
+}
+
+// TestHandleGetJourney_NotFound tests handleGetJourney with non-existent journey
+func TestHandleGetJourney_NotFound(t *testing.T) {
+	store := newMockStorage()
+	server := newTestServerWithStorage(store)
+
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:  httptest.NewRequest("GET", "/api/v1/journeys/nonexistent", nil),
+		Response: rec,
+		Params:   map[string]string{"id": "nonexistent"},
+		Workspace: "default",
+	}
+
+	err := server.handleGetJourney(ctx)
+	// Error may be returned or set in context, check both
+	if err == nil && rec.Code != http.StatusNotFound {
+		t.Errorf("Expected error or not found status, got status %d", rec.Code)
+	}
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Expected status %d, got %d", http.StatusNotFound, rec.Code)
+	}
+}
+
+// TestHandleDeleteJourney_NotFound tests handleDeleteJourney with non-existent journey
+func TestHandleDeleteJourney_NotFound(t *testing.T) {
+	store := newMockStorage()
+	server := newTestServerWithStorage(store)
+
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:  httptest.NewRequest("DELETE", "/api/v1/journeys/nonexistent", nil),
+		Response: rec,
+		Params:   map[string]string{"id": "nonexistent"},
+	}
+
+	err := server.handleDeleteJourney(ctx)
+	// Error may be returned or set in context
+	if err == nil && rec.Code != http.StatusNotFound {
+		t.Errorf("Expected error or not found status, got status %d", rec.Code)
 	}
 }
 

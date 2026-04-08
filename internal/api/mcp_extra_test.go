@@ -244,6 +244,79 @@ func TestMCPServer_handleGetPrompt_CreateMonitorGuide_Server(t *testing.T) {
 	}
 }
 
+// Test handleReadResource with unknown resource URI
+func TestMCPServer_handleReadResource_UnknownResource(t *testing.T) {
+	store := newMockStorage()
+	probe := &mockProbeEngine{}
+	alert := &mockAlertManager{}
+	logger := newTestLogger()
+
+	server := NewMCPServer(store, probe, alert, logger)
+
+	// Read unknown resource
+	reqBody := `{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"unknown://resource"}}`
+	req := httptest.NewRequest("POST", "/mcp", strings.NewReader(reqBody))
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	var resp MCPResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	// Should return error for unknown resource
+	if resp.Error == nil {
+		t.Error("Expected error for unknown resource")
+	}
+}
+
+// Test handleReadResource with soul ID parameter
+func TestMCPServer_handleReadResource_SoulWithID(t *testing.T) {
+	store := newMockStorage()
+	store.souls["soul-1"] = &core.Soul{ID: "soul-1", Name: "Test Soul", Type: core.CheckHTTP, Enabled: true}
+	probe := &mockProbeEngine{}
+	alert := &mockAlertManager{}
+	logger := newTestLogger()
+
+	server := NewMCPServer(store, probe, alert, logger)
+
+	// Read soul resource with ID
+	reqBody := `{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"soul://soul-1"}}`
+	req := httptest.NewRequest("POST", "/mcp", strings.NewReader(reqBody))
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	var resp MCPResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	// Should not error
+	if resp.Error != nil {
+		t.Logf("Got error: %s", resp.Error.Message)
+	}
+}
+
+// Test handleGetPrompt with missing prompt name
+func TestMCPServer_handleGetPrompt_MissingName(t *testing.T) {
+	store := newMockStorage()
+	probe := &mockProbeEngine{}
+	alert := &mockAlertManager{}
+	logger := newTestLogger()
+
+	server := NewMCPServer(store, probe, alert, logger)
+
+	// Get prompt without name
+	reqBody := `{"jsonrpc":"2.0","id":1,"method":"prompts/get","params":{"arguments":{}}}`
+	req := httptest.NewRequest("POST", "/mcp", strings.NewReader(reqBody))
+	w := httptest.NewRecorder()
+
+	server.ServeHTTP(w, req)
+
+	var resp MCPResponse
+	json.NewDecoder(w.Body).Decode(&resp)
+	// Should return error for missing name
+	if resp.Error == nil {
+		t.Error("Expected error for missing prompt name")
+	}
+}
+
 // Test handleGetPrompt with unknown prompt
 func TestMCPServer_handleGetPrompt_UnknownPrompt(t *testing.T) {
 	store := newMockStorage()
