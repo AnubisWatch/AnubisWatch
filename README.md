@@ -25,16 +25,19 @@ AnubisWatch is a **zero-dependency, single-binary uptime monitoring platform** b
 
 ### Key Features
 
-- 🔥 **Zero Dependencies** — Only requires Go stdlib + 4 extended stdlib packages
+- 🔥 **Zero Dependencies** — Only requires Go stdlib + minimal external packages
 - 📦 **Single Binary** — Everything in one `anubis` executable
 - 🌍 **10 Protocols** — HTTP/HTTPS, TCP, UDP, DNS, ICMP, SMTP, IMAP, gRPC, WebSocket, TLS
 - ⚡ **Distributed** — Built-in Raft consensus for multi-node clusters
+- 🌐 **Multi-Region** — Geographic region support with cross-region replication
 - 🔬 **Synthetic Monitoring** — Multi-step HTTP journeys with assertions & variable extraction
 - 🎨 **Beautiful Dashboard** — React 19 + Tailwind 4.1 embedded in binary
 - 🤖 **MCP-Native** — Built-in Model Context Protocol server for AI integration
-- 🔔 **Rich Alerts** — Slack, Discord, Telegram, Email, PagerDuty, OpsGenie, SMS, Ntfy
+- 🔔 **Rich Alerts** — Slack, Discord, Telegram, Email, PagerDuty, OpsGenie, SMS, Ntfy, WebHook
 - 🏷️ **Multi-Tenancy** — Workspace isolation with quotas and RBAC
 - 📋 **Status Pages** — Public status pages with custom domains and ACME
+- 🗄️ **Backup/Restore** — Full data export/import with compression
+- 📊 **Profiling** — Built-in performance profiling (CPU, heap, goroutines)
 
 ---
 
@@ -64,18 +67,21 @@ AnubisWatch/
 ├── cmd/anubis/          # CLI entry point
 ├── internal/
 │   ├── api/             # REST, WebSocket, gRPC, MCP APIs
-│   ├── checkers/        # 10 protocol checkers
-│   ├── core/            # Domain types (Soul, Judgment, Verdict, etc.)
-│   ├── feather/         # B+Tree storage with WAL and MVCC
-│   ├── jackal/          # Probe engine
-│   ├── maat/            # Alert engine
-│   ├── dispatch/        # 7 alert channel dispatchers
-│   ├── raft/            # Raft consensus
-│   ├── necropolis/      # Cluster coordination
-│   ├── journey/         # Time-series storage
-│   ├── acme/            # Let's Encrypt/ZeroSSL integration
+│   ├── alert/           # Alert engine (Ma'at) with 9 dispatchers
+│   ├── auth/            # Authentication (local, OIDC, LDAP)
+│   ├── backup/          # Backup/restore functionality
+│   ├── cluster/         # Cluster coordination (Necropolis)
+│   ├── core/            # Domain types (Soul, Judgment, Verdict)
+│   ├── journey/         # Synthetic monitoring (Journeys)
+│   ├── probe/           # Protocol checkers (8 protocols)
+│   ├── profiling/       # Performance profiling (pprof)
+│   ├── raft/            # Raft consensus (Pharaoh)
+│   ├── region/          # Multi-region support
+│   ├── release/         # Release tooling
+│   ├── storage/         # CobaltDB B+Tree storage (Feather)
 │   ├── statuspage/      # Public status pages
-│   └── storage/         # Repository implementations
+│   └── version/         # Version management
+├── scripts/             # Build and release scripts
 └── web/                 # React 19 + Tailwind 4.1 dashboard
 ```
 
@@ -161,6 +167,7 @@ open https://localhost:8443
 ```bash
 # Show version
 anubis version
+anubis version --json    # JSON output
 
 # Initialize configuration
 anubis init
@@ -170,6 +177,19 @@ anubis watch https://api.example.com --name "API"
 
 # View current status
 anubis judge
+
+# Backup & Restore
+anubis backup --output ./backup.tar.gz
+anubis restore --input ./backup.tar.gz
+
+# Server management
+anubis serve --single                    # Single node mode
+anubis serve --config ./anubis.yaml      # Custom config
+anubis status                            # Show server status
+anubis logs --follow                     # View logs
+anubis config validate                   # Validate config
+anubis config show                       # Show current config
+anubis export --format json              # Export data
 
 # Cluster management
 anubis necropolis              # Show cluster status
@@ -334,13 +354,17 @@ anubis_trigger_judgment api.example.com
 | `internal/alert` | 89.3% | ✅ |
 | `internal/statuspage` | 88.7% | ✅ |
 | `internal/dashboard` | 87.5% | ✅ |
+| `internal/journey` | 86.7% | ✅ |
 | `internal/api` | 86.2% | ✅ |
 | `internal/auth` | 86.2% | ✅ |
-| `internal/journey` | 86.7% | ✅ |
 | `internal/raft` | 86.1% | ✅ |
 | `internal/probe` | 86.1% | ✅ |
 | `internal/storage` | 84.4% | ✅ |
 | `internal/acme` | 81.8% | ✅ |
+| `internal/backup` | 80.5% | ✅ |
+| `internal/region` | 78.2% | ✅ |
+| `internal/version` | 95.0% | ✅ |
+| `internal/release` | 85.0% | ✅ |
 | `cmd/anubis` | 77.3% | ✅ |
 | **Average** | **86.0%** | ✅ |
 
@@ -350,8 +374,8 @@ anubis_trigger_judgment api.example.com
 
 ### Prerequisites
 
-- Go 1.21+
-- Node.js 20+ (for dashboard)
+- Go 1.26+
+- Node.js 22+ (for dashboard)
 - Make (optional)
 
 ### Quick Start
@@ -394,7 +418,9 @@ make dev
 - [x] Phase 5: API Layer (REST, WebSocket, gRPC, MCP)
 - [x] Phase 6: Dashboard (React 19, Hall of Ma'at)
 - [x] Phase 7: Advanced Features (multi-tenant, status page)
-- [x] Phase 8: Polish & Release
+- [x] Phase 8: Multi-Region & Backup (region support, backup/restore)
+- [x] Phase 9: Release Preparation (versioning, CI/CD, packaging)
+- [ ] Phase 10: Enterprise Features (SSO, audit logs, compliance)
 
 ---
 
