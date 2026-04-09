@@ -18,7 +18,7 @@ type Cache struct {
 // cacheItem represents a cached value with metadata
 type cacheItem struct {
 	key        string
-	value      interface{}
+	value      any
 	expiresAt  time.Time
 	element    *list.Element
 	accessCount int
@@ -40,7 +40,7 @@ func New(maxSize int, defaultTTL time.Duration) *Cache {
 }
 
 // Get retrieves a value from the cache
-func (c *Cache) Get(key string) (interface{}, bool) {
+func (c *Cache) Get(key string) (any, bool) {
 	c.mu.RLock()
 	item, found := c.items[key]
 	c.mu.RUnlock()
@@ -89,7 +89,7 @@ func (c *Cache) GetBytes(key string) ([]byte, bool) {
 }
 
 // Set adds or updates a value in the cache
-func (c *Cache) Set(key string, value interface{}, ttl time.Duration) {
+func (c *Cache) Set(key string, value any, ttl time.Duration) {
 	if ttl <= 0 {
 		ttl = c.defaultTTL
 	}
@@ -245,11 +245,11 @@ type CacheStats struct {
 // CacheWithLoader is a cache that can load missing values
 type CacheWithLoader struct {
 	*Cache
-	loader func(key string) (interface{}, error)
+	loader func(key string) (any, error)
 }
 
 // NewWithLoader creates a cache with a loader function
-func NewWithLoader(maxSize int, defaultTTL time.Duration, loader func(key string) (interface{}, error)) *CacheWithLoader {
+func NewWithLoader(maxSize int, defaultTTL time.Duration, loader func(key string) (any, error)) *CacheWithLoader {
 	return &CacheWithLoader{
 		Cache:  New(maxSize, defaultTTL),
 		loader: loader,
@@ -257,7 +257,7 @@ func NewWithLoader(maxSize int, defaultTTL time.Duration, loader func(key string
 }
 
 // GetOrLoad retrieves a value, loading it if not cached
-func (c *CacheWithLoader) GetOrLoad(key string) (interface{}, error) {
+func (c *CacheWithLoader) GetOrLoad(key string) (any, error) {
 	// Try cache first
 	if value, found := c.Get(key); found {
 		return value, nil

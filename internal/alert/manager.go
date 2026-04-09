@@ -47,7 +47,7 @@ type Manager struct {
 // ChannelDispatcher sends notifications to a specific channel type
 type ChannelDispatcher interface {
 	Send(ctx context.Context, event *core.AlertEvent, channel *core.AlertChannel) error
-	Validate(config map[string]interface{}) error
+	Validate(config map[string]any) error
 }
 
 // AlertStorage persists alert data

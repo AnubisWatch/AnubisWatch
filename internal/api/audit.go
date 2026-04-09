@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
@@ -66,7 +67,7 @@ func NewAuditLogger(logger *slog.Logger, backend AuditBackend) *AuditLogger {
 }
 
 // Log records an audit event
-func (al *AuditLogger) Log(eventType, userID, resource, action, status string, details interface{}) {
+func (al *AuditLogger) Log(eventType, userID, resource, action, status string, details any) {
 	event := &AuditEvent{
 		Timestamp: time.Now().UTC(),
 		EventType: eventType,
@@ -109,7 +110,7 @@ func (al *AuditLogger) LogRequest(r *http.Request, userID string, status int, du
 		statusStr = "failure"
 	}
 
-	details := map[string]interface{}{
+	details := map[string]any{
 		"method":        r.Method,
 		"path":          r.URL.Path,
 		"query":         r.URL.RawQuery,
@@ -123,7 +124,7 @@ func (al *AuditLogger) LogRequest(r *http.Request, userID string, status int, du
 }
 
 // LogAuth logs authentication events
-func (al *AuditLogger) LogAuth(userID, ipAddress, action, status string, details map[string]interface{}) {
+func (al *AuditLogger) LogAuth(userID, ipAddress, action, status string, details map[string]any) {
 	event := &AuditEvent{
 		Timestamp: time.Now().UTC(),
 		EventType: "authentication",
@@ -152,7 +153,7 @@ func (al *AuditLogger) LogAuth(userID, ipAddress, action, status string, details
 }
 
 // LogSecurity logs security-related events
-func (al *AuditLogger) LogSecurity(eventType, userID, resource, action string, severity string, details map[string]interface{}) {
+func (al *AuditLogger) LogSecurity(eventType, userID, resource, action string, severity string, details map[string]any) {
 	status := "detected"
 	if severity == "critical" {
 		status = "blocked"
@@ -194,12 +195,13 @@ func (al *AuditLogger) writeLoop() {
 
 		case <-al.shutdown:
 			// Flush remaining events
+		flushLoop:
 			for len(al.buffer) > 0 && len(batch) < cap(batch) {
 				select {
 				case event := <-al.buffer:
 					batch = append(batch, event)
 				default:
-					break
+					break flushLoop
 				}
 			}
 			if len(batch) > 0 {
@@ -240,8 +242,24 @@ func (al *AuditLogger) Query(filter AuditFilter) ([]*AuditEvent, error) {
 
 // generateRequestID creates a unique request identifier
 func generateRequestID() string {
-	return fmt.Sprintf("%d-%x", time.Now().UnixNano(),
-		[]byte(fmt.Sprintf("%d", time.Now().UnixNano())))[:20]
+	nano := time.Now().UnixNano()
+	return fmt.Sprintf("%d-%x", nano, nano)[:20]
+}
+
+// contextKey is used for type-safe context keys
+type contextKey string
+
+const userContextKey contextKey = "user"
+
+// WithUser adds a user to the context
+func WithUser(ctx context.Context, user *User) context.Context {
+	return context.WithValue(ctx, userContextKey, user)
+}
+
+// UserFromContext retrieves a user from the context
+func UserFromContext(ctx context.Context) (*User, bool) {
+	user, ok := ctx.Value(userContextKey).(*User)
+	return user, ok
 }
 
 // AuditMiddleware creates an HTTP middleware for audit logging
@@ -255,7 +273,7 @@ func AuditMiddleware(auditLogger *AuditLogger) func(http.Handler) http.Handler {
 
 			// Extract user ID from context if available
 			userID := ""
-			if user, ok := r.Context().Value("user").(*User); ok {
+			if user, ok := UserFromContext(r.Context()); ok {
 				userID = user.ID
 			}
 
@@ -308,10 +326,10 @@ const (
 
 // AuditEventLogger interface for dependency injection
 type AuditEventLogger interface {
-	Log(eventType, userID, resource, action, status string, details interface{})
+	Log(eventType, userID, resource, action, status string, details any)
 	LogRequest(r *http.Request, userID string, status int, duration time.Duration)
-	LogAuth(userID, ipAddress, action, status string, details map[string]interface{})
-	LogSecurity(eventType, userID, resource, action string, severity string, details map[string]interface{})
+	LogAuth(userID, ipAddress, action, status string, details map[string]any)
+	LogSecurity(eventType, userID, resource, action string, severity string, details map[string]any)
 }
 
 // Constant-time comparison to prevent timing attacks

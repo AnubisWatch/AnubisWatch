@@ -97,7 +97,7 @@ func (d *SlackDispatcher) Send(ctx context.Context, event *core.AlertEvent, chan
 }
 
 // Validate validates Slack configuration
-func (d *SlackDispatcher) Validate(config map[string]interface{}) error {
+func (d *SlackDispatcher) Validate(config map[string]any) error {
 	if _, ok := config["webhook_url"]; !ok {
 		return fmt.Errorf("webhook_url is required")
 	}
@@ -241,7 +241,7 @@ func (d *DiscordDispatcher) Send(ctx context.Context, event *core.AlertEvent, ch
 }
 
 // Validate validates Discord configuration
-func (d *DiscordDispatcher) Validate(config map[string]interface{}) error {
+func (d *DiscordDispatcher) Validate(config map[string]any) error {
 	if _, ok := config["webhook_url"]; !ok {
 		return fmt.Errorf("webhook_url is required")
 	}
@@ -313,7 +313,7 @@ func (d *EmailDispatcher) Send(ctx context.Context, event *core.AlertEvent, chan
 	password, _ := channel.Config["password"].(string)
 	from, _ := channel.Config["from"].(string)
 
-	toList, ok := channel.Config["to"].([]interface{})
+	toList, ok := channel.Config["to"].([]any)
 	if !ok || len(toList) == 0 {
 		return fmt.Errorf("no recipients configured")
 	}
@@ -349,7 +349,7 @@ func (d *EmailDispatcher) Send(ctx context.Context, event *core.AlertEvent, chan
 }
 
 // Validate validates email configuration
-func (d *EmailDispatcher) Validate(config map[string]interface{}) error {
+func (d *EmailDispatcher) Validate(config map[string]any) error {
 	if _, ok := config["smtp_host"]; !ok {
 		return fmt.Errorf("smtp_host is required")
 	}
@@ -444,7 +444,7 @@ func (d *PagerDutyDispatcher) Send(ctx context.Context, event *core.AlertEvent, 
 			Component: event.SoulName,
 			Group:     string(event.Status),
 			Class:     string(event.ChannelType),
-			CustomDetails: map[string]interface{}{
+			CustomDetails: map[string]any{
 				"soul_id":     event.SoulID,
 				"status":      event.Status,
 				"prev_status": event.PrevStatus,
@@ -479,7 +479,7 @@ func (d *PagerDutyDispatcher) Send(ctx context.Context, event *core.AlertEvent, 
 }
 
 // Validate validates PagerDuty configuration
-func (d *PagerDutyDispatcher) Validate(config map[string]interface{}) error {
+func (d *PagerDutyDispatcher) Validate(config map[string]any) error {
 	if _, ok := config["integration_key"]; !ok {
 		return fmt.Errorf("integration_key is required")
 	}
@@ -521,7 +521,7 @@ type pagerDutyEventPayload struct {
 	Component     string                 `json:"component"`
 	Group         string                 `json:"group"`
 	Class         string                 `json:"class"`
-	CustomDetails map[string]interface{} `json:"custom_details"`
+	CustomDetails map[string]any `json:"custom_details"`
 }
 
 // OpsGenieDispatcher sends alerts to OpsGenie
@@ -617,7 +617,7 @@ func (d *OpsGenieDispatcher) closeAlert(ctx context.Context, host, apiKey, alias
 }
 
 // Validate validates OpsGenie configuration
-func (d *OpsGenieDispatcher) Validate(config map[string]interface{}) error {
+func (d *OpsGenieDispatcher) Validate(config map[string]any) error {
 	if _, ok := config["api_key"]; !ok {
 		return fmt.Errorf("api_key is required")
 	}
@@ -705,7 +705,7 @@ func (d *NtfyDispatcher) Send(ctx context.Context, event *core.AlertEvent, chann
 }
 
 // Validate validates Ntfy configuration
-func (d *NtfyDispatcher) Validate(config map[string]interface{}) error {
+func (d *NtfyDispatcher) Validate(config map[string]any) error {
 	if _, ok := config["topic"]; !ok {
 		return fmt.Errorf("topic is required")
 	}
@@ -796,7 +796,7 @@ func (d *TelegramDispatcher) Send(ctx context.Context, event *core.AlertEvent, c
 }
 
 // Validate validates Telegram configuration
-func (d *TelegramDispatcher) Validate(config map[string]interface{}) error {
+func (d *TelegramDispatcher) Validate(config map[string]any) error {
 	if _, ok := config["bot_token"]; !ok {
 		return fmt.Errorf("bot_token is required")
 	}
@@ -858,7 +858,7 @@ func (d *SMSDispatcher) sendTwilio(ctx context.Context, event *core.AlertEvent, 
 		return fmt.Errorf("missing twilio credentials")
 	}
 
-	toList, ok := channel.Config["to"].([]interface{})
+	toList, ok := channel.Config["to"].([]any)
 	if !ok || len(toList) == 0 {
 		return fmt.Errorf("no recipients configured")
 	}
@@ -918,7 +918,7 @@ func (d *SMSDispatcher) sendVonage(ctx context.Context, event *core.AlertEvent, 
 		return fmt.Errorf("missing vonage credentials")
 	}
 
-	toList, ok := channel.Config["to"].([]interface{})
+	toList, ok := channel.Config["to"].([]any)
 	if !ok || len(toList) == 0 {
 		return fmt.Errorf("no recipients configured")
 	}
@@ -962,7 +962,7 @@ func (d *SMSDispatcher) sendVonage(ctx context.Context, event *core.AlertEvent, 
 }
 
 // Validate validates SMS configuration
-func (d *SMSDispatcher) Validate(config map[string]interface{}) error {
+func (d *SMSDispatcher) Validate(config map[string]any) error {
 	provider, _ := config["provider"].(string)
 	if provider == "" {
 		provider = "twilio"
@@ -1018,7 +1018,7 @@ func (d *WebHookDispatcher) Send(ctx context.Context, event *core.AlertEvent, ch
 	}
 
 	// Build payload
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"id":          event.ID,
 		"soul_id":     event.SoulID,
 		"soul_name":   event.SoulName,
@@ -1054,7 +1054,7 @@ func (d *WebHookDispatcher) Send(ctx context.Context, event *core.AlertEvent, ch
 	req.Header.Set("User-Agent", "AnubisWatch/1.0")
 
 	// Add custom headers
-	if headers, ok := channel.Config["headers"].(map[string]interface{}); ok {
+	if headers, ok := channel.Config["headers"].(map[string]any); ok {
 		for k, v := range headers {
 			if val, ok := v.(string); ok {
 				req.Header.Set(k, val)
@@ -1083,7 +1083,7 @@ func (d *WebHookDispatcher) Send(ctx context.Context, event *core.AlertEvent, ch
 }
 
 // Validate validates webhook configuration
-func (d *WebHookDispatcher) Validate(config map[string]interface{}) error {
+func (d *WebHookDispatcher) Validate(config map[string]any) error {
 	if _, ok := config["url"]; !ok {
 		return fmt.Errorf("url is required")
 	}

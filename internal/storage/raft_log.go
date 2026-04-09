@@ -88,7 +88,7 @@ func (s *CobaltDBLogStore) GetLog(index uint64, log *core.RaftLogEntry) error {
 		return err
 	}
 
-	var entry map[string]interface{}
+	var entry map[string]any
 	if err := json.Unmarshal(data, &entry); err != nil {
 		return fmt.Errorf("failed to unmarshal log entry: %w", err)
 	}
@@ -106,7 +106,7 @@ func (s *CobaltDBLogStore) GetLog(index uint64, log *core.RaftLogEntry) error {
 
 // StoreLog stores a single log entry
 func (s *CobaltDBLogStore) StoreLog(log *core.RaftLogEntry) error {
-	entry := map[string]interface{}{
+	entry := map[string]any{
 		"index": log.Index,
 		"term":  log.Term,
 		"data":  log.Data,

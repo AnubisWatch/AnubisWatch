@@ -19,7 +19,7 @@ type Span struct {
 	Tags       map[string]string      `json:"tags,omitempty"`
 	Logs       []LogEntry             `json:"logs,omitempty"`
 	Status     SpanStatus             `json:"status"`
-	Attributes map[string]interface{} `json:"attributes,omitempty"`
+	Attributes map[string]any `json:"attributes,omitempty"`
 }
 
 // SpanStatus represents the status of a span
@@ -47,7 +47,7 @@ func (s SpanStatus) String() string {
 // LogEntry represents a log entry within a span
 type LogEntry struct {
 	Timestamp time.Time              `json:"timestamp"`
-	Fields    map[string]interface{} `json:"fields"`
+	Fields    map[string]any `json:"fields"`
 }
 
 // Tracer handles span creation and management
@@ -87,7 +87,7 @@ func (t *Tracer) StartSpan(ctx context.Context, name string) (context.Context, *
 		Name:       name,
 		StartTime:  time.Now(),
 		Tags:       make(map[string]string),
-		Attributes: make(map[string]interface{}),
+		Attributes: make(map[string]any),
 		Status:     StatusOK,
 	}
 
@@ -129,7 +129,7 @@ func (s *Span) SetTag(key, value string) {
 }
 
 // SetAttribute adds an attribute to a span
-func (s *Span) SetAttribute(key string, value interface{}) {
+func (s *Span) SetAttribute(key string, value any) {
 	if s == nil {
 		return
 	}
@@ -137,7 +137,7 @@ func (s *Span) SetAttribute(key string, value interface{}) {
 }
 
 // Log adds a log entry to a span
-func (s *Span) Log(fields map[string]interface{}) {
+func (s *Span) Log(fields map[string]any) {
 	if s == nil {
 		return
 	}

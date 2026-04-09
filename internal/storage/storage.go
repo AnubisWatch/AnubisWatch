@@ -513,7 +513,7 @@ func (db *CobaltDB) ListJackals(ctx context.Context) (map[string]map[string]stri
 
 // SaveRaftState saves Raft persistent state
 func (db *CobaltDB) SaveRaftState(ctx context.Context, currentTerm uint64, votedFor string) error {
-	data := map[string]interface{}{
+	data := map[string]any{
 		"current_term": currentTerm,
 		"voted_for":    votedFor,
 	}
@@ -533,7 +533,7 @@ func (db *CobaltDB) GetRaftState(ctx context.Context) (currentTerm uint64, voted
 		return 0, "", err
 	}
 
-	var state map[string]interface{}
+	var state map[string]any
 	if err := json.Unmarshal(data, &state); err != nil {
 		return 0, "", err
 	}
@@ -550,7 +550,7 @@ func (db *CobaltDB) GetRaftState(ctx context.Context) (currentTerm uint64, voted
 
 // SaveRaftLogEntry saves a Raft log entry
 func (db *CobaltDB) SaveRaftLogEntry(ctx context.Context, index uint64, term uint64, data []byte) error {
-	entry := map[string]interface{}{
+	entry := map[string]any{
 		"index": index,
 		"term":  term,
 		"data":  data,
@@ -573,7 +573,7 @@ func (db *CobaltDB) GetRaftLogEntry(ctx context.Context, index uint64) (term uin
 		return 0, nil, err
 	}
 
-	var entry map[string]interface{}
+	var entry map[string]any
 	if err := json.Unmarshal(entryData, &entry); err != nil {
 		return 0, nil, err
 	}
