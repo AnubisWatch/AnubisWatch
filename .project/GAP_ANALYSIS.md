@@ -19,7 +19,7 @@
 | Storage | CobaltDB B+Tree | Partial | ⚠️ Partial | Missing: AES-256-GCM encryption, time-series downsampling |
 | Dashboard | React 19 embedded | Complete | ✅ Complete | Embedded via embed.FS |
 | REST API | Full CRUD API | Complete | ✅ Complete | All soul, judgment, channel, rule endpoints |
-| gRPC API | Protobuf service | Complete | ✅ Complete | 30+ RPCs, proto definitions, reflection, streaming stubs |
+| gRPC API | Protobuf service | Complete | ✅ Complete | Full CRUD, verdicts, streaming, 20 tests |
 | WebSocket API | Event streaming | Partial | ⚠️ Partial | Missing: subscribe/unsubscribe commands |
 | MCP Server | 10 tools + 6 resources | Complete | ✅ Complete | All tools and resources exposed |
 | Prometheus Metrics | Custom metrics | Partial | ⚠️ Partial | Latency percentiles, uptime ratios, alert stats added; counters for judgments/verdicts |
@@ -108,7 +108,7 @@
 | CORS | §9.1 | ✅ |
 | Security headers | §9.1 | ✅ CSP, X-Frame, X-XSS |
 | Pagination | §9.1 | ✅ Offset-based |
-| WebSocket | §9.3 | ✅ Connection + broadcast |
+| WebSocket | §9.3 | ✅ Full: subscribe/unsubscribe, heartbeat, cluster events |
 | MCP Server | §9.4 | ✅ 10 tools + 6 resources |
 | SSE | §9.3 | ✅ Heartbeat fallback |
 
@@ -290,13 +290,15 @@
 
 #### 1. gRPC API (Spec §9.2) — ✅ COMPLETE
 - `proto/v1/anubis.proto` — 30+ message types, 30+ RPCs
-- Full CRUD for souls, channels, rules, journeys
+- Full CRUD for souls, channels, rules, journeys (create, update, delete)
+- Interface-based PB converters (soul, channel, rule, journey, judgment, verdict)
 - Judgment listing and forced checks
+- ListVerdicts with alert event → verdict conversion
 - Cluster status endpoint
-- Streaming RPCs (stubs for judgments/verdicts)
+- Streaming RPCs (poll-based StreamJudgments/StreamVerdicts with dedup tracking)
 - gRPC reflection enabled for introspection
 - Default port 9090, configurable via `server.grpc_port`
-- 8 tests covering server lifecycle, RPCs, and TCP/bufconn connections
+- 20 tests covering server lifecycle, all CRUD RPCs, streaming, and TCP/bufconn connections
 
 #### 2. OIDC Authentication (Spec §13.1) — ✅ COMPLETE
 - Full OIDC discovery via `/.well-known/openid-configuration`
@@ -401,7 +403,7 @@
 | Raft Consensus | **100%** | Auto-discovery (mDNS/gossip) complete |
 | Alert System | **100%** | All condition types including anomaly/compound |
 | Storage | **100%** | Encryption + downsampling complete |
-| API Layer | **95%** | gRPC + WebSocket complete, streaming stubs |
+| API Layer | **100%** | gRPC full CRUD + streaming, WebSocket subscribe/unsubscribe |
 | CLI | **100%** | 28 commands including judge <name>, judge --all, config set, souls add/remove |
 | Multi-Tenant | **100%** | Quota enforcement complete |
 | Region Support | **100%** | All 5 distribution strategies implemented |
@@ -417,7 +419,7 @@
 
 | Priority | Gap | Effort | Impact | Recommendation |
 |----------|-----|--------|--------|----------------|
-| ~~P1~~ | ~~gRPC API~~ | ✅ Complete | | Proto definitions + server with 30+ RPCs |
+| ~~P1~~ | ~~gRPC API~~ | ✅ Complete | | Full CRUD + streaming + verdicts, 20 tests |
 | ~~P2~~ | ~~OIDC auth~~ | ✅ Complete | | Zero-dep OIDC with local fallback |
 | ~~P2~~ | ~~LDAP auth~~ | ✅ Complete | | go-ldap with StartTLS + local fallback |
 | ~~P3~~ | ~~mDNS/Gossip auto-discovery~~ | ✅ Complete | | UDP broadcast + gossip wired into cluster manager |
