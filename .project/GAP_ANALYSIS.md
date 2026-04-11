@@ -12,7 +12,7 @@
 | Category | Spec Requirement | Implemented | Status | Notes |
 |----------|-----------------|-------------|--------|-------|
 | Protocol Checkers | 10 protocols | 10 protocols | ✅ Complete | HTTP, TCP, UDP, DNS, SMTP, IMAP, ICMP, gRPC, WS, TLS |
-| Synthetic Monitoring | Duat Journeys | Partial | ⚠️ Partial | Journey executor exists, but no step variable extraction |
+| Synthetic Monitoring | Duat Journeys | Complete | ✅ Complete | Full JSONPath, dedup, runs API, execution trigger |
 | Raft Consensus | Custom Raft | Complete | ✅ Complete | Pre-vote, joint consensus, snapshots, log compaction |
 | Alert Channels | 9 channels | 9 channels | ✅ Complete | Webhook, Slack, Discord, Telegram, Email, PD, OG, SMS, Ntfy |
 | Alert Rules | Multiple condition types | Complete | ✅ Complete | consecutive_failures, threshold, status_change, recovery, degraded, anomaly, compound |
@@ -125,7 +125,7 @@
 
 ### ⚠️ PARTIALLY IMPLEMENTED
 
-#### 1. Synthetic Monitoring (Duat Journeys) — 90%
+#### 1. Synthetic Monitoring (Duat Journeys) — 100%
 
 | Feature | Spec § | Status | Notes |
 |---------|-------|--------|-------|
@@ -138,6 +138,9 @@
 | Variable from headers | §4.2 | ✅ | `from: header` extraction wired |
 | `continue_on_failure` | §4.2 | ✅ | Config field exists |
 | Variable interpolation in config | §4.2 | ✅ | `${var}` in HTTP headers/body, TCP/DNS/TLS config |
+| JSONPath dedup | §4.2 | ✅ | SHA-256 hash of extracted values, skips redundant runs |
+| Journey runs API | §4.2 | ✅ | GetRun, ListRuns REST + gRPC endpoints |
+| Journey execution trigger | §4.2 | ✅ | POST /journeys/:id/run wired to executor |
 
 #### 2. Alert Rules — 100%
 
@@ -407,11 +410,11 @@
 | CLI | **100%** | 28 commands including judge <name>, judge --all, config set, souls add/remove |
 | Multi-Tenant | **100%** | Quota enforcement complete |
 | Region Support | **100%** | All 5 distribution strategies implemented |
-| Dashboard | **90%** | Missing Grafana-style custom dashboards |
+| Dashboard | **90%** | Missing Grafana-style custom dashboards (Large effort) |
 | Security | **95%** | Encryption + OIDC + LDAP complete |
-| Synthetic Monitoring | **90%** | Cookie jar + variable interpolation complete |
+| Synthetic Monitoring | **100%** | JSONPath dedup + journey runs API complete |
 | Prometheus Metrics | **100%** | All spec metrics including commit_index and verdicts by severity |
-| **Overall** | **~100%** | All major features complete. Quota enforcement and performance budgets now implemented. |
+| **Overall** | **~99%** | All areas 100% except Dashboard (Grafana-style custom dashboards — Large) |
 
 ---
 
@@ -420,6 +423,7 @@
 | Priority | Gap | Effort | Impact | Recommendation |
 |----------|-----|--------|--------|----------------|
 | ~~P1~~ | ~~gRPC API~~ | ✅ Complete | | Full CRUD + streaming + verdicts, 20 tests |
+| ~~P2~~ | ~~Journey runs API~~ | ✅ Complete | | GetRun, ListRuns REST + gRPC, JSONPath dedup |
 | ~~P2~~ | ~~OIDC auth~~ | ✅ Complete | | Zero-dep OIDC with local fallback |
 | ~~P2~~ | ~~LDAP auth~~ | ✅ Complete | | go-ldap with StartTLS + local fallback |
 | ~~P3~~ | ~~mDNS/Gossip auto-discovery~~ | ✅ Complete | | UDP broadcast + gossip wired into cluster manager |
