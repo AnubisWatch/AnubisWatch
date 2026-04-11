@@ -23,7 +23,7 @@
 | WebSocket API | Event streaming | Partial | ⚠️ Partial | Missing: subscribe/unsubscribe commands |
 | MCP Server | 10 tools + 6 resources | Complete | ✅ Complete | All tools and resources exposed |
 | Prometheus Metrics | Custom metrics | Partial | ⚠️ Partial | Latency percentiles, uptime ratios, alert stats added; counters for judgments/verdicts |
-| CLI | 15+ commands | Complete | ✅ Complete | All major commands including souls import/export |
+| CLI | 15+ commands | Complete | ✅ Complete | All commands including judge <name>, judge --all, config set, souls add/remove |
 | OIDC Auth | OpenID Connect | Complete | ✅ Complete | Zero-dep OIDC with discovery, code flow, JWT parsing, local fallback |
 | LDAP Auth | AD/LDAP bind | Complete | ✅ Complete | go-ldap with StartTLS, UPN/DN bind, attribute search, local fallback |
 | Multi-Tenant | Workspace isolation | Complete | ✅ Complete | Quota enforcement with per-workspace tracking |
@@ -194,7 +194,7 @@
 | `anubis_latency_p99_seconds` | ✅ | Implemented | 99th percentile across all souls |
 | `anubis_soul_status_count` | ✅ | Implemented | Status distribution (alive/dead/degraded/unknown/embalmed) |
 
-#### 5. CLI Commands — 90%
+#### 5. CLI Commands — 100%
 
 | Command | Spec §10.1 | Status | Notes |
 |---------|------------|--------|-------|
@@ -202,12 +202,15 @@
 | `anubis serve` | ✅ | Implemented | `--single` flag supported |
 | `anubis version` | ✅ | Implemented | `--json` supported |
 | `anubis judge` | ✅ | Implemented | Shows judgments table |
+| `anubis judge <name>` | ✅ | Implemented | Force-check specific soul by name or ID |
+| `anubis judge --all` | ✅ | Implemented | Force-check all souls immediately |
 | `anubis watch` | ✅ | Implemented | Quick-add monitor with `--name`, `--interval`, `--type` |
 | `anubis status` | ✅ | Implemented | Detailed system status |
 | `anubis logs` | ✅ | Implemented | `-n`, `-f` flags |
 | `anubis config validate` | ✅ | Implemented | JSON/YAML validation |
 | `anubis config show` | ✅ | Implemented | Show config |
 | `anubis config path` | ✅ | Implemented | Show config path |
+| `anubis config set` | ✅ | Implemented | Set config values (dot-notation keys) |
 | `anubis export souls` | ✅ | Implemented | JSON/YAML export |
 | `anubis export config` | ✅ | Implemented | Raw config dump |
 | `anubis backup` | ✅ | Implemented | create/list/delete/info |
@@ -217,6 +220,8 @@
 | `anubis banish` | ✅ | Implemented | Remove node via API or storage |
 | `anubis souls export` | ✅ | Implemented | JSON/YAML with `--output`, `--format` |
 | `anubis souls import` | ✅ | Implemented | JSON/YAML with `--replace` |
+| `anubis souls add` | ✅ | Implemented | Add souls from file (merge mode) |
+| `anubis souls remove` | ✅ | Implemented | Remove soul by name or ID |
 | `anubis verdict test` | ✅ | Implemented | Test notification |
 | `anubis verdict history` | ✅ | Implemented | Alert history |
 | `anubis verdict ack` | ✅ | Implemented | Acknowledge incident |
@@ -333,10 +338,11 @@
 - All events broadcast to `event:cluster` room + general broadcast
 
 #### 7. CLI Commands (Spec §10.1) — ✅ COMPLETE
-- 23 commands implemented including `souls import/export`, `verdict test/history/ack`
+- 28 commands implemented including `judge <name>`, `judge --all`, `config set`, `souls add/remove`
 - `--format json|yaml` support for export
 - `--replace` flag for import to overwrite existing souls
 - API-first with direct storage fallback for all commands
+- Dot-notation config keys (e.g., `server.port`, `logging.level`, `server.tls.enabled`)
 
 #### 8. Anomaly/Compound Alert Conditions (Spec §6.1) — ✅ COMPLETE
 - `anomaly`: Z-score based deviation detection with configurable std dev
@@ -396,7 +402,7 @@
 | Alert System | **100%** | All condition types including anomaly/compound |
 | Storage | **100%** | Encryption + downsampling complete |
 | API Layer | **95%** | gRPC + WebSocket complete, streaming stubs |
-| CLI | **90%** | 23 commands implemented including souls import/export |
+| CLI | **100%** | 28 commands including judge <name>, judge --all, config set, souls add/remove |
 | Multi-Tenant | **100%** | Quota enforcement complete |
 | Region Support | **100%** | All 5 distribution strategies implemented |
 | Dashboard | **90%** | Missing Grafana-style custom dashboards |
@@ -415,7 +421,7 @@
 | ~~P2~~ | ~~OIDC auth~~ | ✅ Complete | | Zero-dep OIDC with local fallback |
 | ~~P2~~ | ~~LDAP auth~~ | ✅ Complete | | go-ldap with StartTLS + local fallback |
 | ~~P3~~ | ~~mDNS/Gossip auto-discovery~~ | ✅ Complete | | UDP broadcast + gossip wired into cluster manager |
-| ~~P3~~ | ~~CLI command completion~~ | ✅ Complete | | 23 commands including souls import/export, verdict subcommands |
+| ~~P3~~ | ~~CLI command completion~~ | ✅ Complete | | 28 commands including judge <name>, judge --all, config set, souls add/remove |
 | ~~P4~~ | ~~DNSSEC validation~~ | ✅ Complete | | EDNS0 DO bit, RRSIG parsing, AD flag validation |
 | ~~P4~~ | ~~Check distribution strategies~~ | ✅ Complete | | All 5 strategies: round-robin, region-aware, redundant (primary+backup), weighted (capacity-based), latency-optimal (load+memory scoring) |
 | ~~P0~~ | ~~Storage encryption~~ | ✅ Complete | | AES-256-GCM implemented |

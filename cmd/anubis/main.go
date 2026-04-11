@@ -42,7 +42,7 @@ func main() {
 		case "watch":
 			quickWatch()
 		case "judge":
-			showJudgments()
+			judgeCommand()
 		case "summon":
 			summonNode()
 		case "banish":
@@ -91,6 +91,8 @@ Commands:
   init            Initialize new AnubisWatch instance
   watch <target>  Quick-add a monitor
   judge           Show all current verdicts (status table)
+  judge <name>    Force-check a specific soul
+  judge --all     Force-check all souls now
   summon <addr>   Add node to cluster
   banish <id>     Remove node from cluster
   necropolis      Show cluster status
@@ -102,7 +104,7 @@ Commands:
   export          Export configuration to JSON/YAML
   logs            View recent logs
   config          Configuration management
-  souls           Souls import/export
+  souls           Souls management
   help            Show this help
 
 Subcommands:
@@ -1438,6 +1440,29 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
+// parseConfigValue converts a string value to an appropriate type for config
+func parseConfigValue(s string) interface{} {
+	// Try bool
+	switch strings.ToLower(s) {
+	case "true":
+		return true
+	case "false":
+		return false
+	}
+	// Try int
+	var i int
+	if _, err := fmt.Sscanf(s, "%d", &i); err == nil && fmt.Sprintf("%d", i) == s {
+		return i
+	}
+	// Try float
+	var f float64
+	if _, err := fmt.Sscanf(s, "%f", &f); err == nil && fmt.Sprintf("%g", f) == s {
+		return f
+	}
+	// Default: string
+	return s
+}
+
 func getLogLevel() slog.Level {
 	level := os.Getenv("ANUBIS_LOG_LEVEL")
 	switch level {
@@ -2101,11 +2126,14 @@ func configCommand() {
 		fmt.Println("  validate    Validate configuration file")
 		fmt.Println("  show        Show current configuration")
 		fmt.Println("  path        Show configuration file path")
+		fmt.Println("  set <key> <value>  Set a configuration value")
 		fmt.Println()
 		fmt.Println("Examples:")
 		fmt.Println("  anubis config validate")
 		fmt.Println("  anubis config show")
 		fmt.Println("  anubis config path")
+		fmt.Println(`  anubis config set server.port 9443`)
+		fmt.Println(`  anubis config set logging.level debug`)
 		return
 	}
 
@@ -2184,6 +2212,99 @@ func configCommand() {
 			fmt.Println(configPath)
 		}
 
+	case "set":
+		if len(os.Args) < 5 {
+			fmt.Fprintf(os.Stderr, "Usage: anubis config set <key> <value>\n")
+			fmt.Println()
+			fmt.Println("Supported keys:")
+			fmt.Println("  server.host          Server bind host")
+			fmt.Println("  server.port          Server bind port")
+			fmt.Println("  server.tls.enabled   Enable TLS (true/false)")
+			fmt.Println("  logging.level        Log level (debug/info/warn/error)")
+			fmt.Println("  storage.path         Data directory path")
+			fmt.Println("  probe.workers        Number of probe workers")
+			fmt.Println()
+			fmt.Println("Examples:")
+			fmt.Println(`  anubis config set server.port 9443`)
+			fmt.Println(`  anubis config set logging.level debug`)
+			fmt.Println(`  anubis config set server.tls.enabled true`)
+			os.Exit(1)
+		}
+
+		key := os.Args[3]
+		value := os.Args[4]
+
+		configPath := findConfig()
+		if configPath == "" {
+			fmt.Println("✗ No configuration file found")
+			fmt.Println("Create one with: anubis init")
+			os.Exit(1)
+		}
+
+		data, err := os.ReadFile(configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "✗ Error reading config: %v\n", err)
+			os.Exit(1)
+		}
+
+		var cfg map[string]interface{}
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "✗ Invalid config JSON: %v\n", err)
+			os.Exit(1)
+		}
+
+		parts := strings.SplitN(key, ".", 2)
+		if len(parts) != 2 {
+			fmt.Fprintf(os.Stderr, "✗ Invalid key format: %s\n", key)
+			fmt.Println("Key must be in format: section.key (e.g., server.port)")
+			os.Exit(1)
+		}
+		section, subkey := parts[0], parts[1]
+
+		sectionMap, ok := cfg[section].(map[string]interface{})
+		if !ok {
+			fmt.Fprintf(os.Stderr, "✗ Unknown config section: %s\n", section)
+			os.Exit(1)
+		}
+
+		// Parse nested keys (e.g., tls.enabled)
+		subParts := strings.SplitN(subkey, ".", 3)
+		if len(subParts) > 1 {
+			nested, ok := sectionMap[subParts[0]].(map[string]interface{})
+			if !ok {
+				nested = make(map[string]interface{})
+				sectionMap[subParts[0]] = nested
+			}
+			// Handle up to 3 levels deep
+			if len(subParts) == 3 {
+				deepNested, ok := nested[subParts[1]].(map[string]interface{})
+				if !ok {
+					deepNested = make(map[string]interface{})
+					nested[subParts[1]] = deepNested
+				}
+				deepNested[subParts[2]] = parseConfigValue(value)
+			} else {
+				nested[subParts[1]] = parseConfigValue(value)
+			}
+		} else {
+			sectionMap[subkey] = parseConfigValue(value)
+		}
+
+		// Write back
+		output, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "✗ Error marshaling config: %v\n", err)
+			os.Exit(1)
+		}
+
+		if err := os.WriteFile(configPath, append(output, '\n'), 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "✗ Error writing config: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("✓ Set %s = %v\n", key, value)
+		fmt.Println("  Note: Some changes may require a server restart.")
+
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown config subcommand: %s\n", subcmd)
 		fmt.Println("Run 'anubis config' for usage information")
@@ -2191,7 +2312,7 @@ func configCommand() {
 	}
 }
 
-// soulsCommand handles souls import/export subcommands
+// soulsCommand handles souls management subcommands
 func soulsCommand() {
 	if len(os.Args) < 3 {
 		fmt.Println("⚖️  Souls Management")
@@ -2202,6 +2323,8 @@ func soulsCommand() {
 		fmt.Println("Subcommands:")
 		fmt.Println("  export       Export all souls to JSON or YAML")
 		fmt.Println("  import       Import souls from JSON or YAML file")
+		fmt.Println("  add <file>   Add souls from a YAML/JSON file (merge)")
+		fmt.Println("  remove <name|id>  Remove a soul by name or ID")
 		fmt.Println()
 		fmt.Println("Options for export:")
 		fmt.Println("  --format json|yaml   Output format (default: json)")
@@ -2215,10 +2338,38 @@ func soulsCommand() {
 		fmt.Println("  anubis souls export --format yaml --output souls.yaml")
 		fmt.Println("  anubis souls import souls.json")
 		fmt.Println("  anubis souls import --replace souls.yaml")
+		fmt.Println("  anubis souls add monitors.yaml")
+		fmt.Println("  anubis souls remove my-api")
+		fmt.Println("  anubis souls remove soul_abc123")
 		return
 	}
 
 	subcmd := os.Args[2]
+
+	// add and remove can work with storage directly
+	if subcmd == "add" {
+		store, err := openLocalStorage()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error opening storage: %v\n", err)
+			os.Exit(1)
+		}
+		defer store.Close()
+		ctx := context.Background()
+		soulsAdd(store, ctx)
+		return
+	}
+
+	if subcmd == "remove" {
+		store, err := openLocalStorage()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error opening storage: %v\n", err)
+			os.Exit(1)
+		}
+		defer store.Close()
+		ctx := context.Background()
+		soulsRemove(store, ctx)
+		return
+	}
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -2385,4 +2536,299 @@ func importSouls(store *storage.CobaltDB, ctx context.Context) {
 	for _, soul := range souls {
 		fmt.Printf("  %s  %s (%s)\n", soul.ID, soul.Name, soul.Type)
 	}
+}
+
+// judgeCommand handles the judge command with subcommands and flags
+func judgeCommand() {
+	// Check for --help flag
+	for i := 2; i < len(os.Args); i++ {
+		if os.Args[i] == "--help" || os.Args[i] == "-h" {
+			printJudgeHelp()
+			return
+		}
+	}
+
+	// Check for --all flag
+	for i := 2; i < len(os.Args); i++ {
+		if os.Args[i] == "--all" || os.Args[i] == "-a" {
+			judgeAll()
+			return
+		}
+	}
+
+	// Check for a soul name argument (anubis judge <name>)
+	if len(os.Args) >= 3 && !strings.HasPrefix(os.Args[2], "-") {
+		judgeSingle(os.Args[2])
+		return
+	}
+
+	// No flags or args — show judgments table
+	showJudgments()
+}
+
+func printJudgeHelp() {
+	fmt.Println("⚖️  Judgment Management")
+	fmt.Println("────────────────────────────────────────────")
+	fmt.Println()
+	fmt.Println("Usage: anubis judge [options]")
+	fmt.Println()
+	fmt.Println("Options:")
+	fmt.Println("  <name>      Force-check a specific soul by name or ID")
+	fmt.Println("  --all, -a   Force-check all souls now")
+	fmt.Println("  (no args)   Show current verdicts table")
+	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  anubis judge                # Show status table")
+	fmt.Println("  anubis judge my-api         # Force-check 'my-api' soul")
+	fmt.Println("  anubis judge --all          # Check all souls immediately")
+}
+
+// judgeSingle force-checks a specific soul by name or ID
+func judgeSingle(nameOrID string) {
+	fmt.Printf("⚖️  Force-checking soul: %s\n", nameOrID)
+
+	apiURL := getAPIURL()
+	token := getAPIToken()
+
+	if token == "" {
+		fmt.Println("Error: No API token found. Set ANUBIS_API_TOKEN environment variable.")
+		fmt.Println("       The server must be running to trigger force checks.")
+		os.Exit(1)
+	}
+
+	// First, find the soul by name or ID
+	resp, err := httpGet(apiURL+"/api/v1/souls", token)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error connecting to API: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "Error: API returned status %d\n", resp.StatusCode)
+		os.Exit(1)
+	}
+
+	var souls []*core.Soul
+	if err := json.NewDecoder(resp.Body).Decode(&souls); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Find matching soul
+	var targetSoul *core.Soul
+	for _, s := range souls {
+		if s.ID == nameOrID || s.Name == nameOrID {
+			targetSoul = s
+			break
+		}
+	}
+
+	if targetSoul == nil {
+		fmt.Fprintf(os.Stderr, "Error: soul '%s' not found\n", nameOrID)
+		os.Exit(1)
+	}
+
+	// Trigger force check
+	resp, err = httpPost(apiURL+"/api/v1/souls/"+targetSoul.ID+"/check", "application/json", []byte("{}"), token)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error triggering check: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "Error: API returned status %d\n", resp.StatusCode)
+		os.Exit(1)
+	}
+
+	var judgment core.Judgment
+	if err := json.NewDecoder(resp.Body).Decode(&judgment); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
+		os.Exit(1)
+	}
+
+	statusIcon := "○"
+	switch judgment.Status {
+	case core.SoulAlive:
+		statusIcon = "✓"
+	case core.SoulDead:
+		statusIcon = "✗"
+	case core.SoulDegraded:
+		statusIcon = "~"
+	}
+
+	fmt.Printf("✓ Check complete: %s %s (%s)\n", statusIcon, judgment.Status, judgment.Duration)
+	fmt.Printf("  Duration: %s\n", judgment.Duration)
+	fmt.Printf("  Timestamp: %s\n", judgment.Timestamp.Format("2006-01-02 15:04:05"))
+	if judgment.Message != "" {
+		fmt.Printf("  Message: %s\n", judgment.Message)
+	}
+}
+
+// judgeAll force-checks all souls immediately
+func judgeAll() {
+	fmt.Println("⚖️  Force-checking all souls...")
+
+	apiURL := getAPIURL()
+	token := getAPIToken()
+
+	if token == "" {
+		fmt.Println("Error: No API token found. Set ANUBIS_API_TOKEN environment variable.")
+		fmt.Println("       The server must be running to trigger force checks.")
+		os.Exit(1)
+	}
+
+	// Get all souls
+	resp, err := httpGet(apiURL+"/api/v1/souls", token)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error connecting to API: %v\n", err)
+		os.Exit(1)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "Error: API returned status %d\n", resp.StatusCode)
+		os.Exit(1)
+	}
+
+	var souls []*core.Soul
+	if err := json.NewDecoder(resp.Body).Decode(&souls); err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(souls) == 0 {
+		fmt.Println("No souls configured.")
+		return
+	}
+
+	fmt.Printf("Found %d souls, triggering checks...\n\n", len(souls))
+
+	successCount := 0
+	failCount := 0
+
+	for _, soul := range souls {
+		resp, err := httpPost(apiURL+"/api/v1/souls/"+soul.ID+"/check", "application/json", []byte("{}"), token)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			failCount++
+			if resp != nil {
+				resp.Body.Close()
+			}
+			fmt.Printf("  ✗ %s: failed to trigger\n", soul.Name)
+			continue
+		}
+		resp.Body.Close()
+		successCount++
+		fmt.Printf("  ✓ %s: check triggered\n", soul.Name)
+	}
+
+	fmt.Println()
+	fmt.Printf("Results: %d triggered, %d failed\n", successCount, failCount)
+	fmt.Println("Checks run asynchronously. Use 'anubis judge' to view results.")
+}
+
+// soulsAdd adds souls from a YAML/JSON file (merge mode)
+func soulsAdd(store *storage.CobaltDB, ctx context.Context) {
+	if len(os.Args) < 4 {
+		fmt.Fprintf(os.Stderr, "Usage: anubis souls add <file.yaml|file.json>\n")
+		os.Exit(1)
+	}
+
+	filePath := os.Args[3]
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
+		os.Exit(1)
+	}
+
+	var souls []*core.Soul
+	if strings.HasSuffix(filePath, ".yaml") || strings.HasSuffix(filePath, ".yml") {
+		if err := yaml.Unmarshal(data, &souls); err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing YAML: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		if err := json.Unmarshal(data, &souls); err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing JSON: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	if len(souls) == 0 {
+		fmt.Println("No souls found in input file")
+		return
+	}
+
+	added := 0
+	skipped := 0
+	for _, soul := range souls {
+		if soul.ID == "" {
+			soul.ID = core.GenerateID()
+		}
+		if soul.WorkspaceID == "" {
+			soul.WorkspaceID = "default"
+		}
+		soul.UpdatedAt = time.Now()
+		if soul.CreatedAt.IsZero() {
+			soul.CreatedAt = time.Now()
+		}
+
+		// Skip if soul already exists
+		_, err := store.GetSoulNoCtx(soul.ID)
+		if err == nil {
+			skipped++
+			continue
+		}
+
+		if err := store.SaveSoul(ctx, soul); err != nil {
+			fmt.Fprintf(os.Stderr, "Error saving soul %q: %v\n", soul.Name, err)
+			continue
+		}
+		added++
+	}
+
+	fmt.Printf("✓ Added %d souls", added)
+	if skipped > 0 {
+		fmt.Printf(", skipped %d (already exist)", skipped)
+	}
+	fmt.Println()
+}
+
+// soulsRemove removes a soul by name or ID
+func soulsRemove(store *storage.CobaltDB, ctx context.Context) {
+	if len(os.Args) < 4 {
+		fmt.Fprintf(os.Stderr, "Usage: anubis souls remove <name|id>\n")
+		os.Exit(1)
+	}
+
+	nameOrID := os.Args[3]
+
+	// List all souls to find the match
+	souls, err := store.ListSouls(ctx, "default", 0, 10000)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error listing souls: %v\n", err)
+		os.Exit(1)
+	}
+
+	var targetSoul *core.Soul
+	for _, s := range souls {
+		if s.ID == nameOrID || s.Name == nameOrID {
+			targetSoul = s
+			break
+		}
+	}
+
+	if targetSoul == nil {
+		fmt.Fprintf(os.Stderr, "Error: soul '%s' not found\n", nameOrID)
+		os.Exit(1)
+	}
+
+	if err := store.DeleteSoul(ctx, "default", targetSoul.ID); err != nil {
+		fmt.Fprintf(os.Stderr, "Error deleting soul: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✓ Soul removed: %s (%s)\n", targetSoul.Name, targetSoul.ID)
 }
