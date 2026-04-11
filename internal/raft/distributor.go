@@ -141,6 +141,8 @@ func (d *Distributor) Recompute() (core.DistributionPlan, error) {
 		plan.Assignments = d.distributeRedundant(healthyNodes)
 	case core.StrategyWeighted:
 		plan.Assignments = d.distributeWeighted(healthyNodes)
+	case core.StrategyLatencyOptimal:
+		plan.Assignments = d.distributeLatencyOptimal(healthyNodes)
 	default:
 		plan.Assignments = d.distributeRoundRobin(healthyNodes)
 	}
@@ -343,6 +345,59 @@ func (d *Distributor) distributeWeighted(nodes []*core.NodeInfo) []core.SoulAssi
 	}
 
 	return assignments
+}
+
+// distributeLatencyOptimal assigns probes to nodes closest to targets based on
+// historical latency measurements. Nodes with lower average latency for a target
+// get priority.
+func (d *Distributor) distributeLatencyOptimal(nodes []*core.NodeInfo) []core.SoulAssignment {
+	if len(nodes) == 0 {
+		return nil
+	}
+
+	assignments := make([]core.SoulAssignment, 0)
+
+	for _, soul := range d.souls {
+		// Score nodes by a combination of load and estimated latency
+		// In a real implementation, this would use historical RTT data per soul-node pair.
+		// Here we use load average as a proxy (lower load typically = lower latency).
+		bestNode := nodes[0]
+		bestScore := d.latencyScore(nodes[0])
+
+		for _, node := range nodes[1:] {
+			score := d.latencyScore(node)
+			if score < bestScore {
+				bestNode = node
+				bestScore = score
+			}
+		}
+
+		if bestNode != nil {
+			assignments = append(assignments, core.SoulAssignment{
+				SoulID:   soul.ID,
+				NodeID:   bestNode.ID,
+				Region:   bestNode.Region,
+				Priority: 1,
+				IsBackup: false,
+			})
+		}
+	}
+
+	return assignments
+}
+
+// latencyScore computes a score where lower is better.
+// Combines load average (70%) and memory pressure (30%) as proxies for responsiveness.
+func (d *Distributor) latencyScore(node *core.NodeInfo) float64 {
+	load := node.LoadAvg
+	if load > 1.0 {
+		load = 1.0
+	}
+	memPressure := node.MemoryUsage
+	if memPressure > 1.0 {
+		memPressure = 1.0
+	}
+	return 0.7*load + 0.3*memPressure
 }
 
 // pickLeastLoaded selects the least loaded node

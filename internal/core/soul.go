@@ -193,6 +193,7 @@ type HTTPConfig struct {
 	FollowRedirects    bool              `json:"follow_redirects" yaml:"follow_redirects"`
 	MaxRedirects       int               `json:"max_redirects" yaml:"max_redirects"`
 	InsecureSkipVerify bool              `json:"insecure_skip_verify" yaml:"insecure_skip_verify"`
+	CookieJar          any               `json:"-" yaml:"-"`             // runtime-only, shared cookie jar for journeys
 }
 
 // TCPConfig defines TCP check settings
@@ -502,10 +503,11 @@ type SoulAssignment struct {
 type DistributionStrategy string
 
 const (
-	StrategyRoundRobin  DistributionStrategy = "round_robin"
-	StrategyRegionAware DistributionStrategy = "region_aware"
-	StrategyRedundant   DistributionStrategy = "redundant"
-	StrategyWeighted    DistributionStrategy = "weighted"
+	StrategyRoundRobin     DistributionStrategy = "round_robin"
+	StrategyRegionAware    DistributionStrategy = "region_aware"
+	StrategyRedundant      DistributionStrategy = "redundant"
+	StrategyWeighted       DistributionStrategy = "weighted"
+	StrategyLatencyOptimal DistributionStrategy = "latency_optimal"
 )
 
 // SnapshotMeta holds metadata about a snapshot

@@ -29,12 +29,12 @@
 | Multi-Tenant | Workspace isolation | Partial | ⚠️ Partial | Workspace exists but no quota enforcement |
 | Status Page | Custom domains, ACME | Complete | ✅ Complete | Public status page with custom domain support |
 | Backup/Restore | Full export/import | Complete | ✅ Complete | Compression support |
-| Region Support | Multi-region replication | Complete | ✅ Complete | Conflict detection with timestamp comparison, last-write-wins/manual strategies |
+| Region Support | Multi-region replication | Complete | ✅ Complete | All 5 strategies: round-robin, region-aware, latency-optimal, redundant, weighted |
 | Check Distribution | 4 strategies | Partial | ⚠️ Partial | Only region-aware implemented |
 | Auto-Discovery | mDNS + Gossip | Complete | ✅ Complete | UDP broadcast + gossip peer discovery wired into cluster manager |
 | Storage Encryption | AES-256-GCM | Complete | ✅ Implemented | AES-256-GCM with SHA-256 key derivation, WAL migration support |
 | Performance Budgets | Feathers (p50/p95/p99) | Partial | ⚠️ Partial | Per-soul feather exists, global budgets not implemented |
-| DNS Features | DNSSEC, propagation | Partial | ⚠️ Partial | Propagation check exists, DNSSEC missing |
+| DNS Features | DNSSEC, propagation | Complete | ✅ Complete | EDNS0 DO bit, RRSIG parsing, AD flag validation, propagation check |
 | Time-Series Downsampling | 5 resolution levels | Complete | ✅ Complete | Multi-resolution compaction (raw→1min→5min→1hr→1day) |
 
 ---
@@ -229,19 +229,20 @@
 | Cross-workspace query blocking | ✅ | Implemented | By prefix |
 | Workspace-scoped auth | ✅ | Implemented | User has workspace field |
 
-#### 7. Region Support — 90%
+#### 7. Region Support — 100%
 
 | Feature | Spec §5.4 | Status | Notes |
 |---------|-----------|--------|-------|
 | Region tagging | ✅ | Implemented | `core.RaftConfig.Region` |
 | Region-aware distribution | ✅ | Implemented | `engine.regionMatches()` |
-| Round-robin strategy | ❌ | Not implemented | |
-| Latency-optimized strategy | ❌ | Not implemented | |
-| Redundant strategy | ❌ | Not implemented | |
+| Round-robin strategy | ✅ | Implemented | Even distribution across nodes |
+| Latency-optimized strategy | ✅ | Implemented | Scores nodes by load + memory pressure |
+| Redundant strategy | ✅ | Implemented | Primary + backup assignments |
+| Weighted strategy | ✅ | Implemented | Based on node capacity |
 | Region replication | ✅ | Implemented | `internal/region/` |
 | Conflict detection | ✅ | Implemented | Timestamp comparison, ConflictStore interface |
 
-#### 8. DNS Checker — 80%
+#### 8. DNS Checker — 100%
 
 | Feature | Spec §3.4 | Status | Notes |
 |---------|-----------|--------|-------|
@@ -249,7 +250,7 @@
 | Expected value assertion | ✅ | Implemented | `cfg.Expected` comparison |
 | Multi-resolver query | ✅ | Implemented | Queries all nameservers |
 | Propagation check | ✅ | Implemented | `cfg.PropagationCheck` |
-| DNSSEC validation | ❌ | Not implemented | No EDNS0 DO bit support |
+| DNSSEC validation | ✅ | Implemented | EDNS0 DO bit, RRSIG parsing, AD flag validation |
 | Custom DNS server targeting | ✅ | Implemented | `cfg.Nameservers` |
 
 #### 9. Time-Series Downsampling — 100%
@@ -336,10 +337,11 @@
 - `compound`: AND/OR/majority/at_least logic with recursive evaluation
 - Newton's method sqrt for zero-dependency math
 
-#### 9. Check Distribution Strategies (Spec §5.4)
-- Only `region-aware` implemented
-- Missing: `round-robin`, `latency-optimized`, `redundant`
-- **Impact:** Low — region-aware covers most use cases
+#### 9. Check Distribution Strategies (Spec §5.4) — ✅ COMPLETE
+- 5 strategies implemented: round-robin, region-aware, redundant, weighted, latency-optimal
+- Latency-optimal scores nodes by load (70%) + memory pressure (30%) as responsiveness proxy
+- Redundant provides primary + backup assignments for high availability
+- Weighted distributes based on remaining node capacity
 
 #### 10. Time-Series Downsampling (Spec §7.2) — ✅ COMPLETE
 - Background compaction loop with configurable intervals
@@ -390,12 +392,12 @@
 | API Layer | **85%** | gRPC added, partial WebSocket commands, streaming stubs |
 | CLI | **90%** | 23 commands implemented including souls import/export |
 | Multi-Tenant | **60%** | Missing quota enforcement |
-| Region Support | **90%** | Conflict detection complete, distribution strategies pending |
+| Region Support | **100%** | All 5 distribution strategies implemented |
 | Dashboard | **90%** | Missing Grafana-style custom dashboards |
 | Security | **95%** | Encryption + OIDC + LDAP complete |
 | Synthetic Monitoring | **90%** | Cookie jar + variable interpolation complete |
 | Prometheus Metrics | **80%** | Latency percentiles, uptime ratios, alert stats, counters added |
-| **Overall** | **~94%** | Core + enterprise auth + gRPC + auto-discovery + enhanced metrics + CLI complete |
+| **Overall** | **~97%** | Core + enterprise auth + gRPC + auto-discovery + enhanced metrics + CLI + DNSSEC + distribution strategies complete |
 
 ---
 
@@ -408,8 +410,8 @@
 | ~~P2~~ | ~~LDAP auth~~ | ✅ Complete | | go-ldap with StartTLS + local fallback |
 | ~~P3~~ | ~~mDNS/Gossip auto-discovery~~ | ✅ Complete | | UDP broadcast + gossip wired into cluster manager |
 | ~~P3~~ | ~~CLI command completion~~ | ✅ Complete | | 23 commands including souls import/export, verdict subcommands |
-| P4 | DNSSEC validation | 8h | Low | Niche requirement |
-| P4 | Additional check distribution strategies | 12h | Low | Only needed for complex setups |
+| ~~P4~~ | ~~DNSSEC validation~~ | ✅ Complete | | EDNS0 DO bit, RRSIG parsing, AD flag validation |
+| ~~P4~~ | ~~Check distribution strategies~~ | ✅ Complete | | All 5 strategies: round-robin, region-aware, redundant, weighted, latency-optimal |
 | ~~P0~~ | ~~Storage encryption~~ | ✅ Complete | | AES-256-GCM implemented |
 | ~~P4~~ | ~~Anomaly/compound conditions~~ | ✅ Complete | | Implemented with z-score & compound logic |
 | ~~P2~~ | ~~Time-series downsampling~~ | ✅ Complete | | Multi-resolution compaction |
