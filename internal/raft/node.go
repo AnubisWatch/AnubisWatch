@@ -345,6 +345,13 @@ func (n *Node) CurrentTerm() uint64 {
 	return atomic.LoadUint64(&n.currentTerm)
 }
 
+// CommitIndex returns the index of the highest committed log entry
+func (n *Node) CommitIndex() uint64 {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.commitIndex
+}
+
 // Peers returns a copy of the peers map
 func (n *Node) Peers() map[string]*Peer {
 	n.peerMu.RLock()

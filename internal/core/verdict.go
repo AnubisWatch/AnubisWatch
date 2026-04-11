@@ -282,15 +282,16 @@ type NotificationResult struct {
 
 // AlertManagerStats tracks alert system performance
 type AlertManagerStats struct {
-	TotalAlerts        uint64    `json:"total_alerts"`
-	SentAlerts         uint64    `json:"sent_alerts"`
-	FailedAlerts       uint64    `json:"failed_alerts"`
-	AcknowledgedAlerts uint64    `json:"acknowledged_alerts"`
-	ResolvedAlerts     uint64    `json:"resolved_alerts"`
-	RateLimitedAlerts  uint64    `json:"rate_limited_alerts"`
-	FilteredAlerts     uint64    `json:"filtered_alerts"`
-	ActiveIncidents    int       `json:"active_incidents"`
-	LastAlertTime      time.Time `json:"last_alert_time"`
+	TotalAlerts        uint64            `json:"total_alerts"`
+	SentAlerts         uint64            `json:"sent_alerts"`
+	FailedAlerts       uint64            `json:"failed_alerts"`
+	AcknowledgedAlerts uint64            `json:"acknowledged_alerts"`
+	ResolvedAlerts     uint64            `json:"resolved_alerts"`
+	RateLimitedAlerts  uint64            `json:"rate_limited_alerts"`
+	FilteredAlerts     uint64            `json:"filtered_alerts"`
+	ActiveIncidents    int               `json:"active_incidents"`
+	LastAlertTime      time.Time         `json:"last_alert_time"`
+	VerdictsBySeverity map[string]uint64 `json:"verdicts_by_severity"`
 }
 
 // Incident represents an active or resolved alert incident

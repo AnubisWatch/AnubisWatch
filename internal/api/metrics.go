@@ -82,6 +82,18 @@ func (s *RESTServer) buildSystemMetrics() string {
 	out += fmt.Sprintf("anubis_verdicts_resolved_total %d\n", s.verdictsResolved)
 	s.metricsMu.RUnlock()
 
+	// Verdicts by severity
+	if s.alert != nil {
+		stats := s.alert.GetStats()
+		if len(stats.VerdictsBySeverity) > 0 {
+			out += "# HELP anubis_verdicts_total Total number of verdicts by severity\n"
+			out += "# TYPE anubis_verdicts_total counter\n"
+			for severity, count := range stats.VerdictsBySeverity {
+				out += fmt.Sprintf("anubis_verdicts_total{severity=\"%s\"} %d\n", severity, count)
+			}
+		}
+	}
+
 	return out
 }
 
@@ -201,6 +213,10 @@ func (s *RESTServer) buildClusterMetrics() string {
 			out += "# TYPE anubis_raft_term gauge\n"
 			out += fmt.Sprintf("anubis_raft_term %d\n", status.Term)
 
+			out += "# HELP anubis_raft_commit_index Current Raft log commit index\n"
+			out += "# TYPE anubis_raft_commit_index gauge\n"
+			out += fmt.Sprintf("anubis_raft_commit_index %d\n", status.CommitIndex)
+
 			out += "# HELP anubis_cluster_is_clustered Whether this node is in cluster mode\n"
 			out += "# TYPE anubis_cluster_is_clusterd gauge\n"
 			clustered := 0
@@ -213,6 +229,7 @@ func (s *RESTServer) buildClusterMetrics() string {
 		out += "anubis_cluster_leader 1\n"
 		out += "anubis_cluster_nodes 1\n"
 		out += "anubis_raft_term 0\n"
+		out += "anubis_raft_commit_index 0\n"
 		out += "anubis_cluster_is_clustered 0\n"
 	}
 

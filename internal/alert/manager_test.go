@@ -2950,3 +2950,37 @@ func TestCheckConditions_AnomalyFallback(t *testing.T) {
 		t.Error("Anomaly should trigger with threshold fallback when no history")
 	}
 }
+func TestVerdictsBySeverity(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	ch := &core.AlertChannel{
+		ID:      "ch1",
+		Name:    "test-webhook",
+		Type:    core.ChannelWebHook,
+		Enabled: true,
+		Config:  map[string]any{"url": "http://localhost/test"},
+	}
+
+	// sendToChannel updates verdictsBySeverity before the HTTP send
+	event := &core.AlertEvent{
+		SoulID:    "soul-1",
+		SoulName:  "test-soul",
+		Status:    core.SoulDead,
+		Severity:  core.SeverityCritical,
+		Timestamp: time.Now(),
+	}
+
+	_ = manager.sendToChannel(context.Background(), event, ch) // May fail HTTP but stats updated
+
+	stats := manager.GetStats()
+	if stats.VerdictsBySeverity == nil {
+		t.Fatal("Expected VerdictsBySeverity to be initialized")
+	}
+	if count, ok := stats.VerdictsBySeverity[string(core.SeverityCritical)]; !ok || count != 1 {
+		t.Errorf("Expected 1 critical verdict, got %v", stats.VerdictsBySeverity)
+	}
+}

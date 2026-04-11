@@ -186,6 +186,7 @@ type ClusterStatus struct {
 	Leader      string `json:"leader,omitempty"`
 	Term        uint64 `json:"term,omitempty"`
 	PeerCount   int    `json:"peer_count,omitempty"`
+	CommitIndex uint64 `json:"commit_index,omitempty"`
 }
 
 // User represents an authenticated user

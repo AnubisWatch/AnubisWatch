@@ -37,6 +37,7 @@ type Manager struct {
 		rateLimitedAlerts  uint64
 		filteredAlerts     uint64
 		lastAlertTime      time.Time
+		verdictsBySeverity map[string]uint64
 	}
 
 	// Dependencies
@@ -83,6 +84,7 @@ func NewManager(storage AlertStorage, logger *slog.Logger) *Manager {
 		logger:      logger.With("component", "alert_manager"),
 		storage:     storage,
 	}
+	m.stats.verdictsBySeverity = make(map[string]uint64)
 
 	// Register built-in dispatchers
 	m.registerDispatchers()
@@ -377,6 +379,7 @@ func (m *Manager) sendToChannel(ctx context.Context, event *core.AlertEvent, cha
 	m.mu.Lock()
 	m.stats.totalAlerts++
 	m.stats.lastAlertTime = time.Now()
+	m.stats.verdictsBySeverity[string(event.Severity)]++
 	m.mu.Unlock()
 
 	// Send the alert
@@ -844,7 +847,17 @@ func (m *Manager) GetStats() core.AlertManagerStats {
 		FilteredAlerts:     m.stats.filteredAlerts,
 		ActiveIncidents:    len(m.incidents),
 		LastAlertTime:      m.stats.lastAlertTime,
+		VerdictsBySeverity: m.copyVerdictsBySeverity(),
 	}
+}
+
+// copyVerdictsBySeverity returns a copy of the verdicts by severity map
+func (m *Manager) copyVerdictsBySeverity() map[string]uint64 {
+	out := make(map[string]uint64, len(m.stats.verdictsBySeverity))
+	for k, v := range m.stats.verdictsBySeverity {
+		out[k] = v
+	}
+	return out
 }
 
 // AcknowledgeIncident acknowledges an incident

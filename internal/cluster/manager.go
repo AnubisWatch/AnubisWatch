@@ -205,6 +205,7 @@ func (m *Manager) GetStatus() *ClusterStatus {
 		status.Leader = m.node.Leader()
 		status.Term = m.node.CurrentTerm()
 		status.PeerCount = len(m.node.Peers())
+		status.CommitIndex = m.node.CommitIndex()
 	}
 
 	return status
@@ -229,4 +230,5 @@ type ClusterStatus struct {
 	Leader      string `json:"leader,omitempty"`
 	Term        uint64 `json:"term,omitempty"`
 	PeerCount   int    `json:"peer_count,omitempty"`
+	CommitIndex uint64 `json:"commit_index,omitempty"`
 }

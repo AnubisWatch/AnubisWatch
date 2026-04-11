@@ -178,6 +178,20 @@ func TestNode_CurrentTerm(t *testing.T) {
 	}
 }
 
+func TestNode_CommitIndex(t *testing.T) {
+	cfg := newTestRaftNodeConfig()
+	storage := NewInMemoryLogStore()
+	snapshot := NewInMemorySnapshotStore()
+	fsm := NewStorageFSM(NewInMemoryStorage())
+
+	node, _ := NewNode(cfg, storage, snapshot, fsm, newTestRaftLogger())
+
+	idx := node.CommitIndex()
+	if idx != 0 {
+		t.Errorf("Expected commit index 0, got %d", idx)
+	}
+}
+
 func TestNode_LeaderID(t *testing.T) {
 	cfg := newTestRaftNodeConfig()
 	storage := NewInMemoryLogStore()
