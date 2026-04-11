@@ -481,6 +481,46 @@ func (s *WebSocketServer) BroadcastSoulUpdate(soul *core.Soul) {
 	s.broadcast <- msg
 }
 
+// BroadcastClusterEvent broadcasts a cluster lifecycle event (jackal join/leave,
+// raft leader change, etc.) to connected clients.
+func (s *WebSocketServer) BroadcastClusterEvent(event string, payload interface{}) {
+	msg := WSMessage{
+		Type:      "cluster_event",
+		Timestamp: time.Now().UTC(),
+		Payload: map[string]interface{}{
+			"event":   event,
+			"payload": payload,
+		},
+	}
+
+	s.broadcastToRoom("event:cluster", msg)
+	s.broadcast <- msg
+}
+
+// BroadcastJackalJoined broadcasts that a jackal node joined the cluster
+func (s *WebSocketServer) BroadcastJackalJoined(nodeID, region string) {
+	s.BroadcastClusterEvent("jackal.joined", map[string]interface{}{
+		"node_id": nodeID,
+		"region":  region,
+	})
+}
+
+// BroadcastJackalLeft broadcasts that a jackal node left the cluster
+func (s *WebSocketServer) BroadcastJackalLeft(nodeID, reason string) {
+	s.BroadcastClusterEvent("jackal.left", map[string]interface{}{
+		"node_id": nodeID,
+		"reason":  reason,
+	})
+}
+
+// BroadcastRaftLeaderChange broadcasts a Raft leader change event
+func (s *WebSocketServer) BroadcastRaftLeaderChange(leaderID string, term uint64) {
+	s.BroadcastClusterEvent("raft.leader_change", map[string]interface{}{
+		"leader_id": leaderID,
+		"term":      term,
+	})
+}
+
 // SubscribeClient subscribes a client to specific events
 func (s *WebSocketServer) SubscribeClient(clientID string, events []string) {
 	s.mu.RLock()

@@ -1,11 +1,16 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
+	"github.com/gorilla/websocket"
 )
 
 // TestWSClient_JoinRoom tests joining a room
@@ -372,6 +377,322 @@ func TestWebSocketServer_BroadcastIncident_WithoutWorkspace(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 }
 
+// TestWebSocketServer_removeClient_WithRooms tests removing a client that is in rooms
+func TestWebSocketServer_removeClient_WithRooms(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+
+	// Create a test server to get a real WebSocket connection
+	httpServer := httptest.NewServer(http.HandlerFunc(server.HandleConnection))
+	defer httpServer.Close()
+
+	// Connect a WebSocket client
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "?workspace=test&user_id=user1"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect WebSocket: %v", err)
+	}
+	defer ws.Close()
+
+	// Give time for connection to establish
+	time.Sleep(50 * time.Millisecond)
+
+	// Get the client ID
+	server.mu.RLock()
+	var clientID string
+	for id := range server.clients {
+		clientID = id
+		break
+	}
+	server.mu.RUnlock()
+
+	if clientID == "" {
+		t.Fatal("No client connected")
+	}
+
+	// Manually add client to additional rooms
+	server.mu.Lock()
+	if client, ok := server.clients[clientID]; ok {
+		server.rooms["event:judgment"] = map[string]bool{clientID: true}
+		client.Rooms["event:judgment"] = true
+	}
+	server.mu.Unlock()
+
+	// Remove client - should clean up all rooms
+	server.removeClient(clientID)
+
+	// Give time for cleanup
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify client is removed
+	server.mu.RLock()
+	if server.clients[clientID] != nil {
+		t.Error("Client should be removed from server")
+	}
+	server.mu.RUnlock()
+}
+
+// TestWebSocketServer_broadcastToRoom_NonExistent tests broadcasting to non-existent room
+func TestWebSocketServer_broadcastToRoom_NonExistent(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+
+	msg := WSMessage{
+		Type:      "test",
+		Timestamp: time.Now().UTC(),
+		Payload:   map[string]string{"key": "value"},
+	}
+
+	// Should not panic for non-existent room
+	server.broadcastToRoom("non-existent-room", msg)
+}
+
+// TestWebSocketServer_broadcastToRoom_WithClients tests broadcasting to room with clients
+func TestWebSocketServer_broadcastToRoom_WithClients(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+
+	client := &WSClient{
+		ID:        "test-client",
+		Workspace: "default",
+		Rooms:     make(map[string]bool),
+		send:      make(chan []byte, 10),
+		server:    server,
+	}
+
+	// Setup client and room
+	server.mu.Lock()
+	server.clients[client.ID] = client
+	server.rooms["test-room"] = map[string]bool{client.ID: true}
+	server.mu.Unlock()
+
+	msg := WSMessage{
+		Type:      "test",
+		Timestamp: time.Now().UTC(),
+		Payload:   map[string]string{"key": "value"},
+	}
+
+	// Broadcast to room
+	server.broadcastToRoom("test-room", msg)
+
+	// Verify message was sent
+	select {
+	case <-client.send:
+		// Message received
+	case <-time.After(100 * time.Millisecond):
+		t.Error("Message should be sent to client")
+	}
+}
+
+// TestWebSocketServer_broadcastToRoom_FullBuffer tests broadcasting when client buffer is full
+func TestWebSocketServer_broadcastToRoom_FullBuffer(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+
+	// Create a test server to get a real WebSocket connection
+	httpServer := httptest.NewServer(http.HandlerFunc(server.HandleConnection))
+	defer httpServer.Close()
+
+	// Connect a WebSocket client
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "?workspace=test&user_id=user1"
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("Failed to connect WebSocket: %v", err)
+	}
+	defer ws.Close()
+
+	// Give time for connection to establish
+	time.Sleep(50 * time.Millisecond)
+
+	// Get the client ID
+	server.mu.RLock()
+	var clientID string
+	for id := range server.clients {
+		clientID = id
+		break
+	}
+	server.mu.RUnlock()
+
+	if clientID == "" {
+		t.Fatal("No client connected")
+	}
+
+	// Fill the client's send buffer without reading
+	server.mu.RLock()
+	client := server.clients[clientID]
+	server.mu.RUnlock()
+
+	if client != nil {
+		// Fill buffer
+		for i := 0; i < 256; i++ {
+			select {
+			case client.send <- []byte("fill"):
+			default:
+				// Buffer full
+			}
+		}
+	}
+
+	msg := WSMessage{
+		Type:      "test",
+		Timestamp: time.Now().UTC(),
+		Payload:   map[string]string{"key": "value"},
+	}
+
+	// Broadcast to room - should attempt to remove client if buffer full
+	room := fmt.Sprintf("workspace:%s", "test")
+	server.broadcastToRoom(room, msg)
+
+	// Give time for processing
+	time.Sleep(50 * time.Millisecond)
+}
+
+// TestWebSocketServer_broadcastToRoom_NilClient tests broadcasting when client is nil
+func TestWebSocketServer_broadcastToRoom_NilClient(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+
+	// Setup room with non-existent client ID
+	server.mu.Lock()
+	server.rooms["test-room"] = map[string]bool{"ghost-client": true}
+	server.mu.Unlock()
+
+	msg := WSMessage{
+		Type:      "test",
+		Timestamp: time.Now().UTC(),
+		Payload:   map[string]string{"key": "value"},
+	}
+
+	// Should not panic when client doesn't exist
+	server.broadcastToRoom("test-room", msg)
+}
+
+// TestWebSocketServer_BroadcastAlert_NoWorkspace tests broadcasting alert without workspace
+func TestWebSocketServer_BroadcastAlert_NoWorkspace(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+	server.Start()
+	defer server.Stop()
+
+	// Create a test client
+	client := &WSClient{
+		ID:        "test-client",
+		Workspace: "default",
+		Rooms:     make(map[string]bool),
+		send:      make(chan []byte, 10),
+		server:    server,
+	}
+
+	server.mu.Lock()
+	server.clients[client.ID] = client
+	server.mu.Unlock()
+
+	// Broadcast an alert without workspace
+	event := &core.AlertEvent{
+		ID:      "alert-1",
+		SoulID:  "soul-1",
+		Message: "Test alert",
+		// No WorkspaceID
+	}
+
+	server.BroadcastAlert(event)
+
+	// Give broadcast time to process
+	time.Sleep(50 * time.Millisecond)
+}
+
+// TestWebSocketServer_BroadcastStats_NoWorkspace tests broadcasting stats without workspace
+func TestWebSocketServer_BroadcastStats_NoWorkspace(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+	server.Start()
+	defer server.Stop()
+
+	// Create a test client
+	client := &WSClient{
+		ID:        "test-client",
+		Workspace: "default",
+		Rooms:     make(map[string]bool),
+		send:      make(chan []byte, 10),
+		server:    server,
+	}
+
+	server.mu.Lock()
+	server.clients[client.ID] = client
+	server.mu.Unlock()
+
+	// Broadcast stats without workspace
+	stats := map[string]int{"total": 10}
+	server.BroadcastStats("", stats)
+
+	// Give broadcast time to process
+	time.Sleep(50 * time.Millisecond)
+}
+
+// TestWebSocketServer_GetStats_WithClients tests getting server stats with clients
+func TestWebSocketServer_GetStats_WithClients(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+
+	// Create test clients
+	for i := 0; i < 3; i++ {
+		client := &WSClient{
+			ID:        fmt.Sprintf("client-%d", i),
+			Workspace: "default",
+			Rooms:     make(map[string]bool),
+			send:      make(chan []byte, 10),
+			server:    server,
+		}
+		server.mu.Lock()
+		server.clients[client.ID] = client
+		server.mu.Unlock()
+	}
+
+	stats := server.GetStats()
+
+	if stats["connected_clients"] != 3 {
+		t.Errorf("Expected 3 clients, got %v", stats["connected_clients"])
+	}
+}
+
+// TestWebSocketServer_Stop_WithClients tests stopping server with clients
+func TestWebSocketServer_Stop_WithClients(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+	server.Start()
+
+	// Create test clients with send channels
+	client1 := &WSClient{
+		ID:        "client-1",
+		Workspace: "default",
+		Rooms:     make(map[string]bool),
+		send:      make(chan []byte, 10),
+		server:    server,
+	}
+	client2 := &WSClient{
+		ID:        "client-2",
+		Workspace: "default",
+		Rooms:     make(map[string]bool),
+		send:      make(chan []byte, 10),
+		server:    server,
+	}
+
+	server.mu.Lock()
+	server.clients[client1.ID] = client1
+	server.clients[client2.ID] = client2
+	server.mu.Unlock()
+
+	// Stop should clean up all clients
+	server.Stop()
+
+	// Verify all clients removed
+	server.mu.RLock()
+	if len(server.clients) != 0 {
+		t.Errorf("Expected 0 clients after stop, got %d", len(server.clients))
+	}
+	server.mu.RUnlock()
+}
+
 // Helper function
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr, 0))
@@ -384,4 +705,452 @@ func containsAt(s, substr string, start int) bool {
 		}
 	}
 	return false
+}
+
+// Test WSClient.handleMessage with invalid JSON
+func TestWSClient_handleMessage_InvalidJSON(t *testing.T) {
+	client := &WSClient{
+		ID:    "test-client",
+		Rooms: make(map[string]bool),
+		send:  make(chan []byte, 10),
+	}
+
+	client.handleMessage([]byte(`{invalid json}`))
+
+	// Should send error message to send channel
+	select {
+	case msg := <-client.send:
+		if !strings.Contains(string(msg), "invalid_message") {
+			t.Errorf("Expected invalid_message error, got %s", string(msg))
+		}
+	default:
+		t.Error("Expected error message in send channel")
+	}
+}
+
+// Test WSClient.handleMessage with ping
+func TestWSClient_handleMessage_Ping(t *testing.T) {
+	client := &WSClient{
+		ID:    "test-client",
+		Rooms: make(map[string]bool),
+		send:  make(chan []byte, 10),
+	}
+
+	client.handleMessage([]byte(`{"type":"ping"}`))
+
+	select {
+	case msg := <-client.send:
+		if !strings.Contains(string(msg), "pong") {
+			t.Errorf("Expected pong, got %s", string(msg))
+		}
+	default:
+		t.Error("Expected pong message in send channel")
+	}
+}
+
+// Test WSClient.handleMessage with unknown type
+func TestWSClient_handleMessage_UnknownType(t *testing.T) {
+	client := &WSClient{
+		ID:    "test-client",
+		Rooms: make(map[string]bool),
+		send:  make(chan []byte, 10),
+	}
+
+	client.handleMessage([]byte(`{"type":"unknown_type_xyz"}`))
+
+	select {
+	case msg := <-client.send:
+		if !strings.Contains(string(msg), "unknown_type") {
+			t.Errorf("Expected unknown_type error, got %s", string(msg))
+		}
+	default:
+		t.Error("Expected error message in send channel")
+	}
+}
+
+// Test WSClient.handleMessage with subscribe
+func TestWSClient_handleMessage_Subscribe(t *testing.T) {
+	server := &WebSocketServer{
+		clients: make(map[string]*WSClient),
+		rooms:   make(map[string]map[string]bool),
+		logger:  newTestLogger(),
+	}
+	client := &WSClient{
+		ID:     "test-client",
+		Rooms:  make(map[string]bool),
+		send:   make(chan []byte, 10),
+		server: server,
+	}
+
+	client.handleMessage([]byte(`{"type":"subscribe","events":["judgment","alert"]}`))
+
+	// Should have sent success message
+	select {
+	case msg := <-client.send:
+		if !strings.Contains(string(msg), "subscribed") {
+			t.Errorf("Expected subscribed, got %s", string(msg))
+		}
+	default:
+		t.Error("Expected success message in send channel")
+	}
+
+	// Should have joined rooms
+	if !client.Rooms["event:judgment"] {
+		t.Error("Expected client to be in event:judgment room")
+	}
+	if !client.Rooms["event:alert"] {
+		t.Error("Expected client to be in event:alert room")
+	}
+}
+
+// Test WSClient.handleMessage with unsubscribe
+func TestWSClient_handleMessage_Unsubscribe(t *testing.T) {
+	server := &WebSocketServer{
+		clients: make(map[string]*WSClient),
+		rooms:   make(map[string]map[string]bool),
+		logger:  newTestLogger(),
+	}
+	client := &WSClient{
+		ID:     "test-client",
+		Rooms:  map[string]bool{"event:judgment": true},
+		send:   make(chan []byte, 10),
+		server: server,
+	}
+
+	client.handleMessage([]byte(`{"type":"unsubscribe","events":["judgment"]}`))
+
+	// Should have sent success message
+	select {
+	case msg := <-client.send:
+		if !strings.Contains(string(msg), "unsubscribed") {
+			t.Errorf("Expected unsubscribed, got %s", string(msg))
+		}
+	default:
+		t.Error("Expected success message in send channel")
+	}
+
+	// Should have left room
+	if client.Rooms["event:judgment"] {
+		t.Error("Expected client to have left event:judgment room")
+	}
+}
+
+// Test WSClient.handleMessage with join_workspace
+func TestWSClient_handleMessage_JoinWorkspace(t *testing.T) {
+	server := &WebSocketServer{
+		clients: make(map[string]*WSClient),
+		rooms:   make(map[string]map[string]bool),
+		logger:  newTestLogger(),
+	}
+	client := &WSClient{
+		ID:        "test-client",
+		Workspace: "default",
+		Rooms:     make(map[string]bool),
+		send:      make(chan []byte, 10),
+		server:    server,
+	}
+
+	client.handleMessage([]byte(`{"type":"join_workspace","workspace":"new-ws"}`))
+
+	select {
+	case msg := <-client.send:
+		if !strings.Contains(string(msg), "workspace_changed") {
+			t.Errorf("Expected workspace_changed, got %s", string(msg))
+		}
+	default:
+		t.Error("Expected workspace message in send channel")
+	}
+
+	if client.Workspace != "new-ws" {
+		t.Errorf("Expected workspace new-ws, got %s", client.Workspace)
+	}
+}
+
+// Test WSClient.handleMessage with join_workspace empty
+func TestWSClient_handleMessage_JoinWorkspace_Empty(t *testing.T) {
+	client := &WSClient{
+		ID:        "test-client",
+		Workspace: "default",
+		Rooms:     make(map[string]bool),
+		send:      make(chan []byte, 10),
+	}
+
+	client.handleMessage([]byte(`{"type":"join_workspace","workspace":""}`))
+
+	// Should not send anything for empty workspace
+	select {
+	case msg := <-client.send:
+		t.Errorf("Expected no message, got %s", string(msg))
+	default:
+		// Expected - no message sent
+	}
+}
+
+// TestWebSocketServer_BroadcastClusterEvent tests cluster event broadcasting
+func TestWebSocketServer_BroadcastClusterEvent(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+
+	// Create a client subscribed to cluster events
+	client := &WSClient{
+		ID:        "test-client-cluster",
+		Workspace: "default",
+		UserID:    "test-user",
+		Rooms:     make(map[string]bool),
+		send:      make(chan []byte, 256),
+		server:    server,
+	}
+	server.mu.Lock()
+	server.clients[client.ID] = client
+	server.mu.Unlock()
+
+	// Subscribe to cluster events
+	client.JoinRoom("event:cluster")
+
+	// Broadcast a cluster event
+	server.BroadcastClusterEvent("jackal.joined", map[string]interface{}{
+		"node_id": "node-1",
+		"region":  "us-east",
+	})
+
+	// Client should receive the message
+	select {
+	case data := <-client.send:
+		var msg WSMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			t.Fatalf("Failed to parse message: %v", err)
+		}
+		if msg.Type != "cluster_event" {
+			t.Errorf("Expected type 'cluster_event', got '%s'", msg.Type)
+		}
+		payload, ok := msg.Payload.(map[string]interface{})
+		if !ok {
+			t.Fatal("Expected payload to be map")
+		}
+		if payload["event"] != "jackal.joined" {
+			t.Errorf("Expected event 'jackal.joined', got '%v'", payload["event"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Did not receive cluster event within timeout")
+	}
+}
+
+func TestWebSocketServer_BroadcastJackalJoined(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+
+	client := &WSClient{
+		ID:     "test-join",
+		Rooms:  make(map[string]bool),
+		send:   make(chan []byte, 256),
+		server: server,
+	}
+	server.mu.Lock()
+	server.clients[client.ID] = client
+	server.mu.Unlock()
+	client.JoinRoom("event:cluster")
+
+	server.BroadcastJackalJoined("jackal-1", "eu-west")
+
+	select {
+	case data := <-client.send:
+		var msg WSMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			t.Fatalf("Failed to parse message: %v", err)
+		}
+		if msg.Type != "cluster_event" {
+			t.Errorf("Expected 'cluster_event', got '%s'", msg.Type)
+		}
+		payload := msg.Payload.(map[string]interface{})
+		if payload["event"] != "jackal.joined" {
+			t.Errorf("Expected event 'jackal.joined', got '%v'", payload["event"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Did not receive jackal.joined event")
+	}
+}
+
+func TestWebSocketServer_BroadcastJackalLeft(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+
+	client := &WSClient{
+		ID:     "test-leave",
+		Rooms:  make(map[string]bool),
+		send:   make(chan []byte, 256),
+		server: server,
+	}
+	server.mu.Lock()
+	server.clients[client.ID] = client
+	server.mu.Unlock()
+	client.JoinRoom("event:cluster")
+
+	server.BroadcastJackalLeft("jackal-2", "timeout")
+
+	select {
+	case data := <-client.send:
+		var msg WSMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			t.Fatalf("Failed to parse message: %v", err)
+		}
+		payload := msg.Payload.(map[string]interface{})
+		if payload["event"] != "jackal.left" {
+			t.Errorf("Expected event 'jackal.left', got '%v'", payload["event"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Did not receive jackal.left event")
+	}
+}
+
+func TestWebSocketServer_BroadcastRaftLeaderChange(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger)
+
+	client := &WSClient{
+		ID:     "test-leader",
+		Rooms:  make(map[string]bool),
+		send:   make(chan []byte, 256),
+		server: server,
+	}
+	server.mu.Lock()
+	server.clients[client.ID] = client
+	server.mu.Unlock()
+	client.JoinRoom("event:cluster")
+
+	server.BroadcastRaftLeaderChange("jackal-3", 42)
+
+	select {
+	case data := <-client.send:
+		var msg WSMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			t.Fatalf("Failed to parse message: %v", err)
+		}
+		payload := msg.Payload.(map[string]interface{})
+		if payload["event"] != "raft.leader_change" {
+			t.Errorf("Expected 'raft.leader_change', got '%v'", payload["event"])
+		}
+		eventPayload := payload["payload"].(map[string]interface{})
+		if eventPayload["leader_id"] != "jackal-3" {
+			t.Errorf("Expected leader_id 'jackal-3', got '%v'", eventPayload["leader_id"])
+		}
+		if eventPayload["term"].(float64) != 42 {
+			t.Errorf("Expected term 42, got '%v'", eventPayload["term"])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Did not receive raft.leader_change event")
+	}
+}
+
+func TestClientMessage_SubscribeType(t *testing.T) {
+	client := &WSClient{
+		ID:     "test-sub",
+		Rooms:  make(map[string]bool),
+		send:   make(chan []byte, 256),
+		server: &WebSocketServer{
+			clients: make(map[string]*WSClient),
+			rooms:   make(map[string]map[string]bool),
+		},
+	}
+	client.server.clients[client.ID] = client
+	client.server.logger = newTestLogger()
+
+	client.handleMessage([]byte(`{"type":"subscribe","events":["judgment","alert","cluster_event"]}`))
+
+	select {
+	case data := <-client.send:
+		var msg WSMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			t.Fatalf("Failed to parse response: %v", err)
+		}
+		if msg.Type != "success" {
+			t.Errorf("Expected 'success', got '%s'", msg.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Did not receive subscribe response")
+	}
+}
+
+func TestClientMessage_UnsubscribeType(t *testing.T) {
+	client := &WSClient{
+		ID:     "test-unsub",
+		Rooms:  make(map[string]bool),
+		send:   make(chan []byte, 256),
+		server: &WebSocketServer{
+			clients: make(map[string]*WSClient),
+			rooms:   make(map[string]map[string]bool),
+		},
+	}
+	client.server.clients[client.ID] = client
+	client.server.logger = newTestLogger()
+
+	client.handleMessage([]byte(`{"type":"unsubscribe","events":["judgment"]}`))
+
+	select {
+	case data := <-client.send:
+		var msg WSMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			t.Fatalf("Failed to parse response: %v", err)
+		}
+		if msg.Type != "success" {
+			t.Errorf("Expected 'success', got '%s'", msg.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Did not receive unsubscribe response")
+	}
+}
+
+func TestClientMessage_Ping(t *testing.T) {
+	client := &WSClient{
+		ID:     "test-ping",
+		Rooms:  make(map[string]bool),
+		send:   make(chan []byte, 10),
+		server: &WebSocketServer{
+			clients: make(map[string]*WSClient),
+			rooms:   make(map[string]map[string]bool),
+		},
+	}
+	client.server.logger = newTestLogger()
+
+	client.handleMessage([]byte(`{"type":"ping"}`))
+
+	select {
+	case data := <-client.send:
+		var msg WSMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			t.Fatalf("Failed to parse response: %v", err)
+		}
+		if msg.Type != "pong" {
+			t.Errorf("Expected 'pong', got '%s'", msg.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Did not receive pong response")
+	}
+}
+
+func TestClientMessage_UnknownType(t *testing.T) {
+	client := &WSClient{
+		ID:     "test-unknown",
+		Rooms:  make(map[string]bool),
+		send:   make(chan []byte, 10),
+		server: &WebSocketServer{
+			clients: make(map[string]*WSClient),
+			rooms:   make(map[string]map[string]bool),
+		},
+	}
+	client.server.logger = newTestLogger()
+
+	client.handleMessage([]byte(`{"type":"foobar"}`))
+
+	select {
+	case data := <-client.send:
+		var msg WSMessage
+		if err := json.Unmarshal(data, &msg); err != nil {
+			t.Fatalf("Failed to parse response: %v", err)
+		}
+		if msg.Type != "error" {
+			t.Errorf("Expected 'error', got '%s'", msg.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Did not receive error response")
+	}
 }

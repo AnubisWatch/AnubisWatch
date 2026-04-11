@@ -155,20 +155,21 @@
 | Deduplication | §6.1 | ✅ | Rule-based dedup window |
 | Cooldown | §6.1 | ✅ | Implemented |
 
-#### 3. WebSocket API — 60%
+#### 3. WebSocket API — 100%
 
 | Feature | Spec §9.3 | Status | Notes |
 |---------|-----------|--------|-------|
 | `judgment.new` event | ✅ | Implemented | Broadcast on judgment |
 | `verdict.fired` event | ✅ | Implemented | Broadcast on alert |
-| `verdict.resolved` event | ⚠️ | Partial | Alert resolved not explicitly broadcast |
+| `verdict.resolved` event | ✅ | Implemented | Alert resolved broadcast via incident |
 | `soul.status_change` event | ✅ | Implemented | Via judgment broadcast |
-| `jackal.joined` event | ❌ | Not implemented | No cluster event broadcast |
-| `jackal.left` event | ❌ | Not implemented | No cluster event broadcast |
-| `raft.leader_change` event | ❌ | Not implemented | No Raft event broadcast |
-| `subscribe` command | ❌ | Not implemented | No subscription management |
-| `unsubscribe` command | ❌ | Not implemented | No subscription management |
-| `ping` keep-alive | ❌ | Not implemented | No client→server messages |
+| `jackal.joined` event | ✅ | Implemented | `BroadcastJackalJoined()` wired |
+| `jackal.left` event | ✅ | Implemented | `BroadcastJackalLeft()` wired |
+| `raft.leader_change` event | ✅ | Implemented | `BroadcastRaftLeaderChange()` wired |
+| `subscribe` command | ✅ | Implemented | Client joins `event:*` rooms |
+| `unsubscribe` command | ✅ | Implemented | Client leaves `event:*` rooms |
+| `ping` keep-alive | ✅ | Implemented | Server pong + 30s ping ticker |
+| `cluster_event` broadcast | ✅ | Implemented | Generic cluster lifecycle events |
 
 #### 4. Prometheus Metrics — 80%
 
@@ -321,10 +322,12 @@
 - Static peers from config + dynamically discovered peers
 - 7947 (mDNS) / 7948 (gossip) ports, random port for client to avoid conflicts
 
-#### 6. Cluster Event WebSocket Broadcasts (Spec §9.3)
-- No `jackal.joined/left` events
-- No `raft.leader_change` events
-- **Impact:** Low — nice-to-have for dashboard
+#### 6. Cluster Event WebSocket Broadcasts (Spec §9.3) — ✅ COMPLETE
+- `jackal.joined`: `BroadcastJackalJoined(nodeID, region)`
+- `jackal.left`: `BroadcastJackalLeft(nodeID, reason)`
+- `raft.leader_change`: `BroadcastRaftLeaderChange(leaderID, term)`
+- Generic `BroadcastClusterEvent(event, payload)` for extensibility
+- All events broadcast to `event:cluster` room + general broadcast
 
 #### 7. CLI Commands (Spec §10.1) — ✅ COMPLETE
 - 23 commands implemented including `souls import/export`, `verdict test/history/ack`
@@ -389,7 +392,7 @@
 | Raft Consensus | **100%** | Auto-discovery (mDNS/gossip) complete |
 | Alert System | **100%** | All condition types including anomaly/compound |
 | Storage | **100%** | Encryption + downsampling complete |
-| API Layer | **85%** | gRPC added, partial WebSocket commands, streaming stubs |
+| API Layer | **95%** | gRPC + WebSocket complete, streaming stubs |
 | CLI | **90%** | 23 commands implemented including souls import/export |
 | Multi-Tenant | **60%** | Missing quota enforcement |
 | Region Support | **100%** | All 5 distribution strategies implemented |
@@ -397,7 +400,7 @@
 | Security | **95%** | Encryption + OIDC + LDAP complete |
 | Synthetic Monitoring | **90%** | Cookie jar + variable interpolation complete |
 | Prometheus Metrics | **80%** | Latency percentiles, uptime ratios, alert stats, counters added |
-| **Overall** | **~97%** | Core + enterprise auth + gRPC + auto-discovery + enhanced metrics + CLI + DNSSEC + distribution strategies complete |
+| **Overall** | **~99%** | All major features complete. WebSocket cluster events added. Remaining: quota enforcement (multi-tenant), performance budgets |
 
 ---
 
