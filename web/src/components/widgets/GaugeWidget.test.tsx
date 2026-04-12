@@ -48,4 +48,35 @@ describe('GaugeWidget', () => {
     render(<GaugeWidget widget={makeWidget({ query: { source: 'prometheus', metric: 'uptime', time_range: '1h' } })} dashboardId="d1" />)
     await waitFor(() => expect(screen.getByText('100.0%')).toBeInTheDocument())
   })
+
+  it('applies lt threshold color when value is below threshold', async () => {
+    mocks.post.mockResolvedValue({ cpu_usage: 30 })
+    render(
+      <GaugeWidget
+        widget={makeWidget({
+          thresholds: [
+            { value: 50, color: '#f43f5e', op: 'lt' },
+            { value: 80, color: '#f59e0b', op: 'lt' },
+          ]
+        })}
+        dashboardId="d1"
+      />
+    )
+    await waitFor(() => expect(screen.getByText('30.0%')).toBeInTheDocument())
+  })
+
+  it('applies gt threshold color when value is above threshold', async () => {
+    mocks.post.mockResolvedValue({ cpu_usage: 90 })
+    render(
+      <GaugeWidget
+        widget={makeWidget({
+          thresholds: [
+            { value: 80, color: '#f59e0b', op: 'gt' },
+          ]
+        })}
+        dashboardId="d1"
+      />
+    )
+    await waitFor(() => expect(screen.getByText('90.0%')).toBeInTheDocument())
+  })
 })
