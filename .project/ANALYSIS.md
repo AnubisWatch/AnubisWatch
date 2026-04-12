@@ -315,7 +315,7 @@ GET /ws/v1                                 — WebSocket
 - Chaos tests: 1 (Raft chaos test)
 - Frontend tests: 40 (API client, widgets, components)
 - Fuzz tests: 0 (deferred, non-blocking)
-- E2E tests: 0 (deferred, non-blocking)
+- E2E tests: 1 (Playwright smoke test: login + soul creation)
 
 ### 4.2 Test Infrastructure
 
