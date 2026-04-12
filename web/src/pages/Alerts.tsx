@@ -82,6 +82,7 @@ export function Alerts() {
   const [ruleThreshold, setRuleThreshold] = useState(5000)
   const [ruleSeverity, setRuleSeverity] = useState<Severity>('critical')
   const [ruleConsecutive, setRuleConsecutive] = useState(3)
+  const [ruleDuration, setRuleDuration] = useState(60)
   const [ruleEnabled, setRuleEnabled] = useState(true)
 
   const resetChannelForm = () => {
@@ -100,6 +101,7 @@ export function Alerts() {
     setRuleThreshold(5000)
     setRuleSeverity('critical')
     setRuleConsecutive(3)
+    setRuleDuration(60)
     setRuleEnabled(true)
     setSaving(false)
   }
@@ -196,9 +198,10 @@ export function Alerts() {
         threshold: ruleThreshold,
         severity: ruleSeverity,
         consecutive: ruleConsecutive,
+        duration: ruleDuration,
         enabled: ruleEnabled,
         channels: []
-      } as unknown as Omit<AlertRule, 'id'>)
+      } as Omit<AlertRule, 'id'>)
       setShowRuleModal(false)
       resetRuleForm()
     } catch {
@@ -844,7 +847,7 @@ export function Alerts() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-3 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-2">Threshold (ms)</label>
                   <input
@@ -856,7 +859,17 @@ export function Alerts() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Consecutive Failures</label>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Duration (s)</label>
+                  <input
+                    type="number"
+                    value={ruleDuration}
+                    onChange={(e) => setRuleDuration(parseInt(e.target.value) || 60)}
+                    min={1}
+                    className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Consecutive</label>
                   <input
                     type="number"
                     value={ruleConsecutive}

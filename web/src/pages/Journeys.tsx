@@ -232,7 +232,8 @@ export function Journeys() {
           }))
         })),
         continue_on_failure: formContinueOnFailure
-      } as unknown as Omit<Journey, 'id'>)
+      } as Omit<Journey, 'id'>
+      )
       setShowCreateModal(false)
       resetForm()
     } catch {
@@ -556,6 +557,7 @@ export function Journeys() {
                     disabled={runningId === journey.id || !journey.enabled}
                     className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
                     title="Run Now"
+                    aria-label={`Run journey ${journey.name}`}
                   >
                     {runningId === journey.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                   </button>
@@ -563,16 +565,18 @@ export function Journeys() {
                     onClick={() => handleToggleEnabled(journey.id, journey.enabled)}
                     className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
                     title={journey.enabled ? 'Disable' : 'Enable'}
+                    aria-label={journey.enabled ? `Disable journey ${journey.name}` : `Enable journey ${journey.name}`}
                   >
                     {journey.enabled ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                   </button>
-                  <button className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" title="Edit">
+                  <button className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" title="Edit" aria-label={`Edit journey ${journey.name}`}>
                     <Edit className="w-4 h-4" />
                   </button>
                   <button
                     onClick={() => handleDelete(journey.id)}
                     className="p-2 text-gray-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
                     title="Delete"
+                    aria-label={`Delete journey ${journey.name}`}
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>

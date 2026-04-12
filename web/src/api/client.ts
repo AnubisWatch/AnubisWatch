@@ -151,9 +151,10 @@ export interface AlertRule {
   id: string
   name: string
   enabled: boolean
-  condition: 'down' | 'degraded' | 'latency_spike'
+  condition: string
   threshold: number
-  duration: number
+  duration?: number
+  consecutive?: number
   channels: string[]
   severity: 'critical' | 'warning' | 'info'
   created_at?: string
