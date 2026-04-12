@@ -185,9 +185,9 @@ func TestHandleGetJourney(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	ctx := &Context{
-		Request:  httptest.NewRequest("GET", "/api/v1/journeys/journey-1", nil),
-		Response: rec,
-		Params:   map[string]string{"id": "journey-1"},
+		Request:   httptest.NewRequest("GET", "/api/v1/journeys/journey-1", nil),
+		Response:  rec,
+		Params:    map[string]string{"id": "journey-1"},
 		Workspace: "default",
 	}
 
@@ -305,9 +305,9 @@ func TestHandleGetJourney_NotFound(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	ctx := &Context{
-		Request:  httptest.NewRequest("GET", "/api/v1/journeys/nonexistent", nil),
-		Response: rec,
-		Params:   map[string]string{"id": "nonexistent"},
+		Request:   httptest.NewRequest("GET", "/api/v1/journeys/nonexistent", nil),
+		Response:  rec,
+		Params:    map[string]string{"id": "nonexistent"},
 		Workspace: "default",
 	}
 
@@ -911,10 +911,10 @@ func TestContainsInjectionPatterns_Combined(t *testing.T) {
 		input    string
 		expected bool
 	}{
-		{"../test<script>", true},           // path traversal + xss
-		{"test\x00<script>", true},          // null byte + xss
-		{"'; DROP TABLE users;--", true},    // sql injection
-		{"../test'; SELECT * FROM", true},   // path traversal + sql
+		{"../test<script>", true},         // path traversal + xss
+		{"test\x00<script>", true},        // null byte + xss
+		{"'; DROP TABLE users;--", true},  // sql injection
+		{"../test'; SELECT * FROM", true}, // path traversal + sql
 		{"normal_safe_input_123", false},
 		{"", false},
 	}
@@ -1562,6 +1562,7 @@ func TestRateLimitMiddleware_NegativeRemaining(t *testing.T) {
 		t.Log("Request was rate limited as expected")
 	}
 }
+
 // TestValidateJSONMiddleware_ValidJSON tests validateJSONMiddleware with valid JSON
 func TestValidateJSONMiddleware_ValidJSON(t *testing.T) {
 	storage := newMockStorage()

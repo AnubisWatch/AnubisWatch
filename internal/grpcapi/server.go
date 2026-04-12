@@ -269,12 +269,12 @@ func ruleToPB(r interface{}) *v1.Rule {
 		channelID = ch[0]
 	}
 	return &v1.Rule{
-		Id:          hf.GetID(),
-		Name:        hf.GetName(),
-		Enabled:     hf.GetEnabled(),
-		ChannelId:   channelID,
-		Workspace:   hf.GetWorkspaceID(),
-		CreatedAt:   ts(hf.GetCreatedAt()),
+		Id:        hf.GetID(),
+		Name:      hf.GetName(),
+		Enabled:   hf.GetEnabled(),
+		ChannelId: channelID,
+		Workspace: hf.GetWorkspaceID(),
+		CreatedAt: ts(hf.GetCreatedAt()),
 	}
 }
 
@@ -717,14 +717,14 @@ func eventToVerdict(e interface{}) *v1.Verdict {
 		status = "acknowledged"
 	}
 	return &v1.Verdict{
-		Id:         hf.GetID(),
-		SoulId:     hf.GetSoulID(),
-		SoulName:   hf.GetSoulName(),
-		RuleId:     hf.GetChannelID(),
-		Status:     status,
-		Severity:   hf.GetSeverity(),
-		Message:    hf.GetMessage(),
-		FiredAt:    ts(hf.GetTimestamp()),
+		Id:       hf.GetID(),
+		SoulId:   hf.GetSoulID(),
+		SoulName: hf.GetSoulName(),
+		RuleId:   hf.GetChannelID(),
+		Status:   status,
+		Severity: hf.GetSeverity(),
+		Message:  hf.GetMessage(),
+		FiredAt:  ts(hf.GetTimestamp()),
 	}
 }
 

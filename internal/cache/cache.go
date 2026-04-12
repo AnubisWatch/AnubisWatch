@@ -8,20 +8,20 @@ import (
 
 // Cache is a thread-safe in-memory cache with TTL support
 type Cache struct {
-	mu       sync.RWMutex
-	items    map[string]*cacheItem
-	lruList  *list.List
-	maxSize  int
+	mu         sync.RWMutex
+	items      map[string]*cacheItem
+	lruList    *list.List
+	maxSize    int
 	defaultTTL time.Duration
-	stopCh   chan struct{}
+	stopCh     chan struct{}
 }
 
 // cacheItem represents a cached value with metadata
 type cacheItem struct {
-	key        string
-	value      any
-	expiresAt  time.Time
-	element    *list.Element
+	key         string
+	value       any
+	expiresAt   time.Time
+	element     *list.Element
 	accessCount int
 }
 
@@ -248,17 +248,17 @@ func (c *Cache) Stats() CacheStats {
 	defer c.mu.RUnlock()
 
 	return CacheStats{
-		Size:      len(c.items),
-		MaxSize:   c.maxSize,
-		HitRate:   0, // Would need tracking
+		Size:    len(c.items),
+		MaxSize: c.maxSize,
+		HitRate: 0, // Would need tracking
 	}
 }
 
 // CacheStats holds cache statistics
 type CacheStats struct {
-	Size      int
-	MaxSize   int
-	HitRate   float64
+	Size    int
+	MaxSize int
+	HitRate float64
 }
 
 // CacheWithLoader is a cache that can load missing values

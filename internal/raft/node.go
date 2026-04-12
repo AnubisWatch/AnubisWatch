@@ -42,11 +42,11 @@ type Node struct {
 	// Membership configuration (for joint consensus)
 	membership struct {
 		mu           sync.RWMutex
-		config       []string       // Current configuration (node IDs)
-		oldConfig    []string       // Old configuration during joint consensus
-		newConfig    []string       // New configuration during joint consensus
-		jointState   bool           // True if in joint consensus
-		pendingIndex uint64         // Log index of pending membership change
+		config       []string        // Current configuration (node IDs)
+		oldConfig    []string        // Old configuration during joint consensus
+		newConfig    []string        // New configuration during joint consensus
+		jointState   bool            // True if in joint consensus
+		pendingIndex uint64          // Log index of pending membership change
 		changes      map[uint64]bool // Track applied membership change log indices
 	}
 

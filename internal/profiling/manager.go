@@ -16,16 +16,16 @@ import (
 
 // Manager handles profiling operations
 type Manager struct {
-	logger      *slog.Logger
-	dataDir     string
-	enabled     bool
-	mu          sync.RWMutex
-	cpuFile     *os.File
-	traceFile   *os.File
-	memProfile  *MemProfile
-	cpuProfile  *CPUProfile
-	goroutines  *GoroutineStats
-	gcStats     *GCStats
+	logger     *slog.Logger
+	dataDir    string
+	enabled    bool
+	mu         sync.RWMutex
+	cpuFile    *os.File
+	traceFile  *os.File
+	memProfile *MemProfile
+	cpuProfile *CPUProfile
+	goroutines *GoroutineStats
+	gcStats    *GCStats
 }
 
 // MemProfile tracks memory statistics
@@ -54,21 +54,21 @@ type CPUProfile struct {
 
 // GoroutineStats tracks goroutine information
 type GoroutineStats struct {
-	Count       int
-	MaxCount    int
-	AvgCount    int
-	History     []int
-	Timestamp   time.Time
+	Count     int
+	MaxCount  int
+	AvgCount  int
+	History   []int
+	Timestamp time.Time
 }
 
 // GCStats tracks garbage collection statistics
 type GCStats struct {
-	NumGC       uint32
-	PauseTotal  time.Duration
-	PauseAvg    time.Duration
-	PauseMax    time.Duration
-	PauseHist   []time.Duration
-	Timestamp   time.Time
+	NumGC      uint32
+	PauseTotal time.Duration
+	PauseAvg   time.Duration
+	PauseMax   time.Duration
+	PauseHist  []time.Duration
+	Timestamp  time.Time
 }
 
 // Config for profiling manager
@@ -98,9 +98,9 @@ func DefaultConfig() Config {
 // NewManager creates a new profiling manager
 func NewManager(cfg Config, logger *slog.Logger) *Manager {
 	return &Manager{
-		logger:  logger.With("component", "profiling"),
-		dataDir: cfg.DataDir,
-		enabled: cfg.Enabled,
+		logger:     logger.With("component", "profiling"),
+		dataDir:    cfg.DataDir,
+		enabled:    cfg.Enabled,
 		memProfile: &MemProfile{},
 		cpuProfile: &CPUProfile{},
 		goroutines: &GoroutineStats{
@@ -409,11 +409,11 @@ func (m *Manager) GenerateReport() (*Report, error) {
 	defer m.mu.RUnlock()
 
 	report := &Report{
-		Timestamp:   time.Now(),
-		MemStats:    *m.memProfile,
-		CPUStats:    *m.cpuProfile,
-		Goroutines:  *m.goroutines,
-		GCStats:     *m.gcStats,
+		Timestamp:  time.Now(),
+		MemStats:   *m.memProfile,
+		CPUStats:   *m.cpuProfile,
+		Goroutines: *m.goroutines,
+		GCStats:    *m.gcStats,
 	}
 
 	// Calculate derived metrics

@@ -25,7 +25,7 @@ type CobaltDB struct {
 	logger     *slog.Logger
 	closed     bool
 	closedMu   sync.Mutex
-	btreeOrder int    // Configurable B+Tree order
+	btreeOrder int        // Configurable B+Tree order
 	encryptor  *encryptor // AES-256-GCM encryption (nil if disabled)
 }
 

@@ -14,30 +14,30 @@ import (
 // Region represents a geographic/datacenter region
 // The Lands of Egypt - divided into nomes (regions)
 type Region struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Endpoint    string            `json:"endpoint"`
-	Location    string            `json:"location"`
-	Latitude    float64           `json:"latitude"`
-	Longitude   float64           `json:"longitude"`
-	Priority    int               `json:"priority"`
-	Enabled     bool              `json:"enabled"`
-	Metadata    map[string]string `json:"metadata"`
-	LastHealth  time.Time         `json:"last_health_check"`
-	Healthy     bool              `json:"healthy"`
-	Latency     time.Duration     `json:"latency"`
-	NodeCount   int               `json:"node_count"`
-	SoulCount   int               `json:"soul_count"`
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	Endpoint   string            `json:"endpoint"`
+	Location   string            `json:"location"`
+	Latitude   float64           `json:"latitude"`
+	Longitude  float64           `json:"longitude"`
+	Priority   int               `json:"priority"`
+	Enabled    bool              `json:"enabled"`
+	Metadata   map[string]string `json:"metadata"`
+	LastHealth time.Time         `json:"last_health_check"`
+	Healthy    bool              `json:"healthy"`
+	Latency    time.Duration     `json:"latency"`
+	NodeCount  int               `json:"node_count"`
+	SoulCount  int               `json:"soul_count"`
 }
 
 // RegionInfo provides region information for routing decisions
 type RegionInfo struct {
-	RegionID      string
-	Endpoint      string
-	Latency       time.Duration
-	Health        bool
-	LoadScore     float64
-	Distance      float64 // Geographic distance from client
+	RegionID  string
+	Endpoint  string
+	Latency   time.Duration
+	Health    bool
+	LoadScore float64
+	Distance  float64 // Geographic distance from client
 }
 
 // Manager handles multi-region coordination
@@ -72,11 +72,11 @@ type ConflictStore interface {
 
 // Config contains region configuration
 type Config struct {
-	LocalRegion    string
-	Regions        []RegionConfig
-	Replication    ReplicationConfig
-	Routing        RoutingConfig
-	HealthCheck    HealthConfig
+	LocalRegion string
+	Regions     []RegionConfig
+	Replication ReplicationConfig
+	Routing     RoutingConfig
+	HealthCheck HealthConfig
 }
 
 // RegionConfig defines a region in config
@@ -476,9 +476,9 @@ func haversineDistance(lat1, lon1, lat2, lon2 float64) float64 {
 }
 
 // Helper functions for haversine calculation
-func sin(x float64) float64 { return math.Sin(x) }
-func cos(x float64) float64 { return math.Cos(x) }
-func sqrt(x float64) float64 { return math.Sqrt(x) }
+func sin(x float64) float64      { return math.Sin(x) }
+func cos(x float64) float64      { return math.Cos(x) }
+func sqrt(x float64) float64     { return math.Sqrt(x) }
 func atan2(y, x float64) float64 { return math.Atan2(y, x) }
 
 // GetRegionStatus returns the status of all regions
@@ -489,15 +489,15 @@ func (m *Manager) GetRegionStatus() map[string]RegionStatus {
 	status := make(map[string]RegionStatus)
 	for id, region := range m.regions {
 		status[id] = RegionStatus{
-			ID:          id,
-			Name:        region.Name,
-			Healthy:     region.Healthy,
-			Enabled:     region.Enabled,
-			Latency:     region.Latency,
-			NodeCount:   region.NodeCount,
-			SoulCount:   region.SoulCount,
-			LastHealth:  region.LastHealth,
-			Endpoint:    region.Endpoint,
+			ID:         id,
+			Name:       region.Name,
+			Healthy:    region.Healthy,
+			Enabled:    region.Enabled,
+			Latency:    region.Latency,
+			NodeCount:  region.NodeCount,
+			SoulCount:  region.SoulCount,
+			LastHealth: region.LastHealth,
+			Endpoint:   region.Endpoint,
 		}
 	}
 

@@ -16,26 +16,26 @@ import (
 
 // mockGRPCStore implements Store with in-memory data
 type mockGRPCStore struct {
-	souls      map[string]interface{}
-	judgments  []interface{}
-	channels   map[string]interface{}
-	rules      map[string]interface{}
-	journeys   map[string]interface{}
-	events     []interface{}
-	nextID     int
+	souls     map[string]interface{}
+	judgments []interface{}
+	channels  map[string]interface{}
+	rules     map[string]interface{}
+	journeys  map[string]interface{}
+	events    []interface{}
+	nextID    int
 }
 
 func newMockGRPCStore() *mockGRPCStore {
 	return &mockGRPCStore{
-		souls:      make(map[string]interface{}),
-		channels:   make(map[string]interface{}),
-		rules:      make(map[string]interface{}),
-		journeys:   make(map[string]interface{}),
-		events:     []interface{}{},
+		souls:    make(map[string]interface{}),
+		channels: make(map[string]interface{}),
+		rules:    make(map[string]interface{}),
+		journeys: make(map[string]interface{}),
+		events:   []interface{}{},
 	}
 }
 
-func (m *mockGRPCStore) GetSoulNoCtx(id string) (interface{}, error)         { return m.souls[id], nil }
+func (m *mockGRPCStore) GetSoulNoCtx(id string) (interface{}, error) { return m.souls[id], nil }
 func (m *mockGRPCStore) ListSoulsNoCtx(ws string, o, l int) ([]interface{}, error) {
 	result := make([]interface{}, 0, len(m.souls))
 	for _, s := range m.souls {
@@ -50,19 +50,29 @@ func (m *mockGRPCStore) SaveSoulNoCtx(s interface{}) error {
 	soulType := ""
 	target := ""
 	if mp, ok := s.(map[string]interface{}); ok {
-		if v, ok := mp["name"].(string); ok { name = v }
-		if v, ok := mp["type"].(string); ok { soulType = v }
-		if v, ok := mp["target"].(string); ok { target = v }
+		if v, ok := mp["name"].(string); ok {
+			name = v
+		}
+		if v, ok := mp["type"].(string); ok {
+			soulType = v
+		}
+		if v, ok := mp["target"].(string); ok {
+			target = v
+		}
 	}
-	if name == "" { name = "test-soul" }
+	if name == "" {
+		name = "test-soul"
+	}
 	m.souls[id] = &mockSoul{id: id, name: name, status: "alive", soulType: soulType, target: target}
 	return nil
 }
-func (m *mockGRPCStore) DeleteSoulNoCtx(id string) error      { delete(m.souls, id); return nil }
+func (m *mockGRPCStore) DeleteSoulNoCtx(id string) error { delete(m.souls, id); return nil }
 func (m *mockGRPCStore) ListJudgmentsNoCtx(soulID string, start, end time.Time, limit int) ([]interface{}, error) {
 	return m.judgments, nil
 }
-func (m *mockGRPCStore) GetChannelNoCtx(id string, ws string) (interface{}, error) { return m.channels[id], nil }
+func (m *mockGRPCStore) GetChannelNoCtx(id string, ws string) (interface{}, error) {
+	return m.channels[id], nil
+}
 func (m *mockGRPCStore) ListChannelsNoCtx(ws string) ([]interface{}, error) {
 	result := make([]interface{}, 0, len(m.channels))
 	for _, c := range m.channels {
@@ -76,14 +86,23 @@ func (m *mockGRPCStore) SaveChannelNoCtx(ch interface{}) error {
 	name := "test-channel"
 	chType := "slack"
 	if mp, ok := ch.(map[string]interface{}); ok {
-		if v, ok := mp["name"].(string); ok { name = v }
-		if v, ok := mp["type"].(string); ok { chType = v }
+		if v, ok := mp["name"].(string); ok {
+			name = v
+		}
+		if v, ok := mp["type"].(string); ok {
+			chType = v
+		}
 	}
 	m.channels[id] = &mockChannel{id: id, name: name, chType: chType}
 	return nil
 }
-func (m *mockGRPCStore) DeleteChannelNoCtx(id string, ws string) error { delete(m.channels, id); return nil }
-func (m *mockGRPCStore) GetRuleNoCtx(id string, ws string) (interface{}, error) { return m.rules[id], nil }
+func (m *mockGRPCStore) DeleteChannelNoCtx(id string, ws string) error {
+	delete(m.channels, id)
+	return nil
+}
+func (m *mockGRPCStore) GetRuleNoCtx(id string, ws string) (interface{}, error) {
+	return m.rules[id], nil
+}
 func (m *mockGRPCStore) ListRulesNoCtx(ws string) ([]interface{}, error) {
 	result := make([]interface{}, 0, len(m.rules))
 	for _, r := range m.rules {
@@ -96,12 +115,14 @@ func (m *mockGRPCStore) SaveRuleNoCtx(rule interface{}) error {
 	id := fmt.Sprintf("rule_%d", m.nextID)
 	name := "test-rule"
 	if mp, ok := rule.(map[string]interface{}); ok {
-		if v, ok := mp["name"].(string); ok { name = v }
+		if v, ok := mp["name"].(string); ok {
+			name = v
+		}
 	}
 	m.rules[id] = &mockRule{id: id, name: name}
 	return nil
 }
-func (m *mockGRPCStore) DeleteRuleNoCtx(id string, ws string) error { delete(m.rules, id); return nil }
+func (m *mockGRPCStore) DeleteRuleNoCtx(id string, ws string) error     { delete(m.rules, id); return nil }
 func (m *mockGRPCStore) GetJourneyNoCtx(id string) (interface{}, error) { return m.journeys[id], nil }
 func (m *mockGRPCStore) ListJourneysNoCtx(ws string, o, l int) ([]interface{}, error) {
 	result := make([]interface{}, 0, len(m.journeys))
@@ -115,12 +136,14 @@ func (m *mockGRPCStore) SaveJourneyNoCtx(j interface{}) error {
 	id := fmt.Sprintf("journey_%d", m.nextID)
 	name := "test-journey"
 	if mp, ok := j.(map[string]interface{}); ok {
-		if v, ok := mp["name"].(string); ok { name = v }
+		if v, ok := mp["name"].(string); ok {
+			name = v
+		}
 	}
 	m.journeys[id] = &mockJourney{id: id, name: name}
 	return nil
 }
-func (m *mockGRPCStore) DeleteJourneyNoCtx(id string) error   { delete(m.journeys, id); return nil }
+func (m *mockGRPCStore) DeleteJourneyNoCtx(id string) error { delete(m.journeys, id); return nil }
 func (m *mockGRPCStore) ListJourneyRunsNoCtx(journeyID string, limit int) ([]interface{}, error) {
 	return nil, nil
 }
@@ -142,48 +165,48 @@ type mockSoul struct {
 	id, name, status, soulType, target string
 }
 
-func (m *mockSoul) GetID() string            { return m.id }
-func (m *mockSoul) GetName() string          { return m.name }
-func (m *mockSoul) GetStatus() string        { return m.status }
-func (m *mockSoul) GetType() string          { return m.soulType }
-func (m *mockSoul) GetTarget() string        { return m.target }
+func (m *mockSoul) GetID() string              { return m.id }
+func (m *mockSoul) GetName() string            { return m.name }
+func (m *mockSoul) GetStatus() string          { return m.status }
+func (m *mockSoul) GetType() string            { return m.soulType }
+func (m *mockSoul) GetTarget() string          { return m.target }
 func (m *mockSoul) GetInterval() time.Duration { return 60 * time.Second }
 func (m *mockSoul) GetTimeout() time.Duration  { return 10 * time.Second }
-func (m *mockSoul) GetEnabled() bool         { return true }
-func (m *mockSoul) GetTags() []string        { return nil }
-func (m *mockSoul) GetWorkspaceID() string   { return "default" }
-func (m *mockSoul) GetRegion() string        { return "" }
-func (m *mockSoul) GetCreatedAt() time.Time  { return time.Time{} }
-func (m *mockSoul) GetUpdatedAt() time.Time  { return time.Time{} }
-func (m *mockSoul) GetHTTP() interface{}     { return nil }
-func (m *mockSoul) GetTCP() interface{}      { return nil }
-func (m *mockSoul) GetDNS() interface{}      { return nil }
-func (m *mockSoul) GetTLS() interface{}      { return nil }
-func (m *mockSoul) GetGRPC() interface{}     { return nil }
+func (m *mockSoul) GetEnabled() bool           { return true }
+func (m *mockSoul) GetTags() []string          { return nil }
+func (m *mockSoul) GetWorkspaceID() string     { return "default" }
+func (m *mockSoul) GetRegion() string          { return "" }
+func (m *mockSoul) GetCreatedAt() time.Time    { return time.Time{} }
+func (m *mockSoul) GetUpdatedAt() time.Time    { return time.Time{} }
+func (m *mockSoul) GetHTTP() interface{}       { return nil }
+func (m *mockSoul) GetTCP() interface{}        { return nil }
+func (m *mockSoul) GetDNS() interface{}        { return nil }
+func (m *mockSoul) GetTLS() interface{}        { return nil }
+func (m *mockSoul) GetGRPC() interface{}       { return nil }
 
 // mockChannel implements a minimal channel with getters
 type mockChannel struct {
 	id, name, chType string
 }
 
-func (m *mockChannel) GetID() string       { return m.id }
-func (m *mockChannel) GetName() string     { return m.name }
-func (m *mockChannel) GetType() string     { return m.chType }
-func (m *mockChannel) GetEnabled() bool    { return true }
+func (m *mockChannel) GetID() string                     { return m.id }
+func (m *mockChannel) GetName() string                   { return m.name }
+func (m *mockChannel) GetType() string                   { return m.chType }
+func (m *mockChannel) GetEnabled() bool                  { return true }
 func (m *mockChannel) GetConfig() map[string]interface{} { return make(map[string]interface{}) }
-func (m *mockChannel) GetWorkspaceID() string { return "default" }
-func (m *mockChannel) GetCreatedAt() time.Time { return time.Time{} }
+func (m *mockChannel) GetWorkspaceID() string            { return "default" }
+func (m *mockChannel) GetCreatedAt() time.Time           { return time.Time{} }
 
 // mockRule implements a minimal rule with getters
 type mockRule struct {
 	id, name string
 }
 
-func (m *mockRule) GetID() string          { return m.id }
-func (m *mockRule) GetName() string        { return m.name }
-func (m *mockRule) GetEnabled() bool       { return true }
-func (m *mockRule) GetChannels() []string  { return []string{"ch_1"} }
-func (m *mockRule) GetWorkspaceID() string { return "default" }
+func (m *mockRule) GetID() string           { return m.id }
+func (m *mockRule) GetName() string         { return m.name }
+func (m *mockRule) GetEnabled() bool        { return true }
+func (m *mockRule) GetChannels() []string   { return []string{"ch_1"} }
+func (m *mockRule) GetWorkspaceID() string  { return "default" }
 func (m *mockRule) GetCreatedAt() time.Time { return time.Time{} }
 
 // mockJourney implements a minimal journey with getters
@@ -191,31 +214,31 @@ type mockJourney struct {
 	id, name string
 }
 
-func (m *mockJourney) GetID() string        { return m.id }
-func (m *mockJourney) GetName() string      { return m.name }
-func (m *mockJourney) GetEnabled() bool     { return true }
-func (m *mockJourney) GetWorkspaceID() string { return "default" }
-func (m *mockJourney) GetDescription() string { return "" }
+func (m *mockJourney) GetID() string            { return m.id }
+func (m *mockJourney) GetName() string          { return m.name }
+func (m *mockJourney) GetEnabled() bool         { return true }
+func (m *mockJourney) GetWorkspaceID() string   { return "default" }
+func (m *mockJourney) GetDescription() string   { return "" }
 func (m *mockJourney) GetWeight() time.Duration { return 0 }
-func (m *mockJourney) GetSteps() []interface{} { return nil }
-func (m *mockJourney) GetCreatedAt() time.Time { return time.Time{} }
+func (m *mockJourney) GetSteps() []interface{}  { return nil }
+func (m *mockJourney) GetCreatedAt() time.Time  { return time.Time{} }
 
 // mockAlertEvent implements a minimal alert event for verdict conversion
 type mockAlertEvent struct {
 	id, soulID, soulName, channelID, status, severity, message string
-	timestamp time.Time
+	timestamp                                                  time.Time
 }
 
-func (m *mockAlertEvent) GetID() string        { return m.id }
-func (m *mockAlertEvent) GetSoulID() string    { return m.soulID }
-func (m *mockAlertEvent) GetSoulName() string  { return m.soulName }
-func (m *mockAlertEvent) GetChannelID() string { return m.channelID }
-func (m *mockAlertEvent) GetStatus() string    { return m.status }
-func (m *mockAlertEvent) GetSeverity() string  { return m.severity }
-func (m *mockAlertEvent) GetMessage() string   { return m.message }
+func (m *mockAlertEvent) GetID() string           { return m.id }
+func (m *mockAlertEvent) GetSoulID() string       { return m.soulID }
+func (m *mockAlertEvent) GetSoulName() string     { return m.soulName }
+func (m *mockAlertEvent) GetChannelID() string    { return m.channelID }
+func (m *mockAlertEvent) GetStatus() string       { return m.status }
+func (m *mockAlertEvent) GetSeverity() string     { return m.severity }
+func (m *mockAlertEvent) GetMessage() string      { return m.message }
 func (m *mockAlertEvent) GetTimestamp() time.Time { return m.timestamp }
-func (m *mockAlertEvent) GetResolved() bool    { return false }
-func (m *mockAlertEvent) GetAcknowledged() bool { return false }
+func (m *mockAlertEvent) GetResolved() bool       { return false }
+func (m *mockAlertEvent) GetAcknowledged() bool   { return false }
 
 func TestNewServer(t *testing.T) {
 	store := newMockGRPCStore()
@@ -471,10 +494,10 @@ func TestServer_CreateChannel(t *testing.T) {
 	srv := NewServer(":0", store, &mockGRPCProbe{}, nil)
 
 	resp, err := srv.CreateChannel(context.Background(), &v1.CreateChannelRequest{
-		Name:     "test-slack",
-		Type:     "slack",
-		Enabled:  true,
-		Config:   map[string]string{"webhook_url": "https://hooks.slack.com/test"},
+		Name:      "test-slack",
+		Type:      "slack",
+		Enabled:   true,
+		Config:    map[string]string{"webhook_url": "https://hooks.slack.com/test"},
 		Workspace: "default",
 	})
 	if err != nil {
@@ -543,9 +566,9 @@ func TestServer_CreateJourney(t *testing.T) {
 		Workspace:   "default",
 		Steps: []*v1.JourneyStep{
 			{
-				Name:   "Check API",
-				Type:   "http",
-				Target: "https://api.example.com/health",
+				Name:    "Check API",
+				Type:    "http",
+				Target:  "https://api.example.com/health",
 				Timeout: 10,
 			},
 		},

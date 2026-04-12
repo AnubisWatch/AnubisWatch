@@ -67,22 +67,22 @@ type RuleScope struct {
 
 // AlertCondition defines the trigger condition for an alert
 type AlertCondition struct {
-	Type           string             `json:"type" yaml:"type"` // consecutive_failures, threshold, percentage, anomaly, compound, status_change, status_for, failure_rate
-	Threshold      int                `json:"threshold" yaml:"threshold"`
-	Metric         string             `json:"metric" yaml:"metric"`
-	Operator       string             `json:"operator" yaml:"operator"` // >, <, ==, >=, <=, !=
-	Value          any                `json:"value" yaml:"value"`
-	Window         Duration           `json:"window" yaml:"window"`
+	Type      string   `json:"type" yaml:"type"` // consecutive_failures, threshold, percentage, anomaly, compound, status_change, status_for, failure_rate
+	Threshold int      `json:"threshold" yaml:"threshold"`
+	Metric    string   `json:"metric" yaml:"metric"`
+	Operator  string   `json:"operator" yaml:"operator"` // >, <, ==, >=, <=, !=
+	Value     any      `json:"value" yaml:"value"`
+	Window    Duration `json:"window" yaml:"window"`
 	// Additional fields for status-based conditions
-	From           string             `json:"from" yaml:"from"`         // for status_change
-	To             string             `json:"to" yaml:"to"`             // for status_change
-	Status         string             `json:"status" yaml:"status"`     // for status_for
-	Duration       Duration           `json:"duration" yaml:"duration"` // for status_for
+	From     string   `json:"from" yaml:"from"`         // for status_change
+	To       string   `json:"to" yaml:"to"`             // for status_change
+	Status   string   `json:"status" yaml:"status"`     // for status_for
+	Duration Duration `json:"duration" yaml:"duration"` // for status_for
 	// Fields for compound conditions (AND/OR of sub-conditions)
-	SubConditions  []AlertCondition   `json:"sub_conditions,omitempty" yaml:"sub_conditions,omitempty"`
-	Logic          string             `json:"logic" yaml:"logic"` // for compound: "and" or "or"
+	SubConditions []AlertCondition `json:"sub_conditions,omitempty" yaml:"sub_conditions,omitempty"`
+	Logic         string           `json:"logic" yaml:"logic"` // for compound: "and" or "or"
 	// Fields for anomaly detection
-	AnomalyStdDev  float64            `json:"anomaly_std_dev,omitempty" yaml:"anomaly_std_dev,omitempty"` // standard deviations from mean
+	AnomalyStdDev float64 `json:"anomaly_std_dev,omitempty" yaml:"anomaly_std_dev,omitempty"` // standard deviations from mean
 }
 
 // ChannelConfig defines an alert notification channel

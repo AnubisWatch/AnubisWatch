@@ -17,17 +17,17 @@ var (
 
 // Info holds complete version information
 type Info struct {
-	Version       string `json:"version"`
-	Commit        string `json:"commit"`
-	BuildDate     string `json:"build_date"`
-	GoVersion     string `json:"go_version"`
-	Platform      string `json:"platform"`
-	OS            string `json:"os"`
-	Arch          string `json:"arch"`
-	NumCPU        int    `json:"num_cpu"`
-	NumGoroutine  int    `json:"num_goroutine"`
-	GitBranch     string `json:"git_branch,omitempty"`
-	GitTag        string `json:"git_tag,omitempty"`
+	Version      string `json:"version"`
+	Commit       string `json:"commit"`
+	BuildDate    string `json:"build_date"`
+	GoVersion    string `json:"go_version"`
+	Platform     string `json:"platform"`
+	OS           string `json:"os"`
+	Arch         string `json:"arch"`
+	NumCPU       int    `json:"num_cpu"`
+	NumGoroutine int    `json:"num_goroutine"`
+	GitBranch    string `json:"git_branch,omitempty"`
+	GitTag       string `json:"git_tag,omitempty"`
 }
 
 // Get returns version information

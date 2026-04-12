@@ -1097,10 +1097,10 @@ func TestExecuteJourney_ContinueOnFailure(t *testing.T) {
 	ctx := context.Background()
 
 	journey := &core.JourneyConfig{
-		ID:                 "test-journey",
-		Name:               "Test Journey",
-		WorkspaceID:        "default",
-		ContinueOnFailure:  true, // Continue on failure
+		ID:                "test-journey",
+		Name:              "Test Journey",
+		WorkspaceID:       "default",
+		ContinueOnFailure: true, // Continue on failure
 		Steps: []core.JourneyStep{
 			{
 				Name:   "Step 1",
@@ -1158,8 +1158,8 @@ func TestExecutor_VariableInterpolationInHTTPConfig(t *testing.T) {
 				"Authorization": "Bearer ${token}",
 				"Content-Type":  "application/json",
 			},
-			Body:          `{"user": "${user_id}"}`,
-			ValidStatus:   []int{200},
+			Body:        `{"user": "${user_id}"}`,
+			ValidStatus: []int{200},
 		},
 	}
 

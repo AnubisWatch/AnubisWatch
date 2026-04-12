@@ -12,13 +12,13 @@ import (
 // HealthMonitor monitors the health of remote regions
 // The Ibis - messenger that carries health status between regions
 type HealthMonitor struct {
-	mu         sync.RWMutex
-	config     HealthConfig
-	manager    *Manager
-	checks     map[string]*HealthCheck
-	logger     *slog.Logger
-	stopCh     chan struct{}
-	client     *http.Client
+	mu      sync.RWMutex
+	config  HealthConfig
+	manager *Manager
+	checks  map[string]*HealthCheck
+	logger  *slog.Logger
+	stopCh  chan struct{}
+	client  *http.Client
 }
 
 // HealthConfig contains health monitoring settings
@@ -44,12 +44,12 @@ type HealthCheck struct {
 
 // HealthStatus represents the health status of a region
 type HealthStatus struct {
-	RegionID    string        `json:"region_id"`
-	Healthy     bool          `json:"healthy"`
-	Latency     time.Duration `json:"latency"`
-	LastCheck   time.Time     `json:"last_check"`
-	FailCount   int           `json:"fail_count"`
-	SuccessCount int          `json:"success_count"`
+	RegionID     string        `json:"region_id"`
+	Healthy      bool          `json:"healthy"`
+	Latency      time.Duration `json:"latency"`
+	LastCheck    time.Time     `json:"last_check"`
+	FailCount    int           `json:"fail_count"`
+	SuccessCount int           `json:"success_count"`
 }
 
 // NewHealthMonitor creates a new health monitor
@@ -356,11 +356,11 @@ func (h *HealthMonitor) ForceCheck(ctx context.Context, regionID string) (*Healt
 
 // HealthSummary provides a summary of region health
 type HealthSummary struct {
-	TotalRegions    int       `json:"total_regions"`
-	HealthyRegions  int       `json:"healthy_regions"`
-	UnhealthyRegions int      `json:"unhealthy_regions"`
-	UnknownRegions  int       `json:"unknown_regions"`
-	LastUpdate      time.Time `json:"last_update"`
+	TotalRegions     int       `json:"total_regions"`
+	HealthyRegions   int       `json:"healthy_regions"`
+	UnhealthyRegions int       `json:"unhealthy_regions"`
+	UnknownRegions   int       `json:"unknown_regions"`
+	LastUpdate       time.Time `json:"last_update"`
 }
 
 // GetSummary returns a health summary

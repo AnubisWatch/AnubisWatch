@@ -2705,7 +2705,6 @@ func TestContainsString(t *testing.T) {
 		},
 	}
 
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := containsString(tt.slice, tt.s)
@@ -3235,9 +3234,9 @@ func TestNode_RemovePeer_NotFoundAsLeader(t *testing.T) {
 // failingMockTransport returns errors for all RPC calls
 type failingMockTransport struct{}
 
-func (m *failingMockTransport) Start() error                                 { return nil }
-func (m *failingMockTransport) Stop() error                                  { return nil }
-func (m *failingMockTransport) LocalAddr() string                            { return "127.0.0.1:0" }
+func (m *failingMockTransport) Start() error      { return nil }
+func (m *failingMockTransport) Stop() error       { return nil }
+func (m *failingMockTransport) LocalAddr() string { return "127.0.0.1:0" }
 func (m *failingMockTransport) SendAppendEntries(peerID string, req *core.AppendEntriesRequest) (*core.AppendEntriesResponse, error) {
 	return nil, fmt.Errorf("network error")
 }
@@ -3257,9 +3256,9 @@ func (m *failingMockTransport) SendHeartbeat(peerID string, req *core.HeartbeatR
 // highTermMockTransport returns higher term responses (peer is ahead)
 type highTermMockTransport struct{}
 
-func (m *highTermMockTransport) Start() error                                 { return nil }
-func (m *highTermMockTransport) Stop() error                                  { return nil }
-func (m *highTermMockTransport) LocalAddr() string                            { return "127.0.0.1:0" }
+func (m *highTermMockTransport) Start() error      { return nil }
+func (m *highTermMockTransport) Stop() error       { return nil }
+func (m *highTermMockTransport) LocalAddr() string { return "127.0.0.1:0" }
 func (m *highTermMockTransport) SendAppendEntries(peerID string, req *core.AppendEntriesRequest) (*core.AppendEntriesResponse, error) {
 	return &core.AppendEntriesResponse{Term: req.Term, Success: true}, nil
 }

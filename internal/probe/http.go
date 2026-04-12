@@ -19,11 +19,11 @@ import (
 
 // HTTPChecker implements HTTP/HTTPS health checks
 type HTTPChecker struct {
-	client          *http.Client
-	transportCache  map[string]*http.Transport
-	cacheMu         sync.RWMutex
-	cacheHits       uint64
-	cacheMisses     uint64
+	client         *http.Client
+	transportCache map[string]*http.Transport
+	cacheMu        sync.RWMutex
+	cacheHits      uint64
+	cacheMisses    uint64
 }
 
 // NewHTTPChecker creates a new HTTP checker

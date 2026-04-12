@@ -1719,10 +1719,10 @@ func TestCircuitBreaker_IsOpen_DoubleCheck(t *testing.T) {
 // Test regionMatches with no matching region (covers return false path)
 func TestEngine_regionMatches(t *testing.T) {
 	tests := []struct {
-		name       string
+		name        string
 		probeRegion string
 		soulRegions []string
-		expected   bool
+		expected    bool
 	}{
 		{"empty regions", "us-east-1", nil, true},
 		{"matching region", "us-east-1", []string{"us-east-1", "eu-west-1"}, true},

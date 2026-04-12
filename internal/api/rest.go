@@ -37,7 +37,7 @@ type RESTServer struct {
 	journey    JourneyExecutor
 
 	// Prometheus-style counters (in-memory, reset on restart)
-	metricsMu  sync.RWMutex
+	metricsMu        sync.RWMutex
 	judgmentsTotal   uint64
 	verdictsFired    uint64
 	verdictsResolved uint64
@@ -1079,21 +1079,21 @@ func (s *RESTServer) handleResolveIncident(ctx *Context) error {
 
 func (s *RESTServer) handleGetConfig(ctx *Context) error {
 	config := map[string]interface{}{
-		"instance_name":  "AnubisWatch",
-		"timezone":       "UTC",
-		"language":       "en",
-		"theme":          "dark",
-		"retention_days": 30,
-		"storage_path":   "/var/lib/anubis",
-		"auth_enabled":   s.authConfig.IsEnabled(),
-		"mcp_enabled":    s.mcp != nil,
+		"instance_name":     "AnubisWatch",
+		"timezone":          "UTC",
+		"language":          "en",
+		"theme":             "dark",
+		"retention_days":    30,
+		"storage_path":      "/var/lib/anubis",
+		"auth_enabled":      s.authConfig.IsEnabled(),
+		"mcp_enabled":       s.mcp != nil,
 		"websocket_enabled": true,
-		"host":           s.config.Host,
-		"port":           s.config.Port,
-		"grpc_port":      s.config.GRPCPort,
-		"tls_enabled":    s.config.TLS.Enabled,
-		"auto_cert":      s.config.TLS.AutoCert,
-		"auth_type":      s.authConfig.Type,
+		"host":              s.config.Host,
+		"port":              s.config.Port,
+		"grpc_port":         s.config.GRPCPort,
+		"tls_enabled":       s.config.TLS.Enabled,
+		"auto_cert":         s.config.TLS.AutoCert,
+		"auth_type":         s.authConfig.Type,
 	}
 	return ctx.JSON(http.StatusOK, config)
 }
@@ -1435,9 +1435,9 @@ func (s *RESTServer) rateLimitMiddleware(handler Handler) Handler {
 	}
 
 	var (
-		mu         sync.RWMutex
-		ipClients  = make(map[string]*clientState)
-		userClients= make(map[string]*clientState) // Per-user rate limiting
+		mu          sync.RWMutex
+		ipClients   = make(map[string]*clientState)
+		userClients = make(map[string]*clientState) // Per-user rate limiting
 		// Different limits for different types of endpoints
 		defaultLimit   = 100 // requests per minute for regular endpoints
 		authLimit      = 10  // stricter limit for auth endpoints

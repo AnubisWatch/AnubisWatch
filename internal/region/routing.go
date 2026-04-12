@@ -23,25 +23,25 @@ type Router struct {
 
 // RoutingConfig contains routing settings
 type RoutingConfig struct {
-	Enabled           bool
-	DefaultRegion     string
-	LatencyBased      bool
-	GeoBased          bool
-	HealthBased       bool
-	StickySessions    bool
-	FailoverTimeout   time.Duration
-	MaxHops           int
+	Enabled         bool
+	DefaultRegion   string
+	LatencyBased    bool
+	GeoBased        bool
+	HealthBased     bool
+	StickySessions  bool
+	FailoverTimeout time.Duration
+	MaxHops         int
 }
 
 // Route represents a routing rule
 type Route struct {
-	ID          string
-	Path        string
-	Method      string
-	Regions     []string
-	Priority    int
-	Active      bool
-	CreatedAt   time.Time
+	ID        string
+	Path      string
+	Method    string
+	Regions   []string
+	Priority  int
+	Active    bool
+	CreatedAt time.Time
 }
 
 // RoutingDecision represents a routing decision

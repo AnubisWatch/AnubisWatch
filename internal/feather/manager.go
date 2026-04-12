@@ -11,10 +11,10 @@ import (
 
 // Manager evaluates performance budgets (Feathers) against recent judgments
 type Manager struct {
-	mu      sync.RWMutex
-	feathers map[string]core.FeatherConfig // name -> config
-	latencyDB map[string][]latencySample    // soulID -> recent latencies
-	violations map[string]int              // soulID -> consecutive violation count
+	mu          sync.RWMutex
+	feathers    map[string]core.FeatherConfig // name -> config
+	latencyDB   map[string][]latencySample    // soulID -> recent latencies
+	violations  map[string]int                // soulID -> consecutive violation count
 	onViolation func(soulID, featherName string, sample FeatherViolation)
 }
 
@@ -26,12 +26,12 @@ type latencySample struct {
 
 // FeatherViolation records a budget violation
 type FeatherViolation struct {
-	Feather   string    `json:"feather"`
-	SoulID    string    `json:"soul_id"`
-	Metric    string    `json:"metric"` // p50, p95, p99, max
+	Feather   string        `json:"feather"`
+	SoulID    string        `json:"soul_id"`
+	Metric    string        `json:"metric"` // p50, p95, p99, max
 	Actual    time.Duration `json:"actual"`
 	Threshold time.Duration `json:"threshold"`
-	Timestamp time.Time   `json:"timestamp"`
+	Timestamp time.Time     `json:"timestamp"`
 }
 
 // NewManager creates a feather manager
@@ -246,8 +246,8 @@ func (m *Manager) Stats() map[string]interface{} {
 	defer m.mu.RUnlock()
 
 	stats := map[string]interface{}{
-		"total_feathers":  len(m.feathers),
-		"tracked_souls":   len(m.latencyDB),
+		"total_feathers":    len(m.feathers),
+		"tracked_souls":     len(m.latencyDB),
 		"active_violations": make(map[string]int),
 	}
 

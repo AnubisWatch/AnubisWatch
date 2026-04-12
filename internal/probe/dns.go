@@ -331,7 +331,7 @@ func buildDNSQueryWithEDNS0(domain string, qtype uint16, doBit bool) []byte {
 	// EDNS0 OPT record
 	// NAME: root (0), TYPE: OPT(41), UDP: 4096, TTL: DO bit in upper 8 bits, RDLEN: 0
 	edns0 := []byte{
-		0x00, // NAME: root
+		0x00,       // NAME: root
 		0x00, 0x29, // TYPE: OPT (41)
 		0x10, 0x00, // UDP payload: 4096
 	}

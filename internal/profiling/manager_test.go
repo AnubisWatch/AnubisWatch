@@ -448,7 +448,7 @@ func TestReport_WriteToFile_Error(t *testing.T) {
 
 	// Try to write to a read-only directory (this should fail)
 	readOnlyDir := t.TempDir()
-	os.Chmod(readOnlyDir, 0555) // Read-only
+	os.Chmod(readOnlyDir, 0555)       // Read-only
 	defer os.Chmod(readOnlyDir, 0755) // Restore permissions
 
 	path := filepath.Join(readOnlyDir, "report.json")

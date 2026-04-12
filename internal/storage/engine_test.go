@@ -6996,9 +6996,9 @@ func TestCobaltDB_GetVerdict_DefaultWorkspace(t *testing.T) {
 
 	ctx := context.Background()
 	verdict := &core.Verdict{
-		ID:     "v-ws-test",
-		SoulID: "soul-1",
-		Status: core.VerdictActive,
+		ID:      "v-ws-test",
+		SoulID:  "soul-1",
+		Status:  core.VerdictActive,
 		FiredAt: time.Now(),
 	}
 	if err := db.SaveVerdict(ctx, verdict); err != nil {

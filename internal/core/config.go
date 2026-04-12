@@ -335,12 +335,12 @@ func (c *Config) validate() error {
 
 // RegionsConfig defines multi-region configuration
 type RegionsConfig struct {
-	Enabled           bool             `json:"enabled" yaml:"enabled"`
-	LocalRegion       string           `json:"local_region" yaml:"local_region"`
-	Replication       ReplicationConfig `json:"replication" yaml:"replication"`
-	Routing           RoutingConfig    `json:"routing" yaml:"routing"`
-	HealthCheck       HealthCheckConfig `json:"health_check" yaml:"health_check"`
-	RemoteRegions     []RemoteRegionConfig `json:"remote_regions" yaml:"remote_regions"`
+	Enabled       bool                 `json:"enabled" yaml:"enabled"`
+	LocalRegion   string               `json:"local_region" yaml:"local_region"`
+	Replication   ReplicationConfig    `json:"replication" yaml:"replication"`
+	Routing       RoutingConfig        `json:"routing" yaml:"routing"`
+	HealthCheck   HealthCheckConfig    `json:"health_check" yaml:"health_check"`
+	RemoteRegions []RemoteRegionConfig `json:"remote_regions" yaml:"remote_regions"`
 }
 
 // RemoteRegionConfig defines a remote region
@@ -358,24 +358,24 @@ type RemoteRegionConfig struct {
 
 // ReplicationConfig defines cross-region replication settings
 type ReplicationConfig struct {
-	Enabled          bool          `json:"enabled" yaml:"enabled"`
-	SyncMode         string        `json:"sync_mode" yaml:"sync_mode"`
-	BatchSize        int           `json:"batch_size" yaml:"batch_size"`
-	BatchInterval    Duration      `json:"batch_interval" yaml:"batch_interval"`
-	ConflictStrategy string        `json:"conflict_strategy" yaml:"conflict_strategy"`
-	RetryInterval    Duration      `json:"retry_interval" yaml:"retry_interval"`
-	MaxRetries       int           `json:"max_retries" yaml:"max_retries"`
-	Compression      bool          `json:"compression" yaml:"compression"`
-	EncryptTraffic   bool          `json:"encrypt_traffic" yaml:"encrypt_traffic"`
+	Enabled          bool     `json:"enabled" yaml:"enabled"`
+	SyncMode         string   `json:"sync_mode" yaml:"sync_mode"`
+	BatchSize        int      `json:"batch_size" yaml:"batch_size"`
+	BatchInterval    Duration `json:"batch_interval" yaml:"batch_interval"`
+	ConflictStrategy string   `json:"conflict_strategy" yaml:"conflict_strategy"`
+	RetryInterval    Duration `json:"retry_interval" yaml:"retry_interval"`
+	MaxRetries       int      `json:"max_retries" yaml:"max_retries"`
+	Compression      bool     `json:"compression" yaml:"compression"`
+	EncryptTraffic   bool     `json:"encrypt_traffic" yaml:"encrypt_traffic"`
 }
 
 // RoutingConfig defines region-aware routing settings
 type RoutingConfig struct {
-	Enabled         bool          `json:"enabled" yaml:"enabled"`
-	LatencyBased    bool          `json:"latency_based" yaml:"latency_based"`
-	GeoBased        bool          `json:"geo_based" yaml:"geo_based"`
-	HealthBased     bool          `json:"health_based" yaml:"health_based"`
-	FailoverTimeout Duration      `json:"failover_timeout" yaml:"failover_timeout"`
+	Enabled         bool     `json:"enabled" yaml:"enabled"`
+	LatencyBased    bool     `json:"latency_based" yaml:"latency_based"`
+	GeoBased        bool     `json:"geo_based" yaml:"geo_based"`
+	HealthBased     bool     `json:"health_based" yaml:"health_based"`
+	FailoverTimeout Duration `json:"failover_timeout" yaml:"failover_timeout"`
 }
 
 // HealthCheckConfig defines region health monitoring settings
@@ -387,6 +387,7 @@ type HealthCheckConfig struct {
 	SuccessThreshold int               `json:"success_threshold" yaml:"success_threshold"`
 	Endpoints        map[string]string `json:"endpoints" yaml:"endpoints"`
 }
+
 func SaveConfig(path string, config *Config) error {
 	var data []byte
 	var err error

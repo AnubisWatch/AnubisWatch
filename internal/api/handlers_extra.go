@@ -317,10 +317,10 @@ func (s *RESTServer) queryJudgments(q core.WidgetQuery) (interface{}, error) {
 
 	// Aggregate by time buckets
 	buckets := make(map[string]struct {
-		Count   int     `json:"count"`
-		AvgLat  float64 `json:"avg_latency"`
-		Passed  int     `json:"passed"`
-		Failed  int     `json:"failed"`
+		Count    int     `json:"count"`
+		AvgLat   float64 `json:"avg_latency"`
+		Passed   int     `json:"passed"`
+		Failed   int     `json:"failed"`
 		TotalLat float64 `json:"-"`
 	})
 

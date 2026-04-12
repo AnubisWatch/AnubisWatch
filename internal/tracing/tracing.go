@@ -9,17 +9,17 @@ import (
 
 // Span represents a single operation within a trace
 type Span struct {
-	TraceID    string                 `json:"trace_id"`
-	SpanID     string                 `json:"span_id"`
-	ParentID   string                 `json:"parent_id,omitempty"`
-	Name       string                 `json:"name"`
-	StartTime  time.Time              `json:"start_time"`
-	EndTime    time.Time              `json:"end_time,omitempty"`
-	Duration   int64                  `json:"duration_ms,omitempty"`
-	Tags       map[string]string      `json:"tags,omitempty"`
-	Logs       []LogEntry             `json:"logs,omitempty"`
-	Status     SpanStatus             `json:"status"`
-	Attributes map[string]any `json:"attributes,omitempty"`
+	TraceID    string            `json:"trace_id"`
+	SpanID     string            `json:"span_id"`
+	ParentID   string            `json:"parent_id,omitempty"`
+	Name       string            `json:"name"`
+	StartTime  time.Time         `json:"start_time"`
+	EndTime    time.Time         `json:"end_time,omitempty"`
+	Duration   int64             `json:"duration_ms,omitempty"`
+	Tags       map[string]string `json:"tags,omitempty"`
+	Logs       []LogEntry        `json:"logs,omitempty"`
+	Status     SpanStatus        `json:"status"`
+	Attributes map[string]any    `json:"attributes,omitempty"`
 }
 
 // SpanStatus represents the status of a span
@@ -46,7 +46,7 @@ func (s SpanStatus) String() string {
 
 // LogEntry represents a log entry within a span
 type LogEntry struct {
-	Timestamp time.Time              `json:"timestamp"`
+	Timestamp time.Time      `json:"timestamp"`
 	Fields    map[string]any `json:"fields"`
 }
 
@@ -269,12 +269,12 @@ func NoopTracer() *Tracer {
 
 // SpanStats provides statistics about spans
 type SpanStats struct {
-	TotalSpans   int
-	TotalErrors  int
-	AvgDuration  int64
-	MaxDuration  int64
-	MinDuration  int64
-	SpanCounts   map[string]int
+	TotalSpans  int
+	TotalErrors int
+	AvgDuration int64
+	MaxDuration int64
+	MinDuration int64
+	SpanCounts  map[string]int
 }
 
 // GetStats returns statistics about recorded spans

@@ -15,13 +15,13 @@ import (
 
 // mockStorage implements Storage interface for testing
 type mockStorage struct {
-	regions map[string]*Region
+	regions  map[string]*Region
 	entities map[string]json.RawMessage // "type:entityID" -> data
 }
 
 func newMockStorage() *mockStorage {
 	return &mockStorage{
-		regions: make(map[string]*Region),
+		regions:  make(map[string]*Region),
 		entities: make(map[string]json.RawMessage),
 	}
 }
@@ -342,28 +342,28 @@ func TestSelectBestRegion(t *testing.T) {
 
 	// Register regions with different latencies
 	region1 := &Region{
-		ID:       "region-1",
-		Name:     "Region 1",
-		Endpoint: "http://localhost:8081",
-		Latitude: 40.7128,
+		ID:        "region-1",
+		Name:      "Region 1",
+		Endpoint:  "http://localhost:8081",
+		Latitude:  40.7128,
 		Longitude: -74.0060,
-		Enabled:  true,
-		Healthy:  true,
-		Latency:  50 * time.Millisecond,
-		Priority: 1,
+		Enabled:   true,
+		Healthy:   true,
+		Latency:   50 * time.Millisecond,
+		Priority:  1,
 	}
 	manager.RegisterRegion(context.Background(), region1)
 
 	region2 := &Region{
-		ID:       "region-2",
-		Name:     "Region 2",
-		Endpoint: "http://localhost:8082",
-		Latitude: 34.0522,
+		ID:        "region-2",
+		Name:      "Region 2",
+		Endpoint:  "http://localhost:8082",
+		Latitude:  34.0522,
 		Longitude: -118.2437,
-		Enabled:  true,
-		Healthy:  true,
-		Latency:  100 * time.Millisecond,
-		Priority: 0,
+		Enabled:   true,
+		Healthy:   true,
+		Latency:   100 * time.Millisecond,
+		Priority:  0,
 	}
 	manager.RegisterRegion(context.Background(), region2)
 
@@ -406,12 +406,12 @@ func TestGetRegionStatus(t *testing.T) {
 	}
 
 	region := &Region{
-		ID:       "region-1",
-		Name:     "Test Region",
-		Endpoint: "http://localhost:8081",
-		Enabled:  true,
-		Healthy:  true,
-		Latency:  50 * time.Millisecond,
+		ID:        "region-1",
+		Name:      "Test Region",
+		Endpoint:  "http://localhost:8081",
+		Enabled:   true,
+		Healthy:   true,
+		Latency:   50 * time.Millisecond,
 		NodeCount: 3,
 		SoulCount: 10,
 	}
@@ -644,8 +644,8 @@ func TestResolveRegionEndpoint(t *testing.T) {
 		wantErr  bool
 	}{
 		{"with_port", "localhost:8080", "8080", false},
-		{"without_port", "localhost", "7946", false},      // Uses default port
-		{"invalid_format", ":", "7946", false},            // SplitHostPort fails, falls back
+		{"without_port", "localhost", "7946", false},               // Uses default port
+		{"invalid_format", ":", "7946", false},                     // SplitHostPort fails, falls back
 		{"unresolvable_host", "invalid.host.local.test", "", true}, // LookupHost fails
 	}
 
@@ -1359,10 +1359,10 @@ func TestManager_StartStop(t *testing.T) {
 			Timeout:  10 * time.Second,
 		},
 		Replication: ReplicationConfig{
-			Enabled:        true,
-			BatchInterval:  time.Minute,
-			BatchSize:      100,
-			RetryInterval:  time.Minute,
+			Enabled:          true,
+			BatchInterval:    time.Minute,
+			BatchSize:        100,
+			RetryInterval:    time.Minute,
 			ConflictStrategy: "last-write-wins",
 		},
 	}
@@ -1402,10 +1402,10 @@ func TestManager_Start_WithRegions(t *testing.T) {
 			Timeout:  10 * time.Second,
 		},
 		Replication: ReplicationConfig{
-			Enabled:        true,
-			BatchInterval:  time.Minute,
-			BatchSize:      100,
-			RetryInterval:  time.Minute,
+			Enabled:          true,
+			BatchInterval:    time.Minute,
+			BatchSize:        100,
+			RetryInterval:    time.Minute,
 			ConflictStrategy: "last-write-wins",
 		},
 	}
@@ -1459,10 +1459,10 @@ func TestManager_Start_NilStorage(t *testing.T) {
 			Timeout:  10 * time.Second,
 		},
 		Replication: ReplicationConfig{
-			Enabled:        true,
-			BatchInterval:  time.Minute,
-			BatchSize:      100,
-			RetryInterval:  time.Minute,
+			Enabled:          true,
+			BatchInterval:    time.Minute,
+			BatchSize:        100,
+			RetryInterval:    time.Minute,
 			ConflictStrategy: "last-write-wins",
 		},
 	}
@@ -2247,7 +2247,7 @@ func TestReplicationManager_applyEvent_AllTypes(t *testing.T) {
 	ctx := context.Background()
 
 	tests := []struct {
-		name string
+		name  string
 		event ReplicationEvent
 	}{
 		{
@@ -2530,7 +2530,6 @@ func TestReplicationManager_HandleIncomingBatch_Empty(t *testing.T) {
 	}
 }
 
-
 // TestExtractClientIP tests the extractClientIP function
 func TestExtractClientIP(t *testing.T) {
 	tests := []struct {
@@ -2667,13 +2666,13 @@ func TestRouter_RouteRequest_LatencyBased(t *testing.T) {
 	// Register and enable a region
 	ctx := context.Background()
 	region := &Region{
-		ID:       "remote-region",
-		Name:     "Remote",
-		Endpoint: "http://remote:8080",
-		Latitude: 40.7128,
+		ID:        "remote-region",
+		Name:      "Remote",
+		Endpoint:  "http://remote:8080",
+		Latitude:  40.7128,
 		Longitude: -74.0060,
-		Enabled:  true,
-		Healthy:  true,
+		Enabled:   true,
+		Healthy:   true,
 	}
 	manager.RegisterRegion(ctx, region)
 	manager.UpdateRegionHealth("remote-region", true, 50*time.Millisecond)
@@ -2712,20 +2711,20 @@ func TestRouter_RouteRequest_GeoBased(t *testing.T) {
 	// Register and enable a region
 	ctx := context.Background()
 	region := &Region{
-		ID:       "remote-region",
-		Name:     "Remote",
-		Endpoint: "http://remote:8080",
-		Latitude: 40.7128,
+		ID:        "remote-region",
+		Name:      "Remote",
+		Endpoint:  "http://remote:8080",
+		Latitude:  40.7128,
 		Longitude: -74.0060,
-		Enabled:  true,
-		Healthy:  true,
+		Enabled:   true,
+		Healthy:   true,
 	}
 	manager.RegisterRegion(ctx, region)
 	manager.UpdateRegionHealth("remote-region", true, 50*time.Millisecond)
 
 	routingCfg := RoutingConfig{
-		Enabled:   true,
-		GeoBased:  true,
+		Enabled:  true,
+		GeoBased: true,
 	}
 
 	router := NewRouter(routingCfg, manager, logger)
@@ -2897,8 +2896,8 @@ func TestHealthMonitor_AddRegion_CustomEndpoint(t *testing.T) {
 	manager, _ := NewManager(cfg, storage, logger)
 
 	healthCfg := HealthConfig{
-		Enabled:   true,
-		Interval:  1 * time.Second,
+		Enabled:  true,
+		Interval: 1 * time.Second,
 		Endpoints: map[string]string{
 			"region-1": "http://custom:8080/health",
 		},
@@ -2923,7 +2922,6 @@ func TestHealthMonitor_AddRegion_CustomEndpoint(t *testing.T) {
 		t.Errorf("Expected custom endpoint, got %s", check.Endpoint)
 	}
 }
-
 
 // TestReplicationManager_Replicate_Disabled tests Replicate when disabled
 func TestReplicationManager_Replicate_Disabled(t *testing.T) {
@@ -3896,11 +3894,11 @@ func TestCheckConflict_ResolveLastWriteWins(t *testing.T) {
 	// Remote is newer
 	remoteData := json.RawMessage(`{"id":"soul-789","updated_at":"2026-04-11T12:00:00Z"}`)
 	event := &ReplicationEvent{
-		ID:        "evt-4",
-		Type:      "soul",
-		Action:    "update",
-		EntityID:  "soul-789",
-		Data:      remoteData,
+		ID:       "evt-4",
+		Type:     "soul",
+		Action:   "update",
+		EntityID: "soul-789",
+		Data:     remoteData,
 	}
 
 	conflict, _ := replication.checkConflict(context.Background(), event)
@@ -3939,11 +3937,11 @@ func TestCheckConflict_ResolveLocalWins(t *testing.T) {
 
 	remoteData := json.RawMessage(`{"id":"soul-100","updated_at":"2026-04-11T10:00:00Z"}`)
 	event := &ReplicationEvent{
-		ID:        "evt-5",
-		Type:      "soul",
-		Action:    "update",
-		EntityID:  "soul-100",
-		Data:      remoteData,
+		ID:       "evt-5",
+		Type:     "soul",
+		Action:   "update",
+		EntityID: "soul-100",
+		Data:     remoteData,
 	}
 
 	conflict, _ := replication.checkConflict(context.Background(), event)
@@ -3978,11 +3976,11 @@ func TestCheckConflict_ResolveManual(t *testing.T) {
 
 	remoteData := json.RawMessage(`{"id":"soul-200","updated_at":"2026-04-11T10:00:00Z"}`)
 	event := &ReplicationEvent{
-		ID:        "evt-6",
-		Type:      "soul",
-		Action:    "update",
-		EntityID:  "soul-200",
-		Data:      remoteData,
+		ID:       "evt-6",
+		Type:     "soul",
+		Action:   "update",
+		EntityID: "soul-200",
+		Data:     remoteData,
 	}
 
 	conflict, _ := replication.checkConflict(context.Background(), event)
@@ -4013,11 +4011,11 @@ func TestCheckConflict_NoStorage(t *testing.T) {
 	replication := manager.GetReplicationManager()
 
 	event := &ReplicationEvent{
-		ID:        "evt-7",
-		Type:      "soul",
-		Action:    "update",
-		EntityID:  "soul-300",
-		Data:      json.RawMessage(`{"id":"soul-300"}`),
+		ID:       "evt-7",
+		Type:     "soul",
+		Action:   "update",
+		EntityID: "soul-300",
+		Data:     json.RawMessage(`{"id":"soul-300"}`),
 	}
 
 	conflict, err := replication.checkConflict(context.Background(), event)
@@ -4052,11 +4050,11 @@ func TestReplication_EventWithConflictSkipsLocalWinner(t *testing.T) {
 	// Remote is older — local should win
 	remoteData := json.RawMessage(`{"id":"soul-999","updated_at":"2026-04-11T08:00:00Z"}`)
 	event := &ReplicationEvent{
-		ID:        "evt-8",
-		Type:      "soul",
-		Action:    "update",
-		EntityID:  "soul-999",
-		Data:      remoteData,
+		ID:       "evt-8",
+		Type:     "soul",
+		Action:   "update",
+		EntityID: "soul-999",
+		Data:     remoteData,
 	}
 
 	err := replication.applyEvent(context.Background(), event)

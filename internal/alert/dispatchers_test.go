@@ -1279,12 +1279,12 @@ func TestWebHookDispatcher_CustomHeaders(t *testing.T) {
 
 	dispatcher := &WebHookDispatcher{logger: newTestLogger()}
 	event := &core.AlertEvent{
-		ID:        "test-event",
-		SoulName:  "Test Soul",
-		Status:    core.SoulDead,
+		ID:         "test-event",
+		SoulName:   "Test Soul",
+		Status:     core.SoulDead,
 		PrevStatus: core.SoulAlive,
-		Severity:  core.SeverityCritical,
-		Message:   "Test message",
+		Severity:   core.SeverityCritical,
+		Message:    "Test message",
 	}
 	channel := &core.AlertChannel{
 		Type: core.ChannelWebHook,
@@ -1320,11 +1320,11 @@ func TestWebHookDispatcher_HMACSignature(t *testing.T) {
 
 	dispatcher := &WebHookDispatcher{logger: newTestLogger()}
 	event := &core.AlertEvent{
-		ID:        "test-event",
-		SoulName:  "Test Soul",
-		Status:    core.SoulDead,
-		Severity:  core.SeverityCritical,
-		Message:   "Test message",
+		ID:       "test-event",
+		SoulName: "Test Soul",
+		Status:   core.SoulDead,
+		Severity: core.SeverityCritical,
+		Message:  "Test message",
 	}
 	channel := &core.AlertChannel{
 		Type: core.ChannelWebHook,
@@ -1434,11 +1434,11 @@ func TestSMSDispatcher_Validate_Twilio(t *testing.T) {
 
 	// Valid Twilio config
 	config := map[string]interface{}{
-		"provider":     "twilio",
-		"account_sid":  "AC123",
-		"auth_token":   "token123",
-		"to":           "+1234567890",
-		"from":         "+0987654321",
+		"provider":    "twilio",
+		"account_sid": "AC123",
+		"auth_token":  "token123",
+		"to":          "+1234567890",
+		"from":        "+0987654321",
 	}
 	if err := dispatcher.Validate(config); err != nil {
 		t.Errorf("Expected valid config, got error: %v", err)
@@ -1471,11 +1471,11 @@ func TestSMSDispatcher_Validate_Vonage(t *testing.T) {
 
 	// Valid Vonage config
 	config := map[string]interface{}{
-		"provider":    "vonage",
-		"api_key":     "key123",
-		"api_secret":  "secret123",
-		"to":          "+1234567890",
-		"from":        "AnubisWatch",
+		"provider":   "vonage",
+		"api_key":    "key123",
+		"api_secret": "secret123",
+		"to":         "+1234567890",
+		"from":       "AnubisWatch",
 	}
 	if err := dispatcher.Validate(config); err != nil {
 		t.Errorf("Expected valid config, got error: %v", err)
@@ -1493,9 +1493,9 @@ func TestSMSDispatcher_Validate_Vonage(t *testing.T) {
 
 	// Missing api_secret
 	badConfig2 := map[string]interface{}{
-		"provider":  "vonage",
-		"api_key":   "key123",
-		"to":        "+1234567890",
+		"provider": "vonage",
+		"api_key":  "key123",
+		"to":       "+1234567890",
 	}
 	if err := dispatcher.Validate(badConfig2); err == nil {
 		t.Error("Expected error for missing api_secret")

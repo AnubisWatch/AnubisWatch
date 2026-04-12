@@ -1040,7 +1040,7 @@ func TestManager_Restore_ContinueOnError_AlertChannels(t *testing.T) {
 		workspaces: []*core.Workspace{
 			{ID: "ws1", Name: "Workspace 1"},
 		},
-		souls:      []*core.Soul{},
+		souls: []*core.Soul{},
 		alertChannels: []*core.AlertChannel{
 			{ID: "ch1", Name: "Channel 1"},
 			{ID: "ch2", Name: "Channel 2"},
@@ -1090,7 +1090,7 @@ func TestManager_Restore_ContinueOnError_AlertRules(t *testing.T) {
 		workspaces: []*core.Workspace{
 			{ID: "ws1", Name: "Workspace 1"},
 		},
-		souls:      []*core.Soul{},
+		souls: []*core.Soul{},
 		alertChannels: []*core.AlertChannel{
 			{ID: "ch1", Name: "Channel 1"},
 		},
@@ -1140,7 +1140,7 @@ func TestManager_Restore_ContinueOnError_StatusPages(t *testing.T) {
 		workspaces: []*core.Workspace{
 			{ID: "ws1", Name: "Workspace 1"},
 		},
-		souls:       []*core.Soul{},
+		souls: []*core.Soul{},
 		statusPages: []*core.StatusPage{
 			{ID: "page1", Name: "Page 1"},
 			{ID: "page2", Name: "Page 2"},

@@ -331,17 +331,17 @@ func TestGetExtended_PopulatesGitFields(t *testing.T) {
 // TestInfoString_AllFieldsPopulated tests String with all fields set
 func TestInfoString_AllFieldsPopulated(t *testing.T) {
 	info := Info{
-		Version:    "1.0.0",
-		Commit:     "abcdef123456789",
-		BuildDate:  "2026-01-01",
-		GoVersion:  "go1.26",
-		Platform:   "linux/amd64",
-		OS:         "linux",
-		Arch:       "amd64",
-		NumCPU:     8,
+		Version:      "1.0.0",
+		Commit:       "abcdef123456789",
+		BuildDate:    "2026-01-01",
+		GoVersion:    "go1.26",
+		Platform:     "linux/amd64",
+		OS:           "linux",
+		Arch:         "amd64",
+		NumCPU:       8,
 		NumGoroutine: 10,
-		GitBranch:  "main",
-		GitTag:     "v1.0.0",
+		GitBranch:    "main",
+		GitTag:       "v1.0.0",
 	}
 
 	s := info.String()

@@ -446,7 +446,7 @@ func TestAuditLogger_LogAuth_WithDetails(t *testing.T) {
 	defer al.Stop()
 
 	details := map[string]any{
-		"provider": "oauth",
+		"provider":  "oauth",
 		"client_id": "test-client",
 	}
 
@@ -481,7 +481,7 @@ func TestAuditLogger_LogSecurity_Critical(t *testing.T) {
 
 	details := map[string]any{
 		"attack_type": "sql_injection",
-		"pattern": "' OR 1=1 --",
+		"pattern":     "' OR 1=1 --",
 	}
 
 	al.LogSecurity("attack_detected", "attacker-1", "/api/login", "sql_injection", "critical", details)

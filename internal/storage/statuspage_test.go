@@ -185,11 +185,11 @@ func TestStatusPageRepository_UpdateIncident(t *testing.T) {
 		Slug:        "test-page",
 		Incidents: []core.StatusIncident{
 			{
-				ID:        "inc-1",
-				Title:     "Original Title",
+				ID:          "inc-1",
+				Title:       "Original Title",
 				Description: "Original description",
-				Status:    "investigating",
-				StartedAt: time.Now(),
+				Status:      "investigating",
+				StartedAt:   time.Now(),
 			},
 		},
 	}

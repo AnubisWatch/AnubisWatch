@@ -1022,7 +1022,6 @@ func TestInMemorySnapshotSink_CloseIdempotent(t *testing.T) {
 	}
 }
 
-
 func timeoutChan(d time.Duration) <-chan struct{} {
 	ch := make(chan struct{})
 	go func() {

@@ -23,19 +23,19 @@ import (
 
 // OIDCAuthenticator implements OIDC authentication with local fallback
 type OIDCAuthenticator struct {
-	mu      sync.RWMutex
-	config  core.OIDCAuth
-	local   *LocalAuthenticator
-	state   map[string]*oidcState // CSRF state tracking
-	users   map[string]*api.User  // email -> user
-	tokens  map[string]*session   // token -> session
-	stopCh  chan struct{}
+	mu     sync.RWMutex
+	config core.OIDCAuth
+	local  *LocalAuthenticator
+	state  map[string]*oidcState // CSRF state tracking
+	users  map[string]*api.User  // email -> user
+	tokens map[string]*session   // token -> session
+	stopCh chan struct{}
 
 	// JWK cache
-	jwksMu   sync.RWMutex
-	jwks     *jwkSet
+	jwksMu      sync.RWMutex
+	jwks        *jwkSet
 	jwksFetched time.Time
-	jwksTTL  time.Duration
+	jwksTTL     time.Duration
 }
 
 type oidcState struct {
@@ -44,12 +44,12 @@ type oidcState struct {
 }
 
 type oidcConfig struct {
-	Issuer        string   `json:"issuer"`
-	AuthURL       string   `json:"authorization_endpoint"`
-	TokenURL      string   `json:"token_endpoint"`
-	UserInfoURL   string   `json:"userinfo_endpoint"`
-	JWKSURI       string   `json:"jwks_uri"`
-	Scopes        []string `json:"scopes_supported"`
+	Issuer      string   `json:"issuer"`
+	AuthURL     string   `json:"authorization_endpoint"`
+	TokenURL    string   `json:"token_endpoint"`
+	UserInfoURL string   `json:"userinfo_endpoint"`
+	JWKSURI     string   `json:"jwks_uri"`
+	Scopes      []string `json:"scopes_supported"`
 }
 
 // JWK types for signature verification
@@ -71,9 +71,9 @@ type jwk struct {
 
 // cryptoKey represents a parsed public key ready for verification
 type cryptoKey struct {
-	key     crypto.PublicKey
-	alg     string // RS256, ES256, etc.
-	kid     string
+	key crypto.PublicKey
+	alg string // RS256, ES256, etc.
+	kid string
 }
 
 // base64url decode helper (handles both padded and unpadded)

@@ -167,13 +167,13 @@ func (g *Gauge) Get() float64 {
 
 // Histogram tracks the distribution of values
 type Histogram struct {
-	name   string
-	help   string
+	name    string
+	help    string
 	buckets []float64
-	counts []int64
-	sum    int64
-	count  int64
-	mu     sync.RWMutex
+	counts  []int64
+	sum     int64
+	count   int64
+	mu      sync.RWMutex
 }
 
 // NewHistogram creates a new histogram

@@ -14,16 +14,16 @@ import (
 
 // AuditEvent represents a security audit event
 type AuditEvent struct {
-	Timestamp   time.Time       `json:"timestamp"`
-	EventType   string          `json:"event_type"`
-	UserID      string          `json:"user_id,omitempty"`
-	IPAddress   string          `json:"ip_address"`
-	UserAgent   string          `json:"user_agent,omitempty"`
-	Resource    string          `json:"resource"`
-	Action      string          `json:"action"`
-	Status      string          `json:"status"`
-	Details     json.RawMessage `json:"details,omitempty"`
-	RequestID   string          `json:"request_id"`
+	Timestamp time.Time       `json:"timestamp"`
+	EventType string          `json:"event_type"`
+	UserID    string          `json:"user_id,omitempty"`
+	IPAddress string          `json:"ip_address"`
+	UserAgent string          `json:"user_agent,omitempty"`
+	Resource  string          `json:"resource"`
+	Action    string          `json:"action"`
+	Status    string          `json:"status"`
+	Details   json.RawMessage `json:"details,omitempty"`
+	RequestID string          `json:"request_id"`
 }
 
 // AuditLogger handles security audit logging
@@ -114,13 +114,13 @@ func (al *AuditLogger) LogRequest(r *http.Request, userID string, status int, du
 	}
 
 	details := map[string]any{
-		"method":        r.Method,
-		"path":          r.URL.Path,
-		"query":         r.URL.RawQuery,
-		"status_code":   status,
-		"duration_ms":   duration.Milliseconds(),
-		"content_type":  r.Header.Get("Content-Type"),
-		"referer":       r.Header.Get("Referer"),
+		"method":       r.Method,
+		"path":         r.URL.Path,
+		"query":        r.URL.RawQuery,
+		"status_code":  status,
+		"duration_ms":  duration.Milliseconds(),
+		"content_type": r.Header.Get("Content-Type"),
+		"referer":      r.Header.Get("Referer"),
 	}
 
 	al.Log(eventType, userID, resource, action, statusStr, details)
@@ -314,19 +314,19 @@ func (rr *responseRecorder) Write(p []byte) (int, error) {
 
 // SecurityEvent types
 const (
-	EventTypeAuthSuccess     = "auth_success"
-	EventTypeAuthFailure     = "auth_failure"
-	EventTypeAuthLogout      = "auth_logout"
-	EventTypeAccessDenied    = "access_denied"
-	EventTypeRateLimited     = "rate_limited"
-	EventTypeSuspicious      = "suspicious_activity"
-	EventTypeInjection       = "injection_attempt"
-	EventTypePrivEscalation  = "privilege_escalation"
-	EventTypeDataExport      = "data_export"
-	EventTypeConfigChange    = "config_change"
-	EventTypeSoulCreate      = "soul_create"
-	EventTypeSoulUpdate      = "soul_update"
-	EventTypeSoulDelete      = "soul_delete"
+	EventTypeAuthSuccess    = "auth_success"
+	EventTypeAuthFailure    = "auth_failure"
+	EventTypeAuthLogout     = "auth_logout"
+	EventTypeAccessDenied   = "access_denied"
+	EventTypeRateLimited    = "rate_limited"
+	EventTypeSuspicious     = "suspicious_activity"
+	EventTypeInjection      = "injection_attempt"
+	EventTypePrivEscalation = "privilege_escalation"
+	EventTypeDataExport     = "data_export"
+	EventTypeConfigChange   = "config_change"
+	EventTypeSoulCreate     = "soul_create"
+	EventTypeSoulUpdate     = "soul_update"
+	EventTypeSoulDelete     = "soul_delete"
 )
 
 // AuditEventLogger interface for dependency injection

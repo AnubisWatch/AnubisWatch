@@ -453,7 +453,6 @@ func TestManager_CorruptedStorage(t *testing.T) {
 	}
 }
 
-
 // TestManager_Retrieve_DecryptError tests retrieve with corrupted data
 func TestManager_Retrieve_DecryptError(t *testing.T) {
 	key := make([]byte, 32)
@@ -616,7 +615,7 @@ func TestManager_Update_SameValue(t *testing.T) {
 	m, _ := NewManager(tmpDir, key)
 
 	m.Store("test", []byte("value"), map[string]string{"v": "1"})
-	
+
 	// Update with same value
 	err := m.Update("test", []byte("value"), map[string]string{"v": "2"})
 	if err != nil {

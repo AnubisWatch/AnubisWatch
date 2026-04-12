@@ -2604,9 +2604,9 @@ func TestManager_isDuplicate_SameStatus(t *testing.T) {
 	manager := NewManager(storage, newTestLogger())
 
 	rule := &core.AlertRule{
-		ID:      "rule-dedup",
-		Name:    "Dedup Rule",
-		Enabled: true,
+		ID:       "rule-dedup",
+		Name:     "Dedup Rule",
+		Enabled:  true,
 		Cooldown: core.Duration{Duration: 5 * time.Minute},
 	}
 
@@ -2682,7 +2682,7 @@ func TestCheckConditions_CompoundAnd(t *testing.T) {
 		Enabled: true,
 		Conditions: []core.AlertCondition{
 			{
-				Type: "compound",
+				Type:  "compound",
 				Logic: "and",
 				SubConditions: []core.AlertCondition{
 					{Type: "status_change", From: "alive", To: "dead"},
@@ -2736,7 +2736,7 @@ func TestCheckConditions_CompoundOr(t *testing.T) {
 		Enabled: true,
 		Conditions: []core.AlertCondition{
 			{
-				Type: "compound",
+				Type:  "compound",
 				Logic: "or",
 				SubConditions: []core.AlertCondition{
 					{Type: "degraded"},
@@ -2933,10 +2933,10 @@ func TestCheckConditions_AnomalyFallback(t *testing.T) {
 		Enabled: true,
 		Conditions: []core.AlertCondition{
 			{
-				Type:          "anomaly",
-				Metric:        "latency",
-				Threshold:     100, // 100ms threshold
-				Operator:      ">",
+				Type:      "anomaly",
+				Metric:    "latency",
+				Threshold: 100, // 100ms threshold
+				Operator:  ">",
 			},
 		},
 	}

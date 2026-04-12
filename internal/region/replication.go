@@ -16,29 +16,29 @@ import (
 // ReplicationManager handles cross-region data replication
 // The Ka - spiritual duplicate that travels between regions
 type ReplicationManager struct {
-	mu          sync.RWMutex
-	config      ReplicationConfig
-	manager     *Manager
-	streams     map[string]*ReplicationStream // region -> stream
-	queue       chan ReplicationEvent
-	pending     map[string][]ReplicationEvent // region -> pending events
-	logger      *slog.Logger
-	stopCh      chan struct{}
-	client      *http.Client
+	mu      sync.RWMutex
+	config  ReplicationConfig
+	manager *Manager
+	streams map[string]*ReplicationStream // region -> stream
+	queue   chan ReplicationEvent
+	pending map[string][]ReplicationEvent // region -> pending events
+	logger  *slog.Logger
+	stopCh  chan struct{}
+	client  *http.Client
 }
 
 // ReplicationConfig contains replication settings
 type ReplicationConfig struct {
-	Enabled           bool
-	SyncMode          string        // "async", "sync", "quorum"
-	BatchSize         int
-	BatchInterval     time.Duration
-	ConflictStrategy  string        // "last-write-wins", "timestamp", "manual"
-	RetryInterval     time.Duration
-	MaxRetries        int
-	Compression       bool
-	EncryptTraffic    bool
-	Regions           []string      // Regions to replicate to
+	Enabled          bool
+	SyncMode         string // "async", "sync", "quorum"
+	BatchSize        int
+	BatchInterval    time.Duration
+	ConflictStrategy string // "last-write-wins", "timestamp", "manual"
+	RetryInterval    time.Duration
+	MaxRetries       int
+	Compression      bool
+	EncryptTraffic   bool
+	Regions          []string // Regions to replicate to
 }
 
 // ReplicationStream manages replication to a specific region
@@ -55,8 +55,8 @@ type ReplicationStream struct {
 // ReplicationEvent represents a data change to replicate
 type ReplicationEvent struct {
 	ID        string          `json:"id"`
-	Type      string          `json:"type"`      // "soul", "judgment", "config", etc.
-	Action    string          `json:"action"`    // "create", "update", "delete"
+	Type      string          `json:"type"`   // "soul", "judgment", "config", etc.
+	Action    string          `json:"action"` // "create", "update", "delete"
 	Timestamp time.Time       `json:"timestamp"`
 	Region    string          `json:"region"`
 	EntityID  string          `json:"entity_id"`
@@ -66,10 +66,10 @@ type ReplicationEvent struct {
 
 // ReplicationBatch contains multiple events for batch replication
 type ReplicationBatch struct {
-	SourceRegion string              `json:"source_region"`
-	Timestamp    time.Time           `json:"timestamp"`
-	Events       []ReplicationEvent  `json:"events"`
-	Checksum     string              `json:"checksum"`
+	SourceRegion string             `json:"source_region"`
+	Timestamp    time.Time          `json:"timestamp"`
+	Events       []ReplicationEvent `json:"events"`
+	Checksum     string             `json:"checksum"`
 }
 
 // ConflictResolution handles replication conflicts

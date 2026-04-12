@@ -4,24 +4,24 @@ import "time"
 
 // CustomDashboard represents a user-created custom dashboard
 type CustomDashboard struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	WorkspaceID string            `json:"workspace_id"`
-	Description string            `json:"description,omitempty"`
-	Widgets     []WidgetConfig    `json:"widgets"`
-	RefreshSec  int               `json:"refresh_sec"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	WorkspaceID string         `json:"workspace_id"`
+	Description string         `json:"description,omitempty"`
+	Widgets     []WidgetConfig `json:"widgets"`
+	RefreshSec  int            `json:"refresh_sec"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
 }
 
 // WidgetConfig represents a single widget on a custom dashboard
 type WidgetConfig struct {
-	ID           string            `json:"id"`
-	Title        string            `json:"title"`
-	Type         WidgetType        `json:"type"`
-	Grid         WidgetGrid        `json:"grid"`
-	Query        WidgetQuery       `json:"query"`
-	Thresholds   []WidgetThreshold `json:"thresholds,omitempty"`
+	ID         string            `json:"id"`
+	Title      string            `json:"title"`
+	Type       WidgetType        `json:"type"`
+	Grid       WidgetGrid        `json:"grid"`
+	Query      WidgetQuery       `json:"query"`
+	Thresholds []WidgetThreshold `json:"thresholds,omitempty"`
 }
 
 // WidgetType identifies the visual widget type

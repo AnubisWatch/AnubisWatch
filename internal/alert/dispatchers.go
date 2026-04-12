@@ -515,12 +515,12 @@ type pagerDutyPayload struct {
 }
 
 type pagerDutyEventPayload struct {
-	Summary       string                 `json:"summary"`
-	Severity      string                 `json:"severity"`
-	Source        string                 `json:"source"`
-	Component     string                 `json:"component"`
-	Group         string                 `json:"group"`
-	Class         string                 `json:"class"`
+	Summary       string         `json:"summary"`
+	Severity      string         `json:"severity"`
+	Source        string         `json:"source"`
+	Component     string         `json:"component"`
+	Group         string         `json:"group"`
+	Class         string         `json:"class"`
 	CustomDetails map[string]any `json:"custom_details"`
 }
 

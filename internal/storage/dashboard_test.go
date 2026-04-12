@@ -165,18 +165,18 @@ func TestDashboardWidgetTypes(t *testing.T) {
 	}
 
 	dashboard := &core.CustomDashboard{
-		ID:   "dash-types",
-		Name: "Widget Types Test",
-		Widgets: make([]core.WidgetConfig, len(widgetTypes)),
+		ID:        "dash-types",
+		Name:      "Widget Types Test",
+		Widgets:   make([]core.WidgetConfig, len(widgetTypes)),
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
 
 	for i, wt := range widgetTypes {
 		dashboard.Widgets[i] = core.WidgetConfig{
-			ID:   string(wt),
-			Type: wt,
-			Grid: core.WidgetGrid{X: 0, Y: i, Width: 6, Height: 2},
+			ID:    string(wt),
+			Type:  wt,
+			Grid:  core.WidgetGrid{X: 0, Y: i, Width: 6, Height: 2},
 			Query: core.WidgetQuery{Source: "souls", Metric: "count", TimeRange: "24h"},
 		}
 	}

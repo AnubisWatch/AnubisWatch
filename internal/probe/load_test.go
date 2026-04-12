@@ -34,11 +34,11 @@ func createLoadEngine() *Engine {
 	registry.Register(NewDNSChecker())
 
 	opts := EngineOptions{
-		Registry:   registry,
-		NodeID:     "load-test-node",
-		Region:     "load-test",
-		Logger:     nil,
-		Config:     DefaultEngineConfig(),
+		Registry: registry,
+		NodeID:   "load-test-node",
+		Region:   "load-test",
+		Logger:   nil,
+		Config:   DefaultEngineConfig(),
 	}
 	opts.Config.MaxConcurrentChecks = 100
 

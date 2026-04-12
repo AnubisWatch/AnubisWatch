@@ -1043,9 +1043,9 @@ func TestWebSocketServer_BroadcastRaftLeaderChange(t *testing.T) {
 
 func TestClientMessage_SubscribeType(t *testing.T) {
 	client := &WSClient{
-		ID:     "test-sub",
-		Rooms:  make(map[string]bool),
-		send:   make(chan []byte, 256),
+		ID:    "test-sub",
+		Rooms: make(map[string]bool),
+		send:  make(chan []byte, 256),
 		server: &WebSocketServer{
 			clients: make(map[string]*WSClient),
 			rooms:   make(map[string]map[string]bool),
@@ -1072,9 +1072,9 @@ func TestClientMessage_SubscribeType(t *testing.T) {
 
 func TestClientMessage_UnsubscribeType(t *testing.T) {
 	client := &WSClient{
-		ID:     "test-unsub",
-		Rooms:  make(map[string]bool),
-		send:   make(chan []byte, 256),
+		ID:    "test-unsub",
+		Rooms: make(map[string]bool),
+		send:  make(chan []byte, 256),
 		server: &WebSocketServer{
 			clients: make(map[string]*WSClient),
 			rooms:   make(map[string]map[string]bool),
@@ -1101,9 +1101,9 @@ func TestClientMessage_UnsubscribeType(t *testing.T) {
 
 func TestClientMessage_Ping(t *testing.T) {
 	client := &WSClient{
-		ID:     "test-ping",
-		Rooms:  make(map[string]bool),
-		send:   make(chan []byte, 10),
+		ID:    "test-ping",
+		Rooms: make(map[string]bool),
+		send:  make(chan []byte, 10),
 		server: &WebSocketServer{
 			clients: make(map[string]*WSClient),
 			rooms:   make(map[string]map[string]bool),
@@ -1129,9 +1129,9 @@ func TestClientMessage_Ping(t *testing.T) {
 
 func TestClientMessage_UnknownType(t *testing.T) {
 	client := &WSClient{
-		ID:     "test-unknown",
-		Rooms:  make(map[string]bool),
-		send:   make(chan []byte, 10),
+		ID:    "test-unknown",
+		Rooms: make(map[string]bool),
+		send:  make(chan []byte, 10),
 		server: &WebSocketServer{
 			clients: make(map[string]*WSClient),
 			rooms:   make(map[string]map[string]bool),

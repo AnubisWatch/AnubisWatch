@@ -17,10 +17,10 @@ import (
 
 // Generator handles release artifact generation
 type Generator struct {
-	version    string
-	commit     string
-	outputDir  string
-	logger     *slog.Logger
+	version   string
+	commit    string
+	outputDir string
+	logger    *slog.Logger
 }
 
 // NewGenerator creates a new release generator
@@ -70,10 +70,10 @@ func (g *Generator) GenerateReleaseNotes(since string) (string, error) {
 	g.logger.Info("Generating release notes", "since", since)
 
 	notes := &ReleaseNotes{
-		Version:   g.version,
-		Commit:    g.commit,
-		Date:      time.Now().UTC(),
-		Sections:  make(map[string][]Change),
+		Version:  g.version,
+		Commit:   g.commit,
+		Date:     time.Now().UTC(),
+		Sections: make(map[string][]Change),
 	}
 
 	// Parse git log
@@ -457,19 +457,19 @@ func (g *Generator) writeReleaseNotes(w io.Writer, notes *ReleaseNotes) {
 
 // Change represents a single change
 type Change struct {
-	Type      string
-	Scope     string
-	Message   string
-	Commit    string
-	Author    string
-	Date      time.Time
-	Breaking  bool
+	Type     string
+	Scope    string
+	Message  string
+	Commit   string
+	Author   string
+	Date     time.Time
+	Breaking bool
 }
 
 // ReleaseNotes contains all release note data
 type ReleaseNotes struct {
-	Version   string
-	Commit    string
-	Date      time.Time
-	Sections  map[string][]Change
+	Version  string
+	Commit   string
+	Date     time.Time
+	Sections map[string][]Change
 }

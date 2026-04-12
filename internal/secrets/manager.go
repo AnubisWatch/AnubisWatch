@@ -31,12 +31,12 @@ type Manager struct {
 
 // Secret represents an encrypted secret value
 type Secret struct {
-	Name       string            `json:"name"`
-	Encrypted  []byte            `json:"encrypted"`
-	Nonce      []byte            `json:"nonce"`
-	Salt       []byte            `json:"salt"`
-	Metadata   map[string]string `json:"metadata,omitempty"`
-	Version    int               `json:"version"`
+	Name      string            `json:"name"`
+	Encrypted []byte            `json:"encrypted"`
+	Nonce     []byte            `json:"nonce"`
+	Salt      []byte            `json:"salt"`
+	Metadata  map[string]string `json:"metadata,omitempty"`
+	Version   int               `json:"version"`
 }
 
 // NewManager creates a new secrets manager

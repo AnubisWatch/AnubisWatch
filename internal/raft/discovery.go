@@ -27,8 +27,8 @@ type Discovery struct {
 	mdnsClient *MDNSClient
 
 	// Gossip
-	gossipConn   *net.UDPConn
-	gossipPort   int
+	gossipConn     *net.UDPConn
+	gossipPort     int
 	gossipInterval time.Duration
 	gossipNodes    int
 	knownPeers     map[string]*DiscoveredPeer

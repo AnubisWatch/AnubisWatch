@@ -838,10 +838,10 @@ func TestTLSChecker_Judge_TargetWithoutPort(t *testing.T) {
 	checker := NewTLSChecker()
 
 	soul := &core.Soul{
-		ID:     "test-tls",
-		Name:   "Test TLS",
-		Type:   core.CheckTLS,
-		Target: "example.com", // No port - SplitHostPort will fail
+		ID:      "test-tls",
+		Name:    "Test TLS",
+		Type:    core.CheckTLS,
+		Target:  "example.com", // No port - SplitHostPort will fail
 		Timeout: core.Duration{Duration: 2 * time.Second},
 	}
 

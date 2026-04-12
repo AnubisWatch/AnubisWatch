@@ -21,9 +21,9 @@ import (
 
 // Manager handles backup and restore operations
 type Manager struct {
-	storage  BackupStorage
-	logger   *slog.Logger
-	dataDir  string
+	storage    BackupStorage
+	logger     *slog.Logger
+	dataDir    string
 	backupsDir string
 }
 
@@ -63,46 +63,46 @@ type RestoreStorage interface {
 
 // Backup represents a complete system backup
 type Backup struct {
-	Version     string             `json:"version"`
-	CreatedAt   time.Time          `json:"created_at"`
-	BackupType  string             `json:"backup_type"` // full, incremental
-	Checksum    string             `json:"checksum"`
-	Metadata    BackupMetadata     `json:"metadata"`
-	Data        BackupData         `json:"data"`
+	Version    string         `json:"version"`
+	CreatedAt  time.Time      `json:"created_at"`
+	BackupType string         `json:"backup_type"` // full, incremental
+	Checksum   string         `json:"checksum"`
+	Metadata   BackupMetadata `json:"metadata"`
+	Data       BackupData     `json:"data"`
 }
 
 // BackupMetadata contains backup information
 type BackupMetadata struct {
-	NodeID          string            `json:"node_id,omitempty"`
-	ClusterID       string            `json:"cluster_id,omitempty"`
-	Version         string            `json:"anubis_version"`
-	Workspaces      int               `json:"workspaces_count"`
-	Souls           int               `json:"souls_count"`
-	AlertChannels   int               `json:"alert_channels_count"`
-	AlertRules      int               `json:"alert_rules_count"`
-	StatusPages     int               `json:"status_pages_count"`
-	Journeys        int               `json:"journeys_count"`
-	CustomFields    map[string]string `json:"custom_fields,omitempty"`
+	NodeID        string            `json:"node_id,omitempty"`
+	ClusterID     string            `json:"cluster_id,omitempty"`
+	Version       string            `json:"anubis_version"`
+	Workspaces    int               `json:"workspaces_count"`
+	Souls         int               `json:"souls_count"`
+	AlertChannels int               `json:"alert_channels_count"`
+	AlertRules    int               `json:"alert_rules_count"`
+	StatusPages   int               `json:"status_pages_count"`
+	Journeys      int               `json:"journeys_count"`
+	CustomFields  map[string]string `json:"custom_fields,omitempty"`
 }
 
 // BackupData contains all backed up data
 type BackupData struct {
-	Workspaces    []*core.Workspace        `json:"workspaces"`
-	Souls         []*core.Soul             `json:"souls"`
-	AlertChannels []*core.AlertChannel     `json:"alert_channels"`
-	AlertRules    []*core.AlertRule        `json:"alert_rules"`
-	StatusPages   []*core.StatusPage       `json:"status_pages"`
-	Journeys      []*core.JourneyConfig    `json:"journeys"`
+	Workspaces    []*core.Workspace          `json:"workspaces"`
+	Souls         []*core.Soul               `json:"souls"`
+	AlertChannels []*core.AlertChannel       `json:"alert_channels"`
+	AlertRules    []*core.AlertRule          `json:"alert_rules"`
+	StatusPages   []*core.StatusPage         `json:"status_pages"`
+	Journeys      []*core.JourneyConfig      `json:"journeys"`
 	SystemConfig  map[string]json.RawMessage `json:"system_config,omitempty"`
 }
 
 // Options for backup operations
 type Options struct {
-	IncludeJudgments bool          // Include recent judgment history
-	JudgmentDays     int           // How many days of judgment history to include
-	Compress         bool          // Compress the backup
-	Encrypt          bool          // Encrypt the backup
-	EncryptionKey    []byte        // Encryption key (if encrypting)
+	IncludeJudgments bool              // Include recent judgment history
+	JudgmentDays     int               // How many days of judgment history to include
+	Compress         bool              // Compress the backup
+	Encrypt          bool              // Encrypt the backup
+	EncryptionKey    []byte            // Encryption key (if encrypting)
 	Metadata         map[string]string // Custom metadata
 }
 
@@ -419,11 +419,11 @@ func (m *Manager) List() ([]BackupInfo, error) {
 		metadata := m.readBackupMetadata(path)
 
 		backups = append(backups, BackupInfo{
-			Filename:    name,
-			Path:        path,
-			Size:        info.Size(),
-			CreatedAt:   info.ModTime(),
-			Metadata:    metadata,
+			Filename:  name,
+			Path:      path,
+			Size:      info.Size(),
+			CreatedAt: info.ModTime(),
+			Metadata:  metadata,
 		})
 	}
 
