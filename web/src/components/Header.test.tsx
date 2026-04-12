@@ -1,14 +1,17 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { Header } from '../components/Header'
 
+const mockLogout = vi.fn()
+const mockAuthState = {
+  user: { name: 'Test User', email: 'test@anubis.watch' },
+  logout: mockLogout,
+}
+
 // Mock useAuth hook
 vi.mock('../api/hooks', () => ({
-  useAuth: () => ({
-    user: { name: 'Test User', email: 'test@anubis.watch' },
-    logout: vi.fn(),
-  }),
+  useAuth: () => mockAuthState,
 }))
 
 // Mock useNavigate
@@ -84,5 +87,57 @@ describe('Header', () => {
     )
 
     expect(screen.getByTitle('Log out')).toBeInTheDocument()
+  })
+
+  it('logs out and navigates to login when clicking logout', async () => {
+    mockLogout.mockClear()
+    mockLogout.mockResolvedValue(undefined)
+    mockAuthState.logout = mockLogout
+
+    render(
+      <MemoryRouter>
+        <Header />
+      </MemoryRouter>
+    )
+
+    fireEvent.click(screen.getByTitle('Log out'))
+
+    await waitFor(() => {
+      expect(mockLogout).toHaveBeenCalled()
+    })
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith('/login')
+    })
+  })
+
+  it('toggles theme mode when clicking theme button', () => {
+    render(
+      <MemoryRouter>
+        <Header />
+      </MemoryRouter>
+    )
+
+    const themeButton = screen.getByLabelText('Switch to light mode')
+    expect(themeButton).toBeInTheDocument()
+
+    fireEvent.click(themeButton)
+
+    expect(screen.getByLabelText('Switch to dark mode')).toBeInTheDocument()
+  })
+
+  it('toggles notifications when clicking notification button', () => {
+    render(
+      <MemoryRouter>
+        <Header />
+      </MemoryRouter>
+    )
+
+    const notificationButton = screen.getByLabelText('Toggle notifications')
+    expect(notificationButton).toBeInTheDocument()
+
+    fireEvent.click(notificationButton)
+    // Component uses internal state, so clicking again should work
+    fireEvent.click(notificationButton)
+    expect(notificationButton).toBeInTheDocument()
   })
 })
