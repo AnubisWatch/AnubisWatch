@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-04-12
+
 ### Added
 - Comprehensive configuration validation for all config types
 - Soul configuration validation with protocol-specific checks
@@ -114,4 +116,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+[0.1.1]: https://github.com/AnubisWatch/anubiswatch/releases/tag/v0.1.1
+[0.1.0]: https://github.com/AnubisWatch/anubiswatch/releases/tag/v0.1.0
 [0.0.1]: https://github.com/AnubisWatch/anubiswatch/releases/tag/v0.0.1
