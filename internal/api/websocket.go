@@ -58,9 +58,10 @@ func NewWebSocketServer(logger *slog.Logger, authenticator Authenticator, allowe
 			WriteBufferSize: 1024,
 			CheckOrigin: func(r *http.Request) bool {
 				origin := r.Header.Get("Origin")
-				// If no origin header, allow (for non-browser clients)
+				// Allow empty origin only for localhost development (MED-19 fix)
 				if origin == "" {
-					return true
+					host := r.Host
+					return strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1")
 				}
 				// Check against allowed origins
 				for _, allowed := range allowedOrigins {

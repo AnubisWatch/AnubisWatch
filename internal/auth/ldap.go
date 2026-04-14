@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"crypto/tls"
 	"fmt"
 	"net"
 	"strings"
@@ -66,7 +67,8 @@ func (l *LDAPAuthenticator) ldapLogin(email, password string) (*api.User, error)
 
 	// Start TLS if not already using ldaps
 	if !strings.HasPrefix(l.cfg.URL, "ldaps://") {
-		if err := conn.StartTLS(nil); err != nil {
+		hostname := extractHostnameFromURL(l.cfg.URL)
+		if err := conn.StartTLS(&tls.Config{ServerName: hostname}); err != nil {
 			return nil, fmt.Errorf("failed to start TLS: %w", err)
 		}
 	}
@@ -168,6 +170,22 @@ func (l *LDAPAuthenticator) buildUserDN(email string) string {
 	}
 	// Direct DN
 	return email
+}
+
+// extractHostnameFromURL extracts the hostname from an LDAP URL for SNI
+func extractHostnameFromURL(rawURL string) string {
+	// ldap://hostname:port/... or ldaps://hostname:port/...
+	rawURL = strings.TrimPrefix(rawURL, "ldap://")
+	rawURL = strings.TrimPrefix(rawURL, "ldaps://")
+	// Remove path
+	if idx := strings.Index(rawURL, "/"); idx >= 0 {
+		rawURL = rawURL[:idx]
+	}
+	// Remove port
+	if idx := strings.LastIndex(rawURL, ":"); idx >= 0 {
+		rawURL = rawURL[:idx]
+	}
+	return rawURL
 }
 
 // Authenticate validates a token and returns the user
