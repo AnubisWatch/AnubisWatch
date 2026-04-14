@@ -401,13 +401,24 @@ func (s *WebSocketServer) broadcastLoop() {
 		s.mu.RUnlock()
 
 		for _, client := range clients {
-			select {
-			case client.send <- data:
-			default:
-				// Client send buffer full, close connection
+			if err := safeSend(client.send, data); err != nil {
+				// Client send buffer full or closed, close connection
 				s.removeClient(client.ID)
 			}
 		}
+	}
+}
+
+// safeSend sends data to a channel with panic recovery.
+// Between copying the client list and sending, another goroutine
+// may close the channel — recover() prevents the panic.
+func safeSend(ch chan []byte, data []byte) error {
+	defer func() { recover() }()
+	select {
+	case ch <- data:
+		return nil
+	default:
+		return fmt.Errorf("send buffer full")
 	}
 }
 
@@ -439,9 +450,7 @@ func (s *WebSocketServer) broadcastToRoom(room string, msg WSMessage) {
 		s.mu.RUnlock()
 
 		if ok {
-			select {
-			case client.send <- data:
-			default:
+			if err := safeSend(client.send, data); err != nil {
 				s.removeClient(client.ID)
 			}
 		}
