@@ -5,11 +5,20 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
+	"github.com/AnubisWatch/anubiswatch/internal/probe"
 )
+
+func TestMain(m *testing.M) {
+	// Allow private IPs for webhook tests (httptest.NewServer uses 127.0.0.1)
+	os.Setenv("ANUBIS_SSRF_ALLOW_PRIVATE", "1")
+	probe.ResetDefaultForTest()
+	os.Exit(m.Run())
+}
 
 func TestEmailDispatcher_BuildEmailBody(t *testing.T) {
 	dispatcher := &EmailDispatcher{logger: newTestLogger()}
