@@ -854,15 +854,16 @@ func TestWSClient_handleMessage_JoinWorkspace(t *testing.T) {
 
 	select {
 	case msg := <-client.send:
-		if !strings.Contains(string(msg), "workspace_changed") {
-			t.Errorf("Expected workspace_changed, got %s", string(msg))
+		if !strings.Contains(string(msg), "forbidden") {
+			t.Errorf("Expected forbidden error, got %s", string(msg))
 		}
 	default:
-		t.Error("Expected workspace message in send channel")
+		t.Error("Expected error message in send channel")
 	}
 
-	if client.Workspace != "new-ws" {
-		t.Errorf("Expected workspace new-ws, got %s", client.Workspace)
+	// Workspace should remain unchanged
+	if client.Workspace != "default" {
+		t.Errorf("Expected workspace default, got %s", client.Workspace)
 	}
 }
 
@@ -877,12 +878,14 @@ func TestWSClient_handleMessage_JoinWorkspace_Empty(t *testing.T) {
 
 	client.handleMessage([]byte(`{"type":"join_workspace","workspace":""}`))
 
-	// Should not send anything for empty workspace
+	// Should reject workspace switching with forbidden error
 	select {
 	case msg := <-client.send:
-		t.Errorf("Expected no message, got %s", string(msg))
+		if !strings.Contains(string(msg), "forbidden") {
+			t.Errorf("Expected forbidden error, got %s", string(msg))
+		}
 	default:
-		// Expected - no message sent
+		t.Error("Expected error message in send channel")
 	}
 }
 

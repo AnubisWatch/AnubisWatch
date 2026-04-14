@@ -159,6 +159,7 @@ func (o *OIDCAuthenticator) OIDCCallback(code, state, nonce string) (*api.User, 
 		return nil, "", fmt.Errorf("state expired")
 	}
 	// Verify nonce matches (binds callback to original session)
+	expectedNonce := csrfState.Nonce
 	if csrfState.Nonce != nonce {
 		delete(o.state, state)
 		o.mu.Unlock()
@@ -175,7 +176,7 @@ func (o *OIDCAuthenticator) OIDCCallback(code, state, nonce string) (*api.User, 
 	}
 
 	// Verify ID token signature and claims (always, even if we also fetch userinfo)
-	userInfo, err := o.parseIDToken(tokenResp.IDToken)
+	userInfo, err := o.parseIDToken(tokenResp.IDToken, expectedNonce)
 	if err != nil {
 		return nil, "", fmt.Errorf("invalid ID token: %w", err)
 	}
@@ -556,22 +557,24 @@ func (o *OIDCAuthenticator) verifyJWTSignature(idToken string) (map[string]inter
 }
 
 // parseIDToken parses a JWT ID token WITH cryptographic signature verification
-func (o *OIDCAuthenticator) parseIDToken(idToken string) (*userInfoResponse, error) {
+func (o *OIDCAuthenticator) parseIDToken(idToken string, expectedNonce string) (*userInfoResponse, error) {
 	// Verify signature and get claims
 	claims, err := o.verifyJWTSignature(idToken)
 	if err != nil {
 		return nil, err
 	}
 
-	// Validate required claims
-	if iss, ok := claims["iss"].(string); ok && iss != "" {
-		issuer := strings.TrimSuffix(o.config.Issuer, "/")
-		if iss != issuer {
-			return nil, fmt.Errorf("issuer mismatch: expected %s, got %s", issuer, iss)
-		}
+	// Validate required issuer claim
+	iss, ok := claims["iss"].(string)
+	if !ok || iss == "" {
+		return nil, fmt.Errorf("missing or invalid issuer claim")
+	}
+	issuer := strings.TrimSuffix(o.config.Issuer, "/")
+	if iss != issuer {
+		return nil, fmt.Errorf("issuer mismatch: expected %s, got %s", issuer, iss)
 	}
 
-	// Validate audience
+	// Validate required audience claim
 	if aud, ok := claims["aud"].(string); ok && aud != "" {
 		if aud != o.config.ClientID {
 			return nil, fmt.Errorf("audience mismatch: expected %s, got %s", o.config.ClientID, aud)
@@ -586,6 +589,21 @@ func (o *OIDCAuthenticator) parseIDToken(idToken string) (*userInfoResponse, err
 		}
 		if !found {
 			return nil, fmt.Errorf("audience not in list: expected %s", o.config.ClientID)
+		}
+	} else {
+		return nil, fmt.Errorf("missing audience claim")
+	}
+
+	// Validate required subject claim
+	sub, ok := claims["sub"].(string)
+	if !ok || sub == "" {
+		return nil, fmt.Errorf("missing subject claim")
+	}
+
+	// Validate nonce if expected
+	if expectedNonce != "" {
+		if nonce, ok := claims["nonce"].(string); !ok || nonce != expectedNonce {
+			return nil, fmt.Errorf("nonce claim mismatch or missing")
 		}
 	}
 
@@ -603,9 +621,8 @@ func (o *OIDCAuthenticator) parseIDToken(idToken string) (*userInfoResponse, err
 		}
 	}
 
-	userInfo := &userInfoResponse{}
-	if sub, ok := claims["sub"].(string); ok {
-		userInfo.Sub = sub
+	userInfo := &userInfoResponse{
+		Sub: sub, // Already validated above
 	}
 	if email, ok := claims["email"].(string); ok {
 		userInfo.Email = email

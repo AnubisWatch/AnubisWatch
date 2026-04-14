@@ -296,13 +296,8 @@ func (c *WSClient) handleMessage(data []byte) {
 		})
 
 	case "join_workspace":
-		// Switch workspace
-		if msg.Workspace != "" {
-			c.LeaveRoom(fmt.Sprintf("workspace:%s", c.Workspace))
-			c.Workspace = msg.Workspace
-			c.JoinRoom(fmt.Sprintf("workspace:%s", c.Workspace))
-			c.send <- c.createSuccessMessage("workspace_changed", c.Workspace)
-		}
+		// Reject workspace switching - users are bound to their authenticated workspace
+		c.send <- c.createErrorMessage("forbidden", "workspace switching not supported")
 
 	default:
 		c.send <- c.createErrorMessage("unknown_type", fmt.Sprintf("Unknown message type: %s", msg.Type))

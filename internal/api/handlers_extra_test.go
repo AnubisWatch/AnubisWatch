@@ -2467,7 +2467,7 @@ func TestQuerySouls(t *testing.T) {
 	store.SaveSoul(nil, &core.Soul{ID: "soul-1", Name: "Test Soul"})
 	server := newTestServerWithJourney(store, nil)
 
-	result, err := server.querySouls(core.WidgetQuery{Metric: "count"})
+	result, err := server.querySouls(core.WidgetQuery{Metric: "count"}, "default")
 	if err != nil {
 		t.Fatalf("querySouls failed: %v", err)
 	}
@@ -2486,7 +2486,7 @@ func TestQuerySouls_List(t *testing.T) {
 	store.SaveSoul(nil, &core.Soul{ID: "soul-1", Name: "Test Soul"})
 	server := newTestServerWithJourney(store, nil)
 
-	result, err := server.querySouls(core.WidgetQuery{Metric: "list"})
+	result, err := server.querySouls(core.WidgetQuery{Metric: "list"}, "default")
 	if err != nil {
 		t.Fatalf("querySouls failed: %v", err)
 	}
@@ -2504,7 +2504,7 @@ func TestQueryJudgments(t *testing.T) {
 	store := newMockStorage()
 	server := newTestServerWithJourney(store, nil)
 
-	result, err := server.queryJudgments(core.WidgetQuery{TimeRange: "24h"})
+	result, err := server.queryJudgments(core.WidgetQuery{TimeRange: "24h"}, "default")
 	if err != nil {
 		t.Fatalf("queryJudgments failed: %v", err)
 	}
@@ -2516,7 +2516,7 @@ func TestQueryStats(t *testing.T) {
 	store := newMockStorage()
 	server := newTestServerWithJourney(store, nil)
 
-	result, err := server.queryStats(core.WidgetQuery{})
+	result, err := server.queryStats(core.WidgetQuery{}, "default")
 	if err != nil {
 		t.Fatalf("queryStats failed: %v", err)
 	}
@@ -2556,7 +2556,7 @@ func TestQueryJudgments_WithSoulID(t *testing.T) {
 	store.SaveJudgment(context.Background(), &core.Judgment{ID: "j3", SoulID: "soul-1", Status: core.SoulAlive, Duration: 300 * time.Millisecond, Timestamp: now.Add(-1 * time.Minute)})
 	server := newTestServerWithJourney(store, nil)
 
-	result, err := server.queryJudgments(core.WidgetQuery{TimeRange: "24h", Filters: map[string]string{"soul_id": "soul-1"}})
+	result, err := server.queryJudgments(core.WidgetQuery{TimeRange: "24h", Filters: map[string]string{"soul_id": "soul-1"}}, "default")
 	if err != nil {
 		t.Fatalf("queryJudgments failed: %v", err)
 	}
@@ -2597,7 +2597,7 @@ func TestQueryJudgments_WithoutSoulID(t *testing.T) {
 	store.SaveJudgment(context.Background(), &core.Judgment{ID: "j2", SoulID: "soul-2", Status: core.SoulDead, Duration: 200 * time.Millisecond, Timestamp: now.Add(-3 * time.Minute)})
 	server := newTestServerWithJourney(store, nil)
 
-	result, err := server.queryJudgments(core.WidgetQuery{TimeRange: "24h"})
+	result, err := server.queryJudgments(core.WidgetQuery{TimeRange: "24h"}, "default")
 	if err != nil {
 		t.Fatalf("queryJudgments failed: %v", err)
 	}
@@ -2619,7 +2619,7 @@ func TestQueryJudgments_WithoutSoulID(t *testing.T) {
 func TestQueryJudgments_ListSoulsError(t *testing.T) {
 	server := newTestServerWithJourney(&failingMockStorage{}, nil)
 
-	_, err := server.queryJudgments(core.WidgetQuery{TimeRange: "24h"})
+	_, err := server.queryJudgments(core.WidgetQuery{TimeRange: "24h"}, "default")
 	if err == nil {
 		t.Fatal("Expected error from failing storage")
 	}
@@ -2628,7 +2628,7 @@ func TestQueryJudgments_ListSoulsError(t *testing.T) {
 func TestQueryJudgments_ListJudgmentsError(t *testing.T) {
 	server := newTestServerWithJourney(&failingMockStorage{}, nil)
 
-	_, err := server.queryJudgments(core.WidgetQuery{TimeRange: "24h", Filters: map[string]string{"soul_id": "soul-1"}})
+	_, err := server.queryJudgments(core.WidgetQuery{TimeRange: "24h", Filters: map[string]string{"soul_id": "soul-1"}}, "default")
 	if err == nil {
 		t.Fatal("Expected error from failing storage")
 	}
@@ -2643,7 +2643,7 @@ func TestQueryStats_WithJudgments(t *testing.T) {
 	store.SaveJudgment(context.Background(), &core.Judgment{ID: "j3", SoulID: "soul-1", Status: core.SoulDegraded, Timestamp: now.Add(-3 * time.Hour)})
 	server := newTestServerWithJourney(store, nil)
 
-	result, err := server.queryStats(core.WidgetQuery{})
+	result, err := server.queryStats(core.WidgetQuery{}, "default")
 	if err != nil {
 		t.Fatalf("queryStats failed: %v", err)
 	}

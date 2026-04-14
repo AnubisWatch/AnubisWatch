@@ -718,7 +718,7 @@ func (s *RESTServer) handleCreateSoul(ctx *Context) error {
 	soul.UpdatedAt = time.Now()
 
 	if err := s.store.SaveSoul(ctx.Request.Context(), &soul); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	// Assign soul to probe engine for monitoring
@@ -804,7 +804,7 @@ func (s *RESTServer) handleForceCheck(ctx *Context) error {
 
 	judgment, err := s.probe.ForceCheck(id)
 	if err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusOK, judgment)
@@ -827,7 +827,7 @@ func (s *RESTServer) handleListJudgments(ctx *Context) error {
 
 	judgments, err := s.store.ListJudgmentsNoCtx(soulID, start, end, 100)
 	if err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusOK, judgments)
@@ -897,7 +897,7 @@ func (s *RESTServer) handleCreateChannel(ctx *Context) error {
 	channel.UpdatedAt = time.Now()
 
 	if err := s.alert.RegisterChannel(&channel); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusCreated, channel)
@@ -929,7 +929,7 @@ func (s *RESTServer) handleUpdateChannel(ctx *Context) error {
 	channel.UpdatedAt = time.Now()
 
 	if err := s.alert.RegisterChannel(&channel); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusOK, channel)
@@ -938,7 +938,7 @@ func (s *RESTServer) handleUpdateChannel(ctx *Context) error {
 func (s *RESTServer) handleDeleteChannel(ctx *Context) error {
 	id := ctx.Params["id"]
 	if err := s.alert.DeleteChannel(id); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusNoContent, nil)
@@ -998,7 +998,7 @@ func (s *RESTServer) handleCreateRule(ctx *Context) error {
 	rule.CreatedAt = time.Now()
 
 	if err := s.alert.RegisterRule(&rule); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusCreated, rule)
@@ -1029,7 +1029,7 @@ func (s *RESTServer) handleUpdateRule(ctx *Context) error {
 	rule.ID = id
 
 	if err := s.alert.RegisterRule(&rule); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusOK, rule)
@@ -1038,7 +1038,7 @@ func (s *RESTServer) handleUpdateRule(ctx *Context) error {
 func (s *RESTServer) handleDeleteRule(ctx *Context) error {
 	id := ctx.Params["id"]
 	if err := s.alert.DeleteRule(id); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusNoContent, nil)
@@ -1049,7 +1049,7 @@ func (s *RESTServer) handleDeleteRule(ctx *Context) error {
 func (s *RESTServer) handleListWorkspaces(ctx *Context) error {
 	workspaces, err := s.store.ListWorkspacesNoCtx()
 	if err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusOK, workspaces)
@@ -1066,7 +1066,7 @@ func (s *RESTServer) handleCreateWorkspace(ctx *Context) error {
 	ws.UpdatedAt = time.Now()
 
 	if err := s.store.SaveWorkspaceNoCtx(&ws); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusCreated, ws)
@@ -1093,7 +1093,7 @@ func (s *RESTServer) handleUpdateWorkspace(ctx *Context) error {
 	ws.UpdatedAt = time.Now()
 
 	if err := s.store.SaveWorkspaceNoCtx(&ws); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusOK, ws)
@@ -1102,7 +1102,7 @@ func (s *RESTServer) handleUpdateWorkspace(ctx *Context) error {
 func (s *RESTServer) handleDeleteWorkspace(ctx *Context) error {
 	id := ctx.Params["id"]
 	if err := s.store.DeleteWorkspaceNoCtx(id); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusNoContent, nil)
@@ -1117,7 +1117,7 @@ func (s *RESTServer) handleStats(ctx *Context) error {
 
 	stats, err := s.store.GetStatsNoCtx(workspace, start, end)
 	if err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusOK, stats)
@@ -1189,7 +1189,7 @@ func (s *RESTServer) handleAcknowledgeIncident(ctx *Context) error {
 	userID := ctx.User.ID
 
 	if err := s.alert.AcknowledgeIncident(id, userID, ctx.Workspace); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusOK, map[string]string{"status": "acknowledged"})
@@ -1200,7 +1200,7 @@ func (s *RESTServer) handleResolveIncident(ctx *Context) error {
 	userID := ctx.User.ID
 
 	if err := s.alert.ResolveIncident(id, userID, ctx.Workspace); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusOK, map[string]string{"status": "resolved"})
@@ -1248,7 +1248,7 @@ func (s *RESTServer) handleUpdateConfig(ctx *Context) error {
 func (s *RESTServer) handleListStatusPages(ctx *Context) error {
 	pages, err := s.store.ListStatusPagesNoCtx()
 	if err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 	return ctx.JSON(http.StatusOK, pages)
 }
@@ -1265,7 +1265,7 @@ func (s *RESTServer) handleCreateStatusPage(ctx *Context) error {
 	page.UpdatedAt = time.Now()
 
 	if err := s.store.SaveStatusPageNoCtx(&page); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusCreated, page)
@@ -1292,7 +1292,7 @@ func (s *RESTServer) handleUpdateStatusPage(ctx *Context) error {
 	page.UpdatedAt = time.Now()
 
 	if err := s.store.SaveStatusPageNoCtx(&page); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusOK, page)
@@ -1301,7 +1301,7 @@ func (s *RESTServer) handleUpdateStatusPage(ctx *Context) error {
 func (s *RESTServer) handleDeleteStatusPage(ctx *Context) error {
 	id := ctx.Params["id"]
 	if err := s.store.DeleteStatusPageNoCtx(id); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 	return ctx.JSON(http.StatusNoContent, nil)
 }
@@ -1925,7 +1925,7 @@ func (c *Context) Bind(v interface{}) error {
 func (s *RESTServer) handleListMaintenanceWindows(ctx *Context) error {
 	windows, err := s.store.ListMaintenanceWindows()
 	if err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 	return ctx.JSON(http.StatusOK, windows)
 }
@@ -1938,7 +1938,7 @@ func (s *RESTServer) handleCreateMaintenanceWindow(ctx *Context) error {
 		return ctx.Error(http.StatusBadRequest, "invalid JSON")
 	}
 	if err := s.store.SaveMaintenanceWindow(&w); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 	return ctx.JSON(http.StatusCreated, w)
 }
@@ -2017,7 +2017,7 @@ func (s *RESTServer) handleUpdateMaintenanceWindow(ctx *Context) error {
 	}
 	w.UpdatedAt = time.Now().UTC()
 	if err := s.store.SaveMaintenanceWindow(w); err != nil {
-		return ctx.Error(http.StatusInternalServerError, err.Error())
+		return s.internalError(ctx, err, "internal server error")
 	}
 	return ctx.JSON(http.StatusOK, w)
 }

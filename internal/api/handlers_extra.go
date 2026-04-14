@@ -320,11 +320,11 @@ func (s *RESTServer) handleDashboardQuery(ctx *Context) error {
 
 	switch query.Source {
 	case "souls":
-		result, err = s.querySouls(query)
+		result, err = s.querySouls(query, ctx.Workspace)
 	case "judgments":
-		result, err = s.queryJudgments(query)
+		result, err = s.queryJudgments(query, ctx.Workspace)
 	case "stats":
-		result, err = s.queryStats(query)
+		result, err = s.queryStats(query, ctx.Workspace)
 	case "alerts":
 		result, err = s.queryAlerts(query)
 	default:
@@ -338,8 +338,8 @@ func (s *RESTServer) handleDashboardQuery(ctx *Context) error {
 	return ctx.JSON(http.StatusOK, result)
 }
 
-func (s *RESTServer) querySouls(q core.WidgetQuery) (interface{}, error) {
-	souls, err := s.store.ListSoulsNoCtx("", 0, 1000)
+func (s *RESTServer) querySouls(q core.WidgetQuery, workspace string) (interface{}, error) {
+	souls, err := s.store.ListSoulsNoCtx(workspace, 0, 1000)
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +354,7 @@ func (s *RESTServer) querySouls(q core.WidgetQuery) (interface{}, error) {
 	}
 }
 
-func (s *RESTServer) queryJudgments(q core.WidgetQuery) (interface{}, error) {
+func (s *RESTServer) queryJudgments(q core.WidgetQuery, workspace string) (interface{}, error) {
 	// Parse time range
 	duration := 24 * time.Hour
 	if q.TimeRange != "" {
@@ -372,7 +372,7 @@ func (s *RESTServer) queryJudgments(q core.WidgetQuery) (interface{}, error) {
 		judgments, err = s.store.ListJudgmentsNoCtx(soulID, start, end, 1000)
 	} else {
 		// List all souls and get their judgments
-		souls, err := s.store.ListSoulsNoCtx("", 0, 100)
+		souls, err := s.store.ListSoulsNoCtx(workspace, 0, 100)
 		if err != nil {
 			return nil, err
 		}
@@ -429,8 +429,8 @@ func (s *RESTServer) queryJudgments(q core.WidgetQuery) (interface{}, error) {
 	return result, nil
 }
 
-func (s *RESTServer) queryStats(q core.WidgetQuery) (interface{}, error) {
-	souls, _ := s.store.ListSoulsNoCtx("", 0, 1000)
+func (s *RESTServer) queryStats(q core.WidgetQuery, workspace string) (interface{}, error) {
+	souls, _ := s.store.ListSoulsNoCtx(workspace, 0, 1000)
 
 	// Get recent judgments for all souls to determine status distribution
 	var judgments []*core.Judgment

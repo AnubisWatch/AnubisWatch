@@ -286,7 +286,7 @@ func TestOIDCAuthenticator_ParseIDToken(t *testing.T) {
 		jwksTTL:     time.Hour,
 	}
 
-	userInfo, err := auth.parseIDToken(token)
+	userInfo, err := auth.parseIDToken(token, "")
 	if err != nil {
 		t.Fatalf("parseIDToken failed: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestOIDCAuthenticator_ParseIDToken_RejectForged(t *testing.T) {
 		jwksTTL:     time.Hour,
 	}
 
-	_, err = auth.parseIDToken(forgedToken)
+	_, err = auth.parseIDToken(forgedToken, "")
 	if err == nil {
 		t.Fatal("EXPECTED forged JWT to be rejected, but it was accepted!")
 	}
@@ -377,7 +377,7 @@ func TestOIDCAuthenticator_ParseIDToken_RejectExpired(t *testing.T) {
 		jwksTTL:     time.Hour,
 	}
 
-	_, err = auth.parseIDToken(token)
+	_, err = auth.parseIDToken(token, "")
 	if err == nil {
 		t.Fatal("EXPECTED expired token to be rejected")
 	}
@@ -388,19 +388,19 @@ func TestOIDCAuthenticator_ParseIDToken_Invalid(t *testing.T) {
 	auth := &OIDCAuthenticator{}
 
 	// Empty token
-	_, err := auth.parseIDToken("")
+	_, err := auth.parseIDToken("", "")
 	if err == nil {
 		t.Error("Expected error for empty token")
 	}
 
 	// Invalid format (not 3 parts)
-	_, err = auth.parseIDToken("not.a.valid.jwt")
+	_, err = auth.parseIDToken("not.a.valid.jwt", "")
 	if err == nil {
 		t.Error("Expected error for invalid JWT format")
 	}
 
 	// Invalid base64
-	_, err = auth.parseIDToken("header.!!!invalid!!!.sig")
+	_, err = auth.parseIDToken("header.!!!invalid!!!.sig", "")
 	if err == nil {
 		t.Error("Expected error for invalid base64")
 	}
@@ -461,7 +461,7 @@ func TestOIDCAuthenticator_ParseIDToken_ECKey(t *testing.T) {
 		jwksTTL:     time.Hour,
 	}
 
-	userInfo, err := auth.parseIDToken(token)
+	userInfo, err := auth.parseIDToken(token, "")
 	if err != nil {
 		t.Fatalf("parseIDToken with EC key failed: %v", err)
 	}
@@ -1006,7 +1006,7 @@ func TestOIDCAuthenticator_ParseIDToken_AudienceList(t *testing.T) {
 		jwksTTL:     time.Hour,
 	}
 
-	userInfo, err := auth.parseIDToken(token)
+	userInfo, err := auth.parseIDToken(token, "")
 	if err != nil {
 		t.Fatalf("parseIDToken failed: %v", err)
 	}
@@ -1035,7 +1035,7 @@ func TestOIDCAuthenticator_ParseIDToken_AudienceList_Missing(t *testing.T) {
 		jwksTTL:     time.Hour,
 	}
 
-	_, err := auth.parseIDToken(token)
+	_, err := auth.parseIDToken(token, "")
 	if err == nil {
 		t.Error("Expected error when audience list doesn't contain client ID")
 	}
@@ -1133,11 +1133,15 @@ func TestOIDCAuthenticator_OIDCCallback_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
+	state := "valid-state-abc"
+	nonce := "valid-nonce-xyz"
+
 	now := time.Now()
 	claims := map[string]interface{}{
 		"iss":   server.URL,
 		"aud":   "client-id",
 		"sub":   "user-123",
+		"nonce": nonce,
 		"email": "oidcuser@example.com",
 		"name":  "OIDC User",
 		"exp":   now.Add(time.Hour).Unix(),
@@ -1153,8 +1157,6 @@ func TestOIDCAuthenticator_OIDCCallback_Success(t *testing.T) {
 	defer auth.Shutdown()
 
 	// Inject a valid state
-	state := "valid-state-abc"
-	nonce := "valid-nonce-xyz"
 	auth.mu.Lock()
 	auth.state[state] = &oidcState{
 		Nonce:     nonce,
@@ -1283,11 +1285,15 @@ func TestOIDCAuthenticator_OIDCCallback_GetUserInfoError(t *testing.T) {
 	}))
 	defer server.Close()
 
+	state := "userinfo-error-state"
+	nonce := "userinfo-error-nonce"
+
 	now := time.Now()
 	claims := map[string]interface{}{
 		"iss":   server.URL,
 		"aud":   "client-id",
 		"sub":   "user-123",
+		"nonce": nonce,
 		"email": "oidcuser@example.com",
 		"name":  "OIDC User",
 		"exp":   now.Add(time.Hour).Unix(),
@@ -1302,8 +1308,6 @@ func TestOIDCAuthenticator_OIDCCallback_GetUserInfoError(t *testing.T) {
 	}, "", "admin@test.com", "admin123")
 	defer auth.Shutdown()
 
-	state := "userinfo-error-state"
-	nonce := "userinfo-error-nonce"
 	auth.mu.Lock()
 	auth.state[state] = &oidcState{
 		Nonce:     nonce,
