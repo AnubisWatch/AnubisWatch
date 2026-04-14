@@ -1624,7 +1624,7 @@ func (s *RESTServer) rateLimitMiddleware(handler Handler) Handler {
 	// Determine limit based on endpoint
 	getLimit := func(path string) int {
 		switch {
-		case strings.HasPrefix(path, "/auth/") || path == "/login" || path == "/register":
+		case strings.HasPrefix(path, "/api/v1/auth/") || strings.HasPrefix(path, "/auth/") || path == "/login" || path == "/register":
 			return authLimit
 		case strings.HasPrefix(path, "/api/v1/souls") && (strings.Contains(path, "delete") || strings.Contains(path, "update")):
 			return sensitiveLimit

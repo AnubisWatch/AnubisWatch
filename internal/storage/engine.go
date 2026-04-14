@@ -82,8 +82,8 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 		}
 	}
 
-	// Ensure data directory exists
-	if err := os.MkdirAll(config.Path, 0755); err != nil {
+	// Ensure data directory exists (0700 = owner read/write/execute only)
+	if err := os.MkdirAll(config.Path, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
 

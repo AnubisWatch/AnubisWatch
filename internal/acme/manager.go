@@ -335,8 +335,13 @@ func (m *Manager) generateSelfSignedCert(domain string) ([]byte, error) {
 		return nil, err
 	}
 
+	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate serial number: %w", err)
+	}
+
 	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: serialNumber,
 		Subject: pkix.Name{
 			CommonName: domain,
 		},
