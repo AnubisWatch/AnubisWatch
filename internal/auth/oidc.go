@@ -547,6 +547,18 @@ func (o *OIDCAuthenticator) verifyJWTSignature(idToken string) (map[string]inter
 		return nil, fmt.Errorf("failed to parse JWT header: %w", err)
 	}
 
+	// Validate signing algorithm - reject "none" and only allow known algorithms
+	if alg, ok := headers["alg"].(string); ok {
+		switch alg {
+		case "RS256", "RS384", "RS512", "ES256", "ES384", "ES512":
+			// Allowed asymmetric algorithms
+		case "none", "":
+			return nil, fmt.Errorf("JWT signing algorithm %q not allowed: asymmetric signature required", alg)
+		default:
+			return nil, fmt.Errorf("unsupported JWT signing algorithm: %s", alg)
+		}
+	}
+
 	// Find the matching key
 	cryptoKey, err := o.findKeyForJWT(headers)
 	if err != nil {

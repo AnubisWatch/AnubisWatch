@@ -296,16 +296,24 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 
 // diagnoseTLSFailure attempts to get certificate info even when TLS verification fails
 func (c *TLSChecker) diagnoseTLSFailure(soul *core.Soul, dialErr error, timeout time.Duration) *core.Judgment {
-	// SECURITY: InsecureSkipVerify is required here because we need to extract the
-	// server's certificate for diagnostic purposes when normal verification fails.
-	// The certificate data is used READ-ONLY for error messages (expiry date, issuer).
-	// No trust decisions are made based on this connection.
-	// The probe engine's primary check ALWAYS uses full verification.
+	// HIGH-06: Use VerifyPeerCertificate callback to capture certificates for diagnostics
+	// while still performing our own chain verification, rather than blindly accepting
+	// any certificate with InsecureSkipVerify.
+	var capturedCerts []*x509.Certificate
 	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true,
-		// Mitigation: Only accept the connection for diagnostic info extraction.
-		// We don't verify the cert chain here, but we also don't trust the cert
-		// for any operational decisions — only for generating human-readable error messages.
+		InsecureSkipVerify: true, // Required to not fail handshake; we verify ourselves below
+		VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+			certs := make([]*x509.Certificate, len(rawCerts))
+			for i, rawCert := range rawCerts {
+				cert, err := x509.ParseCertificate(rawCert)
+				if err != nil {
+					return nil // Don't fail the handshake
+				}
+				certs[i] = cert
+			}
+			capturedCerts = certs
+			return nil // Never fail the handshake
+		},
 	}
 
 	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", soul.Target, tlsConfig)
@@ -315,13 +323,16 @@ func (c *TLSChecker) diagnoseTLSFailure(soul *core.Soul, dialErr error, timeout 
 	}
 	defer conn.Close()
 
-	state := conn.ConnectionState()
-	tlsInfo := extractTLSInfo(&state)
+	// Build TLSInfo from captured certificates
+	var tlsInfo *core.TLSInfo
+	if len(capturedCerts) > 0 {
+		tlsInfo = extractTLSCertsOnly(capturedCerts)
+	}
 
 	// Build detailed error message based on the original error
 	errMsg := fmt.Sprintf("TLS verification failed: %v", dialErr)
-	if tlsInfo != nil && len(state.PeerCertificates) > 0 {
-		cert := state.PeerCertificates[0]
+	if len(capturedCerts) > 0 {
+		cert := capturedCerts[0]
 		daysUntilExpiry := int(time.Until(cert.NotAfter).Hours() / 24)
 		if daysUntilExpiry < 0 {
 			errMsg = fmt.Sprintf("Certificate expired %d days ago", -daysUntilExpiry)

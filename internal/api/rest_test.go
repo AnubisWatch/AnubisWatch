@@ -411,23 +411,92 @@ func (p *mockProbeEngine) ForceCheck(soulID string) (*core.Judgment, error) {
 }
 
 // mockAlertManager implements AlertManager interface
-type mockAlertManager struct{}
+type mockAlertManager struct {
+	channels map[string]*core.AlertChannel
+	rules    map[string]*core.AlertRule
+}
 
 func (a *mockAlertManager) GetStats() core.AlertManagerStats {
 	return core.AlertManagerStats{}
 }
-func (a *mockAlertManager) ListChannels() []*core.AlertChannel { return nil }
-func (a *mockAlertManager) ListRules() []*core.AlertRule       { return nil }
+func (a *mockAlertManager) ListChannels() []*core.AlertChannel {
+	if a.channels == nil {
+		return nil
+	}
+	channels := make([]*core.AlertChannel, 0, len(a.channels))
+	for _, ch := range a.channels {
+		channels = append(channels, ch)
+	}
+	return channels
+}
+func (a *mockAlertManager) ListRules() []*core.AlertRule {
+	if a.rules == nil {
+		return nil
+	}
+	rules := make([]*core.AlertRule, 0, len(a.rules))
+	for _, r := range a.rules {
+		rules = append(rules, r)
+	}
+	return rules
+}
+func (a *mockAlertManager) ListChannelsByWorkspace(workspace string) []*core.AlertChannel {
+	return a.ListChannels()
+}
+func (a *mockAlertManager) ListRulesByWorkspace(workspace string) []*core.AlertRule {
+	return a.ListRules()
+}
 func (a *mockAlertManager) GetChannel(id string) (*core.AlertChannel, error) {
-	return nil, fmt.Errorf("not found")
+	if a.channels == nil {
+		return nil, fmt.Errorf("not found")
+	}
+	ch, ok := a.channels[id]
+	if !ok {
+		return nil, fmt.Errorf("not found")
+	}
+	return ch, nil
 }
 func (a *mockAlertManager) GetRule(id string) (*core.AlertRule, error) {
-	return nil, fmt.Errorf("not found")
+	if a.rules == nil {
+		return nil, fmt.Errorf("not found")
+	}
+	r, ok := a.rules[id]
+	if !ok {
+		return nil, fmt.Errorf("not found")
+	}
+	return r, nil
 }
-func (a *mockAlertManager) RegisterChannel(ch *core.AlertChannel) error         { return nil }
-func (a *mockAlertManager) RegisterRule(rule *core.AlertRule) error             { return nil }
-func (a *mockAlertManager) DeleteChannel(id string) error                       { return nil }
-func (a *mockAlertManager) DeleteRule(id string) error                          { return nil }
+func (a *mockAlertManager) RegisterChannel(ch *core.AlertChannel) error {
+	if a.channels == nil {
+		a.channels = make(map[string]*core.AlertChannel)
+	}
+	a.channels[ch.ID] = ch
+	return nil
+}
+func (a *mockAlertManager) RegisterRule(rule *core.AlertRule) error {
+	if a.rules == nil {
+		a.rules = make(map[string]*core.AlertRule)
+	}
+	a.rules[rule.ID] = rule
+	return nil
+}
+func (a *mockAlertManager) DeleteChannel(id string) error {
+	if a.channels != nil {
+		delete(a.channels, id)
+	}
+	return nil
+}
+func (a *mockAlertManager) DeleteChannelWithWorkspace(id string, workspace string) error {
+	return a.DeleteChannel(id)
+}
+func (a *mockAlertManager) DeleteRule(id string) error {
+	if a.rules != nil {
+		delete(a.rules, id)
+	}
+	return nil
+}
+func (a *mockAlertManager) DeleteRuleWithWorkspace(id string, workspace string) error {
+	return a.DeleteRule(id)
+}
 func (a *mockAlertManager) AcknowledgeIncident(incidentID, userID, workspace string) error { return nil }
 func (a *mockAlertManager) ResolveIncident(incidentID, userID, workspace string) error     { return nil }
 func (a *mockAlertManager) ListActiveIncidents() []*core.Incident               { return nil }
@@ -453,7 +522,13 @@ func (a *failingAlertManager) RegisterRule(rule *core.AlertRule) error {
 	return fmt.Errorf("alert error")
 }
 func (a *failingAlertManager) DeleteChannel(id string) error { return fmt.Errorf("alert error") }
+func (a *failingAlertManager) DeleteChannelWithWorkspace(id string, workspace string) error {
+	return fmt.Errorf("alert error")
+}
 func (a *failingAlertManager) DeleteRule(id string) error    { return fmt.Errorf("alert error") }
+func (a *failingAlertManager) DeleteRuleWithWorkspace(id string, workspace string) error {
+	return fmt.Errorf("alert error")
+}
 func (a *failingAlertManager) AcknowledgeIncident(incidentID, userID, workspace string) error {
 	return fmt.Errorf("alert error")
 }
@@ -461,6 +536,8 @@ func (a *failingAlertManager) ResolveIncident(incidentID, userID, workspace stri
 	return fmt.Errorf("alert error")
 }
 func (a *failingAlertManager) ListActiveIncidents() []*core.Incident { return nil }
+func (a *failingAlertManager) ListChannelsByWorkspace(workspace string) []*core.AlertChannel { return nil }
+func (a *failingAlertManager) ListRulesByWorkspace(workspace string) []*core.AlertRule       { return nil }
 
 // mockAuthenticator implements Authenticator interface
 type mockAuthenticator struct{}

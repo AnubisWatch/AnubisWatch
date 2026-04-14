@@ -197,13 +197,17 @@ type ProbeEngine interface {
 type AlertManager interface {
 	GetStats() core.AlertManagerStats
 	ListChannels() []*core.AlertChannel
+	ListChannelsByWorkspace(workspace string) []*core.AlertChannel
 	ListRules() []*core.AlertRule
+	ListRulesByWorkspace(workspace string) []*core.AlertRule
 	GetChannel(id string) (*core.AlertChannel, error)
 	GetRule(id string) (*core.AlertRule, error)
 	RegisterChannel(channel *core.AlertChannel) error
 	RegisterRule(rule *core.AlertRule) error
 	DeleteChannel(id string) error
+	DeleteChannelWithWorkspace(id string, workspace string) error
 	DeleteRule(id string) error
+	DeleteRuleWithWorkspace(id string, workspace string) error
 	AcknowledgeIncident(incidentID, userID, workspace string) error
 	ResolveIncident(incidentID, userID, workspace string) error
 	ListActiveIncidents() []*core.Incident
@@ -853,7 +857,8 @@ func (s *RESTServer) handleListAllJudgments(ctx *Context) error {
 func (s *RESTServer) handleListChannels(ctx *Context) error {
 	offset, limit := parsePagination(ctx.Request, 20, 100)
 
-	allChannels := s.alert.ListChannels()
+	// HIGH-09: Filter channels by user's workspace
+	allChannels := s.alert.ListChannelsByWorkspace(ctx.Workspace)
 
 	// Apply pagination
 	start := offset
@@ -893,6 +898,7 @@ func (s *RESTServer) handleCreateChannel(ctx *Context) error {
 	}
 
 	channel.ID = core.GenerateID()
+	channel.WorkspaceID = ctx.Workspace
 	channel.CreatedAt = time.Now()
 	channel.UpdatedAt = time.Now()
 
@@ -905,12 +911,15 @@ func (s *RESTServer) handleCreateChannel(ctx *Context) error {
 
 func (s *RESTServer) handleGetChannel(ctx *Context) error {
 	id := ctx.Params["id"]
-	// Try alert manager's in-memory cache first (has WorkspaceID)
+	// HIGH-09: Verify channel belongs to user's workspace
 	if ch, err := s.alert.GetChannel(id); err == nil {
+		if ch.WorkspaceID != "" && ch.WorkspaceID != ctx.Workspace {
+			return ctx.Error(http.StatusForbidden, "access denied: channel belongs to another workspace")
+		}
 		return ctx.JSON(http.StatusOK, ch)
 	}
-	// Fallback to storage with default workspace
-	channel, err := s.store.GetChannelNoCtx(id, "")
+	// Fallback to storage with user's workspace
+	channel, err := s.store.GetChannelNoCtx(id, ctx.Workspace)
 	if err != nil {
 		return ctx.Error(http.StatusNotFound, "channel not found")
 	}
@@ -925,7 +934,21 @@ func (s *RESTServer) handleUpdateChannel(ctx *Context) error {
 		return ctx.Error(http.StatusBadRequest, "invalid channel data")
 	}
 
+	// HIGH-09: Verify channel belongs to user's workspace
+	existing, err := s.alert.GetChannel(id)
+	if err != nil {
+		// Fallback to storage for workspace verification
+		existing, err = s.store.GetChannelNoCtx(id, ctx.Workspace)
+		if err != nil || existing == nil {
+			return ctx.Error(http.StatusNotFound, "channel not found")
+		}
+	}
+	if existing.WorkspaceID != "" && existing.WorkspaceID != ctx.Workspace {
+		return ctx.Error(http.StatusForbidden, "access denied: channel belongs to another workspace")
+	}
+
 	channel.ID = id
+	channel.WorkspaceID = ctx.Workspace
 	channel.UpdatedAt = time.Now()
 
 	if err := s.alert.RegisterChannel(&channel); err != nil {
@@ -937,7 +960,15 @@ func (s *RESTServer) handleUpdateChannel(ctx *Context) error {
 
 func (s *RESTServer) handleDeleteChannel(ctx *Context) error {
 	id := ctx.Params["id"]
-	if err := s.alert.DeleteChannel(id); err != nil {
+	// HIGH-09: Verify channel belongs to user's workspace
+	if err := s.alert.DeleteChannelWithWorkspace(id, ctx.Workspace); err != nil {
+		errMsg := err.Error()
+		if errMsg == "channel not found: "+id {
+			return ctx.Error(http.StatusNotFound, "channel not found")
+		}
+		if strings.Contains(errMsg, "does not belong to workspace") {
+			return ctx.Error(http.StatusForbidden, "access denied: "+errMsg)
+		}
 		return s.internalError(ctx, err, "internal server error")
 	}
 
@@ -955,7 +986,8 @@ func (s *RESTServer) handleTestChannel(ctx *Context) error {
 func (s *RESTServer) handleListRules(ctx *Context) error {
 	offset, limit := parsePagination(ctx.Request, 20, 100)
 
-	allRules := s.alert.ListRules()
+	// HIGH-09: Filter rules by user's workspace
+	allRules := s.alert.ListRulesByWorkspace(ctx.Workspace)
 
 	// Apply pagination
 	start := offset
@@ -995,6 +1027,7 @@ func (s *RESTServer) handleCreateRule(ctx *Context) error {
 	}
 
 	rule.ID = core.GenerateID()
+	rule.WorkspaceID = ctx.Workspace
 	rule.CreatedAt = time.Now()
 
 	if err := s.alert.RegisterRule(&rule); err != nil {
@@ -1006,12 +1039,15 @@ func (s *RESTServer) handleCreateRule(ctx *Context) error {
 
 func (s *RESTServer) handleGetRule(ctx *Context) error {
 	id := ctx.Params["id"]
-	// Try alert manager's in-memory cache first (has WorkspaceID)
+	// HIGH-09: Verify rule belongs to user's workspace
 	if rule, err := s.alert.GetRule(id); err == nil {
+		if rule.WorkspaceID != "" && rule.WorkspaceID != ctx.Workspace {
+			return ctx.Error(http.StatusForbidden, "access denied: rule belongs to another workspace")
+		}
 		return ctx.JSON(http.StatusOK, rule)
 	}
-	// Fallback to storage with default workspace
-	rule, err := s.store.GetRuleNoCtx(id, "")
+	// Fallback to storage with user's workspace
+	rule, err := s.store.GetRuleNoCtx(id, ctx.Workspace)
 	if err != nil {
 		return ctx.Error(http.StatusNotFound, "rule not found")
 	}
@@ -1026,7 +1062,21 @@ func (s *RESTServer) handleUpdateRule(ctx *Context) error {
 		return ctx.Error(http.StatusBadRequest, "invalid rule data")
 	}
 
+	// HIGH-09: Verify rule belongs to user's workspace
+	existing, err := s.alert.GetRule(id)
+	if err != nil {
+		// Fallback to storage for workspace verification
+		existing, err = s.store.GetRuleNoCtx(id, ctx.Workspace)
+		if err != nil || existing == nil {
+			return ctx.Error(http.StatusNotFound, "rule not found")
+		}
+	}
+	if existing.WorkspaceID != "" && existing.WorkspaceID != ctx.Workspace {
+		return ctx.Error(http.StatusForbidden, "access denied: rule belongs to another workspace")
+	}
+
 	rule.ID = id
+	rule.WorkspaceID = ctx.Workspace
 
 	if err := s.alert.RegisterRule(&rule); err != nil {
 		return s.internalError(ctx, err, "internal server error")
@@ -1037,7 +1087,15 @@ func (s *RESTServer) handleUpdateRule(ctx *Context) error {
 
 func (s *RESTServer) handleDeleteRule(ctx *Context) error {
 	id := ctx.Params["id"]
-	if err := s.alert.DeleteRule(id); err != nil {
+	// HIGH-09: Verify rule belongs to user's workspace
+	if err := s.alert.DeleteRuleWithWorkspace(id, ctx.Workspace); err != nil {
+		errMsg := err.Error()
+		if errMsg == "rule not found: "+id {
+			return ctx.Error(http.StatusNotFound, "rule not found")
+		}
+		if strings.Contains(errMsg, "does not belong to workspace") {
+			return ctx.Error(http.StatusForbidden, "access denied: "+errMsg)
+		}
 		return s.internalError(ctx, err, "internal server error")
 	}
 

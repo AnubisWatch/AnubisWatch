@@ -185,6 +185,22 @@ func (m *Manager) RegisterChannel(channel *core.AlertChannel) error {
 	return nil
 }
 
+// DeleteChannelWithWorkspace removes an alert channel only if it belongs to the given workspace
+func (m *Manager) DeleteChannelWithWorkspace(id string, workspace string) error {
+	m.mu.RLock()
+	ch := m.channels[id]
+	m.mu.RUnlock()
+
+	if ch == nil {
+		return fmt.Errorf("channel not found: %s", id)
+	}
+	if ch.WorkspaceID != "" && ch.WorkspaceID != workspace {
+		return fmt.Errorf("channel %s does not belong to workspace %s", id, workspace)
+	}
+
+	return m.DeleteChannel(id)
+}
+
 // DeleteChannel removes an alert channel
 func (m *Manager) DeleteChannel(id string) error {
 	m.mu.RLock()
@@ -226,6 +242,22 @@ func (m *Manager) RegisterRule(rule *core.AlertRule) error {
 		"name", rule.Name)
 
 	return nil
+}
+
+// DeleteRuleWithWorkspace removes an alert rule only if it belongs to the given workspace
+func (m *Manager) DeleteRuleWithWorkspace(id string, workspace string) error {
+	m.mu.RLock()
+	rule := m.rules[id]
+	m.mu.RUnlock()
+
+	if rule == nil {
+		return fmt.Errorf("rule not found: %s", id)
+	}
+	if rule.WorkspaceID != "" && rule.WorkspaceID != workspace {
+		return fmt.Errorf("rule %s does not belong to workspace %s", id, workspace)
+	}
+
+	return m.DeleteRule(id)
 }
 
 // DeleteRule removes an alert rule
@@ -946,6 +978,20 @@ func (m *Manager) ListActiveIncidents() []*core.Incident {
 	return incidents
 }
 
+// ListChannelsByWorkspace returns channels filtered by workspace
+func (m *Manager) ListChannelsByWorkspace(workspace string) []*core.AlertChannel {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	channels := make([]*core.AlertChannel, 0)
+	for _, ch := range m.channels {
+		if ch.WorkspaceID == "" || ch.WorkspaceID == workspace {
+			channels = append(channels, ch)
+		}
+	}
+	return channels
+}
+
 // ListChannels returns all registered channels
 func (m *Manager) ListChannels() []*core.AlertChannel {
 	m.mu.RLock()
@@ -956,6 +1002,20 @@ func (m *Manager) ListChannels() []*core.AlertChannel {
 		channels = append(channels, ch)
 	}
 	return channels
+}
+
+// ListRulesByWorkspace returns rules filtered by workspace
+func (m *Manager) ListRulesByWorkspace(workspace string) []*core.AlertRule {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	rules := make([]*core.AlertRule, 0)
+	for _, rule := range m.rules {
+		if rule.WorkspaceID == "" || rule.WorkspaceID == workspace {
+			rules = append(rules, rule)
+		}
+	}
+	return rules
 }
 
 // ListRules returns all registered rules
