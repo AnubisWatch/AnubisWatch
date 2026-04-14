@@ -970,7 +970,7 @@ func TestHandleGetSoul_Success(t *testing.T) {
 
 func TestHandleUpdateSoul(t *testing.T) {
 	storage := newMockStorage()
-	storage.SaveSoul(context.Background(), &core.Soul{ID: "soul-to-update", Name: "Original", Type: core.CheckHTTP, Target: "https://example.com"})
+	storage.SaveSoul(context.Background(), &core.Soul{ID: "soul-to-update", Name: "Original", Type: core.CheckHTTP, Target: "https://example.com", WorkspaceID: "default"})
 
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{

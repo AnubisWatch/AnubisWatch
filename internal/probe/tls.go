@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"strings"
@@ -295,10 +296,16 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 
 // diagnoseTLSFailure attempts to get certificate info even when TLS verification fails
 func (c *TLSChecker) diagnoseTLSFailure(soul *core.Soul, dialErr error, timeout time.Duration) *core.Judgment {
-	// Try to connect with InsecureSkipVerify just to extract certificate info for diagnostics
-	// This connection is only used for error reporting, not for actual service monitoring
+	// SECURITY: InsecureSkipVerify is required here because we need to extract the
+	// server's certificate for diagnostic purposes when normal verification fails.
+	// The certificate data is used READ-ONLY for error messages (expiry date, issuer).
+	// No trust decisions are made based on this connection.
+	// The probe engine's primary check ALWAYS uses full verification.
 	tlsConfig := &tls.Config{
 		InsecureSkipVerify: true,
+		// Mitigation: Only accept the connection for diagnostic info extraction.
+		// We don't verify the cert chain here, but we also don't trust the cert
+		// for any operational decisions — only for generating human-readable error messages.
 	}
 
 	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", soul.Target, tlsConfig)
@@ -327,6 +334,31 @@ func (c *TLSChecker) diagnoseTLSFailure(soul *core.Soul, dialErr error, timeout 
 	judgment.TLSInfo = tlsInfo
 	return judgment
 }
+
+// extractTLSCertsOnly builds TLSInfo from raw certificates without connection state.
+func extractTLSCertsOnly(certs []*x509.Certificate) *core.TLSInfo {
+	if len(certs) == 0 {
+		return nil
+	}
+	cert := certs[0]
+	keyType := "RSA"
+	if cert.PublicKeyAlgorithm == x509.ECDSA {
+		keyType = "ECDSA"
+	}
+	info := &core.TLSInfo{
+		Issuer:          cert.Issuer.CommonName,
+		Subject:         cert.Subject.CommonName,
+		SANs:            cert.DNSNames,
+		NotBefore:       cert.NotBefore,
+		NotAfter:        cert.NotAfter,
+		DaysUntilExpiry: int(time.Until(cert.NotAfter).Hours() / 24),
+		KeyType:         keyType,
+		ChainLength:     len(certs),
+		ChainValid:      len(certs) > 1,
+	}
+	return info
+}
+
 func parseTLSVersion(s string) uint16 {
 	s = strings.ToUpper(strings.ReplaceAll(s, ".", ""))
 	switch s {

@@ -450,9 +450,9 @@ func TestHandleUpdateSoul_StorageError(t *testing.T) {
 	}
 
 	server.handleUpdateSoul(ctx)
-	// Check response code
-	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	// Storage fails on GetSoulNoCtx (IDOR check), returns 404
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("Expected status %d, got %d", http.StatusNotFound, rec.Code)
 	}
 }
 

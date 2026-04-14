@@ -419,11 +419,12 @@ func (s *RESTServer) Start() error {
 	}
 
 	s.http = &http.Server{
-		Addr:         addr,
-		Handler:      s.router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
+		Addr:              addr,
+		Handler:           s.router,
+		ReadTimeout:       30 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	s.logger.Info("REST server starting", "addr", addr)
@@ -722,6 +723,15 @@ func (s *RESTServer) handleUpdateSoul(ctx *Context) error {
 	var soul core.Soul
 	if err := ctx.Bind(&soul); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid soul data")
+	}
+
+	// IDOR protection: Verify soul belongs to user's workspace before updating
+	existing, err := s.store.GetSoulNoCtx(id)
+	if err != nil || existing == nil {
+		return ctx.Error(http.StatusNotFound, "soul not found")
+	}
+	if existing.WorkspaceID != ctx.Workspace {
+		return ctx.Error(http.StatusForbidden, "access denied: soul belongs to another workspace")
 	}
 
 	soul.ID = id

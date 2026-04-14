@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/url"
@@ -243,4 +244,71 @@ func ValidateAddress(address string) error {
 // Test-only: call after setting ANUBIS_SSRF_ALLOW_PRIVATE=1.
 func ResetDefaultForTest() {
 	DefaultValidator = NewSSRFValidator()
+}
+
+// DialContextFunc is a function that dials a network address.
+type DialContextFunc = func(network, addr string) (net.Conn, error)
+
+// WrapDialer wraps a dial function with SSRF-aware DNS rebinding protection.
+// It re-resolves the hostname and validates the IP against the blocklist
+// immediately before each connection attempt, preventing TOCTOU DNS rebinding attacks.
+func (v *SSRFValidator) WrapDialer(dial func(network, addr string) (net.Conn, error)) func(network, addr string) (net.Conn, error) {
+	return func(network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			host = addr
+		}
+
+		// If it's a literal IP, check directly
+		if ip := net.ParseIP(host); ip != nil {
+			if v.isBlockedIP(ip) {
+				return nil, fmt.Errorf("SSRF: target IP %q is blocked", ip)
+			}
+			return dial(network, addr)
+		}
+
+		// Re-resolve hostname and validate all IPs (prevents DNS rebinding)
+		addrs, err := net.LookupHost(host)
+		if err != nil {
+			return nil, fmt.Errorf("SSRF: cannot resolve hostname %q: %w", host, err)
+		}
+		for _, resolved := range addrs {
+			ip := net.ParseIP(resolved)
+			if ip != nil && v.isBlockedIP(ip) {
+				return nil, fmt.Errorf("SSRF: hostname %q resolves to blocked IP %q", host, resolved)
+			}
+		}
+
+		return dial(network, addr)
+	}
+}
+
+// WrapDialerContext wraps net.DialContext with SSRF protection.
+func (v *SSRFValidator) WrapDialerContext(dial func(ctx context.Context, network, addr string) (net.Conn, error)) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			host = addr
+		}
+
+		if ip := net.ParseIP(host); ip != nil {
+			if v.isBlockedIP(ip) {
+				return nil, fmt.Errorf("SSRF: target IP %q is blocked", ip)
+			}
+			return dial(ctx, network, addr)
+		}
+
+		addrs, err := net.DefaultResolver.LookupHost(ctx, host)
+		if err != nil {
+			return nil, fmt.Errorf("SSRF: cannot resolve hostname %q: %w", host, err)
+		}
+		for _, resolved := range addrs {
+			ip := net.ParseIP(resolved)
+			if ip != nil && v.isBlockedIP(ip) {
+				return nil, fmt.Errorf("SSRF: hostname %q resolves to blocked IP %q", host, resolved)
+			}
+		}
+
+		return dial(ctx, network, addr)
+	}
 }
