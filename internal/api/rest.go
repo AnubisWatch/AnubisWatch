@@ -19,7 +19,33 @@ import (
 const (
 	// maxRequestBodySize limits JSON request body size to prevent DoS (1MB)
 	maxRequestBodySize = 1 << 20 // 1MB
+	// maxJSONDepth limits JSON nesting depth to prevent stack overflow
+	maxJSONDepth = 32
 )
+
+// maxDepthReader wraps an io.Reader to track JSON nesting depth.
+// It counts [, { as +1 and ], } as -1, rejecting reads when
+// depth exceeds maxJSONDepth.
+type maxDepthReader struct {
+	r     io.Reader
+	depth int
+}
+
+func (m *maxDepthReader) Read(p []byte) (int, error) {
+	n, err := m.r.Read(p)
+	for _, b := range p[:n] {
+		switch b {
+		case '[', '{':
+			m.depth++
+			if m.depth > maxJSONDepth {
+				return n, fmt.Errorf("JSON depth limit exceeded (max %d)", maxJSONDepth)
+			}
+		case ']', '}':
+			m.depth--
+		}
+	}
+	return n, err
+}
 
 // RESTServer implements the HTTP REST API
 // The scribes record the judgments on papyrus scrolls
@@ -1891,7 +1917,7 @@ func (s *RESTServer) internalError(ctx *Context, err error, context string) erro
 func (c *Context) Bind(v interface{}) error {
 	// Limit request body size to prevent memory exhaustion
 	c.Request.Body = http.MaxBytesReader(c.Response, c.Request.Body, maxRequestBodySize)
-	return json.NewDecoder(c.Request.Body).Decode(v)
+	return json.NewDecoder(&maxDepthReader{r: c.Request.Body}).Decode(v)
 }
 
 // Maintenance Window handlers

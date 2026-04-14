@@ -60,7 +60,7 @@ func NewLocalAuthenticator(sessionPath, adminEmail, adminPassword string) *Local
 			passwordHash = adminPassword
 		} else {
 			// Hash the plaintext password
-			hash, err := bcrypt.GenerateFromPassword([]byte(adminPassword), bcrypt.DefaultCost)
+			hash, err := bcrypt.GenerateFromPassword([]byte(adminPassword), bcryptCost)
 			if err != nil {
 				// If hashing fails, we can't continue securely
 				panic("failed to hash admin password: " + err.Error())
@@ -349,6 +349,7 @@ func generateID() string {
 
 // Brute force protection functions
 const (
+	bcryptCost          = 12
 	maxLoginAttempts    = 5
 	lockoutDuration     = 15 * time.Minute
 	attemptResetWindow  = 30 * time.Minute
@@ -417,7 +418,7 @@ func HashPassword(password string) (string, error) {
 	if password == "" {
 		return "", errors.New("password cannot be empty")
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	if err != nil {
 		return "", err
 	}

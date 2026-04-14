@@ -4,8 +4,8 @@
 # Stage 1: Build environment
 FROM golang:1.26-alpine AS builder
 
-# Install build dependencies
-RUN apk add --no-cache git make nodejs npm
+# Install build dependencies (pin Node.js 22 for dashboard build)
+RUN apk add --no-cache git make nodejs~22 npm
 
 WORKDIR /build
 
