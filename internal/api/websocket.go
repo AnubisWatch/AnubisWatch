@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -10,7 +11,7 @@ import (
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
-	"github.com/gorilla/websocket"
+	"github.com/coder/websocket"
 )
 
 // WebSocketServer handles real-time WebSocket connections
@@ -19,7 +20,6 @@ type WebSocketServer struct {
 	mu             sync.RWMutex
 	clients        map[string]*WSClient
 	rooms          map[string]map[string]bool // room -> clientIDs
-	upgrader       websocket.Upgrader
 	logger         *slog.Logger
 	broadcast      chan WSMessage
 	authenticator  Authenticator // Added for token validation - uses Authenticator from rest.go
@@ -36,6 +36,7 @@ type WSClient struct {
 	send      chan []byte
 	server    *WebSocketServer
 	mu        sync.RWMutex
+	cancel    context.CancelFunc // cancel function for the connection context
 }
 
 // NewWebSocketServer creates a new WebSocket server
@@ -51,27 +52,8 @@ func NewWebSocketServer(logger *slog.Logger, authenticator Authenticator, allowe
 	}
 
 	return &WebSocketServer{
-		clients: make(map[string]*WSClient),
-		rooms:   make(map[string]map[string]bool),
-		upgrader: websocket.Upgrader{
-			ReadBufferSize:  1024,
-			WriteBufferSize: 1024,
-			CheckOrigin: func(r *http.Request) bool {
-				origin := r.Header.Get("Origin")
-				// Allow empty origin only for localhost development (MED-19 fix)
-				if origin == "" {
-					host := r.Host
-					return strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1")
-				}
-				// Check against allowed origins
-				for _, allowed := range allowedOrigins {
-					if origin == allowed {
-						return true
-					}
-				}
-				return false
-			},
-		},
+		clients:        make(map[string]*WSClient),
+		rooms:          make(map[string]map[string]bool),
 		logger:         logger.With("component", "websocket"),
 		broadcast:      make(chan WSMessage, 256),
 		authenticator:  authenticator,
@@ -92,8 +74,11 @@ func (s *WebSocketServer) Stop() {
 		if client.send != nil {
 			close(client.send)
 		}
+		if client.cancel != nil {
+			client.cancel()
+		}
 		if client.Conn != nil {
-			client.Conn.Close()
+			client.Conn.CloseNow()
 		}
 	}
 	s.clients = make(map[string]*WSClient)
@@ -151,12 +136,18 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 		workspace = "default"
 	}
 
-	// Upgrade HTTP to WebSocket
-	conn, err := s.upgrader.Upgrade(w, r, nil)
+	// Upgrade HTTP to WebSocket with origin checking
+	opts := &websocket.AcceptOptions{
+		OriginPatterns: s.allowedOrigins,
+	}
+	conn, err := websocket.Accept(w, r, opts)
 	if err != nil {
 		s.logger.Error("Failed to upgrade WebSocket", "error", err)
 		return
 	}
+
+	// Create a cancellable context for this connection
+	ctx, cancel := context.WithCancel(context.Background())
 
 	// Create client with authenticated user info
 	client := &WSClient{
@@ -167,6 +158,7 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 		Rooms:     make(map[string]bool),
 		send:      make(chan []byte, 256),
 		server:    s,
+		cancel:    cancel,
 	}
 
 	// Register client
@@ -199,7 +191,7 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 
 	// Start goroutines
 	go client.writePump()
-	go client.readPump()
+	go client.readPump(ctx)
 }
 
 // JoinRoom subscribes a client to a room
@@ -237,30 +229,32 @@ func (c *WSClient) LeaveRoom(room string) {
 }
 
 // readPump reads messages from the WebSocket connection
-func (c *WSClient) readPump() {
+func (c *WSClient) readPump(ctx context.Context) {
 	defer func() {
 		c.server.removeClient(c.ID)
-		c.Conn.Close()
+		c.Conn.CloseNow()
 	}()
 
 	c.Conn.SetReadLimit(512 * 1024) // 512KB max message size
-	c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-	c.Conn.SetPongHandler(func(string) error {
-		c.Conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		return nil
-	})
 
 	for {
-		_, message, err := c.Conn.ReadMessage()
+		readCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+		msgType, data, err := c.Conn.Read(readCtx)
+		cancel()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+			closeStatus := websocket.CloseStatus(err)
+			if closeStatus != websocket.StatusNormalClosure &&
+				closeStatus != websocket.StatusGoingAway &&
+				closeStatus != -1 {
 				c.server.logger.Error("WebSocket error", "client_id", c.ID, "error", err)
 			}
 			break
 		}
 
-		// Handle incoming message
-		c.handleMessage(message)
+		// Only handle text/binary messages
+		if msgType == websocket.MessageText {
+			c.handleMessage(data)
+		}
 	}
 }
 
@@ -309,26 +303,34 @@ func (c *WSClient) writePump() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer func() {
 		ticker.Stop()
-		c.Conn.Close()
+		c.Conn.CloseNow()
 	}()
 
 	for {
 		select {
 		case message, ok := <-c.send:
-			c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if !ok {
 				// Channel closed
-				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
+				c.Conn.Close(websocket.StatusNormalClosure, "")
 				return
 			}
 
-			c.Conn.WriteMessage(websocket.TextMessage, message)
+			writeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			err := c.Conn.Write(writeCtx, websocket.MessageText, message)
+			cancel()
+			if err != nil {
+				return
+			}
 
 		case <-ticker.C:
-			c.Conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			// coder/websocket handles ping automatically via ping/pong callbacks
+			// Send a manual ping for liveness check
+			pingCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			if err := c.Conn.Ping(pingCtx); err != nil {
+				cancel()
 				return
 			}
+			cancel()
 		}
 	}
 }
@@ -382,8 +384,11 @@ func (s *WebSocketServer) removeClient(clientID string) {
 	delete(s.clients, clientID)
 	s.mu.Unlock()
 
+	if client.cancel != nil {
+		client.cancel()
+	}
 	close(client.send)
-	client.Conn.Close()
+	client.Conn.CloseNow()
 
 	s.logger.Info("Client disconnected", "client_id", clientID)
 }

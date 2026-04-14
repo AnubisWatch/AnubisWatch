@@ -2015,8 +2015,8 @@ func TestNewWebSocketServer(t *testing.T) {
 	if server.clients == nil {
 		t.Error("clients map should be initialized")
 	}
-	if server.upgrader.ReadBufferSize == 0 {
-		t.Error("upgrader should be initialized")
+	if len(server.allowedOrigins) == 0 {
+		t.Error("allowedOrigins should be initialized with defaults")
 	}
 	if server.broadcast == nil {
 		t.Error("broadcast channel should be initialized")

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,7 +11,7 @@ import (
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
-	"github.com/gorilla/websocket"
+	"github.com/coder/websocket"
 )
 
 // TestWSClient_JoinRoom tests joining a room
@@ -388,11 +389,15 @@ func TestWebSocketServer_removeClient_WithRooms(t *testing.T) {
 
 	// Connect a WebSocket client
 	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "?workspace=test&user_id=user1"
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Authorization": []string{"Bearer valid-token"}})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": []string{"Bearer valid-token"}},
+	})
 	if err != nil {
 		t.Fatalf("Failed to connect WebSocket: %v", err)
 	}
-	defer ws.Close()
+	defer ws.CloseNow()
 
 	// Give time for connection to establish
 	time.Sleep(50 * time.Millisecond)
@@ -495,11 +500,15 @@ func TestWebSocketServer_broadcastToRoom_FullBuffer(t *testing.T) {
 
 	// Connect a WebSocket client
 	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "?workspace=test&user_id=user1"
-	ws, _, err := websocket.DefaultDialer.Dial(wsURL, http.Header{"Authorization": []string{"Bearer valid-token"}})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Authorization": []string{"Bearer valid-token"}},
+	})
 	if err != nil {
 		t.Fatalf("Failed to connect WebSocket: %v", err)
 	}
-	defer ws.Close()
+	defer ws.CloseNow()
 
 	// Give time for connection to establish
 	time.Sleep(50 * time.Millisecond)
