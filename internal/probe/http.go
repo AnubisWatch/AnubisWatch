@@ -182,16 +182,24 @@ func (c *HTTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		client.Jar = jar
 	}
 
-	// Handle redirects
+	// Handle redirects with SSRF validation
 	if !cfg.FollowRedirects {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		}
-	} else if cfg.MaxRedirects > 0 {
+	} else {
 		maxRedir := cfg.MaxRedirects
+		if maxRedir == 0 {
+			maxRedir = 10 // default max
+		}
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedir {
 				return fmt.Errorf("stopped after %d redirects", maxRedir)
+			}
+			// SSRF check on every redirect target
+			redirectURL := req.URL.String()
+			if err := ValidateTarget(redirectURL); err != nil {
+				return fmt.Errorf("redirect target blocked by SSRF: %w", err)
 			}
 			return nil
 		}

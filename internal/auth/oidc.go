@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -257,13 +258,15 @@ func (o *OIDCAuthenticator) exchangeCode(code string) (*tokenResponse, error) {
 		return nil, err
 	}
 
-	// Build token request
-	data := fmt.Sprintf(
-		"grant_type=authorization_code&code=%s&redirect_uri=%s&client_id=%s&client_secret=%s",
-		code, o.config.RedirectURL, o.config.ClientID, o.config.ClientSecret,
-	)
+	// Build token request with proper URL encoding
+	data := url.Values{}
+	data.Set("grant_type", "authorization_code")
+	data.Set("code", code)
+	data.Set("redirect_uri", o.config.RedirectURL)
+	data.Set("client_id", o.config.ClientID)
+	data.Set("client_secret", o.config.ClientSecret)
 
-	resp, err := http.Post(cfg.TokenURL, "application/x-www-form-urlencoded", strings.NewReader(data))
+	resp, err := http.Post(cfg.TokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("token request failed: %w", err)
 	}
