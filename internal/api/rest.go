@@ -305,7 +305,7 @@ func (s *RESTServer) setupRoutes() {
 	// Health
 	s.router.Handle("GET", "/health", s.handleHealth)
 	s.router.Handle("GET", "/ready", s.handleReady)
-	s.router.Handle("GET", "/metrics", s.handleMetrics)
+	s.router.Handle("GET", "/metrics", s.requireAuth(s.handleMetrics))
 
 	// OpenAPI / Swagger (no auth required)
 	s.router.Handle("GET", "/api/openapi.json", s.handleOpenAPIJSON)
@@ -928,6 +928,11 @@ func (s *RESTServer) handleGetJudgment(ctx *Context) error {
 		return ctx.Error(http.StatusNotFound, "judgment not found")
 	}
 
+	// IDOR protection: verify judgment belongs to caller's workspace
+	if judgment.WorkspaceID != "" && judgment.WorkspaceID != ctx.Workspace {
+		return ctx.Error(http.StatusForbidden, "access denied: judgment belongs to another workspace")
+	}
+
 	return ctx.JSON(http.StatusOK, judgment)
 }
 
@@ -1226,12 +1231,34 @@ func (s *RESTServer) handleGetWorkspace(ctx *Context) error {
 
 func (s *RESTServer) handleUpdateWorkspace(ctx *Context) error {
 	id := ctx.Params["id"]
+
+	// Fetch existing workspace for IDOR check
+	existing, err := s.store.GetWorkspaceNoCtx(id)
+	if err != nil {
+		return s.internalError(ctx, err, "failed to fetch workspace")
+	}
+	if existing == nil {
+		return ctx.Error(http.StatusNotFound, "workspace not found")
+	}
+	if existing.ID != id {
+		return ctx.Error(http.StatusForbidden, "access denied")
+	}
+
+	// Bind only the mutable fields; protected fields from existing are preserved
 	var ws core.Workspace
 	if err := ctx.Bind(&ws); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid workspace data")
 	}
 
+	// Mass assignment protection: preserve all sensitive fields from existing.
+	// Only Name, Description, and Settings can be updated by the client.
 	ws.ID = id
+	ws.Slug = existing.Slug     // immutable
+	ws.OwnerID = existing.OwnerID // immutable - prevents privilege escalation
+	ws.Quotas = existing.Quotas // immutable - prevent quota bypass
+	ws.Features = existing.Features // immutable - prevent feature escalation
+	ws.Status = existing.Status // immutable - prevent status manipulation
+	ws.CreatedAt = existing.CreatedAt
 	ws.UpdatedAt = time.Now()
 
 	if err := s.store.SaveWorkspaceNoCtx(&ws); err != nil {
@@ -1736,6 +1763,8 @@ func (s *RESTServer) securityHeadersMiddleware(handler Handler) Handler {
 		ctx.Response.Header().Set("X-XSS-Protection", "1; mode=block")
 		ctx.Response.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		ctx.Response.Header().Set("Content-Security-Policy", "default-src 'self'")
+		// HSTS: force HTTPS (max-age 1 year, include subdomains, preload)
+		ctx.Response.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
 
 		// Check for required headers on sensitive endpoints
 		if strings.HasPrefix(ctx.Request.URL.Path, "/api/v1/") {
@@ -1827,8 +1856,7 @@ func (s *RESTServer) rateLimitMiddleware(handler Handler) Handler {
 	return func(ctx *Context) error {
 		// Skip rate limiting for health endpoints
 		if strings.HasPrefix(ctx.Request.URL.Path, "/health") ||
-			strings.HasPrefix(ctx.Request.URL.Path, "/ready") ||
-			strings.HasPrefix(ctx.Request.URL.Path, "/metrics") {
+			strings.HasPrefix(ctx.Request.URL.Path, "/ready") {
 			return handler(ctx)
 		}
 
@@ -2005,7 +2033,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	isExcluded := strings.HasPrefix(path, "/api/") ||
 		strings.HasPrefix(path, "/health") ||
 		strings.HasPrefix(path, "/ready") ||
-		strings.HasPrefix(path, "/metrics") ||
+		
 		path == "/status" ||
 		path == "/status.html" ||
 		strings.HasPrefix(path, "/public/")

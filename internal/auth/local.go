@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,17 +20,17 @@ import (
 
 // LocalAuthenticator implements simple token-based auth
 type LocalAuthenticator struct {
-	mu              sync.RWMutex
-	tokens          map[string]*session
-	users           map[string]*api.User
-	adminEmail      string
+	mu                sync.RWMutex
+	tokens            map[string]*session
+	users             map[string]*api.User
+	adminEmail        string
 	adminPasswordHash string // bcrypt hashed password
-	sessionPath     string
-	stopCleanup     chan struct{}
-	cleanupDone     chan struct{}
+	sessionPath       string
+	stopCleanup       chan struct{}
+	cleanupDone       chan struct{}
 	// login attempts tracking for brute force protection
-	loginAttempts   map[string]*loginAttempt
-	attemptsMu      sync.RWMutex
+	loginAttempts map[string]*loginAttempt
+	attemptsMu    sync.RWMutex
 	// password reset tokens (protected by a.mu)
 	resetTokens map[string]*resetToken
 }
@@ -52,8 +53,8 @@ type session struct {
 
 // sessionData represents the data persisted to disk
 type sessionData struct {
-	Tokens      map[string]*session   `json:"tokens"`
-	Users       map[string]*api.User  `json:"users"`
+	Tokens      map[string]*session    `json:"tokens"`
+	Users       map[string]*api.User   `json:"users"`
 	ResetTokens map[string]*resetToken `json:"reset_tokens"`
 }
 
@@ -374,11 +375,11 @@ func generateID() string {
 
 // Brute force protection functions
 const (
-	bcryptCost          = 12
-	maxLoginAttempts    = 5
-	lockoutDuration     = 15 * time.Minute
-	attemptResetWindow  = 30 * time.Minute
-	minPasswordLength   = 12
+	bcryptCost         = 12
+	maxLoginAttempts   = 5
+	lockoutDuration    = 15 * time.Minute
+	attemptResetWindow = 30 * time.Minute
+	minPasswordLength  = 12
 )
 
 // validatePassword enforces minimum password policy (MED-12)
@@ -551,9 +552,12 @@ func (a *LocalAuthenticator) RequestPasswordReset(email string) (string, error) 
 	}
 	a.saveSessionsLocked()
 
-	// Log the reset token to server log (no email infrastructure)
-	// In production, this should be sent via email to the admin
-	fmt.Printf("[ANUBIS PASSWORD RESET] Reset token for %s: %s (expires in 1 hour)\n", email, token)
+	// Emit to structured audit log instead of stdout.
+	// In production this should be sent via email to the admin.
+	slog.Info("password reset requested",
+		slog.String("email", email),
+		slog.String("token_prefix", token[:8]+"..."),
+		slog.Time("expires", time.Now().Add(1*time.Hour)))
 
 	return token, nil
 }

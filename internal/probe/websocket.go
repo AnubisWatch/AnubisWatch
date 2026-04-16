@@ -88,6 +88,15 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 		}
 	}
 
+	// SSRF protection: validate target before connecting
+	if err := ValidateTarget(soul.Target); err != nil {
+		return failJudgment(soul, fmt.Errorf("SSRF validation failed: %v", err)), nil
+	}
+
+	// Wrap dial with SSRF DNS-rebinding protection (re-resolves hostname before each connection)
+	dialer := &net.Dialer{Timeout: timeout}
+	dialCtx := DefaultValidator.WrapDialerContext(dialer.DialContext)
+
 	// Connect
 	start := time.Now()
 	var conn net.Conn
@@ -97,9 +106,9 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 			InsecureSkipVerify: cfg.InsecureSkipVerify, // Default: false (secure)
 			ServerName:         u.Hostname(),
 		}
-		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", host, tlsConfig)
+		conn, err = tls.DialWithDialer(dialer, "tcp", host, tlsConfig)
 	} else {
-		conn, err = net.DialTimeout("tcp", host, timeout)
+		conn, err = dialCtx(context.Background(), "tcp", host)
 	}
 
 	if err != nil {

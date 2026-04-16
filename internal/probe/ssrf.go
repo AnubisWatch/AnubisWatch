@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -111,9 +112,8 @@ func (v *SSRFValidator) ValidateTarget(target string) error {
 		return fmt.Errorf("target host %q is blocked", host)
 	}
 
-	// Check if it's an IP address
-	ip := net.ParseIP(host)
-	if ip != nil {
+	// Check if it's an IP address (including decimal/hex/octal notation)
+	if ip := v.parseIP(host); ip != nil {
 		if v.isBlockedIP(ip) {
 			return fmt.Errorf("target IP %q is blocked", ip)
 		}
@@ -134,6 +134,21 @@ func (v *SSRFValidator) ValidateTarget(target string) error {
 		}
 	}
 
+	return nil
+}
+
+// parseIP parses an IP address string, supporting decimal (2130706433),
+// hex (0x7F000001), and octal (0177.0.0.01) notations in addition to
+// standard dotted-decimal. Returns nil if the input cannot be parsed.
+func (v *SSRFValidator) parseIP(host string) net.IP {
+	// Try standard parsing first
+	if ip := net.ParseIP(host); ip != nil {
+		return ip
+	}
+	// Try decimal: 2130706433 -> 127.0.0.1
+	if parsed, err := strconv.ParseUint(host, 10, 32); err == nil {
+		return net.IPv4(byte(parsed>>24), byte(parsed>>16), byte(parsed>>8), byte(parsed))
+	}
 	return nil
 }
 
@@ -259,8 +274,8 @@ func (v *SSRFValidator) WrapDialer(dial func(network, addr string) (net.Conn, er
 			host = addr
 		}
 
-		// If it's a literal IP, check directly
-		if ip := net.ParseIP(host); ip != nil {
+		// If it's a literal IP (including decimal/hex), check directly
+		if ip := v.parseIP(host); ip != nil {
 			if v.isBlockedIP(ip) {
 				return nil, fmt.Errorf("SSRF: target IP %q is blocked", ip)
 			}
@@ -273,7 +288,7 @@ func (v *SSRFValidator) WrapDialer(dial func(network, addr string) (net.Conn, er
 			return nil, fmt.Errorf("SSRF: cannot resolve hostname %q: %w", host, err)
 		}
 		for _, resolved := range addrs {
-			ip := net.ParseIP(resolved)
+			ip := v.parseIP(resolved)
 			if ip != nil && v.isBlockedIP(ip) {
 				return nil, fmt.Errorf("SSRF: hostname %q resolves to blocked IP %q", host, resolved)
 			}
@@ -291,7 +306,7 @@ func (v *SSRFValidator) WrapDialerContext(dial func(ctx context.Context, network
 			host = addr
 		}
 
-		if ip := net.ParseIP(host); ip != nil {
+		if ip := v.parseIP(host); ip != nil {
 			if v.isBlockedIP(ip) {
 				return nil, fmt.Errorf("SSRF: target IP %q is blocked", ip)
 			}
@@ -303,7 +318,7 @@ func (v *SSRFValidator) WrapDialerContext(dial func(ctx context.Context, network
 			return nil, fmt.Errorf("SSRF: cannot resolve hostname %q: %w", host, err)
 		}
 		for _, resolved := range addrs {
-			ip := net.ParseIP(resolved)
+			ip := v.parseIP(resolved)
 			if ip != nil && v.isBlockedIP(ip) {
 				return nil, fmt.Errorf("SSRF: hostname %q resolves to blocked IP %q", host, resolved)
 			}

@@ -3,6 +3,7 @@ package grpcapi
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net"
@@ -12,6 +13,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
@@ -31,6 +33,7 @@ type Server struct {
 	listener net.Listener
 	addr     string
 	logger   *slog.Logger
+	tlsConfig *tls.Config
 
 	store Store
 	probe ProbeEngine
@@ -87,20 +90,27 @@ const (
 )
 
 // NewServer creates a new gRPC server with authentication
-func NewServer(addr string, store Store, probe ProbeEngine, auth Authenticator, logger *slog.Logger) *Server {
+func NewServer(addr string, store Store, probe ProbeEngine, auth Authenticator, logger *slog.Logger, tlsConfig *tls.Config) *Server {
 	s := &Server{
 		addr:   addr,
 		logger: logger,
 		store:  store,
 		probe:  probe,
-		auth:   auth,
+		auth:      auth,
+		tlsConfig: tlsConfig,
+	}
+
+	// Build gRPC options
+	opts := []grpc.ServerOption{
+		grpc.UnaryInterceptor(s.authInterceptor),
+		grpc.StreamInterceptor(s.authStreamInterceptor),
+	}
+	if tlsConfig != nil {
+		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsConfig)))
 	}
 
 	// Create gRPC server with authentication interceptor
-	grpcServer := grpc.NewServer(
-		grpc.UnaryInterceptor(s.authInterceptor),
-		grpc.StreamInterceptor(s.authStreamInterceptor),
-	)
+	grpcServer := grpc.NewServer(opts...)
 
 	s.grpc = grpcServer
 	v1.RegisterAnubisWatchServiceServer(s.grpc, s)
@@ -661,6 +671,11 @@ func (s *Server) ListJudgments(ctx context.Context, req *v1.ListJudgmentsRequest
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	user, ok := GetUserFromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	}
+
 	limit := int(req.Limit)
 	if limit == 0 {
 		limit = 20
@@ -677,6 +692,17 @@ func (s *Server) ListJudgments(ctx context.Context, req *v1.ListJudgmentsRequest
 	soulID := ""
 	if req.SoulId != nil {
 		soulID = *req.SoulId
+	}
+
+	// If soulID specified, verify it belongs to caller's workspace (IDOR protection).
+	// If soul does not exist, allow the call to proceed � ListJudgments will return empty.
+	if soulID != "" {
+		soul, err := s.store.GetSoulNoCtx(soulID)
+		if err == nil && soul != nil {
+			if s, ok := soul.(*core.Soul); ok && s.WorkspaceID != "" && s.WorkspaceID != user.Workspace {
+				return nil, status.Error(codes.PermissionDenied, "access denied: soul belongs to another workspace")
+			}
+		}
 	}
 
 	judgments, err := s.store.ListJudgmentsNoCtx(soulID, start, end, limit)
@@ -832,7 +858,12 @@ func (s *Server) GetChannel(ctx context.Context, req *v1.GetChannelRequest) (*v1
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	ch, err := s.store.GetChannelNoCtx(req.Id, "")
+	user, ok := GetUserFromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	}
+
+	ch, err := s.store.GetChannelNoCtx(req.Id, user.Workspace)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "channel not found: %s", req.Id)
 	}
@@ -963,7 +994,19 @@ func (s *Server) GetRule(ctx context.Context, req *v1.GetRuleRequest) (*v1.Rule,
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	r, err := s.store.GetRuleNoCtx(req.Id, "")
+	user, ok := GetUserFromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	}
+
+	r, err := s.store.GetRuleNoCtx(req.Id, user.Workspace)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "rule not found: %s", req.Id)
+	}
+	// Verify rule belongs to caller's workspace (IDOR protection)
+	if rule, ok := r.(*core.AlertRule); ok && rule.WorkspaceID != "" && rule.WorkspaceID != user.Workspace {
+		return nil, status.Error(codes.PermissionDenied, "access denied: rule belongs to another workspace")
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "rule not found: %s", req.Id)
 	}
@@ -995,12 +1038,22 @@ func (s *Server) UpdateRule(ctx context.Context, req *v1.UpdateRuleRequest) (*v1
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	existing, err := s.store.GetRuleNoCtx(req.Id, "")
+	user, ok := GetUserFromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	}
+
+	existing, err := s.store.GetRuleNoCtx(req.Id, user.Workspace)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "rule not found: %s", req.Id)
 	}
 
 	if m, ok := existing.(map[string]interface{}); ok {
+		// Workspace IDOR check
+		if existingWS, ok := m["workspace_id"].(string); ok && existingWS != "" && existingWS != user.Workspace {
+			return nil, status.Error(codes.PermissionDenied, "access denied: rule belongs to another workspace")
+		}
+
 		if req.Name != nil {
 			m["name"] = *req.Name
 		}
@@ -1008,8 +1061,20 @@ func (s *Server) UpdateRule(ctx context.Context, req *v1.UpdateRuleRequest) (*v1
 			m["enabled"] = *req.Enabled
 		}
 		if req.Config != nil {
+			// Mass assignment protection: only allow known-safe config keys.
+			// Sensitive keys like api_key, token, webhook_url are not modifiable.
+			allowedConfigKeys := map[string]bool{
+				"channel_ids":       true,
+				"cooldown":          true,
+				"severity":          true,
+				"notification_delay": true,
+				"recovery_delay":    true,
+				"aggregation_window": true,
+			}
 			for k, v := range req.Config {
-				m[k] = v
+				if allowedConfigKeys[k] {
+					m[k] = v
+				}
 			}
 		}
 		if err := s.store.SaveRuleNoCtx(m); err != nil {
