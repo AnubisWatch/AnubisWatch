@@ -138,8 +138,8 @@ func (v *SSRFValidator) ValidateTarget(target string) error {
 }
 
 // parseIP parses an IP address string, supporting decimal (2130706433),
-// hex (0x7F000001), and octal (0177.0.0.01) notations in addition to
-// standard dotted-decimal. Returns nil if the input cannot be parsed.
+// hex (0x7F000001), and octal (0177) notations in addition to standard
+// dotted-decimal. Returns nil if the input cannot be parsed.
 func (v *SSRFValidator) parseIP(host string) net.IP {
 	// Try standard parsing first
 	if ip := net.ParseIP(host); ip != nil {
@@ -147,6 +147,16 @@ func (v *SSRFValidator) parseIP(host string) net.IP {
 	}
 	// Try decimal: 2130706433 -> 127.0.0.1
 	if parsed, err := strconv.ParseUint(host, 10, 32); err == nil {
+		return net.IPv4(byte(parsed>>24), byte(parsed>>16), byte(parsed>>8), byte(parsed))
+	}
+	// Try hex: 0x7F000001 -> 127.0.0.1
+	if len(host) >= 3 && host[:2] == "0x" || host[:2] == "0X" {
+		if parsed, err := strconv.ParseUint(host[2:], 16, 32); err == nil {
+			return net.IPv4(byte(parsed>>24), byte(parsed>>16), byte(parsed>>8), byte(parsed))
+		}
+	}
+	// Try pure octal (no dots): 0177 -> 127.0.0.1
+	if parsed, err := strconv.ParseUint(host, 8, 32); err == nil && !strings.Contains(host, ".") {
 		return net.IPv4(byte(parsed>>24), byte(parsed>>16), byte(parsed>>8), byte(parsed))
 	}
 	return nil
