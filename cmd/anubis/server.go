@@ -373,6 +373,10 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	} else {
 		logger.Info("no config file found, using defaults", "path", configPath)
 		cfg = core.GenerateDefaultConfig()
+		// Check environment variable for data dir override (for CI/tests)
+		if envDir := os.Getenv("ANUBIS_DATA_DIR"); envDir != "" {
+			cfg.Storage.Path = envDir
+		}
 	}
 
 	// Create data directory
