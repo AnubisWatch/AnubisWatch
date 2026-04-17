@@ -323,8 +323,7 @@ func TestQuickWatch_NoTarget(t *testing.T) {
 
 func TestShowJudgments(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -475,8 +474,7 @@ func TestInitConfig_Success(t *testing.T) {
 	defer os.Chdir(oldDir)
 
 	// Set temporary data dir to avoid permission issues
-	os.Setenv("ANUBIS_DATA_DIR", filepath.Join(tmpDir, "data"))
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", filepath.Join(tmpDir, "data"))
 
 	// Remove any existing config
 	configPath := filepath.Join(tmpDir, "test_config.json")
@@ -503,8 +501,7 @@ func TestConfigInitCommand(t *testing.T) {
 	defer os.Chdir(oldDir)
 
 	// Set temporary data dir to avoid permission issues
-	os.Setenv("ANUBIS_DATA_DIR", filepath.Join(tmpDir, "data"))
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", filepath.Join(tmpDir, "data"))
 
 	oldArgs := os.Args
 	os.Args = []string{"anubis", "init", "--output", configPath}
@@ -1242,8 +1239,7 @@ func TestShowCluster_Details(t *testing.T) {
 // Test showJudgments details
 func TestShowJudgments_Details(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -1625,8 +1621,7 @@ func TestGetDataDir(t *testing.T) {
 
 // Test getDataDir with ANUBIS_DATA_DIR set
 func TestGetDataDir_EnvVar(t *testing.T) {
-	os.Setenv("ANUBIS_DATA_DIR", "/custom/data/dir")
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", "/custom/data/dir")
 
 	dir := getDataDir()
 	if dir != "/custom/data/dir" {
@@ -1661,8 +1656,7 @@ func TestCheckMemory(t *testing.T) {
 func TestSelfHealth_WithDataDir(t *testing.T) {
 	// Set a temporary data dir
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	oldStdout := os.Stdout
 	r, w, _ := os.Pipe()
@@ -1928,8 +1922,7 @@ func TestHandleLogout_MalformedAuth(t *testing.T) {
 // Test main with 'judge' command
 func TestMainCLI_JudgeCommand(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -4072,8 +4065,7 @@ func TestInitSimpleWithPath(t *testing.T) {
 	configPath := tmpDir + "/test-config.json"
 
 	// Set temporary data dir to avoid permission issues
-	os.Setenv("ANUBIS_DATA_DIR", filepath.Join(tmpDir, "data"))
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", filepath.Join(tmpDir, "data"))
 
 	// Capture stdout
 	oldStdout := os.Stdout
@@ -4156,7 +4148,7 @@ func TestMain_UnknownCommand(t *testing.T) {
 
 func TestMain_Health(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		os.Args = []string{"anubis", "health"}
 		main()
 		return
@@ -4189,7 +4181,7 @@ func TestMain_Version(t *testing.T) {
 
 func TestMain_ExportNoArgs(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		os.Args = []string{"anubis", "export"}
 		main()
 		return
@@ -4206,7 +4198,7 @@ func TestMain_ExportNoArgs(t *testing.T) {
 
 func TestMainCLI_StatusCommand(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		os.Args = []string{"anubis", "status"}
 		main()
 		return
@@ -4223,7 +4215,7 @@ func TestMainCLI_StatusCommand(t *testing.T) {
 
 func TestMainCLI_LogsCommand(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		os.Args = []string{"anubis", "logs"}
 		main()
 		return
@@ -4262,7 +4254,7 @@ func TestMainCLI_ConfigCommand(t *testing.T) {
 
 func TestMainCLI_SummonCommand(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		store, _ := openLocalStorage()
 		store.Close()
 		os.Args = []string{"anubis", "summon", "10.0.0.2:7946"}
@@ -4282,7 +4274,7 @@ func TestMainCLI_SummonCommand(t *testing.T) {
 func TestMainCLI_BanishCommand(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		tmpDir := t.TempDir()
-		os.Setenv("ANUBIS_DATA_DIR", tmpDir)
+		t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 		store, _ := openLocalStorage()
 		ctx := context.Background()
 		store.SaveJackal(ctx, "jackal-01", "10.0.0.2:7946", "default")
@@ -4303,7 +4295,7 @@ func TestMainCLI_BanishCommand(t *testing.T) {
 
 func TestMainCLI_BackupCommand(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		store, _ := openLocalStorage()
 		ctx := context.Background()
 		ws := &core.Workspace{ID: "default", Name: "Default"}
@@ -4326,7 +4318,7 @@ func TestMainCLI_BackupCommand(t *testing.T) {
 func TestMainCLI_RestoreCommand(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		tmpDir := t.TempDir()
-		os.Setenv("ANUBIS_DATA_DIR", tmpDir)
+		t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 		store, _ := openLocalStorage()
 		ctx := context.Background()
 		ws := &core.Workspace{ID: "default", Name: "Default"}
@@ -4351,7 +4343,7 @@ func TestMainCLI_RestoreCommand(t *testing.T) {
 func TestMainCLI_ExportCommand(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		tmpDir := t.TempDir()
-		os.Setenv("ANUBIS_DATA_DIR", tmpDir)
+		t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 		store, _ := openLocalStorage()
 		ctx := context.Background()
 		ws := &core.Workspace{ID: "default", Name: "Default"}
@@ -4374,7 +4366,7 @@ func TestMainCLI_ExportCommand(t *testing.T) {
 func TestMainCLI_SoulsCommand(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		tmpDir := t.TempDir()
-		os.Setenv("ANUBIS_DATA_DIR", tmpDir)
+		t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 		store, _ := openLocalStorage()
 		ctx := context.Background()
 		ws := &core.Workspace{ID: "default", Name: "Default"}
@@ -4396,7 +4388,7 @@ func TestMainCLI_SoulsCommand(t *testing.T) {
 
 func TestMainCLI_VerdictCommand(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		os.Args = []string{"anubis", "verdict"}
 		main()
 		return
@@ -4620,8 +4612,7 @@ func TestMain_ConfigDirect(t *testing.T) {
 
 func TestMain_StatusDirect(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	oldArgs := os.Args
 	os.Args = []string{"anubis", "status"}
@@ -4670,8 +4661,7 @@ func TestMain_NecropolisDirect(t *testing.T) {
 
 func TestMain_JudgeDirect(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -4755,7 +4745,7 @@ func TestMain_ServeInvalidConfig(t *testing.T) {
 		tmpDir := t.TempDir()
 		configPath := filepath.Join(tmpDir, "bad.json")
 		os.WriteFile(configPath, []byte("not valid json"), 0644)
-		os.Setenv("ANUBIS_DATA_DIR", tmpDir)
+		t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 		os.Args = []string{"anubis", "serve", "--config", configPath}
 		main()
 		return

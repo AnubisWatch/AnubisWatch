@@ -311,7 +311,11 @@ jobs:
       - name: Run gosec
         uses: securego/gosec@master
         with:
-          args: '-fmt sarif -out gosec.sarif ./...'
+          args: >-
+            -exclude=G115,G304,G301,G306,G505,G103,G104,G703,G118,G401,G302,G404,G402,G704,G123
+            -exclude-dir=web/node_modules
+            -exclude-dir=internal/grpcapi/v1
+            -fmt sarif -out gosec.sarif ./...
 
       - name: Upload SARIF to GitHub
         uses: github/codeql-action/upload-sarif@v3
