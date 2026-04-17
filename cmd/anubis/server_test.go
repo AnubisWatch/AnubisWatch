@@ -92,6 +92,9 @@ func TestBuildServerDependencies_DefaultConfig(t *testing.T) {
 }
 
 func TestBuildServerDependencies_InvalidConfig(t *testing.T) {
+	// Set ANUBIS_DATA_DIR to avoid permission issues in CI
+	t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	opts := ServerOptions{
 		ConfigPath: "/nonexistent/path/config.json",
