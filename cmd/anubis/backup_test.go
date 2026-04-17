@@ -51,8 +51,7 @@ func TestBackupCommand_NoArgs(t *testing.T) {
 
 func TestBackupCreate(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -80,8 +79,7 @@ func TestBackupCreate(t *testing.T) {
 
 func TestBackupCreate_WithOutput(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 	outPath := filepath.Join(tmpDir, "custom_backup.tar.gz")
 
 	store, err := openLocalStorage()
@@ -108,8 +106,7 @@ func TestBackupCreate_WithOutput(t *testing.T) {
 
 func TestBackupList_Empty(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	oldArgs := os.Args
 	os.Args = []string{"anubis", "backup", "list"}
@@ -123,8 +120,7 @@ func TestBackupList_Empty(t *testing.T) {
 
 func TestBackupList_WithBackups(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	// Create a backup first
 	store, err := openLocalStorage()
@@ -155,8 +151,7 @@ func TestBackupList_WithBackups(t *testing.T) {
 
 func TestBackupDelete(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	// Create a backup first
 	store, err := openLocalStorage()
@@ -191,8 +186,7 @@ func TestBackupDelete(t *testing.T) {
 
 func TestBackupInfo(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	// Create a backup first
 	store, err := openLocalStorage()
@@ -230,8 +224,7 @@ func TestBackupInfo(t *testing.T) {
 
 func TestRestoreCommand_WithForce(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	// Create a backup first
 	store, err := openLocalStorage()
@@ -263,7 +256,7 @@ func TestRestoreCommand_WithForce(t *testing.T) {
 
 func TestBackupCommand_UnknownSubcommandExits(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		os.Args = []string{"anubis", "backup", "unknown"}
 		backupCommand()
 		return
@@ -280,8 +273,7 @@ func TestBackupCommand_UnknownSubcommandExits(t *testing.T) {
 
 func TestBackupCreate_NoCompress(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -318,7 +310,7 @@ func TestRestoreCommand_NoArgs(t *testing.T) {
 
 func TestBackupDelete_MissingArgs(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		os.Args = []string{"anubis", "backup", "delete"}
 		backupDelete()
 		return
@@ -335,7 +327,7 @@ func TestBackupDelete_MissingArgs(t *testing.T) {
 
 func TestExportCommand_UnknownSubcommand(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		store, _ := openLocalStorage()
 		store.Close()
 		os.Args = []string{"anubis", "export", "unknown"}
@@ -356,8 +348,7 @@ func TestExportCommand_UnknownSubcommand(t *testing.T) {
 
 func TestBackupCreate_NoCompressInfo(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -380,8 +371,7 @@ func TestBackupCreate_NoCompressInfo(t *testing.T) {
 
 func TestBackupDelete_WithInfo(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -417,8 +407,7 @@ func TestBackupDelete_WithInfo(t *testing.T) {
 func TestRestoreCommand_NoForce(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		tmpDir := t.TempDir()
-		os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-		defer os.Unsetenv("ANUBIS_DATA_DIR")
+		t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 		store, err := openLocalStorage()
 		if err != nil {
@@ -449,8 +438,7 @@ func TestRestoreCommand_NoForce(t *testing.T) {
 
 func TestBackupCommand_List(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -476,8 +464,7 @@ func TestBackupCommand_List(t *testing.T) {
 
 func TestBackupCommand_Delete(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -509,8 +496,7 @@ func TestBackupCommand_Delete(t *testing.T) {
 
 func TestBackupCommand_Info(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -542,8 +528,7 @@ func TestBackupCommand_Info(t *testing.T) {
 
 func TestBackupCreate_WithFlags(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -566,8 +551,7 @@ func TestBackupCreate_WithFlags(t *testing.T) {
 
 func TestRestoreCommand_WithSkipFlags(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -597,7 +581,7 @@ func TestRestoreCommand_WithSkipFlags(t *testing.T) {
 
 func TestBackupInfo_MissingArgs(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		os.Args = []string{"anubis", "backup", "info"}
 		backupInfo()
 		return
@@ -615,7 +599,7 @@ func TestBackupInfo_MissingArgs(t *testing.T) {
 func TestBackupDelete_NonExistent(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		tmpDir := t.TempDir()
-		os.Setenv("ANUBIS_DATA_DIR", tmpDir)
+		t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 		os.Args = []string{"anubis", "backup", "delete", "nonexistent.tar.gz"}
 		backupDelete()
 		return

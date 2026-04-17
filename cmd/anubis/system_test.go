@@ -33,8 +33,7 @@ func captureStdoutSystem(f func()) string {
 
 func TestStatusCommand_NoStorage(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", filepath.Join(tmpDir, "does-not-exist"))
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", filepath.Join(tmpDir, "does-not-exist"))
 
 	output := captureStdoutSystem(statusCommand)
 	if !strings.Contains(output, "AnubisWatch System Status") {
@@ -61,8 +60,7 @@ func TestExportCommand_NoArgs(t *testing.T) {
 
 func TestExportCommand_Souls(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -224,8 +222,7 @@ func TestConfigCommand_Set(t *testing.T) {
 
 func TestLogsCommand_NoLogFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	oldArgs := os.Args
 	os.Args = []string{"anubis", "logs"}
@@ -242,8 +239,7 @@ func TestLogsCommand_NoLogFile(t *testing.T) {
 
 func TestLogsCommand_WithLogFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	logDir := filepath.Join(tmpDir, "logs")
 	os.MkdirAll(logDir, 0755)
@@ -373,7 +369,7 @@ func TestConfigCommand_UnknownSubcommandExits(t *testing.T) {
 func TestExportCommand_ConfigNotFound(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		tmpDir := t.TempDir()
-		os.Setenv("ANUBIS_DATA_DIR", tmpDir)
+		t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 		os.Unsetenv("ANUBIS_CONFIG")
 		os.Args = []string{"anubis", "export", "config"}
 		exportCommand()
@@ -392,7 +388,7 @@ func TestExportCommand_ConfigNotFound(t *testing.T) {
 func TestConfigCommand_Path_NoConfig(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		tmpDir := t.TempDir()
-		os.Setenv("ANUBIS_DATA_DIR", tmpDir)
+		t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 		os.Unsetenv("ANUBIS_CONFIG")
 		// Change to a temp dir so ./anubis.json doesn't exist
 		os.Chdir(tmpDir)
@@ -413,7 +409,7 @@ func TestConfigCommand_Path_NoConfig(t *testing.T) {
 func TestConfigCommand_Show_NoConfig(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		tmpDir := t.TempDir()
-		os.Setenv("ANUBIS_DATA_DIR", tmpDir)
+		t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 		os.Unsetenv("ANUBIS_CONFIG")
 		os.Chdir(tmpDir)
 		os.Args = []string{"anubis", "config", "show"}
@@ -433,7 +429,7 @@ func TestConfigCommand_Show_NoConfig(t *testing.T) {
 func TestConfigCommand_Validate_NoConfig(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		tmpDir := t.TempDir()
-		os.Setenv("ANUBIS_DATA_DIR", tmpDir)
+		t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 		os.Unsetenv("ANUBIS_CONFIG")
 		os.Chdir(tmpDir)
 		os.Args = []string{"anubis", "config", "validate"}
@@ -452,8 +448,7 @@ func TestConfigCommand_Validate_NoConfig(t *testing.T) {
 
 func TestStatusCommand_WithJudgments(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -496,8 +491,7 @@ func TestStatusCommand_WithJudgments(t *testing.T) {
 
 func TestLogsCommand_FollowFlag(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	logDir := filepath.Join(tmpDir, "logs")
 	os.MkdirAll(logDir, 0755)
@@ -516,7 +510,7 @@ func TestLogsCommand_FollowFlag(t *testing.T) {
 
 func TestSelfHealth_InaccessibleDataDir(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", "Z:/nonexistent/path/for/sure")
+		t.Setenv("ANUBIS_DATA_DIR", "Z:/nonexistent/path/for/sure")
 		selfHealth()
 		return
 	}
@@ -533,7 +527,7 @@ func TestSelfHealth_InaccessibleDataDir(t *testing.T) {
 func TestConfigCommand_Set_MissingConfig(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		tmpDir := t.TempDir()
-		os.Setenv("ANUBIS_DATA_DIR", tmpDir)
+		t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 		os.Unsetenv("ANUBIS_CONFIG")
 		os.Chdir(tmpDir)
 		os.Args = []string{"anubis", "config", "set", "server.port", "9443"}
@@ -552,8 +546,7 @@ func TestConfigCommand_Set_MissingConfig(t *testing.T) {
 
 func TestStatusCommand_StorageError(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", filepath.Join(tmpDir, "not-a-dir"))
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", filepath.Join(tmpDir, "not-a-dir"))
 
 	output := captureStdoutSystem(statusCommand)
 	if !strings.Contains(output, "not accessible") {
@@ -562,8 +555,7 @@ func TestStatusCommand_StorageError(t *testing.T) {
 }
 func TestLogsCommand_FollowWithLines(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	logDir := filepath.Join(tmpDir, "logs")
 	os.MkdirAll(logDir, 0755)

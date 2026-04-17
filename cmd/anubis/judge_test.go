@@ -202,8 +202,7 @@ func TestJudgeSingle_NoToken(t *testing.T) {
 
 func TestShowJudgments_StorageFallback(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -545,8 +544,7 @@ func TestJudgeAll_APIError(t *testing.T) {
 
 func TestShowJudgments_StorageWithJudgments(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {

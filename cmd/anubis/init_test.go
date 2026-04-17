@@ -166,6 +166,9 @@ func TestGetDefaultDataDir_WindowsAppData(t *testing.T) {
 		t.Skip("Windows-specific test")
 	}
 
+	// Clear ANUBIS_DATA_DIR to test fallback behavior
+	t.Setenv("ANUBIS_DATA_DIR", "")
+
 	// Save original APPDATA
 	origAppData := os.Getenv("APPDATA")
 	defer func() {
@@ -194,6 +197,9 @@ func TestGetDefaultDataDir_WindowsFallback(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows-specific test")
 	}
+
+	// Clear ANUBIS_DATA_DIR to test fallback behavior
+	t.Setenv("ANUBIS_DATA_DIR", "")
 
 	// Save original env vars
 	origAppData := os.Getenv("APPDATA")

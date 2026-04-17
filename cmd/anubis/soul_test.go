@@ -56,8 +56,7 @@ func TestSoulsCommand_NoArgs(t *testing.T) {
 
 func TestSoulsCommand_ExportJSON(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -85,8 +84,7 @@ func TestSoulsCommand_ExportJSON(t *testing.T) {
 
 func TestSoulsCommand_ExportYAML(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -111,8 +109,7 @@ func TestSoulsCommand_ExportYAML(t *testing.T) {
 
 func TestSoulsCommand_ExportToFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 	outPath := filepath.Join(tmpDir, "souls.json")
 
 	store, err := openLocalStorage()
@@ -141,8 +138,7 @@ func TestSoulsCommand_ExportToFile(t *testing.T) {
 
 func TestSoulsCommand_ImportJSON(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -173,8 +169,7 @@ func TestSoulsCommand_ImportJSON(t *testing.T) {
 
 func TestSoulsCommand_ImportYAML(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -200,8 +195,7 @@ func TestSoulsCommand_ImportYAML(t *testing.T) {
 
 func TestSoulsCommand_ImportReplace(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -231,8 +225,7 @@ func TestSoulsCommand_ImportReplace(t *testing.T) {
 
 func TestSoulsCommand_Add(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -260,8 +253,7 @@ func TestSoulsCommand_Add(t *testing.T) {
 
 func TestSoulsCommand_RemoveByName(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -289,8 +281,7 @@ func TestSoulsCommand_RemoveByName(t *testing.T) {
 
 func TestSoulsCommand_RemoveByID(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -315,7 +306,7 @@ func TestSoulsCommand_RemoveByID(t *testing.T) {
 
 func TestSoulsCommand_UnknownSubcommandExits(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		os.Args = []string{"anubis", "souls", "unknown"}
 		soulsCommand()
 		return
@@ -332,8 +323,7 @@ func TestSoulsCommand_UnknownSubcommandExits(t *testing.T) {
 
 func TestQuickWatch_StorageFallback(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -359,7 +349,7 @@ func TestQuickWatch_StorageFallback(t *testing.T) {
 
 func TestQuickWatch_InvalidInterval(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		os.Args = []string{"anubis", "watch", "https://example.com", "--interval", "not-a-duration"}
 		quickWatch()
 		return
@@ -408,7 +398,7 @@ func TestQuickWatch_APISuccess(t *testing.T) {
 
 func TestSoulsRemove_NotFound(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		store, _ := openLocalStorage()
 		ctx := context.Background()
 		ws := &core.Workspace{ID: "default", Name: "Default"}
@@ -430,7 +420,7 @@ func TestSoulsRemove_NotFound(t *testing.T) {
 
 func TestSoulsAdd_MissingArgs(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		store, _ := openLocalStorage()
 		store.Close()
 		os.Args = []string{"anubis", "souls", "add"}
@@ -449,7 +439,7 @@ func TestSoulsAdd_MissingArgs(t *testing.T) {
 
 func TestSoulsAdd_FileNotFound(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		store, _ := openLocalStorage()
 		store.Close()
 		os.Args = []string{"anubis", "souls", "add", "/nonexistent/file.json"}
@@ -468,7 +458,7 @@ func TestSoulsAdd_FileNotFound(t *testing.T) {
 
 func TestSoulsAdd_ParseError(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		store, _ := openLocalStorage()
 		store.Close()
 		tmpDir := t.TempDir()
@@ -490,8 +480,7 @@ func TestSoulsAdd_ParseError(t *testing.T) {
 
 func TestSoulsAdd_EmptyFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -514,8 +503,7 @@ func TestSoulsAdd_EmptyFile(t *testing.T) {
 
 func TestSoulsAdd_SkippedExisting(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -545,7 +533,7 @@ func TestSoulsAdd_SkippedExisting(t *testing.T) {
 
 func TestImportSouls_MissingFile(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		store, _ := openLocalStorage()
 		store.Close()
 		os.Args = []string{"anubis", "souls", "import"}
@@ -564,7 +552,7 @@ func TestImportSouls_MissingFile(t *testing.T) {
 
 func TestImportSouls_FileNotFound(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		store, _ := openLocalStorage()
 		store.Close()
 		os.Args = []string{"anubis", "souls", "import", "/nonexistent.json"}
@@ -583,8 +571,7 @@ func TestImportSouls_FileNotFound(t *testing.T) {
 
 func TestImportSouls_ReplaceMode(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -643,8 +630,7 @@ func TestQuickWatch_APIError(t *testing.T) {
 
 func TestExportSouls_Empty(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -667,7 +653,7 @@ func TestExportSouls_Empty(t *testing.T) {
 
 func TestSoulsRemove_MissingArgs(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		store, _ := openLocalStorage()
 		store.Close()
 		os.Args = []string{"anubis", "souls", "remove"}
@@ -686,8 +672,7 @@ func TestSoulsRemove_MissingArgs(t *testing.T) {
 
 func TestQuickWatch_WithInterval(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	oldArgs := os.Args
 	os.Args = []string{"anubis", "watch", "https://interval.com", "--name", "interval-soul", "--interval", "30s"}
@@ -701,8 +686,7 @@ func TestQuickWatch_WithInterval(t *testing.T) {
 
 func TestQuickWatch_WithMinutesInterval(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	oldArgs := os.Args
 	os.Args = []string{"anubis", "watch", "https://minutes.com", "--name", "min-soul", "--interval", "5m"}
@@ -717,8 +701,7 @@ func TestQuickWatch_WithMinutesInterval(t *testing.T) {
 
 func TestQuickWatch_TCPType(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	oldArgs := os.Args
 	os.Args = []string{"anubis", "watch", "tcp://example.com:8080", "--name", "tcp-soul", "--type", "tcp"}
@@ -736,7 +719,7 @@ func TestQuickWatch_TCPType(t *testing.T) {
 func TestSoulsCommand_UnknownSubcommand(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		tmpDir := t.TempDir()
-		os.Setenv("ANUBIS_DATA_DIR", tmpDir)
+		t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 		store, _ := openLocalStorage()
 		store.Close()
 		os.Args = []string{"anubis", "souls", "unknown"}
@@ -756,7 +739,7 @@ func TestSoulsCommand_UnknownSubcommand(t *testing.T) {
 func TestExportSouls_UnsupportedFormat(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		tmpDir := t.TempDir()
-		os.Setenv("ANUBIS_DATA_DIR", tmpDir)
+		t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 		store, _ := openLocalStorage()
 		ctx := context.Background()
 		ws := &core.Workspace{ID: "default", Name: "Default"}
@@ -779,8 +762,7 @@ func TestExportSouls_UnsupportedFormat(t *testing.T) {
 
 func TestQuickWatch_ICMPType(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	oldArgs := os.Args
 	os.Args = []string{"anubis", "watch", "icmp://8.8.8.8", "--name", "icmp-soul"}
@@ -797,8 +779,7 @@ func TestQuickWatch_ICMPType(t *testing.T) {
 
 func TestQuickWatch_NoName(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	oldArgs := os.Args
 	os.Args = []string{"anubis", "watch", "https://noname.example.com"}
@@ -838,8 +819,7 @@ func TestQuickWatch_API201(t *testing.T) {
 
 func TestSoulsCommand_Import(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {

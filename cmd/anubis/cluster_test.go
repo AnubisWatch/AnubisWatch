@@ -49,8 +49,7 @@ func TestSummonNode_APISuccess(t *testing.T) {
 
 func TestSummonNode_StorageFallback(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	oldArgs := os.Args
 	os.Args = []string{"anubis", "summon", "10.0.0.3:7946", "--name", "jackal-03"}
@@ -118,8 +117,7 @@ func TestBanishNode_APISuccess(t *testing.T) {
 
 func TestBanishNode_StorageFallback(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	// First summon a node so it exists in storage
 	oldArgs := os.Args
@@ -195,8 +193,7 @@ func TestShowCluster_ViaAPI(t *testing.T) {
 
 func TestShowCluster_StorageFallback(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	// Summon a node first
 	oldArgs := os.Args
@@ -221,8 +218,7 @@ func TestShowCluster_StorageFallback(t *testing.T) {
 
 func TestShowCluster_NoStorage(t *testing.T) {
 	// Point to a non-existent data dir
-	os.Setenv("ANUBIS_DATA_DIR", filepath.Join(t.TempDir(), "does-not-exist"))
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", filepath.Join(t.TempDir(), "does-not-exist"))
 
 	output := captureStdout(showCluster)
 	if !strings.Contains(output, "Standalone") {
@@ -235,7 +231,7 @@ func TestShowCluster_NoStorage(t *testing.T) {
 
 func TestSummonNode_StorageFallbackOnAPIError(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
@@ -262,7 +258,7 @@ func TestSummonNode_StorageFallbackOnAPIError(t *testing.T) {
 
 func TestShowCluster_StorageFallbackOnAPIError(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
-		os.Setenv("ANUBIS_DATA_DIR", t.TempDir())
+		t.Setenv("ANUBIS_DATA_DIR", t.TempDir())
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
@@ -289,8 +285,7 @@ func TestShowCluster_StorageFallbackOnAPIError(t *testing.T) {
 
 func TestSummonNode_StorageOnlyWithFlags(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -313,8 +308,7 @@ func TestSummonNode_StorageOnlyWithFlags(t *testing.T) {
 
 func TestBanishNode_FromStorage(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -336,8 +330,7 @@ func TestBanishNode_FromStorage(t *testing.T) {
 
 func TestShowCluster_WithStoredJackals(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-	defer os.Unsetenv("ANUBIS_DATA_DIR")
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
 	store, err := openLocalStorage()
 	if err != nil {
