@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"runtime"
 	"testing"
 	"time"
@@ -226,6 +227,11 @@ func TestLoad_1000Souls_Real(t *testing.T) {
 		t.Skip("Skipping load test in short mode")
 	}
 
+	// Skip in CI environments - this test requires significant resources
+	if os.Getenv("CI") == "true" {
+		t.Skip("Skipping load test in CI environment")
+	}
+
 	server := createMockLoadServer(2 * time.Millisecond)
 	defer server.Close()
 
@@ -286,6 +292,11 @@ func TestLoad_MixedTypes_Real(t *testing.T) {
 		t.Skip("Skipping load test in short mode")
 	}
 
+	// Skip in CI environments
+	if os.Getenv("CI") == "true" {
+		t.Skip("Skipping load test in CI environment")
+	}
+
 	server := createMockLoadServer(5 * time.Millisecond)
 	defer server.Close()
 
@@ -315,6 +326,11 @@ func TestLoad_MixedTypes_Real(t *testing.T) {
 func TestLoad_ScaleUpDown_Real(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping load test in short mode")
+	}
+
+	// Skip in CI environments
+	if os.Getenv("CI") == "true" {
+		t.Skip("Skipping load test in CI environment")
 	}
 
 	server := createMockLoadServer(5 * time.Millisecond)

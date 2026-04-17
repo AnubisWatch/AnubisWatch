@@ -487,6 +487,10 @@ func TestConfigInitCommand(t *testing.T) {
 	os.Chdir(tmpDir)
 	defer os.Chdir(oldDir)
 
+	// Set temporary data dir to avoid permission issues
+	os.Setenv("ANUBIS_DATA_DIR", filepath.Join(tmpDir, "data"))
+	defer os.Unsetenv("ANUBIS_DATA_DIR")
+
 	oldArgs := os.Args
 	os.Args = []string{"anubis", "init", "--output", configPath}
 	defer func() { os.Args = oldArgs }()
