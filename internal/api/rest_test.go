@@ -2052,9 +2052,8 @@ func TestNewWebSocketServer(t *testing.T) {
 	if server.clients == nil {
 		t.Error("clients map should be initialized")
 	}
-	if len(server.allowedOrigins) == 0 {
-		t.Error("allowedOrigins should be initialized with defaults")
-	}
+	// SECURITY: No default origins - require explicit configuration (VULN-006 fix)
+	// Empty allowedOrigins is the expected behavior when nil is passed
 	if server.broadcast == nil {
 		t.Error("broadcast channel should be initialized")
 	}

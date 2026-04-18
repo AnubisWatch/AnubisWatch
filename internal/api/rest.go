@@ -83,10 +83,11 @@ type JourneyExecutor interface {
 
 // Router handles HTTP routing
 type Router struct {
-	routes     map[string]map[string]Handler // path -> method -> handler
-	middleware []Middleware
-	dashboard  http.Handler
-	statusPage http.Handler
+	routes         map[string]map[string]Handler // path -> method -> handler
+	middleware     []Middleware
+	dashboard      http.Handler
+	statusPage     http.Handler
+	allowedOrigins []string // Allowed CORS origins from config
 }
 
 // Handler is an HTTP handler function
@@ -263,15 +264,16 @@ type User struct {
 
 // NewRESTServer creates a new REST server
 func NewRESTServer(config core.ServerConfig, authConfig core.AuthConfig, store Storage, probe ProbeEngine, alert AlertManager, auth Authenticator, cluster ClusterManager, journey JourneyExecutor, dashboard http.Handler, statusPage http.Handler, mcp *MCPServer, logger *slog.Logger) *RESTServer {
-	wsServer := NewWebSocketServer(logger, auth, nil) // allowedOrigins will use defaults
+	wsServer := NewWebSocketServer(logger, auth, config.AllowedOrigins) // Wire config origins to WebSocket
 
 	s := &RESTServer{
 		config:     config,
 		authConfig: authConfig,
 		router: &Router{
-			routes:     make(map[string]map[string]Handler),
-			dashboard:  dashboard,
-			statusPage: statusPage,
+			routes:         make(map[string]map[string]Handler),
+			dashboard:      dashboard,
+			statusPage:     statusPage,
+			allowedOrigins: config.AllowedOrigins, // Store allowed origins in router for CORS preflight
 		},
 		logger:     logger.With("component", "rest_server"),
 		store:      store,
@@ -1958,17 +1960,16 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// Handle CORS preflight globally (before route matching)
 	if method == "OPTIONS" {
 		origin := req.Header.Get("Origin")
-		// For preflight, check origin against allowed list
-		allowedOrigins := []string{
-			"http://localhost:3000",
-			"http://localhost:8080",
-			"http://127.0.0.1:3000",
-			"http://127.0.0.1:8080",
-		}
-		// Also check environment variable
-		if envOrigins := os.Getenv("ANUBIS_CORS_ORIGINS"); envOrigins != "" {
+
+		// Use configured allowed origins from router (same as corsMiddleware)
+		// Priority: router.allowedOrigins (from config) > environment variable > empty (production-safe)
+		var allowedOrigins []string
+		if len(r.allowedOrigins) > 0 {
+			allowedOrigins = r.allowedOrigins
+		} else if envOrigins := os.Getenv("ANUBIS_CORS_ORIGINS"); envOrigins != "" {
 			allowedOrigins = strings.Split(envOrigins, ",")
 		}
+		// If no origins configured, we'll check against empty list (production-safe default)
 
 		originAllowed := false
 		for _, allowed := range allowedOrigins {
