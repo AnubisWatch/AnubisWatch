@@ -500,6 +500,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 			authenticator,
 			logger,
 			grpcTLSConfig,
+			cfg.Server.GRPCReflection,
 		)
 	}
 

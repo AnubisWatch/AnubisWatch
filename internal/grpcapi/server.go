@@ -90,7 +90,7 @@ const (
 )
 
 // NewServer creates a new gRPC server with authentication
-func NewServer(addr string, store Store, probe ProbeEngine, auth Authenticator, logger *slog.Logger, tlsConfig *tls.Config) *Server {
+func NewServer(addr string, store Store, probe ProbeEngine, auth Authenticator, logger *slog.Logger, tlsConfig *tls.Config, enableReflection bool) *Server {
 	s := &Server{
 		addr:   addr,
 		logger: logger,
@@ -114,7 +114,18 @@ func NewServer(addr string, store Store, probe ProbeEngine, auth Authenticator, 
 
 	s.grpc = grpcServer
 	v1.RegisterAnubisWatchServiceServer(s.grpc, s)
-	reflection.Register(s.grpc)
+
+	// Register reflection if enabled (VULN-007 fix)
+	// Default is true for backward compatibility; set to false in production
+	if enableReflection {
+		reflection.Register(s.grpc)
+		if logger != nil {
+			logger.Debug("gRPC reflection enabled")
+		}
+	} else if logger != nil {
+		logger.Info("gRPC reflection disabled for security")
+	}
+
 	return s
 }
 

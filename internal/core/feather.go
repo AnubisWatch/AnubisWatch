@@ -53,6 +53,7 @@ type ServerConfig struct {
 	GRPCPort         int             `json:"grpc_port" yaml:"grpc_port"`
 	TLS              TLSServerConfig `json:"tls" yaml:"tls"`
 	AllowedOrigins   []string        `json:"allowed_origins" yaml:"allowed_origins"`
+	GRPCReflection   bool            `json:"grpc_reflection" yaml:"grpc_reflection"` // Enable gRPC reflection (default: true for backward compatibility)
 }
 
 // TLSServerConfig defines TLS settings
