@@ -1,5 +1,6 @@
-# Security scan reports (generated)
-/security-report/
+# Security scan reports (generated - keep SECURITY-REPORT.md)
+/security-report/*
+!/security-report/SECURITY-REPORT.md
 
 # Binaries
 /anubis
