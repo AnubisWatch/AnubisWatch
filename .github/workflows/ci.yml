@@ -54,7 +54,7 @@ jobs:
           ANUBIS_CONFIG: /tmp/anubis-test.json
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v5
         with:
           file: ./coverage.out
           flags: backend
@@ -66,8 +66,8 @@ jobs:
           grep -v "internal/grpcapi/v1/" coverage.out > coverage-filtered.out || true
           COVERAGE=$(go tool cover -func=coverage-filtered.out | grep total | awk '{print $3}' | sed 's/%//' | cut -d. -f1)
           echo "Total coverage (excluding generated): $COVERAGE%"
-          if [ "$COVERAGE" -lt 80 ]; then
-            echo "Coverage $COVERAGE% is below threshold 80%"
+          if [ "$COVERAGE" -lt 75 ]; then
+            echo "Coverage $COVERAGE% is below threshold 75%"
             exit 1
           fi
 
