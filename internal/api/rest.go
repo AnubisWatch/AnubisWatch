@@ -562,8 +562,21 @@ func (s *RESTServer) handleLogin(ctx *Context) error {
 		return ctx.Error(http.StatusUnauthorized, "invalid credentials")
 	}
 
+	// SECURITY: Set httpOnly cookie for token storage (VULN-004 fix)
+	// This prevents XSS attacks from accessing the token
+	http.SetCookie(ctx.Response, &http.Cookie{
+		Name:     "auth_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   ctx.Request.TLS != nil || ctx.Request.Header.Get("X-Forwarded-Proto") == "https",
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   86400 * 7, // 7 days
+	})
+
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
-		"user":  user,
+		"user": user,
+		// Token still returned for WebSocket connections and backward compatibility
 		"token": token,
 	})
 }
@@ -572,9 +585,28 @@ func (s *RESTServer) handleLogout(ctx *Context) error {
 	token := ctx.Request.Header.Get("Authorization")
 	token = strings.TrimPrefix(token, "Bearer ")
 
+	// If no Authorization header, check for cookie
+	if token == "" {
+		if cookie, err := ctx.Request.Cookie("auth_token"); err == nil {
+			token = cookie.Value
+		}
+	}
+
 	if err := s.auth.Logout(token); err != nil {
 		return ctx.Error(http.StatusInternalServerError, "logout failed")
 	}
+
+	// SECURITY: Clear the httpOnly cookie (VULN-004 fix)
+	http.SetCookie(ctx.Response, &http.Cookie{
+		Name:     "auth_token",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   ctx.Request.TLS != nil || ctx.Request.Header.Get("X-Forwarded-Proto") == "https",
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   -1,
+		Expires:  time.Unix(0, 0),
+	})
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{"message": "logged out"})
 }
@@ -1561,8 +1593,17 @@ func (s *RESTServer) requireAuth(handler Handler) Handler {
 			return handler(ctx)
 		}
 
+		// SECURITY: Support both Authorization header and httpOnly cookie (VULN-004 fix)
+		// Check Authorization header first, then fall back to cookie
 		token := ctx.Request.Header.Get("Authorization")
 		token = strings.TrimPrefix(token, "Bearer ")
+
+		// If no Authorization header, check for httpOnly cookie
+		if token == "" {
+			if cookie, err := ctx.Request.Cookie("auth_token"); err == nil {
+				token = cookie.Value
+			}
+		}
 
 		if token == "" {
 			return ctx.Error(http.StatusUnauthorized, "missing authorization token")

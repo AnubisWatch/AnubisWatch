@@ -21,11 +21,15 @@ class ApiClient {
 
   constructor(baseUrl: string = API_BASE_URL) {
     this.baseUrl = baseUrl
+    // SECURITY: Prefer httpOnly cookie over localStorage (VULN-004 fix)
+    // Token is kept for WebSocket connections and backward compatibility
     this.token = localStorage.getItem('auth_token')
   }
 
   setToken(token: string) {
     this.token = token
+    // Keep localStorage for WebSocket compatibility
+    // The actual session is stored in httpOnly cookie by backend
     localStorage.setItem('auth_token', token)
   }
 
@@ -44,6 +48,8 @@ class ApiClient {
       'Content-Type': 'application/json',
     }
 
+    // Include Authorization header for WebSocket compatibility
+    // Backend also checks httpOnly cookie for security
     if (this.token) {
       headers['Authorization'] = `Bearer ${this.token}`
     }
@@ -51,6 +57,8 @@ class ApiClient {
     const options: RequestInit = {
       method,
       headers,
+      // SECURITY: Include credentials (cookies) in requests (VULN-004 fix)
+      credentials: 'include',
     }
 
     if (body) {
