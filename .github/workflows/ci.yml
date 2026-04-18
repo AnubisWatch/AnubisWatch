@@ -323,6 +323,9 @@ jobs:
         with:
           sarif_file: gosec.sarif
 
+      - name: Create go.list for Nancy
+        run: go list -json -m all > go.list
+
       - name: Run Nancy vulnerability scan
         uses: sonatype-nexus-community/nancy-github-action@main
         with:
