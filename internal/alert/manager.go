@@ -27,6 +27,9 @@ type Manager struct {
 	stopCh  chan struct{}
 	queue   chan *core.AlertEvent
 
+	// Worker tracking
+	wg sync.WaitGroup
+
 	// Statistics counters
 	stats struct {
 		totalAlerts        uint64
@@ -133,7 +136,11 @@ func (m *Manager) Start() error {
 
 	// Start workers
 	for i := 0; i < 5; i++ {
-		go m.worker()
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			m.worker()
+		}()
 	}
 
 	// Start escalation checker
@@ -157,6 +164,9 @@ func (m *Manager) Stop() error {
 
 	m.running = false
 	close(m.stopCh)
+
+	// Wait for all workers to finish
+	m.wg.Wait()
 
 	return nil
 }

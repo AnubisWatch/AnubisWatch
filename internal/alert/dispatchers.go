@@ -401,7 +401,8 @@ func (d *EmailDispatcher) buildEmailBody(event *core.AlertEvent) string {
 		statusColor = "#6c757d"
 	}
 
-	html := fmt.Sprintf(`<!DOCTYPE html>
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf(`<!DOCTYPE html>
 <html>
 <head><title>AnubisWatch Alert</title></head>
 <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -411,19 +412,23 @@ func (d *EmailDispatcher) buildEmailBody(event *core.AlertEvent) string {
 <p><strong>Time:</strong> %s</p>
 <p><strong>Message:</strong> %s</p>
 <h3>Details:</h3>
-<ul>`, statusColor, event.Status, event.SoulName, event.Status, event.Timestamp.Format(time.RFC3339), event.Message)
+<ul>`, statusColor, event.Status, event.SoulName, event.Status, event.Timestamp.Format(time.RFC3339), event.Message))
 
 	for key, value := range event.Details {
-		html += fmt.Sprintf("<li><strong>%s:</strong> %s</li>", key, value)
+		b.WriteString("<li><strong>")
+		b.WriteString(key)
+		b.WriteString(":</strong> ")
+		b.WriteString(value)
+		b.WriteString("</li>")
 	}
 
-	html += `</ul>
+	b.WriteString(`</ul>
 <hr>
 <p style="font-size: 12px; color: #666;">This alert was sent by AnubisWatch - The Judgment Never Sleeps</p>
 </body>
-</html>`
+</html>`)
 
-	return html
+	return b.String()
 }
 
 // Simple auth for SMTP
@@ -761,10 +766,12 @@ func (d *TelegramDispatcher) Send(ctx context.Context, event *core.AlertEvent, c
 
 	// Add details
 	if len(event.Details) > 0 {
-		message += "\n\n*Details:*\n"
+		var detailsBuilder strings.Builder
+		detailsBuilder.WriteString("\n\n*Details:*\n")
 		for key, value := range event.Details {
-			message += fmt.Sprintf("• *%s:* %s\n", key, value)
+			detailsBuilder.WriteString(fmt.Sprintf("• *%s:* %s\n", key, value))
 		}
+		message += detailsBuilder.String()
 	}
 
 	message += "\n_AnubisWatch — The Judgment Never Sleeps_"

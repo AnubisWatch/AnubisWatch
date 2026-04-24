@@ -55,6 +55,7 @@ type WSClient struct {
 	IP        string // client IP for rate limiting
 	Rooms     map[string]bool
 	send      chan []byte
+	sendOnce  sync.Once // protect against double-close on send channel
 	server    *WebSocketServer
 	mu        sync.RWMutex
 	cancel    context.CancelFunc // cancel function for the connection context
@@ -97,7 +98,7 @@ func (s *WebSocketServer) Stop() {
 	s.mu.Lock()
 	for _, client := range s.clients {
 		if client.send != nil {
-			close(client.send)
+			client.sendOnce.Do(func() { close(client.send) })
 		}
 		if client.cancel != nil {
 			client.cancel()
@@ -461,7 +462,8 @@ func (s *WebSocketServer) removeClient(clientID string) {
 	if client.cancel != nil {
 		client.cancel()
 	}
-	close(client.send)
+	// Use sync.Once to prevent double-close if Stop() already closed it
+	client.sendOnce.Do(func() { close(client.send) })
 	client.Conn.CloseNow()
 
 	s.logger.Info("Client disconnected", "client_id", clientID)

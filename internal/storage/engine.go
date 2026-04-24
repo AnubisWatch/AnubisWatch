@@ -617,6 +617,11 @@ type walEntry struct {
 }
 
 func (db *CobaltDB) recoverFromWAL() error {
+	// Lock ordering: acquire data.mu first, then wal.mu to avoid deadlock
+	// This matches the order in Put() and Delete()
+	db.data.mu.Lock()
+	defer db.data.mu.Unlock()
+
 	// Use the WAL writer handle directly (opened with O_RDWR to avoid Windows file locking)
 	db.wal.mu.Lock()
 	defer db.wal.mu.Unlock()
