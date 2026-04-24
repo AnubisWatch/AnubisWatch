@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 import { api } from '../api/client'
 import { useAuth, useStats } from '../api/hooks'
+import { useThemeStore, applyTheme } from '../stores/themeStore'
 
 type TabId = 'general' | 'security' | 'notifications' | 'storage' | 'integrations'
 
@@ -53,12 +54,13 @@ export function Settings() {
 
   const { user } = useAuth()
   const { data: statsData } = useStats()
+  const { theme, setTheme } = useThemeStore()
 
   // Fetch configuration
   const fetchConfig = useCallback(async () => {
     try {
       setLoading(true)
-      const result = await api.get<ConfigData>('/config')
+      const result = await api.get<ConfigData>('/api/v1/config')
       setConfig(result)
       setEditedConfig(result)
       setError(null)
@@ -81,7 +83,7 @@ export function Settings() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await api.put('/config', editedConfig)
+      await api.put('/api/v1/config', editedConfig)
       setConfig(editedConfig)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
@@ -93,6 +95,10 @@ export function Settings() {
   }
 
   const handleChange = (key: keyof ConfigData, value: unknown) => {
+    if (key === 'theme' && typeof value === 'string') {
+      setTheme(value as 'dark' | 'light' | 'system')
+      applyTheme(value as 'dark' | 'light' | 'system')
+    }
     setEditedConfig(prev => ({ ...prev, [key]: value }))
   }
 
@@ -263,21 +269,25 @@ export function Settings() {
                       Dashboard Theme
                     </label>
                     <div className="grid grid-cols-3 gap-4">
-                      {(['dark', 'light', 'system'] as const).map((theme) => (
+                      {(['dark', 'light', 'system'] as const).map((themeOption) => (
                         <button
-                          key={theme}
-                          onClick={() => handleChange('theme', theme)}
+                          key={themeOption}
+                          onClick={() => {
+                            setTheme(themeOption)
+                            applyTheme(themeOption)
+                            handleChange('theme', themeOption)
+                          }}
                           className={`p-4 rounded-xl text-left transition-all ${
-                            editedConfig.theme === theme
+                            theme === themeOption
                               ? 'bg-amber-500/10 border-2 border-amber-500'
                               : 'bg-gray-950 border border-gray-700/50 hover:border-gray-600'
                           }`}
                         >
-                          {theme === 'dark' && <Moon className={`w-6 h-6 mb-2 ${editedConfig.theme === theme ? 'text-amber-400' : 'text-gray-400'}`} />}
-                          {theme === 'light' && <Sun className={`w-6 h-6 mb-2 ${editedConfig.theme === theme ? 'text-amber-400' : 'text-gray-400'}`} />}
-                          {theme === 'system' && <Monitor className={`w-6 h-6 mb-2 ${editedConfig.theme === theme ? 'text-amber-400' : 'text-gray-400'}`} />}
-                          <p className={`font-medium ${editedConfig.theme === theme ? 'text-white' : 'text-gray-300'}`}>
-                            {theme.charAt(0).toUpperCase() + theme.slice(1)}
+                          {themeOption === 'dark' && <Moon className={`w-6 h-6 mb-2 ${theme === themeOption ? 'text-amber-400' : 'text-gray-400'}`} />}
+                          {themeOption === 'light' && <Sun className={`w-6 h-6 mb-2 ${theme === themeOption ? 'text-amber-400' : 'text-gray-400'}`} />}
+                          {themeOption === 'system' && <Monitor className={`w-6 h-6 mb-2 ${theme === themeOption ? 'text-amber-400' : 'text-gray-400'}`} />}
+                          <p className={`font-medium ${theme === themeOption ? 'text-white' : 'text-gray-300'}`}>
+                            {themeOption.charAt(0).toUpperCase() + themeOption.slice(1)}
                           </p>
                         </button>
                       ))}

@@ -2,6 +2,7 @@ import { Bell, Search, LogOut, Moon, Sun } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../api/hooks'
+import { useThemeStore, applyTheme } from '../stores/themeStore'
 
 // Ancient Egypt decorative icons
 const ScarabIcon = () => (
@@ -19,9 +20,10 @@ const EyeOfHorus = () => (
 export function Header() {
   const [showNotifications, setShowNotifications] = useState(false)
   const [scrolled, setScrolled] = useState(false)
-  const [darkMode, setDarkMode] = useState(true)
+  const { theme, setTheme } = useThemeStore()
   const { user, logout } = useAuth()
   const navigate = useNavigate()
+  const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 10)
@@ -70,11 +72,15 @@ export function Header() {
       <div className="flex items-center gap-3">
         {/* Theme Toggle */}
         <button
-          onClick={() => setDarkMode(!darkMode)}
+          onClick={() => {
+            const newTheme = isDark ? 'light' : 'dark'
+            setTheme(newTheme)
+            applyTheme(newTheme)
+          }}
           className="relative p-2.5 text-gray-400 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10 rounded-xl transition-all group border border-transparent hover:border-[#D4AF37]/20"
-          aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+          aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
         >
-          {darkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+          {isDark ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
           <div className="absolute inset-0 rounded-xl bg-[#D4AF37]/10 scale-0 group-hover:scale-100 transition-transform" />
         </button>
 

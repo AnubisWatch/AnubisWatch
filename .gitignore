@@ -114,3 +114,4 @@ __debug_bin
 /testdata/*.log
 
 *.out
+.dfmt/

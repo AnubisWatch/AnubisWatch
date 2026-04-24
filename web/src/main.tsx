@@ -3,6 +3,11 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import './index.css'
 import App from './App'
+import { useThemeStore, applyTheme } from './stores/themeStore'
+
+// Apply saved theme on startup
+const savedTheme = useThemeStore.getState().theme
+applyTheme(savedTheme)
 
 // Register service worker for PWA support
 if ('serviceWorker' in navigator) {

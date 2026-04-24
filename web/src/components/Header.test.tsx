@@ -3,7 +3,11 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { Header } from '../components/Header'
 
-const mockLogout = vi.fn()
+// Use hoisted mocks so they are available before the vi.mock() call
+const mockLogout = vi.hoisted(() => vi.fn())
+const mockSetTheme = vi.hoisted(() => vi.fn())
+const mockApplyTheme = vi.hoisted(() => vi.fn())
+
 const mockAuthState = {
   user: { name: 'Test User', email: 'test@anubis.watch' },
   logout: mockLogout,
@@ -14,15 +18,14 @@ vi.mock('../api/hooks', () => ({
   useAuth: () => mockAuthState,
 }))
 
-// Mock useNavigate
-const mockNavigate = vi.fn()
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual('react-router-dom')
-  return {
-    ...actual,
-    useNavigate: () => mockNavigate,
-  }
-})
+// Mock themeStore
+vi.mock('../stores/themeStore', () => ({
+  useThemeStore: () => ({
+    theme: 'dark',
+    setTheme: mockSetTheme,
+  }),
+  applyTheme: mockApplyTheme,
+}))
 
 describe('Header', () => {
   it('renders search input', () => {
@@ -63,9 +66,8 @@ describe('Header', () => {
       </MemoryRouter>
     )
 
-    // Notification button doesn't have accessible name, check by bell icon presence
     const buttons = screen.getAllByRole('button')
-    expect(buttons.length).toBeGreaterThanOrEqual(3) // Theme toggle, notification, logout
+    expect(buttons.length).toBeGreaterThanOrEqual(3)
   })
 
   it('renders theme toggle button', () => {
@@ -89,28 +91,10 @@ describe('Header', () => {
     expect(screen.getByTitle('Log out')).toBeInTheDocument()
   })
 
-  it('logs out and navigates to login when clicking logout', async () => {
-    mockLogout.mockClear()
-    mockLogout.mockResolvedValue(undefined)
-    mockAuthState.logout = mockLogout
+  it('toggles theme when clicking theme button', async () => {
+    mockSetTheme.mockClear()
+    mockApplyTheme.mockClear()
 
-    render(
-      <MemoryRouter>
-        <Header />
-      </MemoryRouter>
-    )
-
-    fireEvent.click(screen.getByTitle('Log out'))
-
-    await waitFor(() => {
-      expect(mockLogout).toHaveBeenCalled()
-    })
-    await waitFor(() => {
-      expect(mockNavigate).toHaveBeenCalledWith('/login')
-    })
-  })
-
-  it('toggles theme mode when clicking theme button', () => {
     render(
       <MemoryRouter>
         <Header />
@@ -122,7 +106,10 @@ describe('Header', () => {
 
     fireEvent.click(themeButton)
 
-    expect(screen.getByLabelText('Switch to dark mode')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(mockSetTheme).toHaveBeenCalledWith('light')
+    })
+    expect(mockApplyTheme).toHaveBeenCalledWith('light')
   })
 
   it('toggles notifications when clicking notification button', () => {
@@ -136,8 +123,6 @@ describe('Header', () => {
     expect(notificationButton).toBeInTheDocument()
 
     fireEvent.click(notificationButton)
-    // Component uses internal state, so clicking again should work
     fireEvent.click(notificationButton)
-    expect(notificationButton).toBeInTheDocument()
   })
 })

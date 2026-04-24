@@ -1,0 +1,106 @@
+/* Light mode overrides for AnubisWatch Egyptian theme */
+
+/* Base light mode styles */
+.light body,
+.light {
+  --bg-primary: #f9fafb;
+  --bg-secondary: #f3f4f6;
+  --bg-card: #ffffff;
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --text-muted: #9ca3af;
+  --border-color: #e5e7eb;
+}
+
+/* Override dark backgrounds with light equivalents */
+.light .bg-gray-950,
+.light .bg-\[\#0a0a15\] {
+  background-color: #f9fafb !important;
+}
+
+.light .bg-\[\#0f172a\] {
+  background-color: #f3f4f6 !important;
+}
+
+.light .bg-\[\#1a1a2e\] {
+  background-color: #ffffff !important;
+}
+
+/* Override text colors */
+.light .text-white {
+  color: #111827 !important;
+}
+
+.light .text-gray-100 {
+  color: #111827 !important;
+}
+
+.light .text-gray-400 {
+  color: #6b7280 !important;
+}
+
+.light .text-gray-500 {
+  color: #9ca3af !important;
+}
+
+/* Light mode gradients */
+.light .bg-gradient-to-br,
+.light .bg-gradient-to-b,
+.light .bg-gradient-to-r {
+  --tw-gradient-from: #ffffff;
+  --tw-gradient-to: #f3f4f6;
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
+}
+
+/* Light mode cards */
+.light .card-gradient,
+.light .bg-gradient-to-br\/from-gray-900\/90 {
+  background: linear-gradient(135deg, #ffffff 0%, #f9fafb 100%) !important;
+  border-color: #e5e7eb !important;
+}
+
+/* Override gold/turquoise for light mode */
+.light .text-\[\#D4AF37\] {
+  color: #b8860b !important;
+}
+
+.light .text-\[\#F4D03F\] {
+  color: #d4af37 !important;
+}
+
+.light .text-\[\#40E0D0\] {
+  color: #14b8a6 !important;
+}
+
+/* Light mode sidebar */
+.light .bg-gradient-to-b\/from-gray-950\/via-\[\#0a0a15\]\/to-gray-950 {
+  background: linear-gradient(to bottom, #f3f4f6, #ffffff, #f3f4f6) !important;
+  border-right-color: #e5e7eb !important;
+}
+
+/* Light mode borders */
+.light .border-\[\#D4AF37\]\/20 {
+  border-color: rgba(184, 134, 11, 0.2) !important;
+}
+
+/* Ensure inputs are visible in light mode */
+.light input,
+.light textarea,
+.light select {
+  background-color: #ffffff !important;
+  border-color: #d1d5db !important;
+  color: #111827 !important;
+}
+
+.light input::placeholder {
+  color: #9ca3af !important;
+}
+
+/* Light mode buttons */
+.light button {
+  background-color: #f3f4f6 !important;
+}
+
+.light button:hover {
+  background-color: #e5e7eb !important;
+}

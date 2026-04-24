@@ -1,9 +1,37 @@
 @import "tailwindcss";
 @import "./styles/ancient-egypt.css";
+@import "./styles/light-mode.css";
+
+@layer base {
+  :root {
+    --bg-primary: #0a0a15;
+    --bg-secondary: #0f172a;
+    --bg-card: #111827;
+    --text-primary: #f3f4f6;
+    --text-secondary: #9ca3af;
+    --border-color: rgba(75, 85, 99, 0.5);
+  }
+
+  .light {
+    --bg-primary: #f9fafb;
+    --bg-secondary: #f3f4f6;
+    --bg-card: #ffffff;
+    --text-primary: #111827;
+    --text-secondary: #6b7280;
+    --border-color: rgba(209, 213, 219, 0.5);
+  }
+}
 
 body {
-  @apply bg-gray-950 text-gray-100 antialiased;
+  @apply antialiased;
   font-family: 'Inter', sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+.light body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
 }
 
 /* Custom Animations */

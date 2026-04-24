@@ -1,0 +1,78 @@
+# AnubisWatch Configuration
+server:
+  host: "0.0.0.0"
+  port: 8080
+  tls:
+    enabled: false
+
+storage:
+  path: "./data"
+
+dashboard:
+  enabled: true
+  branding:
+    title: "AnubisWatch"
+    theme: "auto"
+
+logging:
+  level: "info"
+  format: "text"
+  output: "stdout"
+
+souls:
+  - name: "Google DNS"
+    type: "dns"
+    target: "8.8.8.8"
+    weight: "30s"
+    timeout: "5s"
+    enabled: true
+    tags:
+      - "production"
+      - "dns"
+    dns:
+      record_type: "A"
+      expected:
+        - "8.8.8.8"
+
+  - name: "Cloudflare DNS"
+    type: "dns"
+    target: "1.1.1.1"
+    weight: "30s"
+    timeout: "5s"
+    enabled: true
+    tags:
+      - "production"
+      - "dns"
+
+  - name: "HTTPbin Health"
+    type: "http"
+    target: "https://httpbin.org/get"
+    weight: "60s"
+    timeout: "10s"
+    enabled: true
+    tags:
+      - "example"
+    http:
+      method: "GET"
+      valid_status:
+        - 200
+
+channels:
+  - name: "Admin Alerts"
+    type: "email"
+    enabled: true
+    config:
+      to: "admin@example.com"
+
+verdicts:
+  rules:
+    - name: "Critical Alert"
+      enabled: true
+      scope:
+        type: "all"
+      conditions:
+        - type: "status_change"
+          from: "alive"
+          to: "dead"
+      channels:
+        - "Admin Alerts"
