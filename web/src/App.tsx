@@ -3,6 +3,7 @@ import { Layout } from './components/Layout'
 import { Dashboard } from './pages/Dashboard'
 import { Souls } from './pages/Souls'
 import { SoulDetail } from './pages/SoulDetail'
+import { SoulEdit } from './pages/SoulEdit'
 import { Judgments } from './pages/Judgments'
 import { Alerts } from './pages/Alerts'
 import { Journeys } from './pages/Journeys'
@@ -47,6 +48,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/souls" element={<Souls />} />
             <Route path="/souls/:id" element={<SoulDetail />} />
+            <Route path="/souls/:id/edit" element={<SoulEdit />} />
             <Route path="/judgments" element={<Judgments />} />
             <Route path="/alerts" element={<Alerts />} />
             <Route path="/incidents" element={<Incidents />} />
