@@ -623,7 +623,13 @@ func (n *Node) applyMembershipChange(change core.MembershipChange, index uint64)
 // transitionToFinalConfig transitions from joint consensus to final configuration
 func (n *Node) transitionToFinalConfig(change core.MembershipChange, jointIndex uint64) {
 	// Wait a bit to ensure joint consensus entry is committed
-	time.Sleep(2 * time.Second)
+	// Use select with shutdownCh to allow graceful cancellation
+	select {
+	case <-time.After(2 * time.Second):
+	case <-n.shutdownCh:
+		n.logger.Info("transitionToFinalConfig cancelled - node shutting down")
+		return
+	}
 
 	n.mu.RLock()
 	if n.state != core.StateLeader {
