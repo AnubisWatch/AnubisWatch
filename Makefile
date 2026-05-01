@@ -47,7 +47,7 @@ vet: ## Run go vet
 # Dashboard
 dashboard: ## Build React dashboard
 	@echo "⚖️  Building dashboard..."
-	cd web && npm ci && npm run build
+	cd web && npm ci && npm run build:embed
 	@echo "✓ Dashboard built"
 
 dashboard-dev: ## Run dashboard dev server
