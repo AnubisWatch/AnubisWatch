@@ -573,6 +573,7 @@ func (s *RESTServer) handleLogin(ctx *Context) error {
 
 	// SECURITY: Set httpOnly cookie for token storage (VULN-004 fix)
 	// This prevents XSS attacks from accessing the token
+	// #nosec G124 -- Secure is enabled for TLS/proxied HTTPS; local HTTP dev and E2E need non-Secure cookies.
 	http.SetCookie(ctx.Response, &http.Cookie{
 		Name:     "auth_token",
 		Value:    token,
@@ -606,6 +607,7 @@ func (s *RESTServer) handleLogout(ctx *Context) error {
 	}
 
 	// SECURITY: Clear the httpOnly cookie (VULN-004 fix)
+	// #nosec G124 -- Matches the login cookie Secure policy so local HTTP logout can clear it.
 	http.SetCookie(ctx.Response, &http.Cookie{
 		Name:     "auth_token",
 		Value:    "",

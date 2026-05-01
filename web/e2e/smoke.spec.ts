@@ -14,7 +14,7 @@ test.afterAll(async () => {
 test.describe('AnubisWatch E2E Smoke', () => {
   test('login, create soul, and run an immediate check', async ({ page }) => {
     // 1. Navigate to login
-    await page.goto('/login')
+    await page.goto(`${server.baseURL}/login`)
     await expect(page.getByRole('heading', { name: /Anubis/i })).toBeVisible()
 
     // 2. Log in with demo credentials
@@ -26,7 +26,7 @@ test.describe('AnubisWatch E2E Smoke', () => {
     await page.waitForURL('**/')
 
     // 4. Navigate to Souls page and wait for spinner to disappear
-    await page.goto('/souls')
+    await page.goto(`${server.baseURL}/souls`)
     await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 10000 })
 
     // 5. Open Add Soul modal
