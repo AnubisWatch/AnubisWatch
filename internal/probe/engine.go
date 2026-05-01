@@ -176,6 +176,8 @@ func (e *Engine) AssignSouls(souls []*core.Soul) {
 			runner.cancel()
 			runner.ticker.Stop()
 			delete(e.souls, id)
+			// Clean up circuit breaker for unassigned soul
+			delete(e.circuitBreakers, id)
 			e.logger.Info("soul unassigned", "soul", id)
 		}
 	}
@@ -359,13 +361,65 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 		return nil, &core.ConfigError{Field: "type", Message: "unknown type " + string(runner.soul.Type)}
 	}
 
-	judgment, err := checker.Judge(ctx, runner.soul)
-	if err != nil {
+	if err := checker.Validate(runner.soul); err != nil {
 		return nil, err
+	}
+
+	timeout := runner.soul.Timeout.Duration
+	if timeout == 0 {
+		timeout = 10 * time.Second
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	judgment, err := checker.Judge(checkCtx, runner.soul)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if checkCtx.Err() != nil {
+			return nil, checkCtx.Err()
+		}
+		judgment = failJudgment(runner.soul, err)
+		e.recordFailure(runner.soul.ID)
+	} else if judgment.Status == core.SoulDead {
+		e.recordFailure(runner.soul.ID)
+	} else {
+		e.recordSuccess(runner.soul.ID)
 	}
 
 	judgment.JackalID = e.nodeID
 	judgment.Region = e.region
+	judgment.WorkspaceID = runner.soul.WorkspaceID
+	if judgment.ID == "" {
+		judgment.ID = core.GenerateID()
+	}
+	if judgment.SoulID == "" {
+		judgment.SoulID = runner.soul.ID
+	}
+	if judgment.Timestamp.IsZero() {
+		judgment.Timestamp = time.Now().UTC()
+	}
+
+	if e.store != nil {
+		if err := retryWithBackoff(ctx, 3, 100*time.Millisecond, func() error {
+			return e.store.SaveJudgment(ctx, judgment)
+		}); err != nil {
+			e.logger.Error("failed to save immediate judgment after retries", "err", err, "soul", runner.soul.Name)
+			return nil, err
+		}
+	}
+
+	if e.onJudgment != nil {
+		e.onJudgment(judgment)
+	}
+
+	if e.alerter != nil {
+		prevStatus := runner.lastStatus
+		runner.lastStatus = judgment.Status
+		e.alerter.ProcessJudgment(runner.soul, prevStatus, judgment)
+	}
+
 	return judgment, nil
 }
 

@@ -63,8 +63,8 @@ The system monitors HTTP/HTTPS endpoints, TCP/UDP ports, DNS servers, SMTP/IMAP 
 │  │  └────────────┘  └────────────┘  └────────────┘  └──────────────────┘   │ │
 │  │                                                                           │ │
 │  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────────────────┐   │ │
-│  │  │  Cluster   │  │  Dashboard │  │   Status   │  │  Quota Manager   │   │ │
-│  │  │  Manager   │  │   Embed    │  │   Page     │  │     (Sobek)      │   │ │
+│  │  │  Cluster   │  │  Dashboard │  │   Status   │  │     ACME         │   │ │
+│  │  │  Manager   │  │   Embed    │  │   Page     │  │    Manager       │   │ │
 │  │  └────────────┘  └────────────┘  └────────────┘  └──────────────────┘   │ │
 │  └─────────────────────────────────┬──────────────────────────────────────┘ │
 │                                    │                                         │
@@ -116,7 +116,6 @@ The codebase uses Egyptian mythology terminology to describe system components:
 | **Ma'at** | Goddess of truth | Alert engine |
 | **Duat** | Egyptian underworld | WebSocket real-time layer |
 | **Journey** | Travel of the soul | Multi-step synthetic monitoring |
-| **Sobek** | Crocodile god | Quota management |
 | **Djed** | Stability pillar | Configuration persistence |
 | **Eye of Horus** | Protection symbol | Health check status indicator |
 
@@ -779,26 +778,16 @@ AnubisWatch/
 │   │   ├── oidc.go           # OpenID Connect
 │   │   └── ldap.go           # LDAP/Active Directory
 │   ├── backup/               # Backup & restore
-│   ├── cache/                # In-memory cache
 │   ├── cluster/              # Cluster management (Necropolis)
 │   ├── core/                 # Core domain types
 │   ├── dashboard/            # Dashboard embedding
-│   ├── feather/             # Storage manager
 │   ├── grpcapi/              # gRPC API server
-│   ├── journey/             # Synthetic monitoring
-│   ├── metrics/              # Prometheus metrics
+│   ├── journey/              # Synthetic monitoring
 │   ├── probe/                # Probe engine & checkers
-│   ├── profiling/            # Profiling endpoints
-│   ├── quota/                # Quota management (Sobek)
 │   ├── raft/                 # Raft consensus implementation
-│   ├── region/               # Multi-region support
-│   ├── release/              # Release management
-│   ├── secrets/              # Secrets management
 │   ├── statuspage/           # Status page generator
 │   ├── storage/              # CobaltDB storage engine
-│   ├── tenant/               # Multi-tenancy
-│   ├── tracing/              # Distributed tracing
-│   └── version/              # Version info
+│   └── tenant/               # Multi-tenancy
 ├── web/                      # React dashboard
 │   ├── src/
 │   │   ├── components/        # React components

@@ -749,4 +749,3 @@ func TestAuditLogger_LogRequest_FailureStatus(t *testing.T) {
 		t.Error("Expected event to be logged")
 	}
 }
-

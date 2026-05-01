@@ -336,24 +336,6 @@ verdicts:
           channels: ["ops-email"]
           condition: "not_resolved"
 
-# Performance Budgets (Feathers of Ma'at)
-feathers:
-  - name: "API Latency Budget"
-    scope: "tag:api"
-    rules:
-      p50: 200ms
-      p95: 500ms
-      p99: 1s
-      max: 3s
-    window: 5m
-    violation_threshold: 3
-
-  - name: "Homepage Speed Budget"
-    scope: "soul:Homepage"
-    rules:
-      p95: 800ms
-    window: 15m
-
 # Synthetic Monitoring (Duat Journeys)
 journeys:
   - name: "User Login Flow"

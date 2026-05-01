@@ -104,32 +104,6 @@ func failJudgment(soul *core.Soul, err error) *core.Judgment {
 	}
 }
 
-// successJudgment creates a successful judgment
-func successJudgment(soul *core.Soul, duration time.Duration, message string) *core.Judgment {
-	return &core.Judgment{
-		ID:        core.GenerateID(),
-		SoulID:    soul.ID,
-		Timestamp: time.Now().UTC(),
-		Duration:  duration,
-		Status:    core.SoulAlive,
-		Message:   message,
-		Details:   &core.JudgmentDetails{},
-	}
-}
-
-// degradedJudgment creates a degraded judgment (performance issue)
-func degradedJudgment(soul *core.Soul, duration time.Duration, message string) *core.Judgment {
-	return &core.Judgment{
-		ID:        core.GenerateID(),
-		SoulID:    soul.ID,
-		Timestamp: time.Now().UTC(),
-		Duration:  duration,
-		Status:    core.SoulDegraded,
-		Message:   message,
-		Details:   &core.JudgmentDetails{},
-	}
-}
-
 // truncateString truncates a string to max length
 func truncateString(s string, max int) string {
 	if len(s) <= max {
@@ -146,21 +120,7 @@ func boolToString(b bool, t, f string) string {
 	return f
 }
 
-// parseDuration parses a duration string, returning default on error
-func parseDuration(s string, defaultVal time.Duration) time.Duration {
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return defaultVal
-	}
-	return d
-}
-
 // ConfigError creates a config error for a field
 func configError(field, message string) error {
 	return &core.ConfigError{Field: field, Message: message}
-}
-
-// validationError creates a validation error
-func validationError(field, message string) error {
-	return &core.ValidationError{Field: field, Message: message}
 }

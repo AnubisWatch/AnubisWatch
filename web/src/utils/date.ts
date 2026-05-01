@@ -30,18 +30,3 @@ export function formatDistanceToNow(date: string | Date): string {
   const years = Math.floor(months / 12)
   return `${years}y ago`
 }
-
-export function formatDate(date: string | Date): string {
-  return new Date(date).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric'
-  })
-}
-
-export function formatTime(date: string | Date): string {
-  return new Date(date).toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit'
-  })
-}

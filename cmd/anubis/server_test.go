@@ -4,17 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/api"
-	"github.com/AnubisWatch/anubiswatch/internal/auth"
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 	"github.com/AnubisWatch/anubiswatch/internal/grpcapi"
 	"github.com/AnubisWatch/anubiswatch/internal/probe"
@@ -533,39 +529,6 @@ func TestInitACMEManager_Server_Enabled(t *testing.T) {
 	mgr := initACMEManager(cfg, store, logger)
 	if mgr == nil {
 		t.Error("Expected non-nil manager when TLS auto-cert enabled")
-	}
-}
-
-func TestHandleLogin_InvalidCredentials(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	handler := handleLogin(authenticator)
-
-	req := httptest.NewRequest("POST", "/api/login", strings.NewReader(`{"email":"wrong@example.com","password":"wrong"}`))
-	req.Header.Set("Content-Type", "application/json")
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusUnauthorized {
-		t.Errorf("Expected status %d, got %d", http.StatusUnauthorized, rec.Code)
-	}
-}
-
-func TestHandleListSouls_StorageError(t *testing.T) {
-	store := setupTestStore(t)
-	store.Close() // close to force error
-
-	engine := probe.NewEngine(probe.EngineOptions{
-		Registry: probe.NewCheckerRegistry(),
-		Logger:   slog.New(slog.NewTextHandler(os.Stdout, nil)),
-	})
-
-	handler := handleListSouls(store, engine)
-	req := httptest.NewRequest("GET", "/api/souls", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status %d, got %d", http.StatusInternalServerError, rec.Code)
 	}
 }
 

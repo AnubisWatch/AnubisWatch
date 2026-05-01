@@ -12,22 +12,21 @@ test.afterAll(async () => {
 })
 
 test.describe('AnubisWatch E2E Smoke', () => {
-  test('login, create soul, and verify it appears', async ({ page }) => {
+  test('login, create soul, and run an immediate check', async ({ page }) => {
     // 1. Navigate to login
-    await page.goto('/login')
+    await page.goto(`${server.baseURL}/login`)
     await expect(page.getByRole('heading', { name: /Anubis/i })).toBeVisible()
 
     // 2. Log in with demo credentials
     await page.getByPlaceholder('priest@anubis.watch').fill('admin@anubis.watch')
-    await page.getByPlaceholder('••••••••').fill('admin')
+    await page.getByPlaceholder('••••••••').fill('SecurePass123!')
     await page.getByRole('button', { name: /Enter the Temple/i }).click()
 
     // 3. Wait for dashboard redirect
-    await page.waitForURL('/')
+    await page.waitForURL('**/')
 
     // 4. Navigate to Souls page and wait for spinner to disappear
-    await page.goto('/souls')
-    await page.getByRole('status', { name: 'Loading' }).waitFor({ state: 'hidden', timeout: 10000 })
+    await page.goto(`${server.baseURL}/souls`)
     await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 10000 })
 
     // 5. Open Add Soul modal
@@ -37,7 +36,7 @@ test.describe('AnubisWatch E2E Smoke', () => {
     // 6. Fill in the form
     const soulName = `E2E Smoke Soul ${Date.now()}`
     await page.getByPlaceholder('e.g., Production API').fill(soulName)
-    await page.getByPlaceholder('https://api.example.com/health').fill('https://httpbin.org/get')
+    await page.getByPlaceholder('https://api.example.com/health').fill('https://example.com')
 
     // 7. Submit and wait for POST response
     const createPromise = page.waitForResponse(
@@ -50,5 +49,18 @@ test.describe('AnubisWatch E2E Smoke', () => {
     // 8. Verify modal closes and soul appears in list
     await expect(page.getByRole('heading', { name: 'Add New Soul' })).not.toBeVisible()
     await expect(page.getByText(soulName)).toBeVisible({ timeout: 10000 })
+
+    // 9. Open details and run an immediate check
+    await page.getByLabel(`Edit soul ${soulName}`).click()
+    await expect(page.getByRole('heading', { name: soulName })).toBeVisible({ timeout: 10000 })
+
+    const checkPromise = page.waitForResponse(
+      (res) => res.url().includes('/check') && res.request().method() === 'POST'
+    )
+    await page.getByRole('button', { name: /Test Now/i }).click()
+    const checkRes = await checkPromise
+    expect(checkRes.status()).toBe(200)
+
+    await expect(page.getByText(/Check passed|Check failed/i)).toBeVisible({ timeout: 10000 })
   })
 })

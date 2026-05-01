@@ -28,14 +28,10 @@ export function applyTheme(theme: Theme) {
     : true // Default to dark if matchMedia is not available
 
   root.classList.remove('dark', 'light')
+  const effectiveTheme = theme === 'system'
+    ? (systemDark ? 'dark' : 'light')
+    : theme
 
-  if (theme === 'system') {
-    if (systemDark) {
-      root.classList.add('dark')
-    } else {
-      root.classList.add('light')
-    }
-  } else {
-    root.classList.add(theme)
-  }
+  root.classList.add(effectiveTheme)
+  root.style.colorScheme = effectiveTheme
 }

@@ -1347,47 +1347,6 @@ func TestHandler_showPasswordForm(t *testing.T) {
 	}
 }
 
-func TestHandler_convertIncidentUpdates(t *testing.T) {
-	updates := []core.IncidentUpdate{
-		{
-			ID:        "update-1",
-			Message:   "Test message",
-			Status:    "investigating",
-			UpdatedAt: time.Now().UTC(),
-		},
-		{
-			ID:        "update-2",
-			Message:   "Test message 2",
-			Status:    "resolved",
-			UpdatedAt: time.Now().UTC(),
-		},
-	}
-
-	result := convertIncidentUpdates(updates)
-
-	if len(result) != 2 {
-		t.Errorf("Expected 2 updates, got %d", len(result))
-	}
-
-	if result[0].ID != "update-1" {
-		t.Errorf("Expected update-1, got %s", result[0].ID)
-	}
-
-	if result[1].Message != "Test message 2" {
-		t.Errorf("Expected 'Test message 2', got %s", result[1].Message)
-	}
-}
-
-func TestHandler_convertIncidentUpdates_Empty(t *testing.T) {
-	updates := []core.IncidentUpdate{}
-
-	result := convertIncidentUpdates(updates)
-
-	if len(result) != 0 {
-		t.Errorf("Expected 0 updates, got %d", len(result))
-	}
-}
-
 func TestHandler_SubscribeHandler_MethodNotAllowed(t *testing.T) {
 	repo := &mockRepository{}
 	handler := NewHandler(repo, nil)

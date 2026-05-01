@@ -913,7 +913,6 @@ func TestJudgeSingle_ConnectionError(t *testing.T) {
 	}
 }
 
-
 func TestJudgeSingle_DeadStatus(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -986,7 +985,6 @@ func TestJudgeSingle_DegradedStatus(t *testing.T) {
 		t.Errorf("Expected degraded status, got: %s", output)
 	}
 }
-
 
 func TestSubprocess_showVersion_temp(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {

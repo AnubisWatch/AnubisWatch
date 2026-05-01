@@ -109,7 +109,6 @@ export function Dashboard() {
   const { data: clusterData } = useClusterStatus()
   const { data: judgmentsData } = useJudgments()
   const [refreshing, setRefreshing] = useState(false)
-  const mounted = true
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -227,9 +226,7 @@ export function Dashboard() {
       </div>
 
       {/* Header */}
-      <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-700 ${
-        mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'
-      }`}>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-all duration-700 opacity-100 translate-y-0">
         <div>
           <div className="flex items-center gap-3 mb-1">
             <div className="relative">
@@ -311,9 +308,9 @@ export function Dashboard() {
       {/* Main Content */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Chart Section */}
-        <div className={`lg:col-span-2 bg-gradient-to-br from-gray-900 to-gray-800/50
+        <div className="lg:col-span-2 bg-gradient-to-br from-gray-900 to-gray-800/50
                         border border-gray-700/50 rounded-2xl p-6 transition-all duration-700 delay-500
-                        ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
+                        opacity-100 translate-y-0">
           <div className="flex items-center justify-between mb-6">
             <div>
               <h2 className="text-xl font-semibold text-white flex items-center gap-2">
@@ -416,8 +413,7 @@ export function Dashboard() {
         </div>
 
         {/* Right Column */}
-        <div className={`space-y-4 transition-all duration-700 delay-600
-                        ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
+        <div className="space-y-4 transition-all duration-700 delay-600 opacity-100 translate-y-0">
           {/* System Status */}
           <div className="bg-gradient-to-br from-gray-900 to-gray-800/50 border border-gray-700/50 rounded-2xl p-5">
             <h2 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">

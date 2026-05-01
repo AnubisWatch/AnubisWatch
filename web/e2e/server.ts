@@ -3,6 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import os from 'os'
 import http from 'http'
+import net from 'net'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -22,19 +23,31 @@ export async function startServer(): Promise<TestServer> {
   }
 
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'anubis-e2e-'))
-  const port = 18080
+  const port = await getAvailablePort()
 
   const configPath = path.join(dataDir, 'anubis.json')
   const config = {
-    server: { host: '127.0.0.1', port, tls: { enabled: false } },
+    server: {
+      host: '127.0.0.1',
+      port,
+      tls: { enabled: false },
+      allowed_origins: [`http://localhost:${port}`, `http://127.0.0.1:${port}`],
+    },
     storage: { path: path.join(dataDir, 'data').replace(/\\/g, '/') },
-    auth: { enabled: false, type: 'local' },
+    auth: {
+      enabled: true,
+      type: 'local',
+      local: {
+        admin_email: 'admin@anubis.watch',
+        admin_password: 'SecurePass123!',
+      },
+    },
     dashboard: { enabled: true },
     necropolis: { enabled: false, node_name: 'jackal-e2e' },
     souls: [],
     channels: [],
     journeys: [],
-    logging: { level: 'info', format: 'json' },
+    logging: { level: 'warn', format: 'json' },
   }
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
 
@@ -50,6 +63,23 @@ export async function startServer(): Promise<TestServer> {
     dataDir,
     stop: () => stopServer(proc, dataDir),
   }
+}
+
+function getAvailablePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer()
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      server.close(() => {
+        if (typeof address === 'object' && address?.port) {
+          resolve(address.port)
+        } else {
+          reject(new Error('Failed to allocate an E2E port'))
+        }
+      })
+    })
+    server.on('error', reject)
+  })
 }
 
 function waitForServer(port: number): Promise<void> {

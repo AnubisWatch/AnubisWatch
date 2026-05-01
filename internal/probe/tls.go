@@ -81,8 +81,8 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 
 	// Configure TLS with proper verification
 	tlsConfig := &tls.Config{
-		ServerName:         host,
-		MinVersion:         tls.VersionTLS12, // Enforce TLS 1.2 minimum
+		ServerName: host,
+		MinVersion: tls.VersionTLS12, // Enforce TLS 1.2 minimum
 	}
 
 	// Set minimum protocol version from config (if specified and stricter)

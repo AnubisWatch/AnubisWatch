@@ -111,28 +111,6 @@ func (r MemberRole) Can(permission string) bool {
 	return false
 }
 
-// QuotaUsage tracks current quota consumption
-type QuotaUsage struct {
-	Souls         int       `json:"souls"`
-	Channels      int       `json:"channels"`
-	Rules         int       `json:"rules"`
-	Members       int       `json:"members"`
-	ChecksPerHour int       `json:"checks_per_hour"`
-	StorageBytes  int64     `json:"storage_bytes"`
-	LastUpdated   time.Time `json:"last_updated"`
-}
-
-// IsQuotaExceeded checks if quota is exceeded
-func (q *QuotaUsage) IsQuotaExceeded(config QuotaConfig) (string, bool) {
-	if config.MaxSouls > 0 && q.Souls >= config.MaxSouls {
-		return "max_souls", true
-	}
-	if config.MaxAlertChannels > 0 && q.Channels >= config.MaxAlertChannels {
-		return "max_channels", true
-	}
-	return "", false
-}
-
 // WorkspaceStats contains workspace statistics
 type WorkspaceStats struct {
 	WorkspaceID      string    `json:"workspace_id"`

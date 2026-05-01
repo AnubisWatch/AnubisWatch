@@ -698,7 +698,6 @@ func TestQuickWatch_WithMinutesInterval(t *testing.T) {
 	}
 }
 
-
 func TestQuickWatch_TCPType(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("ANUBIS_DATA_DIR", tmpDir)

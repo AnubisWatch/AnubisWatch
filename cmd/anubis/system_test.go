@@ -634,4 +634,3 @@ func TestConfigCommand_Set_InvalidJSON(t *testing.T) {
 		t.Errorf("Expected invalid JSON error, got: %s", string(output))
 	}
 }
-

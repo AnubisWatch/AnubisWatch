@@ -15,14 +15,12 @@ type Config struct {
 	Server     ServerConfig     `yaml:"server"`
 	Storage    StorageConfig    `yaml:"storage"`
 	Necropolis NecropolisConfig `yaml:"necropolis"`
-	Regions    RegionsConfig    `yaml:"regions"`
 	Tenants    TenantsConfig    `yaml:"tenants"`
 	Auth       AuthConfig       `yaml:"auth"`
 	Dashboard  DashboardConfig  `yaml:"dashboard"`
 	Souls      []Soul           `yaml:"souls"`
 	Channels   []ChannelConfig  `yaml:"channels"`
 	Verdicts   VerdictsConfig   `yaml:"verdicts"`
-	Feathers   []FeatherConfig  `yaml:"feathers"`
 	Journeys   []JourneyConfig  `yaml:"journeys"`
 	Logging    LoggingConfig    `yaml:"logging"`
 }
@@ -316,13 +314,6 @@ func (c *Config) validate() error {
 		}
 	}
 
-	// Validate feathers
-	for i, feather := range c.Feathers {
-		if err := feather.validate(i); err != nil {
-			return err
-		}
-	}
-
 	// Validate journeys
 	for i, journey := range c.Journeys {
 		if err := journey.validate(i); err != nil {
@@ -336,61 +327,6 @@ func (c *Config) validate() error {
 	}
 
 	return nil
-}
-
-// RegionsConfig defines multi-region configuration
-type RegionsConfig struct {
-	Enabled       bool                 `json:"enabled" yaml:"enabled"`
-	LocalRegion   string               `json:"local_region" yaml:"local_region"`
-	Replication   ReplicationConfig    `json:"replication" yaml:"replication"`
-	Routing       RoutingConfig        `json:"routing" yaml:"routing"`
-	HealthCheck   HealthCheckConfig    `json:"health_check" yaml:"health_check"`
-	RemoteRegions []RemoteRegionConfig `json:"remote_regions" yaml:"remote_regions"`
-}
-
-// RemoteRegionConfig defines a remote region
-type RemoteRegionConfig struct {
-	ID        string  `json:"id" yaml:"id"`
-	Name      string  `json:"name" yaml:"name"`
-	Endpoint  string  `json:"endpoint" yaml:"endpoint"`
-	Location  string  `json:"location" yaml:"location"`
-	Latitude  float64 `json:"latitude" yaml:"latitude"`
-	Longitude float64 `json:"longitude" yaml:"longitude"`
-	Priority  int     `json:"priority" yaml:"priority"`
-	Enabled   bool    `json:"enabled" yaml:"enabled"`
-	Secret    string  `json:"secret" yaml:"secret"`
-}
-
-// ReplicationConfig defines cross-region replication settings
-type ReplicationConfig struct {
-	Enabled          bool     `json:"enabled" yaml:"enabled"`
-	SyncMode         string   `json:"sync_mode" yaml:"sync_mode"`
-	BatchSize        int      `json:"batch_size" yaml:"batch_size"`
-	BatchInterval    Duration `json:"batch_interval" yaml:"batch_interval"`
-	ConflictStrategy string   `json:"conflict_strategy" yaml:"conflict_strategy"`
-	RetryInterval    Duration `json:"retry_interval" yaml:"retry_interval"`
-	MaxRetries       int      `json:"max_retries" yaml:"max_retries"`
-	Compression      bool     `json:"compression" yaml:"compression"`
-	EncryptTraffic   bool     `json:"encrypt_traffic" yaml:"encrypt_traffic"`
-}
-
-// RoutingConfig defines region-aware routing settings
-type RoutingConfig struct {
-	Enabled         bool     `json:"enabled" yaml:"enabled"`
-	LatencyBased    bool     `json:"latency_based" yaml:"latency_based"`
-	GeoBased        bool     `json:"geo_based" yaml:"geo_based"`
-	HealthBased     bool     `json:"health_based" yaml:"health_based"`
-	FailoverTimeout Duration `json:"failover_timeout" yaml:"failover_timeout"`
-}
-
-// HealthCheckConfig defines region health monitoring settings
-type HealthCheckConfig struct {
-	Enabled          bool              `json:"enabled" yaml:"enabled"`
-	Interval         Duration          `json:"interval" yaml:"interval"`
-	Timeout          Duration          `json:"timeout" yaml:"timeout"`
-	FailureThreshold int               `json:"failure_threshold" yaml:"failure_threshold"`
-	SuccessThreshold int               `json:"success_threshold" yaml:"success_threshold"`
-	Endpoints        map[string]string `json:"endpoints" yaml:"endpoints"`
 }
 
 func SaveConfig(path string, config *Config) error {

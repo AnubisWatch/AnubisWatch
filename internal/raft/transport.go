@@ -293,8 +293,6 @@ func (t *TCPTransport) sendRPC(peerID string, method string, req interface{}) (i
 		return nil, err
 	}
 
-	defer t.releaseConnection(peerID, conn)
-
 	// Send request
 	reqData, err := json.Marshal(req)
 	if err != nil {
@@ -304,9 +302,13 @@ func (t *TCPTransport) sendRPC(peerID string, method string, req interface{}) (i
 	writer := bufio.NewWriter(conn)
 	fmt.Fprintf(writer, "%s\n%d\n%s\n", method, len(reqData), reqData)
 	if err := writer.Flush(); err != nil {
+		// Write failed - remove from pool (which also closes the connection)
 		t.removeConnection(peerID)
 		return nil, fmt.Errorf("write error: %w", err)
 	}
+
+	// Connection is still valid - return to pool via releaseConnection
+	defer t.releaseConnection(peerID, conn)
 
 	// Read response
 	reader := bufio.NewReader(conn)
@@ -385,13 +387,15 @@ func (t *TCPTransport) getConnection(peerID string) (net.Conn, error) {
 		return nil, fmt.Errorf("unknown peer %s", peerID)
 	}
 
-	// Create new connection
+	// Create new connection with timeout
+	const connectionTimeout = 5 * time.Second
 	var conn net.Conn
 	var err error
 	if t.tlsConfig != nil {
-		conn, err = tls.Dial("tcp", addr, t.tlsConfig)
+		dialer := &net.Dialer{Timeout: connectionTimeout}
+		conn, err = tls.DialWithDialer(dialer, "tcp", addr, t.tlsConfig)
 	} else {
-		conn, err = net.Dial("tcp", addr)
+		conn, err = net.DialTimeout("tcp", addr, connectionTimeout)
 	}
 
 	if err != nil {

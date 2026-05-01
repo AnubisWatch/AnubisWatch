@@ -17,24 +17,24 @@ import (
 
 // connectionLimiter tracks rate limit state for an IP
 type connectionLimiter struct {
-	connections   int       // current concurrent connections
-	lastConnect   time.Time // last connection attempt
-	connectCount  int       // connections in current window
-	windowReset   time.Time // when to reset the window
-	messageCount  int       // messages in current window
-	messageReset  time.Time // when to reset message window
+	connections  int       // current concurrent connections
+	lastConnect  time.Time // last connection attempt
+	connectCount int       // connections in current window
+	windowReset  time.Time // when to reset the window
+	messageCount int       // messages in current window
+	messageReset time.Time // when to reset message window
 }
 
 // WebSocketServer handles real-time WebSocket connections
 // The Oracle's live visions stream to the priests
 type WebSocketServer struct {
-	mu              sync.RWMutex
-	clients         map[string]*WSClient
-	rooms           map[string]map[string]bool // room -> clientIDs
-	logger          *slog.Logger
-	broadcast       chan WSMessage
-	authenticator   Authenticator // Added for token validation - uses Authenticator from rest.go
-	allowedOrigins  []string      // Allowed origins for WebSocket connections (CSRF protection)
+	mu             sync.RWMutex
+	clients        map[string]*WSClient
+	rooms          map[string]map[string]bool // room -> clientIDs
+	logger         *slog.Logger
+	broadcast      chan WSMessage
+	authenticator  Authenticator // Added for token validation - uses Authenticator from rest.go
+	allowedOrigins []string      // Allowed origins for WebSocket connections (CSRF protection)
 
 	// Rate limiting
 	ipLimits         map[string]*connectionLimiter // IP -> limiter state
@@ -78,12 +78,12 @@ func NewWebSocketServer(logger *slog.Logger, authenticator Authenticator, allowe
 		authenticator:    authenticator,
 		allowedOrigins:   allowedOrigins,
 		ipLimits:         make(map[string]*connectionLimiter),
-		maxConnsPerIP:    10,                      // max 10 concurrent connections per IP
-		maxConnsPerUser:  5,                       // max 5 concurrent connections per user
-		connRateLimit:    10,                      // max 10 connection attempts per minute per IP
-		rateLimitWindow:  time.Minute,             // 1 minute window
-		messageRateLimit: 60,                      // max 60 messages per minute per client (VULN-005 fix)
-		messageWindow:    time.Minute,             // 1 minute window for message rate limiting
+		maxConnsPerIP:    10,          // max 10 concurrent connections per IP
+		maxConnsPerUser:  5,           // max 5 concurrent connections per user
+		connRateLimit:    10,          // max 10 connection attempts per minute per IP
+		rateLimitWindow:  time.Minute, // 1 minute window
+		messageRateLimit: 60,          // max 60 messages per minute per client (VULN-005 fix)
+		messageWindow:    time.Minute, // 1 minute window for message rate limiting
 	}
 }
 

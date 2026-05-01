@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { api, ApiResponse, Soul, Judgment, AlertChannel, AlertRule, Workspace, Stats, ClusterStatus, StatusPage, User, CustomDashboard } from './client'
+import { api, ApiResponse, Soul, Judgment, AlertChannel, AlertRule, Stats, ClusterStatus, StatusPage, User, CustomDashboard } from './client'
 
 // Generic hook for API calls
 function useApi<T>(
@@ -10,38 +10,37 @@ function useApi<T>(
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    let cancelled = false
+  const fetchData = useCallback(async () => {
+    setLoading(true)
+    setError(null)
 
-    const fetch = async () => {
-      setLoading(true)
-      setError(null)
-
-      try {
-        const result = await fetcher()
-        if (!cancelled) {
-          setData(result)
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Unknown error')
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false)
-        }
-      }
-    }
-
-    fetch()
-
-    return () => {
-      cancelled = true
+    try {
+      const result = await fetcher()
+      setData(result)
+      return result
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error')
+      throw err
+    } finally {
+      setLoading(false)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps)
 
-  return { data, loading, error, refetch: () => setData(null) }
+  useEffect(() => {
+    let cancelled = false
+
+    fetchData().catch(() => {
+      if (!cancelled) {
+        // Error state is set by fetchData.
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [fetchData])
+
+  return { data, loading, error, refetch: fetchData }
 }
 
 // Souls API hooks
@@ -308,11 +307,6 @@ export function useStatusPages() {
     updatePage,
     deletePage,
   }
-}
-
-// Workspaces API hooks
-export function useWorkspaces() {
-  return useApi<Workspace[]>(() => api.get<Workspace[]>('/workspaces'))
 }
 
 // Dashboards API hooks

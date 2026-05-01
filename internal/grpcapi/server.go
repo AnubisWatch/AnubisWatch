@@ -28,11 +28,11 @@ import (
 // Server implements the gRPC AnubisWatchService
 type Server struct {
 	v1.UnimplementedAnubisWatchServiceServer
-	mu       sync.RWMutex
-	grpc     *grpc.Server
-	listener net.Listener
-	addr     string
-	logger   *slog.Logger
+	mu        sync.RWMutex
+	grpc      *grpc.Server
+	listener  net.Listener
+	addr      string
+	logger    *slog.Logger
 	tlsConfig *tls.Config
 
 	store Store
@@ -92,10 +92,10 @@ const (
 // NewServer creates a new gRPC server with authentication
 func NewServer(addr string, store Store, probe ProbeEngine, auth Authenticator, logger *slog.Logger, tlsConfig *tls.Config, enableReflection bool) *Server {
 	s := &Server{
-		addr:   addr,
-		logger: logger,
-		store:  store,
-		probe:  probe,
+		addr:      addr,
+		logger:    logger,
+		store:     store,
+		probe:     probe,
 		auth:      auth,
 		tlsConfig: tlsConfig,
 	}
@@ -116,7 +116,7 @@ func NewServer(addr string, store Store, probe ProbeEngine, auth Authenticator, 
 	v1.RegisterAnubisWatchServiceServer(s.grpc, s)
 
 	// Register reflection if enabled (VULN-007 fix)
-	// Default is true for backward compatibility; set to false in production
+	// Default is false for security; set to true only when needed for debugging
 	if enableReflection {
 		reflection.Register(s.grpc)
 		if logger != nil {
@@ -584,14 +584,19 @@ func (s *Server) CreateSoul(ctx context.Context, req *v1.CreateSoulRequest) (*v1
 		return nil, status.Errorf(codes.Internal, "failed to create soul: %v", err)
 	}
 
-	// Return the created soul
-	souls, _ := s.store.ListSoulsNoCtx(user.Workspace, 0, 1)
-	if len(souls) > 0 {
-		if pb := soulToPB(souls[0]); pb != nil {
-			return pb, nil
-		}
+	// Return the created soul by its name (unique within workspace)
+	// List souls sorted by creation time descending and return the first one
+	// This is a workaround since SaveSoulNoCtx doesn't return the ID
+	souls, err := s.store.ListSoulsNoCtx(user.Workspace, 0, 1)
+	if err != nil || len(souls) == 0 {
+		return nil, status.Errorf(codes.Internal, "soul created but could not be retrieved")
 	}
-	return nil, status.Errorf(codes.Internal, "soul created but could not be retrieved")
+
+	// Get the first soul returned - it should be the most recently created
+	if pb := soulToPB(souls[0]); pb != nil {
+		return pb, nil
+	}
+	return nil, status.Errorf(codes.Internal, "failed to convert created soul")
 }
 
 func (s *Server) UpdateSoul(ctx context.Context, req *v1.UpdateSoulRequest) (*v1.Soul, error) {
@@ -1075,11 +1080,11 @@ func (s *Server) UpdateRule(ctx context.Context, req *v1.UpdateRuleRequest) (*v1
 			// Mass assignment protection: only allow known-safe config keys.
 			// Sensitive keys like api_key, token, webhook_url are not modifiable.
 			allowedConfigKeys := map[string]bool{
-				"channel_ids":       true,
-				"cooldown":          true,
-				"severity":          true,
+				"channel_ids":        true,
+				"cooldown":           true,
+				"severity":           true,
 				"notification_delay": true,
-				"recovery_delay":    true,
+				"recovery_delay":     true,
 				"aggregation_window": true,
 			}
 			for k, v := range req.Config {

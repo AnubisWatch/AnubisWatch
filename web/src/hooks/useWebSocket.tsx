@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, ReactNode, useCallback } from 'react'
+import { createContext, useEffect, useRef, useState, ReactNode, useCallback } from 'react'
 
 interface WebSocketMessage {
   type: 'judgment' | 'alert' | 'status' | 'ping' | 'pong'
@@ -23,11 +23,6 @@ const WebSocketContext = createContext<WebSocketContextType>({
   connect: () => {},
   disconnect: () => {}
 })
-
-// eslint-disable-next-line react-refresh/only-export-components
-export function useWebSocket() {
-  return useContext(WebSocketContext)
-}
 
 interface WebSocketProviderProps {
   children: ReactNode

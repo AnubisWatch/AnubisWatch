@@ -198,17 +198,6 @@ func (a *LocalAuthenticator) saveSessionsLocked() {
 	os.Chmod(a.sessionPath, 0600)
 }
 
-// saveSessions persists sessions to disk (public version that acquires lock)
-func (a *LocalAuthenticator) saveSessions() {
-	if a.sessionPath == "" {
-		return
-	}
-
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-	a.saveSessionsLocked()
-}
-
 // cleanupExpiredSessions removes expired sessions periodically
 func (a *LocalAuthenticator) cleanupExpiredSessions() {
 	ticker := time.NewTicker(5 * time.Minute)

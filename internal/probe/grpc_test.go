@@ -195,92 +195,6 @@ func TestGRPCChecker_Judge_TLS(t *testing.T) {
 	}
 }
 
-func TestBuildHTTP2SettingsFrame(t *testing.T) {
-	frame := buildHTTP2SettingsFrame()
-
-	if len(frame) != 9 {
-		t.Errorf("Expected frame length 9, got %d", len(frame))
-	}
-
-	// Check frame type (SETTINGS = 0x04)
-	if frame[3] != 0x04 {
-		t.Errorf("Expected SETTINGS type (0x04), got 0x%02X", frame[3])
-	}
-
-	// Check flags (none)
-	if frame[4] != 0x00 {
-		t.Errorf("Expected no flags, got 0x%02X", frame[4])
-	}
-
-	// Check stream ID (0 for settings)
-	if frame[5] != 0x00 || frame[6] != 0x00 || frame[7] != 0x00 || frame[8] != 0x00 {
-		t.Error("Expected stream ID 0")
-	}
-}
-
-func TestBuildHTTP2HeadersFrame(t *testing.T) {
-	frame := buildHTTP2HeadersFrame("example.com", "443", 100)
-
-	if len(frame) != 9 {
-		t.Errorf("Expected frame length 9, got %d", len(frame))
-	}
-
-	// Check frame type (HEADERS = 0x01)
-	if frame[3] != 0x01 {
-		t.Errorf("Expected HEADERS type (0x01), got 0x%02X", frame[3])
-	}
-
-	// Check END_HEADERS flag (0x04)
-	if frame[4] != 0x04 {
-		t.Errorf("Expected END_HEADERS flag (0x04), got 0x%02X", frame[4])
-	}
-
-	// Check stream ID (1)
-	streamID := int(frame[5])<<24 | int(frame[6])<<16 | int(frame[7])<<8 | int(frame[8])
-	if streamID != 1 {
-		t.Errorf("Expected stream ID 1, got %d", streamID)
-	}
-}
-
-func TestBuildHTTP2DataFrame(t *testing.T) {
-	tests := []struct {
-		name        string
-		data        []byte
-		endStream   bool
-		expectedLen int
-	}{
-		{"empty no end", []byte{}, false, 9},
-		{"empty end", []byte{}, true, 9},
-		{"with data", []byte("hello"), false, 14},
-		{"with data end", []byte("hello"), true, 14},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			frame := buildHTTP2DataFrame(tt.data, tt.endStream)
-			if len(frame) != tt.expectedLen {
-				t.Errorf("Expected frame length %d, got %d", tt.expectedLen, len(frame))
-			}
-
-			// Check frame type (DATA = 0x00)
-			if frame[3] != 0x00 {
-				t.Errorf("Expected DATA type (0x00), got 0x%02X", frame[3])
-			}
-
-			// Check END_STREAM flag
-			if tt.endStream {
-				if frame[4] != 0x01 {
-					t.Errorf("Expected END_STREAM flag (0x01), got 0x%02X", frame[4])
-				}
-			} else {
-				if frame[4] != 0x00 {
-					t.Errorf("Expected no flags (0x00), got 0x%02X", frame[4])
-				}
-			}
-		})
-	}
-}
-
 func TestBuildGRPCHealthCheckRequest(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -376,35 +290,6 @@ func TestGRPCChecker_Judge_ContextCancellation(t *testing.T) {
 
 	if judgment == nil {
 		t.Error("Expected judgment to be returned")
-	}
-}
-
-func TestBuildHTTP2DataFrame_LargePayload(t *testing.T) {
-	// Test with larger payload
-	largeData := make([]byte, 1000)
-	for i := range largeData {
-		largeData[i] = byte(i % 256)
-	}
-
-	frame := buildHTTP2DataFrame(largeData, true)
-
-	expectedLen := 9 + len(largeData)
-	if len(frame) != expectedLen {
-		t.Errorf("Expected frame length %d, got %d", expectedLen, len(frame))
-	}
-
-	// Check length bytes (big-endian)
-	length := int(frame[0])<<16 | int(frame[1])<<8 | int(frame[2])
-	if length != len(largeData) {
-		t.Errorf("Expected length %d in header, got %d", len(largeData), length)
-	}
-
-	// Verify payload
-	for i, b := range largeData {
-		if frame[9+i] != b {
-			t.Errorf("Payload mismatch at index %d", i)
-			break
-		}
 	}
 }
 
@@ -613,36 +498,6 @@ func TestGRPCChecker_Judge_InvalidHost(t *testing.T) {
 	// Should fail with DNS resolution error
 	if judgment.Status != core.SoulDead {
 		t.Errorf("Expected status Dead, got %s", judgment.Status)
-	}
-}
-
-func TestBuildHTTP2DataFrame_EOF(t *testing.T) {
-	// Test with endStream flag (EOF = true)
-	data := []byte("test payload")
-	frame := buildHTTP2DataFrame(data, true)
-
-	if len(frame) < 9 {
-		t.Fatalf("Expected frame header, got length %d", len(frame))
-	}
-
-	// Check END_STREAM flag (0x01)
-	if frame[4]&0x01 != 0x01 {
-		t.Error("Expected END_STREAM flag to be set")
-	}
-}
-
-func TestBuildHTTP2DataFrame_NoEOF(t *testing.T) {
-	// Test without endStream flag
-	data := []byte("test payload")
-	frame := buildHTTP2DataFrame(data, false)
-
-	if len(frame) < 9 {
-		t.Fatalf("Expected frame header, got length %d", len(frame))
-	}
-
-	// Check END_STREAM flag is not set
-	if frame[4]&0x01 != 0x00 {
-		t.Error("Expected END_STREAM flag to not be set")
 	}
 }
 

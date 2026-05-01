@@ -42,6 +42,7 @@ type Discovery struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
+	wg     sync.WaitGroup
 	logger *slog.Logger
 }
 
@@ -170,10 +171,18 @@ func (d *Discovery) Start() error {
 	}
 
 	// Start gossip loop
-	go d.gossipLoop()
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		d.gossipLoop()
+	}()
 
 	// Start mDNS discovery loop
-	go d.mdnsDiscoveryLoop()
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		d.mdnsDiscoveryLoop()
+	}()
 
 	d.logger.Info("Discovery service started",
 		"gossip_interval", d.gossipInterval,
@@ -191,6 +200,8 @@ func (d *Discovery) Stop() error {
 		d.gossipConn.Close()
 	}
 	close(d.done)
+	// Wait for gossip and mDNS loops to finish
+	d.wg.Wait()
 	return nil
 }
 

@@ -378,20 +378,6 @@ func (h *Handler) buildStatusPageData(page *core.StatusPage) (*core.StatusPageDa
 	}, nil
 }
 
-// convertIncidentUpdates converts internal updates to status updates
-func convertIncidentUpdates(updates []core.IncidentUpdate) []core.IncidentUpdate {
-	result := make([]core.IncidentUpdate, len(updates))
-	for i, u := range updates {
-		result[i] = core.IncidentUpdate{
-			ID:        u.ID,
-			Message:   u.Message,
-			Status:    u.Status,
-			UpdatedAt: u.UpdatedAt,
-		}
-	}
-	return result
-}
-
 // buildUptimeData builds uptime data for the page
 func (h *Handler) buildUptimeData(page *core.StatusPage, souls []core.SoulStatusInfo) core.UptimeData {
 	days := make([]core.UptimeDay, 0, page.UptimeDays)
@@ -1210,27 +1196,4 @@ func sanitizeCSS(css string) string {
 		}
 	}
 	return css
-}
-
-// sanitizeStyleAttr returns a safe value for inline style="" attributes.
-// It only allows a restricted set of CSS properties (color, background, etc.)
-// and rejects any url(), expression(), or behavioral properties.
-func sanitizeStyleAttr(style string) string {
-	if style == "" {
-		return ""
-	}
-	// Remove anything that could contain dangerous functions or URLs
-	dangerous := []string{
-		"url(", "expression(", "behavior(", "-moz-binding",
-		"javascript:", "data:", "vbscript:",
-		"background-image:", "list-style-image:", "border-image:",
-		"@import", "filter:", "behavior:",
-	}
-	lower := strings.ToLower(style)
-	for _, pattern := range dangerous {
-		if strings.Contains(lower, pattern) {
-			return ""
-		}
-	}
-	return style
 }
