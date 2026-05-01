@@ -1,4 +1,3 @@
-/* eslint-disable no-restricted-globals */
 const CACHE_NAME = 'anubis-watch-v1';
 const OFFLINE_URL = '/offline';
 

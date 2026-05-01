@@ -3,17 +3,16 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"crypto/tls"
 	"os"
 	"os/signal"
 	"path"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -83,14 +82,39 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Assign souls from config
-	if len(cfg.Souls) > 0 {
-		soulPtrs := make([]*core.Soul, len(cfg.Souls))
+	// Assign configured souls plus API-created souls persisted in storage.
+	if s.deps.ProbeEngine != nil {
+		soulPtrs := make([]*core.Soul, 0, len(cfg.Souls))
+		seen := make(map[string]struct{}, len(cfg.Souls))
 		for i := range cfg.Souls {
-			soulPtrs[i] = &cfg.Souls[i]
+			soul := &cfg.Souls[i]
+			soulPtrs = append(soulPtrs, soul)
+			if soul.ID != "" {
+				seen[soul.ID] = struct{}{}
+			}
 		}
-		s.deps.ProbeEngine.AssignSouls(soulPtrs)
-		logger.Info("souls assigned", "count", len(cfg.Souls))
+
+		storedSouls, err := s.deps.Store.ListSouls(ctx, "default", 0, 1000)
+		if err != nil {
+			logger.Warn("failed to load stored souls for probe assignment", "err", err)
+		}
+		for _, soul := range storedSouls {
+			if soul == nil {
+				continue
+			}
+			if _, exists := seen[soul.ID]; exists && soul.ID != "" {
+				continue
+			}
+			soulPtrs = append(soulPtrs, soul)
+			if soul.ID != "" {
+				seen[soul.ID] = struct{}{}
+			}
+		}
+
+		if len(soulPtrs) > 0 {
+			s.deps.ProbeEngine.AssignSouls(soulPtrs)
+			logger.Info("souls assigned", "count", len(soulPtrs))
+		}
 	}
 
 	// Start journey executors
@@ -523,48 +547,6 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	}, nil
 }
 
-func handleLogin(a *auth.LocalAuthenticator) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var req struct {
-			Email    string `json:"email"`
-			Password string `json:"password"`
-		}
-		// Limit request body size to prevent memory exhaustion
-		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "invalid request", http.StatusBadRequest)
-			return
-		}
-
-		user, token, err := a.Login(req.Email, req.Password)
-		if err != nil {
-			http.Error(w, "invalid credentials", http.StatusUnauthorized)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"user":  user,
-			"token": token,
-		})
-	}
-}
-
-func handleLogout(a *auth.LocalAuthenticator) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		a.Logout(token)
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"message": "logged out"})
-	}
-}
-
 // probeStorageAdapter adapts storage.CobaltDB to probe.Storage interface
 type probeStorageAdapter struct {
 	store *storage.CobaltDB
@@ -969,17 +951,4 @@ func initACMEManager(cfg *core.Config, store *storage.CobaltDB, logger *slog.Log
 
 	logger.Info("ACME manager initialized", "provider", acmeCfg.Provider, "email", acmeCfg.Email)
 	return mgr
-}
-
-func handleListSouls(store *storage.CobaltDB, engine *probe.Engine) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.Background()
-		souls, err := store.ListSouls(ctx, "", 0, 100)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(souls)
-	}
 }

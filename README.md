@@ -29,7 +29,7 @@ AnubisWatch is a **zero-dependency, single-binary uptime monitoring platform** b
 - 📦 **Single Binary** — Everything in one `anubis` executable
 - 🌍 **10 Protocols** — HTTP/HTTPS, TCP, UDP, DNS, ICMP, SMTP, IMAP, gRPC, WebSocket, TLS
 - ⚡ **Distributed** — Built-in Raft consensus for multi-node clusters
-- 🌐 **Multi-Region** — Geographic region support with cross-region replication
+- 🌐 **Region-Aware Clustering** — Geographic metadata for probe distribution
 - 🔬 **Synthetic Monitoring** — Multi-step HTTP journeys with assertions & variable extraction
 - 🎨 **Beautiful Dashboard** — React 19 + Tailwind 4.1 embedded in binary
 - 🤖 **MCP-Native** — Built-in Model Context Protocol server for AI integration
@@ -74,13 +74,10 @@ AnubisWatch/
 │   ├── core/            # Domain types (Soul, Judgment, Verdict)
 │   ├── journey/         # Synthetic monitoring (Journeys)
 │   ├── probe/           # Protocol checkers (8 protocols)
-│   ├── profiling/       # Performance profiling (pprof)
 │   ├── raft/            # Raft consensus (Pharaoh)
-│   ├── region/          # Multi-region support
-│   ├── release/         # Release tooling
 │   ├── storage/         # CobaltDB B+Tree storage (Feather)
 │   ├── statuspage/      # Public status pages
-│   └── version/         # Version management
+│   └── tenant/          # Multi-tenancy
 ├── scripts/             # Build and release scripts
 └── web/                 # React 19 + Tailwind 4.1 dashboard
 ```
@@ -362,11 +359,8 @@ anubis_trigger_judgment api.example.com
 | `internal/storage` | 84.4% | ✅ |
 | `internal/acme` | 81.8% | ✅ |
 | `internal/backup` | 80.5% | ✅ |
-| `internal/region` | 78.2% | ✅ |
-| `internal/version` | 95.0% | ✅ |
-| `internal/release` | 85.0% | ✅ |
 | `cmd/anubis` | 77.3% | ✅ |
-| **Average** | **86.0%** | ✅ |
+| **Average** | **86.4%** | ✅ |
 
 ---
 
@@ -418,7 +412,7 @@ make dev
 - [x] Phase 5: API Layer (REST, WebSocket, gRPC, MCP)
 - [x] Phase 6: Dashboard (React 19, Hall of Ma'at)
 - [x] Phase 7: Advanced Features (multi-tenant, status page)
-- [x] Phase 8: Multi-Region & Backup (region support, backup/restore)
+- [x] Phase 8: Backup & Restore
 - [x] Phase 9: Release Preparation (versioning, CI/CD, packaging)
 - [ ] Phase 10: Enterprise Features (SSO, audit logs, compliance)
 

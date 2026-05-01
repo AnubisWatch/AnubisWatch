@@ -7,23 +7,6 @@ import (
 	"testing"
 )
 
-// TestGetConfigPaths tests getConfigPaths function
-func TestGetConfigPaths(t *testing.T) {
-	paths := getConfigPaths()
-
-	if paths.Local != "./anubis.json" {
-		t.Errorf("Expected Local path to be ./anubis.json, got %s", paths.Local)
-	}
-
-	// System and User paths should not be empty
-	if paths.System == "" {
-		t.Error("Expected System path to not be empty")
-	}
-	if paths.User == "" {
-		t.Error("Expected User path to not be empty")
-	}
-}
-
 // TestGetSystemConfigPath tests getSystemConfigPath function
 func TestGetSystemConfigPath(t *testing.T) {
 	path := getSystemConfigPath()
@@ -147,42 +130,6 @@ func TestEnsureConfigDir_CurrentDir(t *testing.T) {
 	err := ensureConfigDir("anubis.json")
 	if err != nil {
 		t.Errorf("Expected no error for current dir, got %v", err)
-	}
-}
-
-// TestListInstances tests listInstances function
-func TestListInstances(t *testing.T) {
-	instances := listInstances()
-
-	// Should return a slice (may be empty)
-	if instances == nil {
-		t.Error("Expected listInstances to return non-nil slice")
-	}
-}
-
-// TestListInstances_WithLocalConfig tests listInstances with local config
-func TestListInstances_WithLocalConfig(t *testing.T) {
-	// Create a temporary config file
-	tmpDir := t.TempDir()
-	origWd, _ := os.Getwd()
-	defer os.Chdir(origWd)
-	os.Chdir(tmpDir)
-
-	// Create anubis.json
-	os.WriteFile("anubis.json", []byte("{}"), 0644)
-
-	instances := listInstances()
-
-	found := false
-	for _, inst := range instances {
-		if contains(inst, "local:") {
-			found = true
-			break
-		}
-	}
-
-	if !found {
-		t.Log("Instances found:", instances)
 	}
 }
 

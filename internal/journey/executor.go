@@ -500,35 +500,6 @@ func (e *Executor) extractJSONPath(body, path string) string {
 	}
 }
 
-// jsonPathDedupHash computes a deduplication key from multiple JSONPath expressions
-func jsonPathDedupHash(body string, paths []string) string {
-	h := sha256.New()
-	for _, path := range paths {
-		keys := strings.Split(strings.TrimPrefix(path, "$."), ".")
-
-		var data interface{}
-		if err := json.Unmarshal([]byte(body), &data); err != nil {
-			continue
-		}
-
-		current := data
-		for _, key := range keys {
-			obj, ok := current.(map[string]interface{})
-			if !ok {
-				current = nil
-				break
-			}
-			current = obj[key]
-		}
-
-		if current != nil {
-			b, _ := json.Marshal(current)
-			h.Write(b)
-		}
-	}
-	return fmt.Sprintf("%x", h.Sum(nil))
-}
-
 // computeDedupHash computes a deduplication hash for a journey by evaluating
 // all JSONPath extraction rules across all HTTP steps. Returns empty string if
 // no JSONPath rules are configured (dedup disabled).

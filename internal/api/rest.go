@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,6 +74,9 @@ type RESTServer struct {
 	judgmentsTotal   uint64
 	verdictsFired    uint64
 	verdictsResolved uint64
+
+	// Rate limiter cleanup channel
+	rateLimitStopCh chan struct{}
 }
 
 // JourneyExecutor interface for journey operations
@@ -275,17 +279,18 @@ func NewRESTServer(config core.ServerConfig, authConfig core.AuthConfig, store S
 			statusPage:     statusPage,
 			allowedOrigins: config.AllowedOrigins, // Store allowed origins in router for CORS preflight
 		},
-		logger:     logger.With("component", "rest_server"),
-		store:      store,
-		probe:      probe,
-		alert:      alert,
-		auth:       auth,
-		cluster:    cluster,
-		journey:    journey,
-		mcp:        mcp,
-		ws:         wsServer,
-		dashboard:  dashboard,
-		statusPage: statusPage,
+		logger:          logger.With("component", "rest_server"),
+		store:           store,
+		probe:           probe,
+		alert:           alert,
+		auth:            auth,
+		cluster:         cluster,
+		journey:         journey,
+		mcp:             mcp,
+		ws:              wsServer,
+		dashboard:       dashboard,
+		statusPage:      statusPage,
+		rateLimitStopCh: make(chan struct{}),
 	}
 
 	s.setupRoutes()
@@ -477,6 +482,10 @@ func (s *RESTServer) Start() error {
 
 // Stop stops the REST server
 func (s *RESTServer) Stop(ctx context.Context) error {
+	// Stop rate limiter cleanup goroutine
+	if s.rateLimitStopCh != nil {
+		close(s.rateLimitStopCh)
+	}
 	if s.http != nil {
 		return s.http.Shutdown(ctx)
 	}
@@ -843,10 +852,7 @@ func (s *RESTServer) handleCreateSoul(ctx *Context) error {
 		return s.internalError(ctx, err, "internal server error")
 	}
 
-	// Assign soul to probe engine for monitoring
-	if s.probe != nil {
-		s.probe.AssignSouls([]*core.Soul{&soul})
-	}
+	s.syncProbeAssignments(ctx.Request.Context(), ctx.Workspace)
 
 	return ctx.JSON(http.StatusCreated, soul)
 }
@@ -893,6 +899,8 @@ func (s *RESTServer) handleUpdateSoul(ctx *Context) error {
 		return ctx.Error(http.StatusInternalServerError, "failed to update soul")
 	}
 
+	s.syncProbeAssignments(ctx.Request.Context(), ctx.Workspace)
+
 	return ctx.JSON(http.StatusOK, soul)
 }
 
@@ -913,6 +921,8 @@ func (s *RESTServer) handleDeleteSoul(ctx *Context) error {
 		return ctx.Error(http.StatusInternalServerError, "failed to delete soul")
 	}
 
+	s.syncProbeAssignments(ctx.Request.Context(), ctx.Workspace)
+
 	return ctx.JSON(http.StatusNoContent, nil)
 }
 
@@ -926,12 +936,29 @@ func (s *RESTServer) handleForceCheck(ctx *Context) error {
 		return ctx.Error(http.StatusForbidden, "access denied: soul belongs to another workspace")
 	}
 
+	if s.probe == nil {
+		return ctx.Error(http.StatusServiceUnavailable, "probe engine unavailable")
+	}
+
 	judgment, err := s.probe.ForceCheck(id)
 	if err != nil {
 		return s.internalError(ctx, err, "internal server error")
 	}
 
 	return ctx.JSON(http.StatusOK, judgment)
+}
+
+func (s *RESTServer) syncProbeAssignments(ctx context.Context, workspace string) {
+	if s.probe == nil {
+		return
+	}
+
+	souls, err := s.store.ListSoulsNoCtx(workspace, 0, 1000)
+	if err != nil {
+		s.logger.Warn("failed to refresh probe soul assignments", "workspace", workspace, "err", err)
+		return
+	}
+	s.probe.AssignSouls(souls)
 }
 
 func (s *RESTServer) handleListJudgments(ctx *Context) error {
@@ -973,8 +1000,40 @@ func (s *RESTServer) handleGetJudgment(ctx *Context) error {
 }
 
 func (s *RESTServer) handleListAllJudgments(ctx *Context) error {
-	// List recent judgments across all souls
-	return ctx.JSON(http.StatusOK, []interface{}{})
+	// Get all souls in the user's workspace
+	souls, err := s.store.ListSoulsNoCtx(ctx.Workspace, 0, 1000)
+	if err != nil {
+		return s.internalError(ctx, err, "failed to list souls")
+	}
+
+	var allJudgments []*core.Judgment
+	start := time.Now().Add(-24 * time.Hour) // Last 24 hours
+	end := time.Now()
+
+	// Collect judgments from each soul (limit to 100 per soul)
+	for _, soul := range souls {
+		if soul == nil {
+			continue
+		}
+		soulID := soul.ID
+		judgments, err := s.store.ListJudgmentsNoCtx(soulID, start, end, 100)
+		if err != nil {
+			continue // Skip souls with errors
+		}
+		allJudgments = append(allJudgments, judgments...)
+	}
+
+	// Sort by timestamp descending
+	sort.Slice(allJudgments, func(i, j int) bool {
+		return allJudgments[i].Timestamp.After(allJudgments[j].Timestamp)
+	})
+
+	// Limit to 500 total judgments
+	if len(allJudgments) > 500 {
+		allJudgments = allJudgments[:500]
+	}
+
+	return ctx.JSON(http.StatusOK, allJudgments)
 }
 
 // Channel handlers
@@ -1289,11 +1348,11 @@ func (s *RESTServer) handleUpdateWorkspace(ctx *Context) error {
 	// Mass assignment protection: preserve all sensitive fields from existing.
 	// Only Name, Description, and Settings can be updated by the client.
 	ws.ID = id
-	ws.Slug = existing.Slug     // immutable
-	ws.OwnerID = existing.OwnerID // immutable - prevents privilege escalation
-	ws.Quotas = existing.Quotas // immutable - prevent quota bypass
+	ws.Slug = existing.Slug         // immutable
+	ws.OwnerID = existing.OwnerID   // immutable - prevents privilege escalation
+	ws.Quotas = existing.Quotas     // immutable - prevent quota bypass
 	ws.Features = existing.Features // immutable - prevent feature escalation
-	ws.Status = existing.Status // immutable - prevent status manipulation
+	ws.Status = existing.Status     // immutable - prevent status manipulation
 	ws.CreatedAt = existing.CreatedAt
 	ws.UpdatedAt = time.Now()
 
@@ -1881,25 +1940,30 @@ func (s *RESTServer) rateLimitMiddleware(handler Handler) Handler {
 	// Cleanup old entries periodically
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
-		for range ticker.C {
-			mu.Lock()
-			now := time.Now()
-			for ip, state := range ipClients {
-				if state.resetTime.Before(now) {
-					delete(ipClients, ip)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.rateLimitStopCh:
+				return
+			case <-ticker.C:
+				mu.Lock()
+				now := time.Now()
+				for ip, state := range ipClients {
+					if state.resetTime.Before(now) {
+						delete(ipClients, ip)
+					}
 				}
-			}
-			for user, state := range userClients {
-				if state.resetTime.Before(now) {
-					delete(userClients, user)
+				for user, state := range userClients {
+					if state.resetTime.Before(now) {
+						delete(userClients, user)
+					}
 				}
+				mu.Unlock()
 			}
-			mu.Unlock()
 		}
 	}()
 
 	return func(ctx *Context) error {
-		// Skip rate limiting for health endpoints
 		if strings.HasPrefix(ctx.Request.URL.Path, "/health") ||
 			strings.HasPrefix(ctx.Request.URL.Path, "/ready") {
 			return handler(ctx)
@@ -2077,7 +2141,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	isExcluded := strings.HasPrefix(path, "/api/") ||
 		strings.HasPrefix(path, "/health") ||
 		strings.HasPrefix(path, "/ready") ||
-		
+
 		path == "/status" ||
 		path == "/status.html" ||
 		strings.HasPrefix(path, "/public/")

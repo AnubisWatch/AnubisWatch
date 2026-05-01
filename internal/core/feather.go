@@ -2,23 +2,6 @@ package core
 
 import "fmt"
 
-// FeatherConfig defines a performance budget (Feather of Ma'at)
-type FeatherConfig struct {
-	Name               string       `json:"name" yaml:"name"`
-	Scope              string       `json:"scope" yaml:"scope"` // "tag:xxx", "soul:xxx", "type:xxx"
-	Rules              FeatherRules `json:"rules" yaml:"rules"`
-	Window             Duration     `json:"window" yaml:"window"`                           // evaluation window
-	ViolationThreshold int          `json:"violation_threshold" yaml:"violation_threshold"` // consecutive violations
-}
-
-// FeatherRules defines latency thresholds
-type FeatherRules struct {
-	P50 Duration `json:"p50" yaml:"p50"`
-	P95 Duration `json:"p95" yaml:"p95"`
-	P99 Duration `json:"p99" yaml:"p99"`
-	Max Duration `json:"max" yaml:"max"`
-}
-
 // VerdictsConfig holds alert rules configuration
 type VerdictsConfig struct {
 	Rules      []AlertRule        `json:"rules" yaml:"rules"`
@@ -48,12 +31,12 @@ type LoggingConfig struct {
 
 // ServerConfig defines server settings
 type ServerConfig struct {
-	Host             string          `json:"host" yaml:"host"`
-	Port             int             `json:"port" yaml:"port"`
-	GRPCPort         int             `json:"grpc_port" yaml:"grpc_port"`
-	TLS              TLSServerConfig `json:"tls" yaml:"tls"`
-	AllowedOrigins   []string        `json:"allowed_origins" yaml:"allowed_origins"`
-	GRPCReflection   bool            `json:"grpc_reflection" yaml:"grpc_reflection"` // Enable gRPC reflection (default: true for backward compatibility)
+	Host           string          `json:"host" yaml:"host"`
+	Port           int             `json:"port" yaml:"port"`
+	GRPCPort       int             `json:"grpc_port" yaml:"grpc_port"`
+	TLS            TLSServerConfig `json:"tls" yaml:"tls"`
+	AllowedOrigins []string        `json:"allowed_origins" yaml:"allowed_origins"`
+	GRPCReflection bool            `json:"grpc_reflection" yaml:"grpc_reflection"` // Enable gRPC reflection (default: false for security)
 }
 
 // TLSServerConfig defines TLS settings
@@ -325,20 +308,6 @@ func (c AuthConfig) validate() error {
 		if c.LDAP.BaseDN == "" {
 			return &ConfigError{Field: "auth.ldap.base_dn", Message: "LDAP base DN is required"}
 		}
-	}
-	return nil
-}
-
-// validate validates the feather configuration
-func (c FeatherConfig) validate(index int) error {
-	if c.Name == "" {
-		return &ConfigError{Field: fmt.Sprintf("feathers[%d].name", index), Message: "name is required"}
-	}
-	if c.Scope == "" {
-		return &ConfigError{Field: fmt.Sprintf("feathers[%d].scope", index), Message: "scope is required"}
-	}
-	if c.ViolationThreshold < 1 {
-		return &ConfigError{Field: fmt.Sprintf("feathers[%d].violation_threshold", index), Message: "violation_threshold must be at least 1"}
 	}
 	return nil
 }

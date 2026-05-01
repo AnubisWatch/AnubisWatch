@@ -1565,44 +1565,6 @@ func TestAlertRuleValidate(t *testing.T) {
 	}
 }
 
-func TestFeatherConfigValidate(t *testing.T) {
-	tests := []struct {
-		name      string
-		feather   FeatherConfig
-		wantError bool
-	}{
-		{
-			name:      "valid config",
-			feather:   FeatherConfig{Name: "Test", Scope: "tag:api", ViolationThreshold: 3},
-			wantError: false,
-		},
-		{
-			name:      "missing name",
-			feather:   FeatherConfig{Scope: "tag:api", ViolationThreshold: 3},
-			wantError: true,
-		},
-		{
-			name:      "missing scope",
-			feather:   FeatherConfig{Name: "Test", ViolationThreshold: 3},
-			wantError: true,
-		},
-		{
-			name:      "zero threshold",
-			feather:   FeatherConfig{Name: "Test", Scope: "tag:api", ViolationThreshold: 0},
-			wantError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.feather.validate(0)
-			if (err != nil) != tt.wantError {
-				t.Errorf("validate() error = %v, wantError = %v", err, tt.wantError)
-			}
-		})
-	}
-}
-
 func TestJourneyConfigValidate(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -1743,9 +1705,6 @@ func TestConfig_Validate_FullConfig(t *testing.T) {
 			Rules: []AlertRule{
 				{Name: "rule1", Conditions: []AlertCondition{{Type: "consecutive_failures", Threshold: 3}}, Channels: []string{"slack"}},
 			},
-		},
-		Feathers: []FeatherConfig{
-			{Name: "latency", Scope: "tag:api", ViolationThreshold: 5},
 		},
 		Journeys: []JourneyConfig{
 			{Name: "checkout", Steps: []JourneyStep{{Name: "home", Target: "https://example.com"}}},

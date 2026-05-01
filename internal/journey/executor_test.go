@@ -1322,52 +1322,6 @@ func TestJourney_VariablePassingBetweenSteps(t *testing.T) {
 	t.Log("Journey with variable passing executed successfully")
 }
 
-// Tests for uncovered jsonPathDedupHash
-
-func TestJsonPathDedupHash(t *testing.T) {
-	body := `{"id": "123", "user": {"name": "John"}, "tags": ["a", "b"]}`
-
-	// Test with valid paths
-	hash1 := jsonPathDedupHash(body, []string{"$.id", "$.user.name"})
-	if hash1 == "" {
-		t.Error("Expected non-empty hash for valid paths")
-	}
-
-	// Same body and paths should produce same hash
-	hash2 := jsonPathDedupHash(body, []string{"$.id", "$.user.name"})
-	if hash1 != hash2 {
-		t.Error("Expected deterministic hash for same inputs")
-	}
-
-	// Different paths should produce different hash
-	hash3 := jsonPathDedupHash(body, []string{"$.id"})
-	if hash1 == hash3 {
-		t.Error("Expected different hash for different paths")
-	}
-}
-
-func TestJsonPathDedupHash_InvalidJSON(t *testing.T) {
-	hash := jsonPathDedupHash("not json", []string{"$.id"})
-	if hash == "" {
-		t.Log("Empty hash for invalid JSON is acceptable")
-	}
-}
-
-func TestJsonPathDedupHash_MissingKey(t *testing.T) {
-	body := `{"id": "123"}`
-	hash := jsonPathDedupHash(body, []string{"$.missing"})
-	// Should return empty hash or hash of empty when key missing
-	_ = hash
-}
-
-func TestJsonPathDedupHash_NestedArray(t *testing.T) {
-	body := `{"data": {"items": [1, 2, 3]}}`
-	hash := jsonPathDedupHash(body, []string{"$.data.items"})
-	if hash == "" {
-		t.Error("Expected non-empty hash for array value")
-	}
-}
-
 // Tests for computeDedupHash
 
 func TestComputeDedupHash_NoPaths(t *testing.T) {

@@ -222,8 +222,9 @@ func (d *Distributor) ReassignSoul(soulID string) error {
 	// Unassign first
 	d.UnassignSoul(soulID)
 
-	// Get soul from storage (we need the full soul object)
-	// For now, create a minimal soul object
+	// Note: Region-aware routing would require fetching the full soul object from storage.
+	// For now, we create a minimal soul object. The region field won't be set,
+	// so StrategyRegionAware will fall back to round-robin for this soul.
 	soul := &core.Soul{ID: soulID}
 
 	// Reassign
@@ -488,7 +489,8 @@ func (d *Distributor) checkAndRebalance() {
 			"overloaded", len(overloaded),
 			"underloaded", len(underloaded))
 
-		// Execute moves
+		// Execute moves - use separate lock to avoid blocking other readers
+		// while moves are being executed
 		d.mu.Unlock()
 		for _, move := range moves {
 			if err := d.executeMove(move); err != nil {
@@ -497,9 +499,21 @@ func (d *Distributor) checkAndRebalance() {
 					"error", err)
 			}
 		}
+
+		// Capture soul map state for callback before re-acquiring lock
+		// This ensures callback sees consistent state
+		soulMapCopy := make(map[string]string, len(d.soulMap))
+		for k, v := range d.soulMap {
+			soulMapCopy[k] = v
+		}
 		d.mu.Lock()
 
+		// Log rebalance completion before calling callback
+		d.logger.Info("Rebalance moves completed",
+			"moves_executed", len(moves))
+
 		if d.onRebalance != nil {
+			// Pass a consistent copy of the soul map state to callback
 			d.onRebalance(moves)
 		}
 	}

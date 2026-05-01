@@ -3171,9 +3171,9 @@ func TestManager_DeleteRuleWithWorkspace_NoWorkspaceRule(t *testing.T) {
 	manager := NewManager(storage, newTestLogger())
 
 	rule := &core.AlertRule{
-		ID:         "rule-nows",
-		Name:       "no-ws-rule",
-		Channels:   []string{},
+		ID:       "rule-nows",
+		Name:     "no-ws-rule",
+		Channels: []string{},
 	}
 	if err := manager.RegisterRule(rule); err != nil {
 		t.Fatalf("RegisterRule failed: %v", err)

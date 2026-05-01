@@ -279,36 +279,6 @@ func TestMemberRole_Can(t *testing.T) {
 	}
 }
 
-func TestQuotaUsage_IsQuotaExceeded(t *testing.T) {
-	usage := &QuotaUsage{
-		Souls:    5,
-		Channels: 2,
-	}
-
-	config := QuotaConfig{
-		MaxSouls:         10,
-		MaxAlertChannels: 5,
-	}
-
-	// Within quota
-	if _, exceeded := usage.IsQuotaExceeded(config); exceeded {
-		t.Error("Expected quota to not be exceeded")
-	}
-
-	// Souls exceeded
-	config.MaxSouls = 3
-	if _, exceeded := usage.IsQuotaExceeded(config); !exceeded {
-		t.Error("Expected quota to be exceeded for souls")
-	}
-
-	// Channels exceeded
-	config.MaxSouls = 10
-	config.MaxAlertChannels = 1
-	if _, exceeded := usage.IsQuotaExceeded(config); !exceeded {
-		t.Error("Expected quota to be exceeded for channels")
-	}
-}
-
 func TestWorkspace_NamespaceKey(t *testing.T) {
 	workspace := &Workspace{
 		ID: "workspace-1",

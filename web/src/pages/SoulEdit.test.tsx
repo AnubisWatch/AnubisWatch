@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { MemoryRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom'
+import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { SoulEdit } from './SoulEdit'
 import React from 'react'
 

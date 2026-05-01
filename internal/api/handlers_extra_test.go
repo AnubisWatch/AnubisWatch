@@ -50,8 +50,8 @@ func TestHandleListJourneys_StorageError(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	ctx := &Context{
-		Request: httptest.NewRequest("GET", "/api/v1/journeys", nil),
-		Response: rec,
+		Request:   httptest.NewRequest("GET", "/api/v1/journeys", nil),
+		Response:  rec,
 		Workspace: "default",
 	}
 
@@ -204,8 +204,8 @@ func TestHandleUpdateJourney_SaveError(t *testing.T) {
 	store := newMockStorage()
 	// Create the journey first for IDOR check
 	store.SaveJourneyNoCtx(&core.JourneyConfig{
-		ID: "journey-1",
-		Name: "Test Journey",
+		ID:          "journey-1",
+		Name:        "Test Journey",
 		WorkspaceID: "default",
 	})
 
@@ -223,9 +223,9 @@ func TestHandleUpdateJourney_SaveError(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	ctx := &Context{
-		Request: httptest.NewRequest("PUT", "/api/v1/journeys/journey-1", bytes.NewReader(body)),
-		Response: rec,
-		Params: map[string]string{"id": "journey-1"},
+		Request:   httptest.NewRequest("PUT", "/api/v1/journeys/journey-1", bytes.NewReader(body)),
+		Response:  rec,
+		Params:    map[string]string{"id": "journey-1"},
 		Workspace: "default",
 	}
 
@@ -262,8 +262,8 @@ func TestHandleDeleteJourney(t *testing.T) {
 func TestHandleDeleteJourney_SaveError(t *testing.T) {
 	store := newMockStorage()
 	store.SaveJourneyNoCtx(&core.JourneyConfig{
-		ID: "journey-1",
-		Name: "Test Journey",
+		ID:          "journey-1",
+		Name:        "Test Journey",
 		WorkspaceID: "default",
 	})
 
@@ -272,9 +272,9 @@ func TestHandleDeleteJourney_SaveError(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	ctx := &Context{
-		Request: httptest.NewRequest("DELETE", "/api/v1/journeys/journey-1", nil),
-		Response: rec,
-		Params: map[string]string{"id": "journey-1"},
+		Request:   httptest.NewRequest("DELETE", "/api/v1/journeys/journey-1", nil),
+		Response:  rec,
+		Params:    map[string]string{"id": "journey-1"},
 		Workspace: "default",
 	}
 
@@ -2806,9 +2806,9 @@ func TestHandleGetDashboard_IDOR(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	ctx := &Context{
-		Request:  httptest.NewRequest("GET", "/api/v1/dashboards/dash-1", nil),
-		Response: rec,
-		Params:   map[string]string{"id": "dash-1"},
+		Request:   httptest.NewRequest("GET", "/api/v1/dashboards/dash-1", nil),
+		Response:  rec,
+		Params:    map[string]string{"id": "dash-1"},
 		Workspace: "default",
 	}
 
@@ -2885,9 +2885,9 @@ func TestHandleDeleteDashboard_IDOR(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	ctx := &Context{
-		Request:  httptest.NewRequest("DELETE", "/api/v1/dashboards/dash-1", nil),
-		Response: rec,
-		Params:   map[string]string{"id": "dash-1"},
+		Request:   httptest.NewRequest("DELETE", "/api/v1/dashboards/dash-1", nil),
+		Response:  rec,
+		Params:    map[string]string{"id": "dash-1"},
 		Workspace: "default",
 	}
 

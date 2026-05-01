@@ -64,7 +64,6 @@ type RestoreStorage interface {
 // Backup represents a complete system backup
 //
 // NOTE: Backup scope does NOT include the following:
-//   - secrets.enc (encrypted webhook/API keys — must be backed up separately)
 //   - WAL files and raw data files (not needed for restore)
 //   - Dashboard assets (rebuilt from source on restore)
 //

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { formatDistanceToNow, formatDate, formatTime } from './date'
+import { formatDistanceToNow } from './date'
 
 describe('formatDistanceToNow', () => {
   beforeEach(() => {
@@ -51,29 +51,5 @@ describe('formatDistanceToNow', () => {
 
   it('accepts string input', () => {
     expect(formatDistanceToNow('2026-01-15T11:30:00Z')).toBe('30m ago')
-  })
-})
-
-describe('formatDate', () => {
-  it('formats a date string in en-US locale', () => {
-    expect(formatDate('2026-01-15T12:00:00Z')).toBe('Jan 15, 2026')
-  })
-
-  it('formats a Date object in en-US locale', () => {
-    expect(formatDate(new Date('2026-12-25T00:00:00Z'))).toBe('Dec 25, 2026')
-  })
-})
-
-describe('formatTime', () => {
-  it('formats a time string in en-US locale', () => {
-    const result = formatTime('2026-01-15T14:30:00Z')
-    expect(result).toMatch(/\d{1,2}:\d{2}/)
-    expect(result).toMatch(/AM|PM/)
-  })
-
-  it('formats a Date object in en-US locale', () => {
-    const result = formatTime(new Date('2026-01-15T09:05:00Z'))
-    expect(result).toMatch(/\d{1,2}:\d{2}/)
-    expect(result).toMatch(/AM|PM/)
   })
 })

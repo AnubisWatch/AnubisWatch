@@ -1624,6 +1624,37 @@ func (n *Node) newElectionTimer() *time.Timer {
 
 func (n *Node) restoreLog() error {
 	// Restore log entries from persistent storage (LogStore interface)
+	if n.storage == nil {
+		return fmt.Errorf("log store not available")
+	}
+
+	// Get log bounds
+	firstIdx, err := n.storage.FirstIndex()
+	if err != nil {
+		return fmt.Errorf("failed to get first log index: %w", err)
+	}
+	lastIdx, err := n.storage.LastIndex()
+	if err != nil {
+		return fmt.Errorf("failed to get last log index: %w", err)
+	}
+
+	// If no logs, nothing to restore
+	if lastIdx < firstIdx || firstIdx == 0 {
+		n.logger.Info("No logs to restore from storage")
+		return nil
+	}
+
+	// Load all log entries
+	n.logger.Info("Restoring logs from storage", "first", firstIdx, "last", lastIdx)
+	for i := firstIdx; i <= lastIdx; i++ {
+		var entry core.RaftLogEntry
+		if err := n.storage.GetLog(i, &entry); err != nil {
+			return fmt.Errorf("failed to restore log entry %d: %w", i, err)
+		}
+		n.log = append(n.log, entry)
+	}
+
+	n.logger.Info("Log restore complete", "entries", len(n.log))
 	return nil
 }
 
@@ -1729,20 +1760,19 @@ func (n *Node) compactLog(snapshotIndex uint64) {
 		trailingLogs = 1024 // Default
 	}
 
-	// Calculate new start - keep some trailing logs
-	newStart := snapshotIndex - uint64(trailingLogs)
-	if newStart < 1 {
-		newStart = 1
+	// Calculate new start - keep some trailing logs before snapshot
+	// newStart is the index to start retaining from (keep trailingLogs entries before snapshotIndex)
+	newStart := int(snapshotIndex) - int(trailingLogs)
+	if newStart < 0 {
+		newStart = 0
 	}
 
-	// Create new log with retained entries
-	newLog := make([]core.RaftLogEntry, newStart)
-	copy(newLog, n.log[:newStart])
-
-	// Append entries from snapshotIndex onwards
-	for i := snapshotIndex; i < uint64(len(n.log)); i++ {
-		newLog = append(newLog, n.log[i])
+	// Build new log: entries from newStart to snapshotIndex (trailing logs), then entries from snapshotIndex onwards
+	newLog := make([]core.RaftLogEntry, 0, int(snapshotIndex)-newStart+256)
+	if newStart < int(snapshotIndex) {
+		newLog = append(newLog, n.log[newStart:snapshotIndex]...)
 	}
+	newLog = append(newLog, n.log[snapshotIndex:]...)
 
 	oldLen := len(n.log)
 	n.log = newLog

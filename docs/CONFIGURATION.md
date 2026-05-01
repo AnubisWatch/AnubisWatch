@@ -16,7 +16,6 @@
 - [Souls (Monitored Targets)](#souls-monitored-targets)
 - [Alert Channels](#alert-channels)
 - [Alert Rules (Verdicts)](#alert-rules-verdicts)
-- [Performance Budgets (Feathers)](#performance-budgets-feathers)
 - [Synthetic Monitoring (Journeys)](#synthetic-monitoring-journeys)
 - [Logging](#logging)
 - [Environment Variable Expansion](#environment-variable-expansion)
@@ -932,50 +931,6 @@ verdicts:
         - wait: 15m
           channels: ["ops-email", "sms-oncall"]
           condition: "not_resolved"
-```
-
----
-
-## Performance Budgets (Feathers)
-
-### Root `feathers` Array
-
-| Field | Type | Default | Required | Description |
-|-------|------|---------|----------|-------------|
-| `name` | string | - | **Yes** | Budget name |
-| `scope` | string | `"all"` | No | Target scope |
-| `rules` | object | - | No | Latency budgets |
-| `window` | duration | `5m` | No | Evaluation window |
-| `violation_threshold` | integer | `3` | No | Violations before alert |
-
-### `rules` Object
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `p50` | duration | - | 50th percentile budget |
-| `p95` | duration | - | 95th percentile budget |
-| `p99` | duration | - | 99th percentile budget |
-| `max` | duration | - | Maximum latency budget |
-
-### Example
-
-```yaml
-feathers:
-  - name: "API Latency Budget"
-    scope: "tag:api"
-    rules:
-      p50: 200ms
-      p95: 500ms
-      p99: 1s
-      max: 3s
-    window: 5m
-    violation_threshold: 3
-
-  - name: "Homepage Speed"
-    scope: "soul:Homepage"
-    rules:
-      p95: 800ms
-    window: 15m
 ```
 
 ---

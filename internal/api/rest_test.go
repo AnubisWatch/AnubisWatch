@@ -5399,12 +5399,12 @@ func TestHandleGetChannel_IDOR(t *testing.T) {
 	}
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
-		config:     core.ServerConfig{Host: "localhost", Port: 8080},
-		store:      storage,
-		alert:      alert,
-		router:     router,
-		auth:       &mockAuthenticator{},
-		logger:     newTestLogger(),
+		config: core.ServerConfig{Host: "localhost", Port: 8080},
+		store:  storage,
+		alert:  alert,
+		router: router,
+		auth:   &mockAuthenticator{},
+		logger: newTestLogger(),
 	}
 
 	router.Handle("GET", "/api/v1/channels/:id", server.requireAuth(server.handleGetChannel))
@@ -5430,12 +5430,12 @@ func TestHandleGetRule_IDOR(t *testing.T) {
 	}
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
-		config:     core.ServerConfig{Host: "localhost", Port: 8080},
-		store:      storage,
-		alert:      alert,
-		router:     router,
-		auth:       &mockAuthenticator{},
-		logger:     newTestLogger(),
+		config: core.ServerConfig{Host: "localhost", Port: 8080},
+		store:  storage,
+		alert:  alert,
+		router: router,
+		auth:   &mockAuthenticator{},
+		logger: newTestLogger(),
 	}
 
 	router.Handle("GET", "/api/v1/rules/:id", server.requireAuth(server.handleGetRule))
@@ -5461,12 +5461,12 @@ func TestHandleGetChannel_AlertManager(t *testing.T) {
 	}
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
-		config:     core.ServerConfig{Host: "localhost", Port: 8080},
-		store:      storage,
-		alert:      alert,
-		router:     router,
-		auth:       &mockAuthenticator{},
-		logger:     newTestLogger(),
+		config: core.ServerConfig{Host: "localhost", Port: 8080},
+		store:  storage,
+		alert:  alert,
+		router: router,
+		auth:   &mockAuthenticator{},
+		logger: newTestLogger(),
 	}
 
 	router.Handle("GET", "/api/v1/channels/:id", server.requireAuth(server.handleGetChannel))
@@ -5492,12 +5492,12 @@ func TestHandleGetRule_AlertManager(t *testing.T) {
 	}
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
-		config:     core.ServerConfig{Host: "localhost", Port: 8080},
-		store:      storage,
-		alert:      alert,
-		router:     router,
-		auth:       &mockAuthenticator{},
-		logger:     newTestLogger(),
+		config: core.ServerConfig{Host: "localhost", Port: 8080},
+		store:  storage,
+		alert:  alert,
+		router: router,
+		auth:   &mockAuthenticator{},
+		logger: newTestLogger(),
 	}
 
 	router.Handle("GET", "/api/v1/rules/:id", server.requireAuth(server.handleGetRule))

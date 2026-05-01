@@ -1,27 +1,10 @@
 package main
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 )
-
-// ConfigPaths holds all possible config locations
-type ConfigPaths struct {
-	System string // System-wide config
-	User   string // User config
-	Local  string // Current directory
-}
-
-// getConfigPaths returns possible config file locations
-func getConfigPaths() ConfigPaths {
-	return ConfigPaths{
-		System: getSystemConfigPath(),
-		User:   getUserConfigPath(),
-		Local:  "./anubis.json",
-	}
-}
 
 // getSystemConfigPath returns system-wide config path
 func getSystemConfigPath() string {
@@ -93,37 +76,6 @@ func ensureConfigDir(configPath string) error {
 		return nil
 	}
 	return os.MkdirAll(dir, 0755)
-}
-
-// listInstances lists all Anubis instances (config files)
-func listInstances() []string {
-	instances := make([]string, 0)
-
-	// Local
-	if _, err := os.Stat("./anubis.json"); err == nil {
-		wd, _ := os.Getwd()
-		instances = append(instances, fmt.Sprintf("local: %s/anubis.json", wd))
-	}
-
-	// User
-	userConfig := getUserConfigPath()
-	if _, err := os.Stat(userConfig); err == nil {
-		instances = append(instances, fmt.Sprintf("user: %s", userConfig))
-	}
-
-	// System
-	systemConfig := getSystemConfigPath()
-	if _, err := os.Stat(systemConfig); err == nil {
-		instances = append(instances, fmt.Sprintf("system: %s", systemConfig))
-	}
-
-	// Additional instances from ANUBIS_CONFIGS (comma-separated)
-	if configs := os.Getenv("ANUBIS_CONFIGS"); configs != "" {
-		// Parse multiple configs
-		fmt.Sscanf(configs, "%s")
-	}
-
-	return instances
 }
 
 // getInstanceName returns a name for the current instance based on config location

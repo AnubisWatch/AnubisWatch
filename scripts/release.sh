@@ -137,20 +137,6 @@ if [[ "$SKIP_TESTS" == false ]]; then
     echo ""
 fi
 
-# Update version in code
-if [[ "$DRY_RUN" == false ]]; then
-    echo "📝 Updating version..."
-
-    # Update version file
-    VERSION_FILE="$PROJECT_ROOT/internal/version/version.go"
-    if [[ -f "$VERSION_FILE" ]]; then
-        sed -i "s/Version.*= \"dev\"/Version = \"$VERSION\"/" "$VERSION_FILE"
-        echo -e "${GREEN}✓ Updated $VERSION_FILE${NC}"
-    fi
-
-    echo ""
-fi
-
 # Build binaries
 if [[ "$SKIP_BUILD" == false ]]; then
     echo "🔨 Building binaries..."
@@ -188,10 +174,6 @@ fi
 # Create git tag
 if [[ "$DRY_RUN" == false ]]; then
     echo "🏷️  Creating git tag..."
-
-    # Commit version changes
-    git add -A
-    git commit -m "chore(release): prepare $VERSION"
 
     # Create tag
     git tag -a "$VERSION" -m "Release $VERSION"

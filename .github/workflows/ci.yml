@@ -139,7 +139,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Build binary
-        run: CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${{ github.sha }}" -o anubis ./cmd/anubis
+        run: CGO_ENABLED=0 go build -ldflags "-s -w -X main.Version=${{ github.sha }}" -o anubis ./cmd/anubis
 
       - name: Test binary
         run: |

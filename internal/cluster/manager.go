@@ -77,6 +77,7 @@ type Manager struct {
 	fsm           *raft.StorageFSM
 	logger        *slog.Logger
 	isClustered   bool
+	stopped       bool // True when Stop() has been called
 
 	// Distribution
 	distributor *Distributor
@@ -156,30 +157,36 @@ func (m *Manager) Start(ctx context.Context) error {
 	if cfg := m.necroConfig.Discovery; cfg.Mode != "" && cfg.Mode != "manual" {
 		disc, err := raft.NewDiscovery(m.config, m.logger)
 		if err != nil {
-			m.logger.Warn("failed to create discovery service", "err", err)
+			return fmt.Errorf("failed to create discovery service: %w", err)
 		} else {
 			// Wire peer discovery callbacks to Raft node
+			// Use atomic stopped flag to avoid race with Stop()
 			disc.RegisterPeerCallback(
 				func(peer core.RaftPeer) {
-					m.logger.Info("peer discovered", "id", peer.ID, "addr", peer.Address)
-					if m.node != nil {
+					m.mu.RLock()
+					defer m.mu.RUnlock()
+					// Check both node and stopped flag under read lock
+					if !m.stopped && m.node != nil {
+						m.logger.Info("peer discovered", "id", peer.ID, "addr", peer.Address)
 						m.node.AddPeer(peer)
 					}
 				},
 				func(nodeID string) {
-					m.logger.Info("peer lost", "id", nodeID)
-					if m.node != nil {
+					m.mu.RLock()
+					defer m.mu.RUnlock()
+					// Check both node and stopped flag under read lock
+					if !m.stopped && m.node != nil {
+						m.logger.Info("peer lost", "id", nodeID)
 						m.node.RemovePeer(nodeID)
 					}
 				},
 			)
 
 			if err := disc.Start(); err != nil {
-				m.logger.Warn("failed to start discovery service", "err", err)
-			} else {
-				m.discovery = disc
-				m.logger.Info("auto-discovery started", "mode", cfg.Mode)
+				return fmt.Errorf("failed to start discovery service: %w", err)
 			}
+			m.discovery = disc
+			m.logger.Info("auto-discovery started", "mode", cfg.Mode)
 		}
 	}
 
@@ -205,8 +212,15 @@ func (m *Manager) Start(ctx context.Context) error {
 // Stop gracefully shuts down the Raft node
 func (m *Manager) Stop(ctx context.Context) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	// Mark as stopped to prevent callbacks from accessing node
+	m.stopped = true
+	if m.node != nil {
+		m.logger.Info("stopping Raft node")
+		m.node.Stop()
+	}
+	m.mu.Unlock()
 
+	// Stop other components outside of main lock to avoid deadlock
 	if m.distributor != nil {
 		m.logger.Info("stopping distributor")
 		m.distributor.Stop()
@@ -215,11 +229,6 @@ func (m *Manager) Stop(ctx context.Context) error {
 	if m.discovery != nil {
 		m.logger.Info("stopping discovery")
 		m.discovery.Stop()
-	}
-
-	if m.node != nil {
-		m.logger.Info("stopping Raft node")
-		m.node.Stop()
 	}
 
 	return nil

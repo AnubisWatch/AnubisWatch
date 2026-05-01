@@ -617,14 +617,13 @@ type walEntry struct {
 }
 
 func (db *CobaltDB) recoverFromWAL() error {
-	// Lock ordering: acquire data.mu first, then wal.mu to avoid deadlock
-	// This matches the order in Put() and Delete()
-	db.data.mu.Lock()
-	defer db.data.mu.Unlock()
-
-	// Use the WAL writer handle directly (opened with O_RDWR to avoid Windows file locking)
+	// Lock ordering: acquire wal.mu first, then data.mu to avoid deadlock
+	// This matches the order in Put() which does wal.Append() first, then data.mu
 	db.wal.mu.Lock()
 	defer db.wal.mu.Unlock()
+
+	db.data.mu.Lock()
+	defer db.data.mu.Unlock()
 
 	// Seek to beginning for reading
 	if _, err := db.wal.file.Seek(0, io.SeekStart); err != nil {
@@ -667,6 +666,14 @@ func (db *CobaltDB) recoverFromWAL() error {
 			if db.encryptor != nil && db.encryptor.isEncrypted(value) {
 				if decrypted, err := db.encryptor.decrypt(value); err == nil {
 					value = decrypted
+				} else {
+					// Log warning but continue with raw value - this handles
+					// the case where WAL was written before encryption was enabled
+					if db.logger != nil {
+						db.logger.Warn("WAL entry decryption failed, storing raw value",
+							"key", entry.Key,
+							"error", err)
+					}
 				}
 			}
 			db.data.insert(entry.Key, value)

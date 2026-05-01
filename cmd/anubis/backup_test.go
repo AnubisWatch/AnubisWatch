@@ -344,8 +344,6 @@ func TestExportCommand_UnknownSubcommand(t *testing.T) {
 	}
 }
 
-
-
 func TestBackupCreate_NoCompressInfo(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("ANUBIS_DATA_DIR", tmpDir)

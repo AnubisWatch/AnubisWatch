@@ -147,7 +147,6 @@ anubis banish jackal-02        # Remove node from cluster
 | **Ma'at** | The alert engine (goddess of truth) | `internal/alert/` |
 | **Duat** | The WebSocket real-time layer | `internal/api/websocket.go` |
 | **Journey** | Multi-step synthetic monitoring | `internal/journey/` |
-| **Sobek** | The quota manager | `internal/quota/` |
 
 ### Dependency Injection
 

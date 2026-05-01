@@ -43,7 +43,12 @@ export function SoulDetail() {
   const [checkResult, setCheckResult] = useState<{ success: boolean; message: string } | null>(null)
 
   const { soul, loading: soulLoading, error: soulError, refetch, updateSoul, deleteSoul, forceCheck } = useSoul(id)
-  const { data: judgmentsData, loading: judgmentsLoading, error: judgmentsError } = useSoulJudgments(id)
+  const {
+    data: judgmentsData,
+    loading: judgmentsLoading,
+    error: judgmentsError,
+    refetch: refetchJudgments,
+  } = useSoulJudgments(id)
 
   const judgments = useMemo(() => judgmentsData || [], [judgmentsData])
 
@@ -155,7 +160,7 @@ export function SoulDetail() {
           ? `Check passed! Latency: ${result.latency}ms`
           : `Check failed: ${result?.error || 'Unknown error'}`
       })
-      await refetch()
+      await Promise.all([refetch(), refetchJudgments()])
     } catch (err) {
       setCheckResult({
         success: false,

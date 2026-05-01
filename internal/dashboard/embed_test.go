@@ -26,12 +26,12 @@ func (fi mockFileInfo) Sys() interface{}   { return nil }
 
 // mockFile implements http.File but can fail on Stat()
 type mockFile struct {
-	statErr error
+	statErr  error
 	statInfo os.FileInfo
-	name    string
-	modTime time.Time
-	content []byte
-	offset  int64
+	name     string
+	modTime  time.Time
+	content  []byte
+	offset   int64
 }
 
 func (f *mockFile) Stat() (os.FileInfo, error) {

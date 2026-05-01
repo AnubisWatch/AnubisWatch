@@ -159,7 +159,10 @@ func TestLoad_100Souls_Real(t *testing.T) {
 
 	elapsed := time.Since(startTime)
 	memAfter := getMemoryStats()
-	memUsed := memAfter.Alloc - memBefore.Alloc
+	var memUsed uint64
+	if memAfter.Alloc > memBefore.Alloc {
+		memUsed = memAfter.Alloc - memBefore.Alloc
+	}
 
 	status := engine.GetStatus()
 

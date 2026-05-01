@@ -144,7 +144,11 @@ func (m *Manager) Start() error {
 	}
 
 	// Start escalation checker
-	go m.escalationChecker()
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.escalationChecker()
+	}()
 
 	m.logger.Info("Alert manager started",
 		"channels", len(m.channels),
@@ -941,7 +945,9 @@ func (m *Manager) AcknowledgeIncident(incidentID, userID, workspace string) erro
 	m.stats.acknowledgedAlerts++
 
 	if m.storage != nil {
-		m.storage.SaveIncident(incident)
+		if err := m.storage.SaveIncident(incident); err != nil {
+			m.logger.Error("Failed to save incident", "incident_id", incident.ID, "error", err)
+		}
 	}
 
 	return nil
@@ -968,7 +974,9 @@ func (m *Manager) ResolveIncident(incidentID, userID, workspace string) error {
 	m.stats.resolvedAlerts++
 
 	if m.storage != nil {
-		m.storage.SaveIncident(incident)
+		if err := m.storage.SaveIncident(incident); err != nil {
+			m.logger.Error("Failed to save resolved incident", "incident_id", incident.ID, "error", err)
+		}
 	}
 
 	return nil
@@ -1194,8 +1202,9 @@ func (m *Manager) escalateIncident(incident *core.Incident, rule *core.AlertRule
 	m.mu.Unlock()
 
 	// Send to escalation channels
+	// Use separate context with timeout - escalation alerts should be timely but not blocking
 	for _, channel := range channels {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		err := m.sendToChannel(ctx, event, channel)
 		cancel()
 
@@ -1213,7 +1222,11 @@ func (m *Manager) escalateIncident(incident *core.Incident, rule *core.AlertRule
 	incident.LastEscalatedAt = &now
 
 	if m.storage != nil {
-		m.storage.SaveIncident(incident)
+		if err := m.storage.SaveIncident(incident); err != nil {
+			m.logger.Error("Failed to save escalated incident",
+				"incident_id", incident.ID,
+				"error", err)
+		}
 	}
 	m.mu.Unlock()
 

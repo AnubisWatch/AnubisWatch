@@ -168,8 +168,10 @@ func (d *Distributor) GetAssignment(soulID string) *core.SoulAssignment {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	for _, assignment := range d.plan.Assignments {
-		if assignment.SoulID == soulID {
+	for i := range d.plan.Assignments {
+		if d.plan.Assignments[i].SoulID == soulID {
+			// Return a copy to avoid returning pointer to loop variable
+			assignment := d.plan.Assignments[i]
 			return &assignment
 		}
 	}

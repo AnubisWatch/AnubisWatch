@@ -5,13 +5,13 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
-	"log/slog"
 )
 
 func init() {
@@ -174,20 +174,6 @@ func TestBaseCheckerHelpers(t *testing.T) {
 		t.Errorf("expected status dead, got %s", failed.Status)
 	}
 
-	// Test successJudgment
-	success := successJudgment(soul, 100*time.Millisecond, "OK")
-	if success.Status != core.SoulAlive {
-		t.Errorf("expected status alive, got %s", success.Status)
-	}
-	if success.Duration != 100*time.Millisecond {
-		t.Errorf("expected duration 100ms, got %v", success.Duration)
-	}
-
-	// Test degradedJudgment
-	degraded := degradedJudgment(soul, 5*time.Second, "slow response")
-	if degraded.Status != core.SoulDegraded {
-		t.Errorf("expected status degraded, got %s", degraded.Status)
-	}
 }
 
 func TestTruncateString(t *testing.T) {
@@ -216,18 +202,6 @@ func TestBoolToString(t *testing.T) {
 	}
 	if result := boolToString(false, "yes", "no"); result != "no" {
 		t.Errorf("boolToString(false) = %q, want 'no'", result)
-	}
-}
-
-func TestParseDuration(t *testing.T) {
-	if result := parseDuration("5s", time.Second); result != 5*time.Second {
-		t.Errorf("parseDuration('5s') = %v, want 5s", result)
-	}
-	if result := parseDuration("invalid", 10*time.Second); result != 10*time.Second {
-		t.Errorf("parseDuration('invalid') with default = %v, want 10s", result)
-	}
-	if result := parseDuration("", 5*time.Minute); result != 5*time.Minute {
-		t.Errorf("parseDuration('') with default = %v, want 5m", result)
 	}
 }
 
@@ -397,24 +371,6 @@ func TestUDPChecker_Type(t *testing.T) {
 	checker := NewUDPChecker()
 	if checker.Type() != core.CheckUDP {
 		t.Errorf("Expected type %s, got %s", core.CheckUDP, checker.Type())
-	}
-}
-
-// Test validationError helper
-func TestValidationError(t *testing.T) {
-	err := validationError("target", "target is required")
-	if err == nil {
-		t.Fatal("Expected error, got nil")
-	}
-	verr, ok := err.(*core.ValidationError)
-	if !ok {
-		t.Fatal("Expected ValidationError")
-	}
-	if verr.Field != "target" {
-		t.Errorf("Expected field 'target', got %s", verr.Field)
-	}
-	if verr.Message != "target is required" {
-		t.Errorf("Expected message 'target is required', got %s", verr.Message)
 	}
 }
 
@@ -907,14 +863,6 @@ func TestBuildGRPCHealthCheckRequest_WithService(t *testing.T) {
 	}
 	if req[0] != 0 {
 		t.Error("Expected uncompressed flag")
-	}
-}
-
-func TestBuildHTTP2DataFrame_NoEndStream(t *testing.T) {
-	data := []byte("test payload")
-	frame := buildHTTP2DataFrame(data, false)
-	if frame[4] != 0x00 {
-		t.Errorf("Expected no END_STREAM flag 0x00, got 0x%02x", frame[4])
 	}
 }
 

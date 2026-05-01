@@ -2,7 +2,6 @@ package probe
 
 import (
 	"testing"
-	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
@@ -114,17 +113,6 @@ func TestHelperFunctions(t *testing.T) {
 		t.Error("Expected 'no' for false")
 	}
 
-	// Test parseDuration
-	d := parseDuration("1s", 0)
-	if d != 1000000000 { // 1 second in nanoseconds
-		t.Errorf("Expected 1s, got %v", d)
-	}
-
-	// Test invalid duration returns default
-	d = parseDuration("invalid", 5*time.Second)
-	if d != 5*time.Second {
-		t.Errorf("Expected default 5s, got %v", d)
-	}
 }
 
 // TestFailJudgment tests failJudgment helper
@@ -150,46 +138,6 @@ func TestFailJudgment(t *testing.T) {
 	}
 }
 
-// TestSuccessJudgment tests successJudgment helper
-func TestSuccessJudgment(t *testing.T) {
-	soul := &core.Soul{
-		ID:   "test-soul",
-		Name: "Test Soul",
-	}
-
-	judgment := successJudgment(soul, 100*time.Millisecond, "OK")
-
-	if judgment.SoulID != soul.ID {
-		t.Errorf("Expected SoulID %s, got %s", soul.ID, judgment.SoulID)
-	}
-
-	if judgment.Status != core.SoulAlive {
-		t.Errorf("Expected status Alive, got %s", judgment.Status)
-	}
-
-	if judgment.Duration != 100*time.Millisecond {
-		t.Errorf("Expected duration 100ms, got %v", judgment.Duration)
-	}
-}
-
-// TestDegradedJudgment tests degradedJudgment helper
-func TestDegradedJudgment(t *testing.T) {
-	soul := &core.Soul{
-		ID:   "test-soul",
-		Name: "Test Soul",
-	}
-
-	judgment := degradedJudgment(soul, 500*time.Millisecond, "Slow response")
-
-	if judgment.SoulID != soul.ID {
-		t.Errorf("Expected SoulID %s, got %s", soul.ID, judgment.SoulID)
-	}
-
-	if judgment.Status != core.SoulDegraded {
-		t.Errorf("Expected status Degraded, got %s", judgment.Status)
-	}
-}
-
 // TestConfigErrorHelper tests configError helper
 func TestConfigErrorHelper(t *testing.T) {
 	err := configError("field1", "error message")
@@ -205,19 +153,5 @@ func TestConfigErrorHelper(t *testing.T) {
 
 	if configErr.Message != "error message" {
 		t.Errorf("Expected message 'error message', got '%s'", configErr.Message)
-	}
-}
-
-// TestValidationErrorHelper tests validationError helper
-func TestValidationErrorHelper(t *testing.T) {
-	err := validationError("field2", "validation failed")
-
-	valErr, ok := err.(*core.ValidationError)
-	if !ok {
-		t.Fatal("Expected *core.ValidationError")
-	}
-
-	if valErr.Field != "field2" {
-		t.Errorf("Expected field 'field2', got '%s'", valErr.Field)
 	}
 }

@@ -67,7 +67,7 @@ jobs:
           GOARM: ${{ matrix.goarm }}
         run: |
           CGO_ENABLED=0 go build \
-            -ldflags "-s -w -X github.com/AnubisWatch/anubiswatch/internal/core.Version=${{ github.ref_name }}" \
+            -ldflags "-s -w -X main.Version=${{ github.ref_name }}" \
             -o anubis-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.os == 'windows' && '.exe' || '' }} \
             ./cmd/anubis
 

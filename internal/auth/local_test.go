@@ -309,8 +309,6 @@ func TestSaveSessions_NoSessionPath(t *testing.T) {
 		t.Errorf("Authenticate failed: %v", err)
 	}
 
-	// Call saveSessions directly - should not panic
-	auth.saveSessions()
 }
 
 // TestAuthenticate_UserNotFound tests authenticate when user is not found
@@ -472,8 +470,6 @@ func TestLocalAuthenticator_SaveSessions_NoPath(t *testing.T) {
 		t.Fatalf("Login failed: %v", err)
 	}
 
-	// saveSessions should not panic with empty path
-	auth.saveSessions()
 }
 
 // TestLocalAuthenticator_Login_EmptyCredentials tests login with empty fields
@@ -547,8 +543,6 @@ func TestLocalAuthenticator_SaveSessions_WriteError(t *testing.T) {
 		t.Fatalf("Login failed: %v", err)
 	}
 
-	// saveSessions should handle write error gracefully (no panic)
-	auth.saveSessions()
 }
 
 // TestLocalAuthenticator_ChangePassword tests the password change flow
@@ -1190,18 +1184,6 @@ func TestSaveSessionsLocked_ChmodError(t *testing.T) {
 	// Should handle gracefully
 }
 
-// TestSaveSessionsLocked_MarshalError tests saveSessionsLocked when json.Marshal fails
-func TestSaveSessionsLocked_MarshalError(t *testing.T) {
-	// Create a session with data that can still be marshaled (maps always marshal)
-	// To trigger marshal error, we'd need non-serializable data, which isn't possible
-	// with the current types. This is a note that the error path is hard to trigger.
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
-
-	// saveSessions should return early without error when sessionPath is empty
-	auth.saveSessions()
-}
-
 // TestValidatePassword tests the password validation function directly
 func TestValidatePassword(t *testing.T) {
 	tests := []struct {
@@ -1209,14 +1191,14 @@ func TestValidatePassword(t *testing.T) {
 		password  string
 		wantError bool
 	}{
-		{"too short", "Sh0rt!Aa", true},                                    // < 12 chars
-		{"no uppercase no special", "nouppercase1only", true},               // only lowercase+digit = 2 classes
-		{"no lowercase no special", "NOUPPERCASE1ONLY", true},               // only uppercase+digit = 2 classes
-		{"no digits no special", "NoDigitsHere", true},                      // only upper+lower = 2 classes
+		{"too short", "Sh0rt!Aa", true},                       // < 12 chars
+		{"no uppercase no special", "nouppercase1only", true}, // only lowercase+digit = 2 classes
+		{"no lowercase no special", "NOUPPERCASE1ONLY", true}, // only uppercase+digit = 2 classes
+		{"no digits no special", "NoDigitsHere", true},        // only upper+lower = 2 classes
 		{"empty", "", true},
-		{"valid 3 classes", "ValidPass1234!", false},                        // upper+lower+digit+special = 4 classes
-		{"valid longer", "Another$Valid99", false},                          // upper+lower+digit+special = 4
-		{"exactly 12 chars with 3 classes", "Testpass123!", false},          // upper+lower+digit+special = 4, 13 chars
+		{"valid 3 classes", "ValidPass1234!", false},               // upper+lower+digit+special = 4 classes
+		{"valid longer", "Another$Valid99", false},                 // upper+lower+digit+special = 4
+		{"exactly 12 chars with 3 classes", "Testpass123!", false}, // upper+lower+digit+special = 4, 13 chars
 	}
 
 	for _, tt := range tests {

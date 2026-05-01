@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -8,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"context"
 	"testing"
 )
 
@@ -281,7 +281,6 @@ func TestShowCluster_StorageFallbackOnAPIError(t *testing.T) {
 		t.Errorf("Expected standalone fallback, got: %s", string(output))
 	}
 }
-
 
 func TestSummonNode_StorageOnlyWithFlags(t *testing.T) {
 	tmpDir := t.TempDir()

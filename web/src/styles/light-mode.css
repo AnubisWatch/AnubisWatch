@@ -14,6 +14,12 @@
 
 /* Override dark backgrounds with light equivalents */
 .light .bg-gray-950,
+.light .bg-gray-900,
+.light .bg-gray-800,
+.light .bg-gray-800\/50,
+.light .bg-gray-900\/50,
+.light .bg-gray-900\/80,
+.light .bg-gray-900\/90,
 .light .bg-\[\#0a0a15\] {
   background-color: #f9fafb !important;
 }
@@ -26,11 +32,19 @@
   background-color: #ffffff !important;
 }
 
+.light .glass,
+.light .glass-light {
+  background: rgba(255, 255, 255, 0.82) !important;
+  border-color: #e5e7eb !important;
+}
+
 /* Override text colors */
 .light .text-white {
   color: #111827 !important;
 }
 
+.light .text-gray-200,
+.light .text-gray-300,
 .light .text-gray-100 {
   color: #111827 !important;
 }
@@ -44,9 +58,30 @@
 }
 
 /* Light mode gradients */
-.light .bg-gradient-to-br,
-.light .bg-gradient-to-b,
-.light .bg-gradient-to-r {
+.light [class*="from-gray-950"],
+.light [class*="from-gray-900"],
+.light [class*="from-[#0a0a15]"] {
+  --tw-gradient-from: #ffffff !important;
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to, rgba(255, 255, 255, 0)) !important;
+}
+
+.light [class*="via-gray-950"],
+.light [class*="via-gray-900"],
+.light [class*="via-[#0a0a15]"] {
+  --tw-gradient-via: #f9fafb !important;
+  --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-via), var(--tw-gradient-to, rgba(249, 250, 251, 0)) !important;
+}
+
+.light [class*="to-gray-950"],
+.light [class*="to-gray-900"],
+.light [class*="to-gray-800"],
+.light [class*="to-[#0a0a15]"] {
+  --tw-gradient-to: #f3f4f6 !important;
+}
+
+.light .bg-gradient-to-br:not([class*="from-amber"]):not([class*="from-yellow"]):not([class*="from-green"]):not([class*="from-emerald"]):not([class*="from-red"]):not([class*="from-rose"]):not([class*="from-blue"]):not([class*="from-purple"]),
+.light .bg-gradient-to-b:not([class*="from-amber"]):not([class*="from-yellow"]):not([class*="from-green"]):not([class*="from-emerald"]):not([class*="from-red"]):not([class*="from-rose"]):not([class*="from-blue"]):not([class*="from-purple"]),
+.light .bg-gradient-to-r:not([class*="from-amber"]):not([class*="from-yellow"]):not([class*="from-green"]):not([class*="from-emerald"]):not([class*="from-red"]):not([class*="from-rose"]):not([class*="from-blue"]):not([class*="from-purple"]) {
   --tw-gradient-from: #ffffff;
   --tw-gradient-to: #f3f4f6;
   --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to);
@@ -83,6 +118,13 @@
   border-color: rgba(184, 134, 11, 0.2) !important;
 }
 
+.light .border-gray-700,
+.light .border-gray-700\/50,
+.light .border-gray-800,
+.light .border-white\/10 {
+  border-color: #e5e7eb !important;
+}
+
 /* Ensure inputs are visible in light mode */
 .light input,
 .light textarea,
@@ -97,10 +139,11 @@
 }
 
 /* Light mode buttons */
-.light button {
+.light button:not([class*="bg-amber"]):not([class*="bg-yellow"]):not([class*="bg-green"]):not([class*="bg-emerald"]):not([class*="bg-red"]):not([class*="bg-rose"]):not([class*="bg-blue"]):not([class*="bg-purple"]):not([class*="gradient"]) {
   background-color: #f3f4f6 !important;
+  color: #111827 !important;
 }
 
-.light button:hover {
+.light button:not([class*="bg-amber"]):not([class*="bg-yellow"]):not([class*="bg-green"]):not([class*="bg-emerald"]):not([class*="bg-red"]):not([class*="bg-rose"]):not([class*="bg-blue"]):not([class*="bg-purple"]):not([class*="gradient"]):hover {
   background-color: #e5e7eb !important;
 }

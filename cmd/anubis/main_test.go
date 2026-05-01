@@ -20,7 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnubisWatch/anubiswatch/internal/auth"
 	"github.com/AnubisWatch/anubiswatch/internal/cluster"
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 	"github.com/AnubisWatch/anubiswatch/internal/storage"
@@ -198,39 +197,6 @@ func TestInitConfig_AlreadyExists(t *testing.T) {
 	// This would call os.Exit(1), so we just test the file exists check
 	if _, err := os.Stat("anubis.yaml"); err != nil {
 		t.Error("Expected config file to exist")
-	}
-}
-
-func TestHandleLogin(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-
-	handler := handleLogin(authenticator)
-
-	// Test valid login
-	reqBody := `{"username":"admin","password":"TestPass1234!"}`
-	req := httptest.NewRequest("POST", "/login", strings.NewReader(reqBody))
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	// Should return either success or failure (not panic)
-	if w.Code != http.StatusOK && w.Code != http.StatusUnauthorized {
-		t.Errorf("Expected 200 or 401, got %d", w.Code)
-	}
-}
-
-func TestHandleLogout(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	handler := handleLogout(authenticator)
-
-	req := httptest.NewRequest("POST", "/logout", nil)
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	// Should return 200 or redirect
-	if w.Code < 200 || w.Code >= 400 {
-		t.Logf("Logout returned status %d (may be acceptable)", w.Code)
 	}
 }
 
@@ -547,38 +513,6 @@ func TestInitConfig_AlreadyExists_CLI(t *testing.T) {
 	t.Log("Config already exists - init would exit with error")
 }
 
-// Test handleLogin with empty body
-func TestHandleLogin_EmptyBody(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	handler := handleLogin(authenticator)
-
-	req := httptest.NewRequest("POST", "/login", strings.NewReader(""))
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	// Should handle gracefully (error response is acceptable)
-	if w.Code == 500 {
-		t.Error("Expected graceful error handling, not 500")
-	}
-}
-
-// Test handleLogin with invalid JSON
-func TestHandleLogin_InvalidJSON(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	handler := handleLogin(authenticator)
-
-	req := httptest.NewRequest("POST", "/login", strings.NewReader("{invalid json}"))
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	// Should handle invalid JSON gracefully
-	if w.Code != http.StatusBadRequest && w.Code != http.StatusOK {
-		t.Logf("Login returned %d for invalid JSON (may be acceptable)", w.Code)
-	}
-}
-
 // Test initACMEManager function signature
 func TestInitACMEManager(t *testing.T) {
 	// This requires storage which is complex to mock
@@ -649,24 +583,6 @@ func TestHTTPPost_NilBody(t *testing.T) {
 	}
 }
 
-// Test handleLogout with different methods
-func TestHandleLogout_Methods(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	handler := handleLogout(authenticator)
-
-	methods := []string{"GET", "POST", "DELETE", "PUT"}
-
-	for _, method := range methods {
-		req := httptest.NewRequest(method, "/logout", nil)
-		w := httptest.NewRecorder()
-
-		handler(w, req)
-
-		// Should handle all methods gracefully
-		t.Logf("Logout %s returned %d", method, w.Code)
-	}
-}
-
 // Test adapter types
 func TestProbeStorageAdapter(t *testing.T) {
 	adapter := &probeStorageAdapter{store: nil}
@@ -700,49 +616,6 @@ func TestStatusPageRepository(t *testing.T) {
 	repo := &statusPageRepository{store: nil}
 	if repo.store != nil {
 		t.Error("Expected store to be nil")
-	}
-}
-
-// Test handleLogin with different scenarios
-func TestHandleLogin_Success(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	handler := handleLogin(authenticator)
-
-	reqBody := `{"email":"admin@example.com","password":"TestPass1234!"}`
-	req := httptest.NewRequest("POST", "/login", strings.NewReader(reqBody))
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	t.Logf("Login with valid credentials returned: %d", w.Code)
-}
-
-func TestHandleLogin_WrongMethod(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	handler := handleLogin(authenticator)
-
-	req := httptest.NewRequest("GET", "/login", nil)
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("Expected 405 for GET request, got %d", w.Code)
-	}
-}
-
-func TestHandleLogout_Success(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	handler := handleLogout(authenticator)
-
-	req := httptest.NewRequest("POST", "/logout", nil)
-	req.Header.Set("Authorization", "Bearer test-token")
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected 200 for logout, got %d", w.Code)
 	}
 }
 
@@ -1305,22 +1178,6 @@ func TestHTTPPost_ServerError(t *testing.T) {
 	}
 }
 
-// Test handleLogin with missing fields
-func TestHandleLogin_MissingFields(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	handler := handleLogin(authenticator)
-
-	// Test with empty username
-	reqBody := `{"username":"","password":"TestPass1234!"}`
-	req := httptest.NewRequest("POST", "/login", strings.NewReader(reqBody))
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	// Should handle gracefully
-	t.Logf("Login with empty username returned: %d", w.Code)
-}
-
 // Test truncate with zero max length
 func TestTruncate_ZeroMaxLen(t *testing.T) {
 	result := truncate("hello", 0)
@@ -1722,13 +1579,6 @@ func TestVerdictAck_WithTokenNoServer(t *testing.T) {
 	t.Log("verdictAck would try to connect (skipped to avoid os.Exit)")
 }
 
-// Test handleListSouls with mock store
-func TestHandleListSouls(t *testing.T) {
-	// This test verifies the handler signature compiles
-	// Full test requires storage.CobaltDB setup
-	t.Log("handleListSouls handler exists and has correct signature")
-}
-
 // Test quickWatch parsing
 func TestQuickWatch_NameFlag(t *testing.T) {
 	oldArgs := os.Args
@@ -1863,59 +1713,6 @@ func TestHTTPPost_NoToken(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected 200, got %d", resp.StatusCode)
-	}
-}
-
-// Test handleLogin with valid credentials format
-func TestHandleLogin_ValidFormat(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	handler := handleLogin(authenticator)
-
-	// Test with email format (as used by authenticator)
-	reqBody := `{"email":"admin@example.com","password":"admin"}`
-	req := httptest.NewRequest("POST", "/login", strings.NewReader(reqBody))
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	// The authenticator may return 401 for invalid credentials
-	// but should handle the request gracefully
-	if w.Code != http.StatusOK && w.Code != http.StatusUnauthorized {
-		t.Errorf("Expected 200 or 401, got %d: %s", w.Code, w.Body.String())
-	}
-}
-
-// Test handleLogout without authorization header
-func TestHandleLogout_NoAuthHeader(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	handler := handleLogout(authenticator)
-
-	req := httptest.NewRequest("POST", "/logout", nil)
-	// No Authorization header set
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	// Should handle gracefully (empty token)
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected 200, got %d", w.Code)
-	}
-}
-
-// Test handleLogout with malformed authorization header
-func TestHandleLogout_MalformedAuth(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	handler := handleLogout(authenticator)
-
-	req := httptest.NewRequest("POST", "/logout", nil)
-	req.Header.Set("Authorization", "not-bearer-token")
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	// Should handle gracefully
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected 200, got %d", w.Code)
 	}
 }
 
@@ -2208,98 +2005,6 @@ func TestAdapterStructInitialization(t *testing.T) {
 	statusRepo := statusPageRepository{}
 	if statusRepo.store != nil {
 		t.Error("Expected nil store in zero-value repository")
-	}
-}
-
-// Test handleLogin with various content types
-func TestHandleLogin_ContentTypes(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	handler := handleLogin(authenticator)
-
-	tests := []struct {
-		name     string
-		body     string
-		wantCode int
-	}{
-		{
-			name:     "valid JSON",
-			body:     `{"email":"test@example.com","password":"pass"}`,
-			wantCode: http.StatusUnauthorized, // wrong credentials
-		},
-		{
-			name:     "empty object",
-			body:     `{}`,
-			wantCode: http.StatusUnauthorized,
-		},
-		{
-			name:     "only email",
-			body:     `{"email":"test@example.com"}`,
-			wantCode: http.StatusUnauthorized,
-		},
-		{
-			name:     "only password",
-			body:     `{"password":"pass"}`,
-			wantCode: http.StatusUnauthorized,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("POST", "/login", strings.NewReader(tt.body))
-			w := httptest.NewRecorder()
-
-			handler(w, req)
-
-			// Accept either 200 (if default auth works) or 401 (if credentials wrong)
-			if w.Code != http.StatusOK && w.Code != http.StatusUnauthorized {
-				t.Errorf("got status %d, want 200 or 401", w.Code)
-			}
-		})
-	}
-}
-
-// Test handleLogout with bearer token extraction
-func TestHandleLogout_BearerExtraction(t *testing.T) {
-	authenticator := auth.NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	handler := handleLogout(authenticator)
-
-	tests := []struct {
-		name          string
-		authHeader    string
-		expectedToken string
-	}{
-		{
-			name:          "Bearer prefix",
-			authHeader:    "Bearer test-token-123",
-			expectedToken: "test-token-123",
-		},
-		{
-			name:          "No prefix",
-			authHeader:    "raw-token",
-			expectedToken: "raw-token",
-		},
-		{
-			name:          "Empty",
-			authHeader:    "",
-			expectedToken: "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("POST", "/logout", nil)
-			if tt.authHeader != "" {
-				req.Header.Set("Authorization", tt.authHeader)
-			}
-			w := httptest.NewRecorder()
-
-			handler(w, req)
-
-			// Should return 200 regardless
-			if w.Code != http.StatusOK {
-				t.Errorf("got status %d, want 200", w.Code)
-			}
-		})
 	}
 }
 
@@ -3102,49 +2807,6 @@ func TestStatusPageRepository_WithRealDB(t *testing.T) {
 	}
 }
 
-// TestHandleListSouls_WithData tests handleListSouls with actual data
-func TestHandleListSouls_WithData(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-
-	ctx := context.Background()
-
-	// Save test souls
-	for i := 1; i <= 3; i++ {
-		soul := &core.Soul{
-			ID:     fmt.Sprintf("list-handler-soul-%d", i),
-			Name:   fmt.Sprintf("Soul %d", i),
-			Target: "https://example.com",
-		}
-		if err := db.SaveSoul(ctx, soul); err != nil {
-			t.Fatalf("SaveSoul failed: %v", err)
-		}
-	}
-
-	// Create handler
-	handler := handleListSouls(db, nil)
-
-	// Make request
-	req := httptest.NewRequest("GET", "/api/souls", nil)
-	w := httptest.NewRecorder()
-
-	handler(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("Expected 200, got %d", w.Code)
-	}
-
-	// Parse response
-	var souls []*core.Soul
-	if err := json.Unmarshal(w.Body.Bytes(), &souls); err != nil {
-		t.Errorf("Failed to parse response: %v", err)
-	}
-
-	if len(souls) < 3 {
-		t.Errorf("Expected at least 3 souls, got %d", len(souls))
-	}
-}
-
 // TestInitACMEManager_WithStorage tests initACMEManager with actual storage
 func TestInitACMEManager_WithStorage(t *testing.T) {
 	db := setupTestDB(t)
@@ -3845,29 +3507,6 @@ func TestPrintInitHelp(t *testing.T) {
 	}
 }
 
-// Test listInstances with environment variable
-func TestListInstances_WithEnvVar(t *testing.T) {
-	os.Setenv("ANUBIS_CONFIGS", "/tmp/test1.json,/tmp/test2.json")
-	defer os.Unsetenv("ANUBIS_CONFIGS")
-
-	instances := listInstances()
-	if instances == nil {
-		t.Error("Expected non-nil instances slice")
-	}
-}
-
-// Test listInstances with no configs
-func TestListInstances_NoConfigs(t *testing.T) {
-	oldConfigs := os.Getenv("ANUBIS_CONFIGS")
-	defer os.Setenv("ANUBIS_CONFIGS", oldConfigs)
-	os.Unsetenv("ANUBIS_CONFIGS")
-
-	instances := listInstances()
-	if instances == nil {
-		t.Error("Expected non-nil instances slice")
-	}
-}
-
 // Test getInstanceName with custom path
 func TestGetInstanceName_CustomPath(t *testing.T) {
 	name := getInstanceName("/etc/anubis/custom-config.json")
@@ -4010,21 +3649,6 @@ func TestFindConfig_Fallback(t *testing.T) {
 	// Should return default since no config files exist
 	if config != "./anubis.json" {
 		t.Errorf("Expected default ./anubis.json, got %s", config)
-	}
-}
-
-// Test getConfigPaths returns all paths
-func TestGetConfigPaths_AllPaths(t *testing.T) {
-	paths := getConfigPaths()
-
-	if paths.Local != "./anubis.json" {
-		t.Errorf("Expected local path ./anubis.json, got %s", paths.Local)
-	}
-	if paths.User == "" {
-		t.Error("Expected non-empty user config path")
-	}
-	if paths.System == "" {
-		t.Error("Expected non-empty system config path")
 	}
 }
 
@@ -4402,7 +4026,6 @@ func TestMainCLI_VerdictCommand(t *testing.T) {
 		t.Errorf("Expected verdict output, got: %s", string(output))
 	}
 }
-
 
 func TestInitInteractiveWithPath(t *testing.T) {
 	tmpDir := t.TempDir()
