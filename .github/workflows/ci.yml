@@ -105,6 +105,47 @@ jobs:
           flags: frontend
           fail_ci_if_error: false
 
+  # Dashboard E2E
+  e2e-dashboard:
+    name: Dashboard E2E
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build embedded dashboard assets
+        working-directory: web
+        run: npm run build:embed
+
+      - name: Build E2E binary
+        run: |
+          mkdir -p .tmp
+          CGO_ENABLED=0 go build -o .tmp/anubis-e2e ./cmd/anubis
+
+      - name: Install Playwright browsers
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run dashboard smoke E2E
+        working-directory: web
+        run: npm run e2e
+
   # Lint
   lint:
     name: Lint
