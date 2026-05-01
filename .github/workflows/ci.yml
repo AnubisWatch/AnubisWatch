@@ -13,7 +13,7 @@ permissions:
 
 env:
   GO_VERSION: '1.25'
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
   ANUBIS_DATA_DIR: /tmp/anubis
   ANUBIS_CONFIG: /tmp/anubis.json
 
@@ -359,7 +359,7 @@ jobs:
             -fmt sarif -out gosec.sarif ./...
 
       - name: Upload SARIF to GitHub
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: gosec.sarif
@@ -394,7 +394,7 @@ jobs:
           output: 'trivy-results.sarif'
 
       - name: Upload SARIF to GitHub
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy-results.sarif
