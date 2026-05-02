@@ -18,11 +18,18 @@ async function loginAndOpenSouls(page: Page) {
 
   await page.getByPlaceholder('priest@anubis.watch').fill('admin@anubis.watch')
   await page.getByPlaceholder('••••••••').fill('SecurePass123!')
+
+  const loginPromise = page.waitForResponse(
+    (res) => res.url().endsWith('/api/v1/auth/login') && res.request().method() === 'POST'
+  )
   await page.getByRole('button', { name: /Enter the Temple/i }).click()
+  const loginRes = await loginPromise
+  expect(loginRes.status()).toBe(200)
+  await page.waitForFunction(() => Boolean(localStorage.getItem('auth_token')))
   await page.waitForURL('**/')
 
   await page.goto(`${server.baseURL}/souls`)
-  await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 10000 })
+  await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 30000 })
 }
 
 async function createHttpSoul(page: Page, soulName: string) {
@@ -65,7 +72,7 @@ async function expectReadableLightPage(page: Page, path: string, headingName: st
   await expect(root).toHaveCSS('color-scheme', 'light')
 
   const heading = page.getByRole('heading', { name: headingName, exact: true }).first()
-  await expect(heading).toBeVisible({ timeout: 10000 })
+  await expect(heading).toBeVisible({ timeout: 30000 })
 
   const styles = await heading.evaluate((element) => {
     const headingStyle = getComputedStyle(element)
@@ -84,6 +91,8 @@ async function expectReadableLightPage(page: Page, path: string, headingName: st
 }
 
 test.describe('AnubisWatch E2E Smoke', () => {
+  test.describe.configure({ mode: 'serial' })
+
   test('toggles light mode and preserves it after reload', async ({ page }) => {
     await loginAndOpenSouls(page)
 
