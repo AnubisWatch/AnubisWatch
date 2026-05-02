@@ -43,6 +43,46 @@ async function createHttpSoul(page: Page, soulName: string) {
   await expect(page.getByText(soulName)).toBeVisible({ timeout: 10000 })
 }
 
+const lightModePages = [
+  { path: '/', heading: 'Hall of Judgment' },
+  { path: '/souls', heading: 'Souls' },
+  { path: '/judgments', heading: 'Judgments' },
+  { path: '/alerts', heading: 'Alerts' },
+  { path: '/incidents', heading: 'Incidents' },
+  { path: '/maintenance', heading: 'Maintenance' },
+  { path: '/journeys', heading: 'Journeys' },
+  { path: '/cluster', heading: 'Cluster' },
+  { path: '/status-pages', heading: 'Status Pages' },
+  { path: '/dashboards', heading: 'Custom Dashboards' },
+  { path: '/settings', heading: 'Settings' },
+]
+
+async function expectReadableLightPage(page: Page, path: string, headingName: string) {
+  await page.goto(`${server.baseURL}${path}`)
+
+  const root = page.locator('html')
+  await expect(root).toHaveClass(/light/)
+  await expect(root).toHaveCSS('color-scheme', 'light')
+
+  const heading = page.getByRole('heading', { name: headingName, exact: true }).first()
+  await expect(heading).toBeVisible({ timeout: 10000 })
+
+  const styles = await heading.evaluate((element) => {
+    const headingStyle = getComputedStyle(element)
+    const bodyStyle = getComputedStyle(document.body)
+
+    return {
+      bodyBackground: bodyStyle.backgroundColor,
+      bodyColor: bodyStyle.color,
+      headingFontFamily: headingStyle.fontFamily,
+    }
+  })
+
+  expect(styles.bodyBackground).toBe('rgb(249, 250, 251)')
+  expect(styles.bodyColor).toBe('rgb(17, 24, 39)')
+  expect(styles.headingFontFamily.toLowerCase()).not.toMatch(/cormorant|philosopher|cinzel/)
+}
+
 test.describe('AnubisWatch E2E Smoke', () => {
   test('toggles light mode and preserves it after reload', async ({ page }) => {
     await loginAndOpenSouls(page)
@@ -60,6 +100,16 @@ test.describe('AnubisWatch E2E Smoke', () => {
     await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 10000 })
     await expect(root).toHaveClass(/light/)
     await expect(root).toHaveCSS('color-scheme', 'light')
+  })
+
+  test('keeps primary pages readable in light mode', async ({ page }) => {
+    await loginAndOpenSouls(page)
+
+    await page.getByLabel('Switch to light mode').click()
+
+    for (const { path, heading } of lightModePages) {
+      await expectReadableLightPage(page, path, heading)
+    }
   })
 
   test('login, create soul, and run an immediate check', async ({ page }) => {
