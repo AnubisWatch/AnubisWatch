@@ -44,6 +44,24 @@ async function createHttpSoul(page: Page, soulName: string) {
 }
 
 test.describe('AnubisWatch E2E Smoke', () => {
+  test('toggles light mode and preserves it after reload', async ({ page }) => {
+    await loginAndOpenSouls(page)
+
+    const root = page.locator('html')
+    await expect(root).toHaveClass(/dark/)
+
+    await page.getByLabel('Switch to light mode').click()
+    await expect(root).toHaveClass(/light/)
+    await expect(root).not.toHaveClass(/dark/)
+    await expect(root).toHaveCSS('color-scheme', 'light')
+    await expect(page.getByLabel('Switch to dark mode')).toBeVisible()
+
+    await page.reload()
+    await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 10000 })
+    await expect(root).toHaveClass(/light/)
+    await expect(root).toHaveCSS('color-scheme', 'light')
+  })
+
   test('login, create soul, and run an immediate check', async ({ page }) => {
     await loginAndOpenSouls(page)
 
