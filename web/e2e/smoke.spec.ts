@@ -51,7 +51,7 @@ test.describe('AnubisWatch E2E Smoke', () => {
     await expect(page.getByText(soulName)).toBeVisible({ timeout: 10000 })
 
     // 9. Open details and run an immediate check
-    await page.getByLabel(`Edit soul ${soulName}`).click()
+    await page.getByLabel(`View soul ${soulName}`).click()
     await expect(page.getByRole('heading', { name: soulName })).toBeVisible({ timeout: 10000 })
 
     const checkPromise = page.waitForResponse(

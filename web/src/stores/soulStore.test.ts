@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { waitFor } from '@testing-library/react'
 import { useSoulStore } from './soulStore'
 
 const mockGet = vi.fn()
@@ -67,7 +68,16 @@ describe('useSoulStore', () => {
 
   it('createSoul appends new soul', async () => {
     const newSoul = { id: '3', name: 'Soul 3', type: 'http', target: 'https://c.com', enabled: true, weight: 1, timeout: 5 }
-    mockPost.mockResolvedValue(newSoul)
+    mockPost
+      .mockResolvedValueOnce(newSoul)
+      .mockResolvedValueOnce({
+        id: 'judgment-1',
+        soul_id: '3',
+        status: 'passed',
+        latency: 42,
+        timestamp: '2026-05-02T09:10:00Z',
+        region: 'default',
+      })
 
     const result = await useSoulStore.getState().createSoul({
       name: 'Soul 3',
@@ -79,8 +89,38 @@ describe('useSoulStore', () => {
     })
 
     expect(result).toEqual(newSoul)
-    expect(useSoulStore.getState().souls).toContainEqual(newSoul)
+    expect(useSoulStore.getState().souls[0]).toMatchObject(newSoul)
     expect(useSoulStore.getState().loading).toBe(false)
+
+    await waitFor(() => {
+      expect(useSoulStore.getState().souls[0]).toMatchObject({
+        id: '3',
+        status: 'healthy',
+        latency: 42,
+        last_check: '2026-05-02T09:10:00Z',
+      })
+    })
+    expect(mockPost).toHaveBeenCalledWith('/souls/3/check')
+  })
+
+  it('createSoul does not block creation when the background check fails', async () => {
+    const newSoul = { id: '4', name: 'Soul 4', type: 'http', target: 'https://d.com', enabled: true, weight: 1, timeout: 5 }
+    mockPost
+      .mockResolvedValueOnce(newSoul)
+      .mockRejectedValueOnce(new Error('check failed'))
+
+    const result = await useSoulStore.getState().createSoul({
+      name: 'Soul 4',
+      type: 'http',
+      target: 'https://d.com',
+      enabled: true,
+      weight: 1,
+      timeout: 5,
+    })
+
+    expect(result).toEqual(newSoul)
+    expect(useSoulStore.getState().souls).toContainEqual(newSoul)
+    expect(useSoulStore.getState().error).toBeNull()
   })
 
   it('createSoul returns null on failure', async () => {

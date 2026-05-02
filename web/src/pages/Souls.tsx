@@ -7,7 +7,7 @@ import {
   Play,
   Pause,
   Trash2,
-  Edit,
+  Eye,
   Activity,
   Globe,
   Server,
@@ -365,8 +365,8 @@ export function Souls() {
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center justify-end gap-1">
-                        <Link to={`/souls/${soul.id}`} className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" aria-label={`Edit soul ${soul.name || soul.target}`}>
-                          <Edit className="w-4 h-4" />
+                        <Link to={`/souls/${soul.id}`} className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" aria-label={`View soul ${soul.name || soul.target}`}>
+                          <Eye className="w-4 h-4" />
                         </Link>
                         <button
                           onClick={() => handleToggle(soul)}
@@ -427,8 +427,8 @@ export function Souls() {
                 </div>
 
                 <div className="flex gap-1 pt-4 border-t border-gray-700/50">
-                  <Link to={`/souls/${soul.id}`} className="flex-1 p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" aria-label={`Edit soul ${soul.name || soul.target}`}>
-                    <Edit className="w-4 h-4 mx-auto" />
+                  <Link to={`/souls/${soul.id}`} className="flex-1 p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" aria-label={`View soul ${soul.name || soul.target}`}>
+                    <Eye className="w-4 h-4 mx-auto" />
                   </Link>
                   <button
                     onClick={() => handleToggle(soul)}
