@@ -7,6 +7,7 @@ interface SoulStore {
   pagination: { total: number; has_more: boolean } | null
   loading: boolean
   error: string | null
+  initialChecks: Record<string, 'running' | 'failed'>
   fetchSouls: () => Promise<void>
   createSoul: (soul: Omit<Soul, 'id' | 'created_at' | 'updated_at'>) => Promise<Soul | null>
   updateSoul: (id: string, soul: Partial<Soul>) => Promise<Soul | null>
@@ -38,6 +39,7 @@ export const useSoulStore = create<SoulStore>((set) => ({
   pagination: null,
   loading: false,
   error: null,
+  initialChecks: {},
 
   fetchSouls: async () => {
     set({ loading: true, error: null })
@@ -59,12 +61,21 @@ export const useSoulStore = create<SoulStore>((set) => ({
         set((state) => ({ souls: [...state.souls, result], loading: false }))
 
         if (result.enabled) {
+          set((state) => ({
+            initialChecks: { ...state.initialChecks, [result.id]: 'running' },
+          }))
+
           void api.post<Judgment>(`/souls/${result.id}/check`).then((judgment) => {
             set((state) => ({
               souls: state.souls.map((s) => (s.id === result.id ? mergeJudgmentStatus(s, judgment) : s)),
+              initialChecks: Object.fromEntries(
+                Object.entries(state.initialChecks).filter(([id]) => id !== result.id)
+              ),
             }))
           }).catch(() => {
-            // The soul remains created; a failed background check can be retried from the detail page.
+            set((state) => ({
+              initialChecks: { ...state.initialChecks, [result.id]: 'failed' },
+            }))
           })
         }
       }

@@ -24,6 +24,7 @@ import { useSoulStore } from '../stores/soulStore'
 import type { Soul } from '../api/client'
 
 type SoulType = Soul['type']
+type SoulDisplayStatus = 'healthy' | 'unhealthy' | 'unknown' | 'checking' | 'check_failed'
 
 // Extended Soul type with UI-specific properties
 interface SoulWithStatus extends Soul {
@@ -45,7 +46,7 @@ const typeConfig: Record<SoulType, { label: string; color: string; bg: string; i
 }
 
 export function Souls() {
-  const { souls: rawSouls, fetchSouls, createSoul, updateSoul, deleteSoul } = useSoulStore()
+  const { souls: rawSouls, initialChecks, fetchSouls, createSoul, updateSoul, deleteSoul } = useSoulStore()
   const souls = rawSouls as SoulWithStatus[]
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
@@ -137,19 +138,40 @@ export function Souls() {
     types: new Set(souls.map(s => s.type)).size
   }
 
-  const getStatusColor = (status?: string) => {
+  const getDisplayStatus = (soul: SoulWithStatus): SoulDisplayStatus => {
+    const initialCheck = initialChecks[soul.id]
+    if (initialCheck === 'running') return 'checking'
+    if (initialCheck === 'failed') return 'check_failed'
+    return soul.status ?? 'unknown'
+  }
+
+  const getStatusColor = (status?: SoulDisplayStatus) => {
     switch (status) {
       case 'healthy': return 'bg-emerald-500'
       case 'unhealthy': return 'bg-rose-500'
+      case 'checking': return 'bg-amber-400 animate-pulse'
+      case 'check_failed': return 'bg-rose-500'
       default: return 'bg-gray-500'
     }
   }
 
-  const getStatusText = (status?: string) => {
+  const getStatusText = (status?: SoulDisplayStatus) => {
     switch (status) {
       case 'healthy': return 'text-emerald-400'
       case 'unhealthy': return 'text-rose-400'
+      case 'checking': return 'text-amber-400'
+      case 'check_failed': return 'text-rose-400'
       default: return 'text-gray-400'
+    }
+  }
+
+  const getStatusLabel = (status?: SoulDisplayStatus) => {
+    switch (status) {
+      case 'healthy': return 'Healthy'
+      case 'unhealthy': return 'Unhealthy'
+      case 'checking': return 'Checking'
+      case 'check_failed': return 'Check failed'
+      default: return 'Unknown'
     }
   }
 
@@ -314,6 +336,7 @@ export function Souls() {
               {filteredSouls.map((soul) => {
                 const typeInfo = typeConfig[soul.type] || typeConfig.http
                 const TypeIcon = typeInfo.icon
+                const displayStatus = getDisplayStatus(soul)
 
                 return (
                   <tr key={soul.id} className="hover:bg-gray-800/30 transition-colors group">
@@ -336,9 +359,9 @@ export function Souls() {
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${getStatusColor(soul.status)}`} />
-                        <span className={`text-sm font-medium ${getStatusText(soul.status)}`}>
-                          {soul.status?.charAt(0).toUpperCase()}{soul.status?.slice(1) || 'Unknown'}
+                        <div className={`w-2 h-2 rounded-full ${getStatusColor(displayStatus)}`} />
+                        <span className={`text-sm font-medium ${getStatusText(displayStatus)}`}>
+                          {getStatusLabel(displayStatus)}
                         </span>
                       </div>
                     </td>
@@ -352,7 +375,14 @@ export function Souls() {
                       <span className="text-sm text-gray-400 font-mono">{soul.target}</span>
                     </td>
                     <td className="px-6 py-4">
-                      {soul.latency ? (
+                      {displayStatus === 'checking' ? (
+                        <div className="flex items-center gap-2 text-amber-400">
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span className="text-sm font-medium">Running</span>
+                        </div>
+                      ) : displayStatus === 'check_failed' ? (
+                        <span className="text-sm text-rose-400">Retry from detail</span>
+                      ) : soul.latency ? (
                         <div className="flex items-center gap-2">
                           <Clock className="w-4 h-4 text-gray-500" />
                           <span className={`text-sm font-medium ${soul.latency > 1000 ? 'text-amber-400' : 'text-emerald-400'}`}>
@@ -395,6 +425,7 @@ export function Souls() {
           {filteredSouls.map((soul) => {
             const typeInfo = typeConfig[soul.type] || typeConfig.http
             const TypeIcon = typeInfo.icon
+            const displayStatus = getDisplayStatus(soul)
 
             return (
               <div key={soul.id} className="bg-gradient-to-br from-gray-900 to-gray-800/50 border border-gray-700/50 rounded-2xl p-5 hover:border-gray-600 transition-all group">
@@ -408,7 +439,7 @@ export function Souls() {
                       <span className={`text-xs ${typeInfo.color}`}>{typeInfo.label}</span>
                     </div>
                   </div>
-                  <div className={`w-2 h-2 rounded-full ${getStatusColor(soul.status)}`} />
+                  <div className={`w-2 h-2 rounded-full ${getStatusColor(displayStatus)}`} />
                 </div>
 
                 <div className="space-y-3 mb-4">
@@ -416,7 +447,19 @@ export function Souls() {
                     <Globe className="w-4 h-4 text-gray-500" />
                     <span className="text-gray-400 font-mono text-xs truncate">{soul.target}</span>
                   </div>
-                  {soul.latency && (
+                  {displayStatus === 'checking' && (
+                    <div className="flex items-center gap-2 text-sm text-amber-400">
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Initial check running</span>
+                    </div>
+                  )}
+                  {displayStatus === 'check_failed' && (
+                    <div className="flex items-center gap-2 text-sm text-rose-400">
+                      <XCircle className="w-4 h-4" />
+                      <span>Initial check failed</span>
+                    </div>
+                  )}
+                  {displayStatus !== 'checking' && displayStatus !== 'check_failed' && soul.latency && (
                     <div className="flex items-center gap-2 text-sm">
                       <Clock className="w-4 h-4 text-gray-500" />
                       <span className={soul.latency > 1000 ? 'text-amber-400' : 'text-emerald-400'}>

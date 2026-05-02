@@ -23,6 +23,7 @@ describe('useSoulStore', () => {
       pagination: null,
       loading: false,
       error: null,
+      initialChecks: {},
     })
     mockGet.mockClear()
     mockPost.mockClear()
@@ -68,16 +69,13 @@ describe('useSoulStore', () => {
 
   it('createSoul appends new soul', async () => {
     const newSoul = { id: '3', name: 'Soul 3', type: 'http', target: 'https://c.com', enabled: true, weight: 1, timeout: 5 }
+    let resolveCheck: (value: unknown) => void = () => {}
+    const checkPromise = new Promise((resolve) => {
+      resolveCheck = resolve
+    })
     mockPost
       .mockResolvedValueOnce(newSoul)
-      .mockResolvedValueOnce({
-        id: 'judgment-1',
-        soul_id: '3',
-        status: 'passed',
-        latency: 42,
-        timestamp: '2026-05-02T09:10:00Z',
-        region: 'default',
-      })
+      .mockReturnValueOnce(checkPromise)
 
     const result = await useSoulStore.getState().createSoul({
       name: 'Soul 3',
@@ -91,6 +89,16 @@ describe('useSoulStore', () => {
     expect(result).toEqual(newSoul)
     expect(useSoulStore.getState().souls[0]).toMatchObject(newSoul)
     expect(useSoulStore.getState().loading).toBe(false)
+    expect(useSoulStore.getState().initialChecks['3']).toBe('running')
+
+    resolveCheck({
+      id: 'judgment-1',
+      soul_id: '3',
+      status: 'passed',
+      latency: 42,
+      timestamp: '2026-05-02T09:10:00Z',
+      region: 'default',
+    })
 
     await waitFor(() => {
       expect(useSoulStore.getState().souls[0]).toMatchObject({
@@ -100,6 +108,7 @@ describe('useSoulStore', () => {
         last_check: '2026-05-02T09:10:00Z',
       })
     })
+    expect(useSoulStore.getState().initialChecks['3']).toBeUndefined()
     expect(mockPost).toHaveBeenCalledWith('/souls/3/check')
   })
 
@@ -121,6 +130,10 @@ describe('useSoulStore', () => {
     expect(result).toEqual(newSoul)
     expect(useSoulStore.getState().souls).toContainEqual(newSoul)
     expect(useSoulStore.getState().error).toBeNull()
+
+    await waitFor(() => {
+      expect(useSoulStore.getState().initialChecks['4']).toBe('failed')
+    })
   })
 
   it('createSoul returns null on failure', async () => {
