@@ -41,6 +41,13 @@ textarea {
   letter-spacing: 0;
 }
 
+.tracking-tight,
+.tracking-wide,
+.tracking-wider,
+.tracking-widest {
+  letter-spacing: 0 !important;
+}
+
 .font-cormorant,
 .font-philosopher,
 .font-cinzel {

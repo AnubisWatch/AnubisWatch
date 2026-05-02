@@ -50,11 +50,16 @@
 }
 
 .light .text-gray-400 {
-  color: #6b7280 !important;
+  color: #4b5563 !important;
 }
 
 .light .text-gray-500 {
-  color: #9ca3af !important;
+  color: #6b7280 !important;
+}
+
+.light .text-gray-600,
+.light .placeholder\:text-gray-600::placeholder {
+  color: #4b5563 !important;
 }
 
 /* Light mode gradients */
@@ -134,16 +139,12 @@
   color: #111827 !important;
 }
 
-.light input::placeholder {
-  color: #9ca3af !important;
+.light input::placeholder,
+.light textarea::placeholder {
+  color: #6b7280 !important;
 }
 
 /* Light mode buttons */
-.light button:not([class*="bg-amber"]):not([class*="bg-yellow"]):not([class*="bg-green"]):not([class*="bg-emerald"]):not([class*="bg-red"]):not([class*="bg-rose"]):not([class*="bg-blue"]):not([class*="bg-purple"]):not([class*="gradient"]) {
-  background-color: #f3f4f6 !important;
-  color: #111827 !important;
-}
-
-.light button:not([class*="bg-amber"]):not([class*="bg-yellow"]):not([class*="bg-green"]):not([class*="bg-emerald"]):not([class*="bg-red"]):not([class*="bg-rose"]):not([class*="bg-blue"]):not([class*="bg-purple"]):not([class*="gradient"]):hover {
-  background-color: #e5e7eb !important;
+.light button:not([class*="text-white"]):not([class*="text-amber"]):not([class*="text-yellow"]):not([class*="text-green"]):not([class*="text-emerald"]):not([class*="text-red"]):not([class*="text-rose"]):not([class*="text-blue"]):not([class*="text-purple"]) {
+  color: #111827;
 }

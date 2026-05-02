@@ -189,6 +189,9 @@ describe('ApiClient', () => {
               target: 'https://example.com',
               weight: '1m0s',
               timeout: '10s',
+              status: 'alive',
+              latency: 12,
+              last_check: '2026-05-01T20:36:58Z',
               http: {
                 method: 'GET',
                 valid_status: [200],
@@ -201,11 +204,13 @@ describe('ApiClient', () => {
       })
 
       const result = await api.get<{
-        data: Array<{ weight: number; timeout: number; http_config?: unknown }>
+        data: Array<{ weight: number; timeout: number; status: string; latency: number; http_config?: unknown }>
       }>('/souls')
 
       expect(result.data[0].weight).toBe(60)
       expect(result.data[0].timeout).toBe(10)
+      expect(result.data[0].status).toBe('healthy')
+      expect(result.data[0].latency).toBe(12)
       expect(result.data[0].http_config).toEqual({
         method: 'GET',
         valid_status: [200],

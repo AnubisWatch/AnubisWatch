@@ -69,6 +69,19 @@ function normalizeJudgmentStatus(status: unknown): Judgment['status'] {
   }
 }
 
+function normalizeSoulStatus(status: unknown): Soul['status'] {
+  switch (status) {
+    case 'alive':
+    case 'healthy':
+      return 'healthy'
+    case 'dead':
+    case 'unhealthy':
+      return 'unhealthy'
+    default:
+      return 'unknown'
+  }
+}
+
 function normalizeApiValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(normalizeApiValue)
@@ -99,6 +112,9 @@ function normalizeApiValue(value: unknown): unknown {
   if ('id' in normalized && 'type' in normalized && 'target' in normalized) {
     normalized.weight = parseDurationSeconds(normalized.weight, 60)
     normalized.timeout = parseDurationSeconds(normalized.timeout, 10)
+    if ('status' in normalized) {
+      normalized.status = normalizeSoulStatus(normalized.status)
+    }
     if (!normalized.http_config && normalized.http) {
       normalized.http_config = normalized.http
     }
@@ -253,6 +269,9 @@ export interface Soul {
   workspace_id?: string
   created_at?: string
   updated_at?: string
+  status?: 'healthy' | 'unhealthy' | 'unknown'
+  last_check?: string
+  latency?: number
   http_config?: {
     method: string
     valid_status: number[]

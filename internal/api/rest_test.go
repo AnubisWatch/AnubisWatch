@@ -401,12 +401,11 @@ type mockProbeEngine struct {
 }
 
 func (p *mockProbeEngine) AssignSouls(souls []*core.Soul) {
-	if p.souls == nil {
-		p.souls = make(map[string]*core.Soul)
-	}
+	next := make(map[string]*core.Soul)
 	for _, soul := range souls {
-		p.souls[soul.ID] = soul
+		next[soul.ID] = soul
 	}
+	p.souls = next
 }
 
 func (p *mockProbeEngine) GetStatus() *core.ProbeStatus {
@@ -760,8 +759,24 @@ func TestHandleListSouls(t *testing.T) {
 	}
 }
 
-func TestHandleCreateSoul(t *testing.T) {
+func TestHandleListSoulsIncludesLatestMonitoringStatus(t *testing.T) {
 	storage := newMockStorage()
+	storage.SaveSoul(context.Background(), &core.Soul{
+		ID:          "soul-1",
+		Name:        "Monitored Soul",
+		Type:        core.CheckHTTP,
+		Target:      "https://example.com",
+		WorkspaceID: "default",
+		Enabled:     true,
+	})
+	storage.SaveJudgment(context.Background(), &core.Judgment{
+		ID:        "judgment-1",
+		SoulID:    "soul-1",
+		Status:    core.SoulAlive,
+		Duration:  25 * time.Millisecond,
+		Timestamp: time.Now().UTC(),
+	})
+
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
 		config:     core.ServerConfig{Host: "localhost", Port: 8080},
@@ -773,14 +788,62 @@ func TestHandleCreateSoul(t *testing.T) {
 		cluster:    &mockClusterManager{},
 	}
 
+	router.Handle("GET", "/api/v1/souls", server.requireAuth(server.handleListSouls))
+
+	req := httptest.NewRequest("GET", "/api/v1/souls", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response struct {
+		Data []map[string]interface{} `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if len(response.Data) != 1 {
+		t.Fatalf("expected 1 soul, got %d", len(response.Data))
+	}
+	if response.Data[0]["status"] != "healthy" {
+		t.Fatalf("expected healthy status, got %v", response.Data[0]["status"])
+	}
+	if response.Data[0]["latency"] != float64(25) {
+		t.Fatalf("expected 25ms latency, got %v", response.Data[0]["latency"])
+	}
+	if response.Data[0]["last_check"] == nil {
+		t.Fatal("expected last_check to be present")
+	}
+}
+
+func TestHandleCreateSoul(t *testing.T) {
+	storage := newMockStorage()
+	probe := &mockProbeEngine{}
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		probe:      probe,
+		router:     router,
+		auth:       &mockAuthenticator{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
 	router.Handle("POST", "/api/v1/souls", server.requireRole(server.handleCreateSoul, "souls:*"))
 
 	soul := core.Soul{
-		Name:   "New Soul",
-		Type:   core.CheckHTTP,
-		Target: "https://new-example.com",
-		Weight: core.Duration{Duration: 60 * time.Second},
-		HTTP:   &core.HTTPConfig{Method: "GET", ValidStatus: []int{200}},
+		Name:    "New Soul",
+		Type:    core.CheckHTTP,
+		Target:  "https://new-example.com",
+		Enabled: true,
+		Weight:  core.Duration{Duration: 60 * time.Second},
+		HTTP:    &core.HTTPConfig{Method: "GET", ValidStatus: []int{200}},
 	}
 	body, _ := json.Marshal(soul)
 
@@ -799,6 +862,9 @@ func TestHandleCreateSoul(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&created)
 	if created.Name != "New Soul" {
 		t.Errorf("expected name 'New Soul', got '%s'", created.Name)
+	}
+	if _, ok := probe.souls[created.ID]; !ok {
+		t.Fatalf("expected created soul to be assigned to probe")
 	}
 }
 

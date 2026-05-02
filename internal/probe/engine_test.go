@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -405,6 +407,29 @@ func (m *mockProbeStorage) ListSouls(ctx context.Context, workspaceID string) ([
 	return []*core.Soul{}, nil
 }
 
+type recordingProbeStorage struct {
+	souls     map[string]*core.Soul
+	judgments []*core.Judgment
+}
+
+func (m *recordingProbeStorage) SaveJudgment(ctx context.Context, j *core.Judgment) error {
+	m.judgments = append(m.judgments, j)
+	return nil
+}
+func (m *recordingProbeStorage) GetSoul(ctx context.Context, workspaceID, soulID string) (*core.Soul, error) {
+	if soul, ok := m.souls[soulID]; ok {
+		return soul, nil
+	}
+	return nil, &core.NotFoundError{Entity: "soul", ID: soulID}
+}
+func (m *recordingProbeStorage) ListSouls(ctx context.Context, workspaceID string) ([]*core.Soul, error) {
+	souls := make([]*core.Soul, 0, len(m.souls))
+	for _, soul := range m.souls {
+		souls = append(souls, soul)
+	}
+	return souls, nil
+}
+
 // mockAlerter for probe tests
 type mockProbeAlerter struct{}
 
@@ -426,6 +451,51 @@ func TestEngine_ForceCheck(t *testing.T) {
 	_, err := engine.ForceCheck("non-existent-soul")
 	if err == nil {
 		t.Error("Expected error for non-existent soul")
+	}
+}
+
+func TestEngine_ForceCheckLoadsUnassignedSoulFromStorage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	store := &recordingProbeStorage{
+		souls: map[string]*core.Soul{
+			"stored-soul": {
+				ID:          "stored-soul",
+				WorkspaceID: "default",
+				Name:        "Stored Soul",
+				Type:        core.CheckHTTP,
+				Target:      server.URL,
+				Enabled:     false,
+				Timeout:     core.Duration{Duration: time.Second},
+				HTTP:        &core.HTTPConfig{Method: "GET", ValidStatus: []int{200}},
+			},
+		},
+	}
+	engine := NewEngine(EngineOptions{
+		Registry: NewCheckerRegistry(),
+		NodeID:   "test-node",
+		Region:   "test-region",
+		Store:    store,
+		Alerter:  &mockProbeAlerter{},
+		Logger:   newTestProbeLogger(),
+	})
+	defer engine.Stop()
+
+	judgment, err := engine.ForceCheck("stored-soul")
+	if err != nil {
+		t.Fatalf("expected force check to load unassigned soul, got error: %v", err)
+	}
+	if judgment.Status != core.SoulAlive {
+		t.Fatalf("expected alive judgment, got %s", judgment.Status)
+	}
+	if len(store.judgments) != 1 {
+		t.Fatalf("expected saved judgment, got %d", len(store.judgments))
+	}
+	if active := engine.ListActiveSouls(); len(active) != 0 {
+		t.Fatalf("expected one-off force check to avoid assigning runner, got %d active souls", len(active))
 	}
 }
 

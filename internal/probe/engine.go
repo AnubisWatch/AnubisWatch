@@ -353,7 +353,22 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 	e.mu.RUnlock()
 
 	if !ok {
-		return nil, &core.NotFoundError{Entity: "soul", ID: soulID}
+		if e.store == nil {
+			return nil, &core.NotFoundError{Entity: "soul", ID: soulID}
+		}
+
+		soul, err := e.store.GetSoul(ctx, "", soulID)
+		if err != nil {
+			return nil, err
+		}
+		if soul == nil {
+			return nil, &core.NotFoundError{Entity: "soul", ID: soulID}
+		}
+
+		runner = &soulRunner{
+			soul:       soul,
+			lastStatus: core.SoulUnknown,
+		}
 	}
 
 	checker, ok := e.registry.Get(runner.soul.Type)

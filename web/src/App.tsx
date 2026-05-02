@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import { Layout } from './components/Layout'
 import { Dashboard } from './pages/Dashboard'
@@ -17,6 +18,7 @@ import { Settings } from './pages/Settings'
 import { Login } from './pages/Login'
 import { WebSocketProvider } from './hooks/useWebSocket'
 import { useAuth } from './api/hooks'
+import { applyTheme, useThemeStore } from './stores/themeStore'
 
 function ProtectedRoute() {
   const { isAuthenticated, loading } = useAuth()
@@ -37,9 +39,30 @@ function ProtectedRoute() {
   return <Outlet />
 }
 
+function ThemeController() {
+  const theme = useThemeStore((state) => state.theme)
+
+  useEffect(() => {
+    applyTheme(theme)
+
+    if (theme !== 'system' || typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return
+    }
+
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const updateSystemTheme = () => applyTheme('system')
+
+    media.addEventListener?.('change', updateSystemTheme)
+    return () => media.removeEventListener?.('change', updateSystemTheme)
+  }, [theme])
+
+  return null
+}
+
 function App() {
   return (
     <WebSocketProvider>
+      <ThemeController />
       <a href="#main-content" className="skip-link">Skip to main content</a>
       <Routes>
         <Route path="/login" element={<Login />} />

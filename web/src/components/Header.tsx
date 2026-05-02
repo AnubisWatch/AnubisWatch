@@ -2,7 +2,7 @@ import { Bell, Search, LogOut, Moon, Sun } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../api/hooks'
-import { useThemeStore, applyTheme } from '../stores/themeStore'
+import { useThemeStore, applyTheme, getEffectiveTheme } from '../stores/themeStore'
 
 // Ancient Egypt decorative icons
 const ScarabIcon = () => (
@@ -23,13 +23,27 @@ export function Header() {
   const { theme, setTheme } = useThemeStore()
   const { user, logout } = useAuth()
   const navigate = useNavigate()
-  const isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+  const [effectiveTheme, setEffectiveTheme] = useState(() => getEffectiveTheme(theme))
+  const isDark = effectiveTheme === 'dark'
 
   useEffect(() => {
     const handleScroll = () => setScrolled(window.scrollY > 10)
     window.addEventListener('scroll', handleScroll)
     return () => window.removeEventListener('scroll', handleScroll)
   }, [])
+
+  useEffect(() => {
+    const syncEffectiveTheme = () => setEffectiveTheme(getEffectiveTheme(theme))
+    syncEffectiveTheme()
+
+    if (theme !== 'system' || typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return
+    }
+
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    media.addEventListener?.('change', syncEffectiveTheme)
+    return () => media.removeEventListener?.('change', syncEffectiveTheme)
+  }, [theme])
 
   const handleLogout = async () => {
     await logout()

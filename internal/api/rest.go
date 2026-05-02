@@ -809,6 +809,46 @@ func (s *RESTServer) handleOIDCCallback(ctx *Context) error {
 
 // Soul handlers
 
+type soulMonitorResponse struct {
+	*core.Soul
+	Status    string     `json:"status"`
+	LastCheck *time.Time `json:"last_check,omitempty"`
+	Latency   int64      `json:"latency,omitempty"`
+}
+
+func soulMonitorStatus(status core.SoulStatus) string {
+	switch status {
+	case core.SoulAlive:
+		return "healthy"
+	case core.SoulDead:
+		return "unhealthy"
+	default:
+		return "unknown"
+	}
+}
+
+func (s *RESTServer) soulWithLatestJudgment(soul *core.Soul) soulMonitorResponse {
+	response := soulMonitorResponse{
+		Soul:   soul,
+		Status: "unknown",
+	}
+
+	if soul == nil {
+		return response
+	}
+
+	judgments, err := s.store.ListJudgmentsNoCtx(soul.ID, time.Time{}, time.Now().Add(time.Hour), 1)
+	if err != nil || len(judgments) == 0 || judgments[0] == nil {
+		return response
+	}
+
+	latest := judgments[0]
+	response.Status = soulMonitorStatus(latest.Status)
+	response.LastCheck = &latest.Timestamp
+	response.Latency = latest.Duration.Milliseconds()
+	return response
+}
+
 func (s *RESTServer) handleListSouls(ctx *Context) error {
 	workspace := ctx.Workspace
 	offset, limit := parsePagination(ctx.Request, 20, 100)
@@ -822,9 +862,13 @@ func (s *RESTServer) handleListSouls(ctx *Context) error {
 	// Check if there are more results
 	hasMore := len(souls) == limit
 	nextOffset := offset + limit
+	data := make([]soulMonitorResponse, 0, len(souls))
+	for _, soul := range souls {
+		data = append(data, s.soulWithLatestJudgment(soul))
+	}
 
 	response := PaginatedResponse{
-		Data: souls,
+		Data: data,
 		Pagination: Pagination{
 			Offset:  offset,
 			Limit:   limit,
@@ -856,7 +900,7 @@ func (s *RESTServer) handleCreateSoul(ctx *Context) error {
 
 	s.syncProbeAssignments(ctx.Request.Context(), ctx.Workspace)
 
-	return ctx.JSON(http.StatusCreated, soul)
+	return ctx.JSON(http.StatusCreated, s.soulWithLatestJudgment(&soul))
 }
 
 func (s *RESTServer) handleGetSoul(ctx *Context) error {
@@ -871,7 +915,7 @@ func (s *RESTServer) handleGetSoul(ctx *Context) error {
 		return ctx.Error(http.StatusForbidden, "access denied")
 	}
 
-	return ctx.JSON(http.StatusOK, soul)
+	return ctx.JSON(http.StatusOK, s.soulWithLatestJudgment(soul))
 }
 
 func (s *RESTServer) handleUpdateSoul(ctx *Context) error {
@@ -903,7 +947,7 @@ func (s *RESTServer) handleUpdateSoul(ctx *Context) error {
 
 	s.syncProbeAssignments(ctx.Request.Context(), ctx.Workspace)
 
-	return ctx.JSON(http.StatusOK, soul)
+	return ctx.JSON(http.StatusOK, s.soulWithLatestJudgment(&soul))
 }
 
 func (s *RESTServer) handleDeleteSoul(ctx *Context) error {

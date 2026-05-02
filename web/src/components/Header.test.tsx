@@ -7,6 +7,7 @@ import { Header } from '../components/Header'
 const mockLogout = vi.hoisted(() => vi.fn())
 const mockSetTheme = vi.hoisted(() => vi.fn())
 const mockApplyTheme = vi.hoisted(() => vi.fn())
+const mockGetEffectiveTheme = vi.hoisted(() => vi.fn(() => 'dark'))
 
 const mockAuthState = {
   user: { name: 'Test User', email: 'test@anubis.watch' },
@@ -25,6 +26,7 @@ vi.mock('../stores/themeStore', () => ({
     setTheme: mockSetTheme,
   }),
   applyTheme: mockApplyTheme,
+  getEffectiveTheme: mockGetEffectiveTheme,
 }))
 
 describe('Header', () => {
