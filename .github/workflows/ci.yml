@@ -12,7 +12,7 @@ permissions:
   id-token: write
 
 env:
-  GO_VERSION: '1.25'
+  GO_VERSION: '1.26.2'
   NODE_VERSION: '22'
   ANUBIS_DATA_DIR: /tmp/anubis
   ANUBIS_CONFIG: /tmp/anubis.json
@@ -366,9 +366,9 @@ jobs:
           sarif_file: gosec.sarif
 
       - name: Run govulncheck
-        uses: golang/govulncheck-action@v1
-        with:
-          go-version-input: ${{ env.GO_VERSION }}
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
 
   # Docker Security Scan
   docker-security:
