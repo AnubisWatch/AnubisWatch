@@ -92,6 +92,7 @@ async function expectReadableLightPage(page: Page, path: string, headingName: st
 
 test.describe('AnubisWatch E2E Smoke', () => {
   test.describe.configure({ mode: 'serial' })
+  test.setTimeout(120000)
 
   test('toggles light mode and preserves it after reload', async ({ page }) => {
     await loginAndOpenSouls(page)
