@@ -136,6 +136,42 @@ describe('useSoulStore', () => {
     })
   })
 
+  it('retryInitialCheck updates a failed soul after a successful retry', async () => {
+    useSoulStore.setState({
+      souls: [{ id: '4', name: 'Soul 4', type: 'http', target: 'https://d.com', enabled: true, weight: 1, timeout: 5 }],
+      initialChecks: { '4': 'failed' },
+    })
+    let resolveCheck: (value: unknown) => void = () => {}
+    const checkPromise = new Promise((resolve) => {
+      resolveCheck = resolve
+    })
+    mockPost.mockReturnValueOnce(checkPromise)
+
+    const retry = useSoulStore.getState().retryInitialCheck('4')
+
+    expect(useSoulStore.getState().initialChecks['4']).toBe('running')
+
+    resolveCheck({
+      id: 'judgment-2',
+      soul_id: '4',
+      status: 'failed',
+      latency: 1200,
+      timestamp: '2026-05-02T09:15:00Z',
+      region: 'default',
+    })
+
+    await retry
+
+    expect(useSoulStore.getState().souls[0]).toMatchObject({
+      id: '4',
+      status: 'unhealthy',
+      latency: 1200,
+      last_check: '2026-05-02T09:15:00Z',
+    })
+    expect(useSoulStore.getState().initialChecks['4']).toBeUndefined()
+    expect(mockPost).toHaveBeenCalledWith('/souls/4/check')
+  })
+
   it('createSoul returns null on failure', async () => {
     mockPost.mockRejectedValue(new Error('Create failed'))
 

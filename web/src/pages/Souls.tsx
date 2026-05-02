@@ -46,7 +46,7 @@ const typeConfig: Record<SoulType, { label: string; color: string; bg: string; i
 }
 
 export function Souls() {
-  const { souls: rawSouls, initialChecks, fetchSouls, createSoul, updateSoul, deleteSoul } = useSoulStore()
+  const { souls: rawSouls, initialChecks, fetchSouls, createSoul, retryInitialCheck, updateSoul, deleteSoul } = useSoulStore()
   const souls = rawSouls as SoulWithStatus[]
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
@@ -116,6 +116,10 @@ export function Souls() {
     } catch {
       alert('Failed to update soul')
     }
+  }
+
+  const handleRetryInitialCheck = async (soul: SoulWithStatus) => {
+    await retryInitialCheck(soul.id)
   }
 
   const filteredSouls = souls.filter(soul => {
@@ -381,7 +385,14 @@ export function Souls() {
                           <span className="text-sm font-medium">Running</span>
                         </div>
                       ) : displayStatus === 'check_failed' ? (
-                        <span className="text-sm text-rose-400">Retry from detail</span>
+                        <button
+                          onClick={() => handleRetryInitialCheck(soul)}
+                          className="inline-flex items-center gap-2 text-sm font-medium text-rose-400 hover:text-rose-300 transition-colors"
+                          aria-label={`Retry initial check for ${soul.name || soul.target}`}
+                        >
+                          <RefreshCw className="w-4 h-4" />
+                          Retry
+                        </button>
                       ) : soul.latency ? (
                         <div className="flex items-center gap-2">
                           <Clock className="w-4 h-4 text-gray-500" />
@@ -454,10 +465,14 @@ export function Souls() {
                     </div>
                   )}
                   {displayStatus === 'check_failed' && (
-                    <div className="flex items-center gap-2 text-sm text-rose-400">
+                    <button
+                      onClick={() => handleRetryInitialCheck(soul)}
+                      className="flex items-center gap-2 text-sm text-rose-400 hover:text-rose-300 transition-colors"
+                      aria-label={`Retry initial check for ${soul.name || soul.target}`}
+                    >
                       <XCircle className="w-4 h-4" />
-                      <span>Initial check failed</span>
-                    </div>
+                      <span>Retry initial check</span>
+                    </button>
                   )}
                   {displayStatus !== 'checking' && displayStatus !== 'check_failed' && soul.latency && (
                     <div className="flex items-center gap-2 text-sm">

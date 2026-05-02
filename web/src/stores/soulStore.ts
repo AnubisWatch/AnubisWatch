@@ -10,6 +10,7 @@ interface SoulStore {
   initialChecks: Record<string, 'running' | 'failed'>
   fetchSouls: () => Promise<void>
   createSoul: (soul: Omit<Soul, 'id' | 'created_at' | 'updated_at'>) => Promise<Soul | null>
+  retryInitialCheck: (id: string) => Promise<Judgment | null>
   updateSoul: (id: string, soul: Partial<Soul>) => Promise<Soul | null>
   deleteSoul: (id: string) => Promise<void>
 }
@@ -34,7 +35,14 @@ function mergeJudgmentStatus(soul: Soul, judgment: Judgment): Soul {
   }
 }
 
-export const useSoulStore = create<SoulStore>((set) => ({
+function removeInitialCheck(
+  initialChecks: Record<string, 'running' | 'failed'>,
+  soulID: string
+): Record<string, 'running' | 'failed'> {
+  return Object.fromEntries(Object.entries(initialChecks).filter(([id]) => id !== soulID))
+}
+
+export const useSoulStore = create<SoulStore>((set, get) => ({
   souls: [],
   pagination: null,
   loading: false,
@@ -61,27 +69,32 @@ export const useSoulStore = create<SoulStore>((set) => ({
         set((state) => ({ souls: [...state.souls, result], loading: false }))
 
         if (result.enabled) {
-          set((state) => ({
-            initialChecks: { ...state.initialChecks, [result.id]: 'running' },
-          }))
-
-          void api.post<Judgment>(`/souls/${result.id}/check`).then((judgment) => {
-            set((state) => ({
-              souls: state.souls.map((s) => (s.id === result.id ? mergeJudgmentStatus(s, judgment) : s)),
-              initialChecks: Object.fromEntries(
-                Object.entries(state.initialChecks).filter(([id]) => id !== result.id)
-              ),
-            }))
-          }).catch(() => {
-            set((state) => ({
-              initialChecks: { ...state.initialChecks, [result.id]: 'failed' },
-            }))
-          })
+          void get().retryInitialCheck(result.id)
         }
       }
       return result ?? null
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Unknown error', loading: false })
+      return null
+    }
+  },
+
+  retryInitialCheck: async (id) => {
+    set((state) => ({
+      initialChecks: { ...state.initialChecks, [id]: 'running' },
+    }))
+
+    try {
+      const judgment = await api.post<Judgment>(`/souls/${id}/check`)
+      set((state) => ({
+        souls: state.souls.map((s) => (s.id === id ? mergeJudgmentStatus(s, judgment) : s)),
+        initialChecks: removeInitialCheck(state.initialChecks, id),
+      }))
+      return judgment
+    } catch {
+      set((state) => ({
+        initialChecks: { ...state.initialChecks, [id]: 'failed' },
+      }))
       return null
     }
   },
