@@ -16,6 +16,7 @@ env:
   NODE_VERSION: '22'
   ANUBIS_DATA_DIR: /tmp/anubis
   ANUBIS_CONFIG: /tmp/anubis.json
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   # Backend Tests
