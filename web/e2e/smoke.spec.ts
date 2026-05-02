@@ -94,7 +94,8 @@ test.describe('AnubisWatch E2E Smoke', () => {
     await retryPromise
 
     await expect(retryButton).not.toBeVisible({ timeout: 10000 })
-    await expect(page.getByText('Check failed')).not.toBeVisible()
-    await expect(page.getByText(/Healthy|Unhealthy/)).toBeVisible({ timeout: 10000 })
+    const soulRow = page.getByRole('row').filter({ hasText: soulName })
+    await expect(soulRow.getByText('Check failed')).not.toBeVisible()
+    await expect(soulRow.getByText(/Healthy|Unhealthy/)).toBeVisible({ timeout: 10000 })
   })
 })
