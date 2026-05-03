@@ -429,7 +429,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		if _, err := rand.Read(b); err != nil {
 			return nil, fmt.Errorf("failed to generate admin password: %w", err)
 		}
-		adminPassword = base64.RawURLEncoding.EncodeToString(b)
+		adminPassword = "Aa1!" + base64.RawURLEncoding.EncodeToString(b)
 		logger.Warn("no admin password configured — random password generated",
 			"action", "set auth.local.admin_password in config",
 			"password", adminPassword)
