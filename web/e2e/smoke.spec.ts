@@ -4,6 +4,13 @@ import { startServer, TestServer } from './server'
 
 let server: TestServer
 
+type CreatedSoul = {
+  id: string
+  name: string
+  target: string
+  type: string
+}
+
 test.beforeAll(async () => {
   server = await startServer()
 })
@@ -40,12 +47,14 @@ async function loginAndOpenSouls(page: Page) {
   await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 30000 })
 }
 
-async function createHttpSoul(page: Page, soulName: string) {
+async function createSoulViaUI(page: Page, soul: { name: string; type: string; target: string }): Promise<CreatedSoul> {
   await page.getByRole('button', { name: /Add Soul/i }).click()
-  await expect(page.getByRole('heading', { name: 'Add New Soul' })).toBeVisible()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('heading', { name: 'Add New Soul' })).toBeVisible()
 
-  await page.getByPlaceholder('e.g., Production API').fill(soulName)
-  await page.getByPlaceholder('https://api.example.com/health').fill('https://example.com')
+  await dialog.getByPlaceholder('e.g., Production API').fill(soul.name)
+  await dialog.locator('select').selectOption(soul.type)
+  await dialog.getByPlaceholder('https://api.example.com/health').fill(soul.target)
 
   const createPromise = page.waitForResponse(
     (res) => res.url().endsWith('/api/v1/souls') && res.request().method() === 'POST'
@@ -53,9 +62,15 @@ async function createHttpSoul(page: Page, soulName: string) {
   await page.getByRole('button', { name: /Create Soul/i }).click()
   const createRes = await createPromise
   expect(createRes.status()).toBe(201)
+  const createdSoul = await createRes.json() as CreatedSoul
+  expect(createdSoul.id).toBeTruthy()
+  expect(createdSoul.name).toBe(soul.name)
+  expect(createdSoul.type).toBe(soul.type)
+  expect(createdSoul.target).toBe(soul.target)
 
   await expect(page.getByRole('heading', { name: 'Add New Soul' })).not.toBeVisible()
-  await expect(page.getByText(soulName)).toBeVisible({ timeout: 10000 })
+  await expect(page.getByText(soul.name)).toBeVisible({ timeout: 10000 })
+  return createdSoul
 }
 
 const lightModePages = [
@@ -159,23 +174,44 @@ test.describe('AnubisWatch E2E Smoke', () => {
     }
   })
 
-  test('login, create soul, and run an immediate check', async ({ page }) => {
+  test('login, create souls, and run immediate checks', async ({ page }) => {
     await loginAndOpenSouls(page)
 
-    const soulName = `E2E Smoke Soul ${Date.now()}`
-    await createHttpSoul(page, soulName)
+    const runID = Date.now()
+    const serverURL = new URL(server.baseURL)
+    const monitorCases = [
+      {
+        name: `E2E HTTP Soul ${runID}`,
+        type: 'http',
+        target: `${server.baseURL}/health`,
+      },
+      {
+        name: `E2E TCP Soul ${runID}`,
+        type: 'tcp',
+        target: `${serverURL.hostname}:${serverURL.port}`,
+      },
+    ]
 
-    await page.getByLabel(`View soul ${soulName}`).click()
-    await expect(page.getByRole('heading', { name: soulName })).toBeVisible({ timeout: 10000 })
+    for (const monitor of monitorCases) {
+      const createdSoul = await createSoulViaUI(page, monitor)
 
-    const checkPromise = page.waitForResponse(
-      (res) => res.url().includes('/check') && res.request().method() === 'POST'
-    )
-    await page.getByRole('button', { name: /Test Now/i }).click()
-    const checkRes = await checkPromise
-    expect(checkRes.status()).toBe(200)
+      await page.getByLabel(`View soul ${monitor.name}`).click()
+      await expect(page.getByRole('heading', { name: monitor.name })).toBeVisible({ timeout: 10000 })
 
-    await expect(page.getByText(/Check passed|Check failed/i)).toBeVisible({ timeout: 10000 })
+      const checkPromise = page.waitForResponse(
+        (res) => res.url().endsWith(`/api/v1/souls/${createdSoul.id}/check`) && res.request().method() === 'POST'
+      )
+      await page.getByRole('button', { name: /Test Now/i }).click()
+      const checkRes = await checkPromise
+      expect(checkRes.status()).toBe(200)
+      const judgment = await checkRes.json() as { soul_id: string; status: string }
+      expect(judgment.soul_id).toBe(createdSoul.id)
+      expect(['passed', 'failed', 'pending']).toContain(judgment.status)
+
+      await expect(page.getByText(/Check passed|Check failed/i)).toBeVisible({ timeout: 10000 })
+      await page.goto(`${server.baseURL}/souls`)
+      await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 10000 })
+    }
   })
 
   test('shows retry when the automatic initial check request fails', async ({ page }) => {
@@ -197,7 +233,11 @@ test.describe('AnubisWatch E2E Smoke', () => {
     })
 
     const soulName = `E2E Retry Soul ${Date.now()}`
-    await createHttpSoul(page, soulName)
+    await createSoulViaUI(page, {
+      name: soulName,
+      type: 'http',
+      target: `${server.baseURL}/health`,
+    })
 
     const retryButton = page.getByLabel(`Retry initial check for ${soulName}`)
     await expect(retryButton).toBeVisible({ timeout: 10000 })

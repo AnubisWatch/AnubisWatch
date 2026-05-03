@@ -53,7 +53,7 @@ export async function startServer(): Promise<TestServer> {
 
   const proc = spawn(binaryPath, ['serve', '--single', '--config', configPath], {
     cwd: rootDir,
-    env: { ...process.env, ANUBIS_LOG_LEVEL: 'warn' },
+    env: { ...process.env, ANUBIS_LOG_LEVEL: 'warn', ANUBIS_SSRF_ALLOW_PRIVATE: '1' },
   })
 
   await waitForServer(port)
