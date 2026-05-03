@@ -35,7 +35,8 @@ func TestBuildServerDependencies_DefaultConfig(t *testing.T) {
 		},
 		"server": {
 			"host": "127.0.0.1",
-			"port": 0
+			"port": 0,
+			"grpc_port": 0
 		},
 		"necropolis": {
 			"node_name": "test-node",
@@ -140,7 +141,8 @@ func TestServer_StartStop(t *testing.T) {
 		},
 		"server": {
 			"host": "127.0.0.1",
-			"port": 0
+			"port": 0,
+			"grpc_port": 0
 		},
 		"necropolis": {
 			"node_name": "test-node"
@@ -282,7 +284,8 @@ func TestServer_Start_WithNilComponents(t *testing.T) {
 		},
 		"server": {
 			"host": "127.0.0.1",
-			"port": 0
+			"port": 0,
+			"grpc_port": 0
 		}
 	}`
 	configPath := filepath.Join(tempDir, "test-config.json")
@@ -328,7 +331,8 @@ func TestServer_Start_MultipleTimes(t *testing.T) {
 		},
 		"server": {
 			"host": "127.0.0.1",
-			"port": 0
+			"port": 0,
+			"grpc_port": 0
 		}
 	}`
 	configPath := filepath.Join(tempDir, "test-config.json")
@@ -360,6 +364,7 @@ func TestServer_Start_MultipleTimes(t *testing.T) {
 	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	server.Stop(shutdownCtx)
 	cancel()
+	time.Sleep(100 * time.Millisecond)
 
 	// Start again with fresh dependencies (some components don't support reuse)
 	deps2, err := BuildServerDependencies(opts)

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -231,6 +232,46 @@ func TestHandler_ServeHTTP_SPA(t *testing.T) {
 
 	// Should either return the file or fallback to index.html
 	t.Logf("SPA route returned status: %d", w.Code)
+}
+
+func TestHandler_ServeHTTP_PrimarySPARoutes(t *testing.T) {
+	handler, err := NewHandler()
+	if err != nil {
+		t.Fatalf("NewHandler failed: %v", err)
+	}
+
+	routes := []string{
+		"/",
+		"/souls",
+		"/judgments",
+		"/alerts",
+		"/incidents",
+		"/maintenance",
+		"/journeys",
+		"/cluster",
+		"/status-pages",
+		"/dashboards",
+		"/settings",
+	}
+
+	for _, route := range routes {
+		t.Run(route, func(t *testing.T) {
+			req := httptest.NewRequest("GET", route, nil)
+			w := httptest.NewRecorder()
+
+			handler.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected %s to serve dashboard shell, got %d", route, w.Code)
+			}
+			if ct := w.Header().Get("Content-Type"); ct != "text/html; charset=utf-8" {
+				t.Fatalf("expected HTML content type for %s, got %q", route, ct)
+			}
+			if body := w.Body.String(); !strings.Contains(body, `<div id="root"></div>`) {
+				t.Fatalf("expected %s to return the SPA shell", route)
+			}
+		})
+	}
 }
 
 func TestHandler_ServeHTTP_NotFound(t *testing.T) {

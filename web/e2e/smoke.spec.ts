@@ -91,6 +91,11 @@ async function expectReadableLightPage(page: Page, path: string, headingName: st
   expect(styles.headingFontFamily.toLowerCase()).not.toMatch(/cormorant|philosopher|cinzel/)
 }
 
+async function expectDirectlyLoadablePage(page: Page, path: string, headingName: string) {
+  await page.goto(`${server.baseURL}${path}`)
+  await expect(page.getByRole('heading', { name: headingName, exact: true }).first()).toBeVisible({ timeout: 30000 })
+}
+
 test.describe('AnubisWatch E2E Smoke', () => {
   test.describe.configure({ mode: 'serial' })
   test.setTimeout(120000)
@@ -120,6 +125,14 @@ test.describe('AnubisWatch E2E Smoke', () => {
 
     for (const { path, heading } of lightModePages) {
       await expectReadableLightPage(page, path, heading)
+    }
+  })
+
+  test('supports direct reloads for primary app routes', async ({ page }) => {
+    await loginAndOpenSouls(page)
+
+    for (const { path, heading } of lightModePages) {
+      await expectDirectlyLoadablePage(page, path, heading)
     }
   })
 
