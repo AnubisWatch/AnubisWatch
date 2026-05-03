@@ -38,7 +38,7 @@ func createLoadEngine() *Engine {
 		Registry: registry,
 		NodeID:   "load-test-node",
 		Region:   "load-test",
-		Logger:   nil,
+		Logger:   newTestProbeLogger(),
 		Config:   DefaultEngineConfig(),
 	}
 	opts.Config.MaxConcurrentChecks = 100
@@ -133,6 +133,13 @@ func getMemoryStats() runtime.MemStats {
 	return m
 }
 
+func memoryAllocDelta(before, after runtime.MemStats) uint64 {
+	if after.Alloc <= before.Alloc {
+		return 0
+	}
+	return after.Alloc - before.Alloc
+}
+
 // TestLoad_100Souls_Real tests with 100 souls
 func TestLoad_100Souls_Real(t *testing.T) {
 	if testing.Short() {
@@ -159,10 +166,7 @@ func TestLoad_100Souls_Real(t *testing.T) {
 
 	elapsed := time.Since(startTime)
 	memAfter := getMemoryStats()
-	var memUsed uint64
-	if memAfter.Alloc > memBefore.Alloc {
-		memUsed = memAfter.Alloc - memBefore.Alloc
-	}
+	memUsed := memoryAllocDelta(memBefore, memAfter)
 
 	status := engine.GetStatus()
 
@@ -205,7 +209,7 @@ func TestLoad_500Souls_Real(t *testing.T) {
 
 	elapsed := time.Since(startTime)
 	memAfter := getMemoryStats()
-	memUsed := memAfter.Alloc - memBefore.Alloc
+	memUsed := memoryAllocDelta(memBefore, memAfter)
 
 	status := engine.GetStatus()
 
@@ -253,7 +257,7 @@ func TestLoad_1000Souls_Real(t *testing.T) {
 
 	elapsed := time.Since(startTime)
 	memAfter := getMemoryStats()
-	memUsed := memAfter.Alloc - memBefore.Alloc
+	memUsed := memoryAllocDelta(memBefore, memAfter)
 
 	status := engine.GetStatus()
 

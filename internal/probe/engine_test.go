@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -23,10 +24,13 @@ func init() {
 	DefaultValidator = NewSSRFValidator()
 }
 
+func TestMain(m *testing.M) {
+	slog.SetDefault(newTestProbeLogger())
+	os.Exit(m.Run())
+}
+
 func newTestProbeLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelWarn,
-	}))
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 func TestCheckerRegistry(t *testing.T) {
