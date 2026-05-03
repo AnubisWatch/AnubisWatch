@@ -89,29 +89,6 @@ export function Cluster() {
     }
   }
 
-  if (clusterLoading) {
-    return (
-      <div className="flex items-center justify-center py-32">
-        <div className="w-10 h-10 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
-      </div>
-    )
-  }
-
-  if (clusterError) {
-    return (
-      <div className="text-center py-16">
-        <AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
-        <p className="text-gray-400">{clusterError}</p>
-        <button
-          onClick={handleRefresh}
-          className="mt-4 px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition-colors"
-        >
-          Try Again
-        </button>
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -139,6 +116,23 @@ export function Cluster() {
         </div>
       </div>
 
+      {clusterLoading ? (
+        <div className="flex items-center justify-center py-32" role="status" aria-label="Loading cluster status">
+          <div className="w-10 h-10 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
+        </div>
+      ) : clusterError ? (
+        <div className="text-center py-16">
+          <AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
+          <p className="text-gray-400">{clusterError}</p>
+          <button
+            onClick={handleRefresh}
+            className="mt-4 px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition-colors"
+          >
+            Try Again
+          </button>
+        </div>
+      ) : (
+        <>
       {/* Cluster Overview Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
@@ -388,6 +382,8 @@ export function Cluster() {
           </div>
         </div>
       </div>
+        </>
+      )}
     </div>
   )
 }
