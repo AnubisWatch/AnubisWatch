@@ -65,7 +65,8 @@ const lightModePages = [
 ]
 
 async function expectReadableLightPage(page: Page, path: string, headingName: string) {
-  await page.goto(`${server.baseURL}${path}`)
+  await page.locator(`a[href="${path}"]`).click()
+  await expect(page).toHaveURL(new RegExp(path === '/' ? '/$' : `${path}$`))
 
   const root = page.locator('html')
   await expect(root).toHaveClass(/light/)
