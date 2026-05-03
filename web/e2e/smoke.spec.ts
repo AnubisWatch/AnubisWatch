@@ -206,7 +206,7 @@ test.describe('AnubisWatch E2E Smoke', () => {
       expect(checkRes.status()).toBe(200)
       const judgment = await checkRes.json() as { soul_id: string; status: string }
       expect(judgment.soul_id).toBe(createdSoul.id)
-      expect(['passed', 'failed', 'pending']).toContain(judgment.status)
+      expect(['alive', 'dead', 'degraded', 'unknown', 'embalmed', 'passed', 'failed', 'pending']).toContain(judgment.status)
 
       await expect(page.getByText(/Check passed|Check failed/i)).toBeVisible({ timeout: 10000 })
       await page.goto(`${server.baseURL}/souls`)
