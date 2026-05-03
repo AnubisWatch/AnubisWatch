@@ -24,14 +24,6 @@ export function Dashboards() {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="w-8 h-8 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-8 animate-fade-in">
       {/* Header */}
@@ -52,7 +44,11 @@ export function Dashboards() {
       </div>
 
       {/* Dashboard Grid */}
-      {dashboards.length === 0 ? (
+      {loading ? (
+        <div className="flex items-center justify-center h-64" role="status" aria-label="Loading dashboards">
+          <div className="w-8 h-8 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
+        </div>
+      ) : dashboards.length === 0 ? (
         <div className="text-center py-16">
           <div className="w-24 h-24 rounded-2xl bg-gradient-to-br from-amber-500/20 to-amber-600/10
                           flex items-center justify-center border border-amber-500/20 mx-auto mb-6">

@@ -116,14 +116,6 @@ export function Settings() {
     { id: 'integrations' as TabId, label: 'Integrations', icon: Globe, description: 'API & webhooks' },
   ]
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-32">
-        <div className="w-10 h-10 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -163,6 +155,12 @@ export function Settings() {
         </div>
       </div>
 
+      {loading ? (
+        <div className="flex items-center justify-center py-32" role="status" aria-label="Loading settings">
+          <div className="w-10 h-10 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
+        </div>
+      ) : (
+        <>
       {/* Error */}
       {error && (
         <div className="bg-rose-500/10 border border-rose-500/20 rounded-2xl p-4 flex items-center gap-3">
@@ -586,6 +584,8 @@ export function Settings() {
           )}
         </div>
       </div>
+        </>
+      )}
     </div>
   )
 }

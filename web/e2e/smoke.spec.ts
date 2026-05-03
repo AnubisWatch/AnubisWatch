@@ -55,8 +55,13 @@ const lightModePages = [
   { path: '/souls', heading: 'Souls' },
   { path: '/judgments', heading: 'Judgments' },
   { path: '/alerts', heading: 'Alerts' },
+  { path: '/incidents', heading: 'Incidents' },
   { path: '/maintenance', heading: 'Maintenance' },
+  { path: '/journeys', heading: 'Journeys' },
   { path: '/cluster', heading: 'Cluster' },
+  { path: '/status-pages', heading: 'Status Pages' },
+  { path: '/dashboards', heading: 'Custom Dashboards' },
+  { path: '/settings', heading: 'Settings' },
 ]
 
 async function expectReadableLightPage(page: Page, path: string, headingName: string) {

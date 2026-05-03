@@ -307,14 +307,6 @@ export function Journeys() {
     }
   }
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-32">
-        <div className="w-10 h-10 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-8">
       {/* Header */}
@@ -341,6 +333,12 @@ export function Journeys() {
         </div>
       </div>
 
+      {loading ? (
+        <div className="flex items-center justify-center py-32" role="status" aria-label="Loading journeys">
+          <div className="w-10 h-10 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
+        </div>
+      ) : (
+        <>
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
         <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
@@ -617,6 +615,8 @@ export function Journeys() {
             Note: Journeys feature requires backend API support
           </p>
         </div>
+      )}
+        </>
       )}
 
       {/* Create Modal */}
