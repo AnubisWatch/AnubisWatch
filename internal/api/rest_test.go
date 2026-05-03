@@ -868,6 +868,93 @@ func TestHandleCreateSoul(t *testing.T) {
 	}
 }
 
+func TestHandleCreateSoulAssignsTCPAndForceChecksCreatedSoul(t *testing.T) {
+	storage := newMockStorage()
+	probe := &mockProbeEngine{}
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		probe:      probe,
+		router:     router,
+		auth:       &mockAuthenticator{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("POST", "/api/v1/souls", server.requireRole(server.handleCreateSoul, "souls:*"))
+	router.Handle("POST", "/api/v1/souls/:id/check", server.requireAuth(server.handleForceCheck))
+
+	soul := core.Soul{
+		Name:    "TCP Monitor",
+		Type:    core.CheckTCP,
+		Target:  "example.com:443",
+		Enabled: true,
+		Weight:  core.Duration{Duration: 30 * time.Second},
+		Timeout: core.Duration{Duration: 5 * time.Second},
+		TCP:     &core.TCPConfig{},
+	}
+	body, _ := json.Marshal(soul)
+
+	createReq := httptest.NewRequest("POST", "/api/v1/souls", bytes.NewBuffer(body))
+	createReq.Header.Set("Authorization", "Bearer valid-token")
+	createReq.Header.Set("Content-Type", "application/json")
+	createResp := httptest.NewRecorder()
+
+	router.ServeHTTP(createResp, createReq)
+
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d: %s", createResp.Code, createResp.Body.String())
+	}
+
+	var created core.Soul
+	if err := json.NewDecoder(createResp.Body).Decode(&created); err != nil {
+		t.Fatalf("failed to decode created soul: %v", err)
+	}
+	if created.ID == "" {
+		t.Fatal("expected created soul to have an id")
+	}
+	if created.WorkspaceID != "default" {
+		t.Fatalf("expected workspace default, got %q", created.WorkspaceID)
+	}
+	if created.Type != core.CheckTCP {
+		t.Fatalf("expected TCP soul, got %s", created.Type)
+	}
+	if _, ok := storage.souls[created.ID]; !ok {
+		t.Fatalf("expected created soul to be saved")
+	}
+
+	assigned, ok := probe.souls[created.ID]
+	if !ok {
+		t.Fatalf("expected created TCP soul to be assigned to probe")
+	}
+	if assigned.Type != core.CheckTCP || assigned.Target != "example.com:443" {
+		t.Fatalf("expected assigned TCP soul target example.com:443, got type=%s target=%s", assigned.Type, assigned.Target)
+	}
+
+	checkReq := httptest.NewRequest("POST", "/api/v1/souls/"+created.ID+"/check", nil)
+	checkReq.Header.Set("Authorization", "Bearer valid-token")
+	checkResp := httptest.NewRecorder()
+
+	router.ServeHTTP(checkResp, checkReq)
+
+	if checkResp.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", checkResp.Code, checkResp.Body.String())
+	}
+
+	var judgment core.Judgment
+	if err := json.NewDecoder(checkResp.Body).Decode(&judgment); err != nil {
+		t.Fatalf("failed to decode force-check judgment: %v", err)
+	}
+	if judgment.SoulID != created.ID {
+		t.Fatalf("expected judgment soul id %q, got %q", created.ID, judgment.SoulID)
+	}
+	if judgment.Status != core.SoulAlive {
+		t.Fatalf("expected alive judgment, got %s", judgment.Status)
+	}
+}
+
 func TestHandleGetSoul_NotFound(t *testing.T) {
 	storage := newMockStorage()
 	router := &Router{routes: make(map[string]map[string]Handler)}
