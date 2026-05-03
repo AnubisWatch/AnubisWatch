@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import type { Page } from '@playwright/test'
+import type { Browser, Page } from '@playwright/test'
 import { startServer, TestServer } from './server'
 
 let server: TestServer
@@ -12,7 +12,7 @@ test.afterAll(async () => {
   await server?.stop()
 })
 
-async function loginAndOpenSouls(page: Page) {
+async function authenticate(page: Page) {
   const loginRes = await page.request.post(`${server.baseURL}/api/v1/auth/login`, {
     data: {
       email: 'admin@anubis.watch',
@@ -22,10 +22,18 @@ async function loginAndOpenSouls(page: Page) {
   expect(loginRes.status()).toBe(200)
   const loginBody = await loginRes.json() as { token: string }
   expect(loginBody.token).toBeTruthy()
+  return loginBody.token
+}
 
+async function installAuthToken(page: Page, token: string) {
   await page.addInitScript((token) => {
     localStorage.setItem('auth_token', token)
-  }, loginBody.token)
+  }, token)
+}
+
+async function loginAndOpenSouls(page: Page) {
+  const token = await authenticate(page)
+  await installAuthToken(page, token)
 
   await page.goto(`${server.baseURL}/souls`)
   await page.waitForURL('**/souls')
@@ -92,8 +100,23 @@ async function expectReadableLightPage(page: Page, path: string, headingName: st
 }
 
 async function expectDirectlyLoadablePage(page: Page, path: string, headingName: string) {
-  await page.goto(`${server.baseURL}${path}`)
+  await page.goto(`${server.baseURL}${path}`, { waitUntil: 'domcontentloaded' })
+  await expect(page).toHaveURL(new RegExp(path === '/' ? '/$' : `${path}$`))
   await expect(page.getByRole('heading', { name: headingName, exact: true }).first()).toBeVisible({ timeout: 30000 })
+}
+
+async function expectDirectlyLoadablePageInFreshContext(browser: Browser, token: string, path: string, headingName: string) {
+  const context = await browser.newContext({ serviceWorkers: 'block' })
+  await context.addInitScript((token) => {
+    localStorage.setItem('auth_token', token)
+  }, token)
+
+  const page = await context.newPage()
+  try {
+    await expectDirectlyLoadablePage(page, path, headingName)
+  } finally {
+    await context.close()
+  }
 }
 
 test.describe('AnubisWatch E2E Smoke', () => {
@@ -128,11 +151,11 @@ test.describe('AnubisWatch E2E Smoke', () => {
     }
   })
 
-  test('supports direct reloads for primary app routes', async ({ page }) => {
-    await loginAndOpenSouls(page)
+  test('supports direct reloads for primary app routes', async ({ browser, page }) => {
+    const token = await authenticate(page)
 
     for (const { path, heading } of lightModePages) {
-      await expectDirectlyLoadablePage(page, path, heading)
+      await expectDirectlyLoadablePageInFreshContext(browser, token, path, heading)
     }
   })
 

@@ -9,6 +9,7 @@ export default defineConfig({
   reporter: 'list',
   use: {
     baseURL: process.env.E2E_BASE_URL || 'http://localhost:18080',
+    serviceWorkers: 'block',
     trace: 'on-first-retry',
   },
   projects: [
