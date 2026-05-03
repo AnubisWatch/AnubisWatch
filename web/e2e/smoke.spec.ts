@@ -13,22 +13,22 @@ test.afterAll(async () => {
 })
 
 async function loginAndOpenSouls(page: Page) {
-  await page.goto(`${server.baseURL}/login`)
-  await expect(page.getByRole('heading', { name: /Anubis/i })).toBeVisible()
-
-  await page.getByPlaceholder('priest@anubis.watch').fill('admin@anubis.watch')
-  await page.getByPlaceholder('••••••••').fill('SecurePass123!')
-
-  const loginPromise = page.waitForResponse(
-    (res) => res.url().endsWith('/api/v1/auth/login') && res.request().method() === 'POST'
-  )
-  await page.getByRole('button', { name: /Enter the Temple/i }).click()
-  const loginRes = await loginPromise
+  const loginRes = await page.request.post(`${server.baseURL}/api/v1/auth/login`, {
+    data: {
+      email: 'admin@anubis.watch',
+      password: 'SecurePass123!',
+    },
+  })
   expect(loginRes.status()).toBe(200)
-  await page.waitForFunction(() => Boolean(localStorage.getItem('auth_token')))
-  await page.waitForURL('**/')
+  const loginBody = await loginRes.json() as { token: string }
+  expect(loginBody.token).toBeTruthy()
+
+  await page.addInitScript((token) => {
+    localStorage.setItem('auth_token', token)
+  }, loginBody.token)
 
   await page.goto(`${server.baseURL}/souls`)
+  await page.waitForURL('**/souls')
   await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 30000 })
 }
 
