@@ -11,6 +11,11 @@ type CreatedSoul = {
   type: string
 }
 
+type CreatedDashboard = {
+  id: string
+  name: string
+}
+
 test.beforeAll(async () => {
   server = await startServer()
 })
@@ -36,6 +41,135 @@ async function installAuthToken(page: Page, token: string) {
   await page.addInitScript((token) => {
     localStorage.setItem('auth_token', token)
   }, token)
+}
+
+function trackRuntimeIssues(page: Page) {
+  const issues: string[] = []
+
+  page.on('console', (message) => {
+    if (message.type() === 'error') {
+      const location = message.location()
+      const source = location.url ? ` at ${location.url}` : ''
+      issues.push(`console error: ${message.text()}${source}`)
+    }
+  })
+  page.on('pageerror', (error) => {
+    issues.push(`page error: ${error.message}`)
+  })
+  page.on('response', (response) => {
+    const status = response.status()
+    const resourceType = response.request().resourceType()
+    if (status < 400 || resourceType === 'fetch' || resourceType === 'xhr') {
+      return
+    }
+    issues.push(`resource ${status}: ${resourceType} ${response.url()}`)
+  })
+
+  return issues
+}
+
+function filterExpectedE2EIssues(issues: string[]) {
+  const sawWebSocketRateLimit = issues.some((issue) =>
+    issue.includes('/ws') && issue.includes('Unexpected response code: 429')
+  )
+
+  return issues.filter((issue) => {
+    if (issue.includes('/ws') && issue.includes('Unexpected response code: 429')) {
+      return false
+    }
+    if (sawWebSocketRateLimit && issue.startsWith('console error: WebSocket error: Event')) {
+      return false
+    }
+    return true
+  })
+}
+
+function authStorageState(token: string) {
+  const serverURL = new URL(server.baseURL)
+
+  return {
+    cookies: [
+      {
+        name: 'auth_token',
+        value: token,
+        domain: serverURL.hostname,
+        path: '/',
+        expires: Math.floor(Date.now() / 1000) + 86400,
+        httpOnly: true,
+        secure: serverURL.protocol === 'https:',
+        sameSite: 'Strict' as const,
+      },
+    ],
+    origins: [
+      {
+        origin: serverURL.origin,
+        localStorage: [{ name: 'auth_token', value: token }],
+      },
+    ],
+  }
+}
+
+async function withAuthenticatedPage(
+  browser: Browser,
+  token: string,
+  action: (page: Page) => Promise<void>
+) {
+  const context = await browser.newContext({
+    serviceWorkers: 'block',
+    storageState: authStorageState(token),
+  })
+  const page = await context.newPage()
+  const issues = trackRuntimeIssues(page)
+
+  try {
+    await action(page)
+    expect(filterExpectedE2EIssues(issues)).toEqual([])
+  } finally {
+    await context.close()
+  }
+}
+
+async function createSoulViaAPI(page: Page, token: string, runID: number): Promise<CreatedSoul> {
+  const createRes = await page.request.post(`${server.baseURL}/api/v1/souls`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: {
+      name: `E2E Route Soul ${runID}`,
+      type: 'http',
+      target: `${server.baseURL}/health`,
+      enabled: true,
+      weight: '30s',
+      timeout: '5s',
+      http: { method: 'GET', valid_status: [200] },
+    },
+  })
+  expect(createRes.status()).toBe(201)
+  const created = await createRes.json() as CreatedSoul
+  expect(created.id).toBeTruthy()
+  return created
+}
+
+async function createDashboardViaAPI(page: Page, token: string, runID: number): Promise<CreatedDashboard> {
+  const createRes = await page.request.post(`${server.baseURL}/api/v1/dashboards`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: {
+      name: `E2E Dashboard ${runID}`,
+      description: 'Route coverage dashboard',
+      refresh_sec: 0,
+      widgets: [
+        {
+          id: 'w_soul_count',
+          title: 'Soul Count',
+          type: 'stat',
+          grid: { x: 0, y: 0, width: 4, height: 2 },
+          query: { source: 'souls', metric: 'count', time_range: '24h' },
+        },
+      ],
+    },
+  })
+  expect(createRes.status()).toBe(201)
+  const created = await createRes.json() as CreatedDashboard
+  expect(created.id).toBeTruthy()
+  return created
 }
 
 async function loginAndOpenSouls(page: Page) {
@@ -134,6 +268,15 @@ async function expectDirectlyLoadablePageInFreshContext(browser: Browser, token:
   }
 }
 
+async function expectRouteHeading(page: Page, path: string, headingName: string | RegExp) {
+  const expectedURL = new URL(path, server.baseURL).toString()
+
+  await page.goto(`${server.baseURL}${path}`, { waitUntil: 'domcontentloaded' })
+  await expect(page).toHaveURL(expectedURL)
+  await expect(page.getByRole('heading', { name: headingName }).first()).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('#main-content')).toBeVisible()
+}
+
 test.describe('AnubisWatch E2E Smoke', () => {
   test.describe.configure({ mode: 'serial' })
   test.setTimeout(120000)
@@ -172,6 +315,99 @@ test.describe('AnubisWatch E2E Smoke', () => {
     for (const { path, heading } of lightModePages) {
       await expectDirectlyLoadablePageInFreshContext(browser, token, path, heading)
     }
+  })
+
+  test('renders every dashboard route and critical controls without runtime errors', async ({ browser }) => {
+    const setupContext = await browser.newContext({ serviceWorkers: 'block' })
+    const setupPage = await setupContext.newPage()
+    const token = await authenticate(setupPage)
+    const runID = Date.now()
+    const createdSoul = await createSoulViaAPI(setupPage, token, runID)
+    const createdDashboard = await createDashboardViaAPI(setupPage, token, runID)
+    await setupContext.close()
+
+    const routes = [
+      ...lightModePages,
+      { path: `/souls/${createdSoul.id}`, heading: createdSoul.name },
+      { path: `/souls/${createdSoul.id}/edit`, heading: 'Edit Soul' },
+      { path: '/dashboards/new', heading: 'New Dashboard' },
+      { path: `/dashboards/${createdDashboard.id}`, heading: createdDashboard.name },
+    ]
+
+    for (const { path, heading } of routes) {
+      await withAuthenticatedPage(browser, token, async (appPage) => {
+        await expectRouteHeading(appPage, path, heading)
+      })
+    }
+
+    await withAuthenticatedPage(browser, token, async (appPage) => {
+      await appPage.goto(`${server.baseURL}/souls/${createdSoul.id}`)
+      for (const tab of ['overview', 'performance', 'history', 'settings']) {
+        await appPage.getByRole('tab', { name: tab }).click()
+        await expect(appPage.getByRole('tab', { name: tab })).toHaveAttribute('aria-selected', 'true')
+      }
+    })
+
+    await withAuthenticatedPage(browser, token, async (appPage) => {
+      await appPage.goto(`${server.baseURL}/alerts`)
+      for (const tab of ['Alert Rules', 'Channels', 'History']) {
+        await appPage.getByRole('tab', { name: new RegExp(tab) }).click()
+        await expect(appPage.getByRole('tab', { name: new RegExp(tab) })).toHaveAttribute('aria-selected', 'true')
+      }
+    })
+
+    await withAuthenticatedPage(browser, token, async (appPage) => {
+      await appPage.goto(`${server.baseURL}/settings`)
+      for (const tab of ['General', 'Security', 'Notifications', 'Storage', 'Integrations']) {
+        await appPage.getByRole('tab', { name: new RegExp(tab) }).click()
+        await expect(appPage.getByRole('tab', { name: new RegExp(tab) })).toHaveAttribute('aria-selected', 'true')
+      }
+    })
+
+    const refreshControls = [
+      { path: '/', label: 'Refresh dashboard' },
+      { path: '/souls', label: 'Refresh souls' },
+      { path: '/judgments', label: 'Refresh judgments' },
+      { path: '/alerts', label: 'Refresh' },
+      { path: '/maintenance', label: 'Refresh maintenance windows' },
+      { path: '/journeys', label: 'Refresh journeys' },
+      { path: '/cluster', label: 'Refresh cluster status' },
+      { path: '/status-pages', label: 'Refresh status pages' },
+      { path: `/dashboards/${createdDashboard.id}`, label: 'Refresh dashboard' },
+      { path: '/settings', label: 'Refresh configuration' },
+    ]
+
+    for (const { path, label } of refreshControls) {
+      await withAuthenticatedPage(browser, token, async (appPage) => {
+        await appPage.goto(`${server.baseURL}${path}`)
+        await appPage.getByRole('button', { name: label }).click()
+        await expect(appPage.locator('#main-content')).toBeVisible()
+      })
+    }
+
+    await withAuthenticatedPage(browser, token, async (appPage) => {
+      await appPage.goto(`${server.baseURL}/dashboards/new`)
+      const dashboardName = `E2E Created Dashboard ${runID}`
+      await appPage.getByLabel('Name').fill(dashboardName)
+      await appPage.getByLabel('Description').fill('Created from full dashboard route coverage')
+      const createDashboardPromise = appPage.waitForResponse(
+        (res) => res.url().endsWith('/api/v1/dashboards') && res.request().method() === 'POST'
+      )
+      await appPage.getByRole('button', { name: 'Create Dashboard' }).click()
+      const createDashboardRes = await createDashboardPromise
+      expect(createDashboardRes.status()).toBe(201)
+      await expect(appPage.getByRole('heading', { name: dashboardName })).toBeVisible({ timeout: 10000 })
+    })
+
+    await withAuthenticatedPage(browser, token, async (appPage) => {
+      await appPage.goto(`${server.baseURL}/dashboards/${createdDashboard.id}`)
+      await appPage.getByRole('button', { name: 'Edit' }).click()
+      await expect(appPage.getByRole('button', { name: 'Add Widget' })).toBeVisible()
+      await appPage.getByRole('button', { name: 'Add Widget' }).click()
+      await expect(appPage.getByRole('heading', { name: 'Add Widget' })).toBeVisible()
+      await appPage.getByRole('button', { name: 'Cancel' }).click()
+      await expect(appPage.getByRole('heading', { name: 'Add Widget' })).not.toBeVisible()
+    })
   })
 
   test('login, create souls, and run immediate checks', async ({ page }) => {

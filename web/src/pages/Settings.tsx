@@ -60,7 +60,7 @@ export function Settings() {
   const fetchConfig = useCallback(async () => {
     try {
       setLoading(true)
-      const result = await api.get<ConfigData>('/api/v1/config')
+      const result = await api.get<ConfigData>('/config')
       setConfig(result)
       setEditedConfig(result)
       setError(null)
@@ -83,7 +83,7 @@ export function Settings() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await api.put('/api/v1/config', editedConfig)
+      await api.put('/config', editedConfig)
       setConfig(editedConfig)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)

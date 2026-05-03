@@ -1,6 +1,7 @@
 package core
 
 import (
+	"strings"
 	"time"
 )
 
@@ -105,6 +106,9 @@ func (r MemberRole) Can(permission string) bool {
 
 	for _, p := range rolePerms {
 		if p == "*" || p == permission {
+			return true
+		}
+		if strings.HasSuffix(p, ":*") && strings.HasPrefix(permission, strings.TrimSuffix(p, "*")) {
 			return true
 		}
 	}

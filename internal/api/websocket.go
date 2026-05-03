@@ -145,23 +145,25 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Extract token from Authorization header only
+	// Extract token from Authorization header or httpOnly auth cookie.
+	// Browser WebSocket clients cannot set Authorization headers, so the dashboard
+	// relies on the same secure cookie used by REST API requests.
 	// SECURITY: Reject query parameter tokens to prevent token leakage in access logs,
 	// browser history, and Referer headers. (HIGH-03 fix)
 	if r.URL.Query().Get("token") != "" {
 		s.logger.Warn("WebSocket connection rejected: token via query parameter is not allowed",
 			"remote_addr", r.RemoteAddr)
-		http.Error(w, "Unauthorized: token must be provided via Authorization header, not query parameter", http.StatusUnauthorized)
+		http.Error(w, "Unauthorized: token must be provided via Authorization header or auth cookie, not query parameter", http.StatusUnauthorized)
 		return
 	}
 
 	authHeader := r.Header.Get("Authorization")
-	if !strings.HasPrefix(authHeader, "Bearer ") {
-		s.logger.Warn("WebSocket connection rejected: missing Bearer token", "remote_addr", r.RemoteAddr)
-		http.Error(w, "Unauthorized: missing Bearer token in Authorization header", http.StatusUnauthorized)
-		return
+	token := ""
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		token = strings.TrimPrefix(authHeader, "Bearer ")
+	} else if cookie, err := r.Cookie("auth_token"); err == nil {
+		token = cookie.Value
 	}
-	token := strings.TrimPrefix(authHeader, "Bearer ")
 
 	// Validate token
 	if token == "" {

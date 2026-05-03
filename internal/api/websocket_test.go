@@ -437,6 +437,25 @@ func TestWebSocketServer_removeClient_WithRooms(t *testing.T) {
 	server.mu.RUnlock()
 }
 
+func TestWebSocketServer_HandleConnection_WithAuthCookie(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger, &mockAuthenticator{}, nil)
+
+	httpServer := httptest.NewServer(http.HandlerFunc(server.HandleConnection))
+	defer httpServer.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "?workspace=test"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Cookie": []string{"auth_token=valid-token"}},
+	})
+	if err != nil {
+		t.Fatalf("Failed to connect WebSocket with auth cookie: %v", err)
+	}
+	defer ws.CloseNow()
+}
+
 // TestWebSocketServer_broadcastToRoom_NonExistent tests broadcasting to non-existent room
 func TestWebSocketServer_broadcastToRoom_NonExistent(t *testing.T) {
 	logger := newTestLogger()

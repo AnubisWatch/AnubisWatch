@@ -12,14 +12,22 @@ import { TableWidget } from '../components/widgets/TableWidget'
 export function DashboardDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const isNewDashboard = !id || id === 'new'
   const [dashboard, setDashboard] = useState<CustomDashboard | null>(null)
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [showAddWidget, setShowAddWidget] = useState(false)
+  const [newName, setNewName] = useState('New Dashboard')
+  const [newDescription, setNewDescription] = useState('')
+  const [newRefreshSec, setNewRefreshSec] = useState(60)
+  const [savingNew, setSavingNew] = useState(false)
 
   const fetchDashboard = useCallback(async () => {
-    if (!id) return
+    if (isNewDashboard) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
       const result = await api.get<CustomDashboard>(`/dashboards/${id}`)
@@ -29,7 +37,7 @@ export function DashboardDetail() {
     } finally {
       setLoading(false)
     }
-  }, [id])
+  }, [id, isNewDashboard])
 
   useEffect(() => { fetchDashboard() }, [fetchDashboard])
 
@@ -71,6 +79,22 @@ export function DashboardDetail() {
     setShowAddWidget(false)
   }
 
+  const handleCreateDashboard = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setSavingNew(true)
+    try {
+      const created = await api.post<CustomDashboard>('/dashboards', {
+        name: newName.trim() || 'Untitled Dashboard',
+        description: newDescription.trim(),
+        widgets: [],
+        refresh_sec: newRefreshSec,
+      })
+      navigate(`/dashboards/${created.id}`)
+    } finally {
+      setSavingNew(false)
+    }
+  }
+
   const renderWidget = (widget: WidgetConfig) => {
     const props = { widget, dashboardId: id! }
     switch (widget.type) {
@@ -87,6 +111,71 @@ export function DashboardDetail() {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="w-8 h-8 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
+      </div>
+    )
+  }
+
+  if (isNewDashboard) {
+    return (
+      <div className="space-y-6 animate-fade-in max-w-3xl">
+        <div className="flex items-center gap-4">
+          <button onClick={() => navigate('/dashboards')} className="text-gray-400 hover:text-amber-400 transition-colors" aria-label="Back to dashboards">
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+          <div>
+            <h1 className="text-3xl font-cinzel font-bold gradient-gold-shine tracking-wider">New Dashboard</h1>
+            <p className="text-gray-400 font-cormorant italic mt-1">Create a custom view for the metrics you watch most.</p>
+          </div>
+        </div>
+
+        <form onSubmit={handleCreateDashboard} className="bg-gray-900/80 border border-gray-700/50 rounded-2xl p-6 space-y-5">
+          <div>
+            <label htmlFor="dashboard-name" className="text-sm font-medium text-gray-300 block mb-2">Name</label>
+            <input
+              id="dashboard-name"
+              value={newName}
+              onChange={event => setNewName(event.target.value)}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+              required
+            />
+          </div>
+          <div>
+            <label htmlFor="dashboard-description" className="text-sm font-medium text-gray-300 block mb-2">Description</label>
+            <textarea
+              id="dashboard-description"
+              value={newDescription}
+              onChange={event => setNewDescription(event.target.value)}
+              className="w-full min-h-24 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+              placeholder="Optional context for this dashboard"
+            />
+          </div>
+          <div>
+            <label htmlFor="dashboard-refresh" className="text-sm font-medium text-gray-300 block mb-2">Refresh Interval</label>
+            <select
+              id="dashboard-refresh"
+              value={newRefreshSec}
+              onChange={event => setNewRefreshSec(Number(event.target.value))}
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white"
+            >
+              <option value={0}>Manual only</option>
+              <option value={30}>30 seconds</option>
+              <option value={60}>1 minute</option>
+              <option value={300}>5 minutes</option>
+            </select>
+          </div>
+          <div className="flex items-center gap-3 pt-2">
+            <button
+              type="submit"
+              disabled={savingNew}
+              className="px-4 py-2 bg-amber-500/20 border border-amber-500/40 text-amber-400 rounded-lg text-sm font-medium hover:bg-amber-500/30 transition-all disabled:opacity-60"
+            >
+              {savingNew ? 'Creating...' : 'Create Dashboard'}
+            </button>
+            <button type="button" onClick={() => navigate('/dashboards')} className="px-4 py-2 bg-gray-800 border border-gray-700 text-gray-400 rounded-lg text-sm hover:text-white transition-all">
+              Cancel
+            </button>
+          </div>
+        </form>
       </div>
     )
   }

@@ -241,9 +241,18 @@ func TestMemberRole_Can(t *testing.T) {
 		t.Error("Expected Viewer to not have souls:write permission")
 	}
 
-	// Editor has "souls:*" permission - exact match only
+	// Editor has "souls:*" permission
 	if !RoleEditor.Can("souls:*") {
 		t.Error("Expected Editor to have souls:* permission")
+	}
+	if !RoleEditor.Can("souls:read") {
+		t.Error("Expected Editor wildcard to allow souls:read permission")
+	}
+	if !RoleEditor.Can("souls:write") {
+		t.Error("Expected Editor wildcard to allow souls:write permission")
+	}
+	if !RoleAdmin.Can("souls:read") {
+		t.Error("Expected Admin wildcard to allow souls:read permission")
 	}
 
 	// Editor has "channels:read" permission
