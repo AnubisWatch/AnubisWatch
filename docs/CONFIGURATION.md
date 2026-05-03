@@ -137,18 +137,18 @@ CobaltDB automatically compacts time-series data:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `raw_to_minute` | duration | `48h` | Raw samples → 1-minute aggregates |
-| `minute_to_five` | duration | `7d` | 1-minute → 5-minute aggregates |
-| `five_to_hour` | duration | `30d` | 5-minute → hourly aggregates |
-| `hour_to_day` | duration | `365d` | Hourly → daily aggregates |
+| `minute_to_five` | duration | `168h` | 1-minute → 5-minute aggregates |
+| `five_to_hour` | duration | `720h` | 5-minute → hourly aggregates |
+| `hour_to_day` | duration | `8760h` | Hourly → daily aggregates |
 
 ### `storage.retention` Block
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `raw` | duration | `48h` | Keep raw judgment samples |
-| `minute` | duration | `30d` | Keep minute-level aggregates |
-| `five` | duration | `90d` | Keep 5-minute aggregates |
-| `hour` | duration | `365d` | Keep hourly aggregates |
+| `minute` | duration | `720h` | Keep minute-level aggregates |
+| `five` | duration | `2160h` | Keep 5-minute aggregates |
+| `hour` | duration | `8760h` | Keep hourly aggregates |
 | `day` | duration | `unlimited` | Keep daily aggregates |
 
 ### Example
@@ -162,14 +162,14 @@ storage:
   timeseries:
     compaction:
       raw_to_minute: 48h
-      minute_to_five: 7d
-      five_to_hour: 30d
-      hour_to_day: 365d
+      minute_to_five: 168h
+      five_to_hour: 720h
+      hour_to_day: 8760h
     retention:
       raw: 48h
-      minute: 30d
-      five: 90d
-      hour: 365d
+      minute: 720h
+      five: 2160h
+      hour: 8760h
       day: unlimited
 ```
 
@@ -1102,10 +1102,10 @@ Validate your configuration file:
 
 ```bash
 # Validate config syntax
-anubis validate --config anubis.yaml
+anubis config validate --config anubis.yaml
 
-# Dry-run with config (no actual checks)
-anubis serve --config anubis.yaml --dry-run
+# Show the resolved config path
+anubis config path --config anubis.yaml
 ```
 
 ### Common Errors

@@ -2,7 +2,7 @@
 # AnubisWatch Release Script
 # ═══════════════════════════════════════════════════════════
 
-set -e
+set -euo pipefail
 
 # Colors
 RED='\033[0;31m'
@@ -42,6 +42,11 @@ usage() {
 while [[ $# -gt 0 ]]; do
     case $1 in
         -v|--version)
+            if [[ $# -lt 2 || "$2" == -* ]]; then
+                echo -e "${RED}Error: --version requires a value${NC}"
+                usage
+                exit 1
+            fi
             VERSION="$2"
             shift 2
             ;;
@@ -121,6 +126,8 @@ fi
 # Check tools
 command -v go >/dev/null 2>&1 || { echo -e "${RED}Error: Go is required${NC}"; exit 1; }
 command -v git >/dev/null 2>&1 || { echo -e "${RED}Error: Git is required${NC}"; exit 1; }
+command -v make >/dev/null 2>&1 || { echo -e "${RED}Error: make is required${NC}"; exit 1; }
+command -v npm >/dev/null 2>&1 || { echo -e "${RED}Error: npm is required${NC}"; exit 1; }
 
 echo -e "${GREEN}✓ Prerequisites OK${NC}"
 echo ""
@@ -129,6 +136,7 @@ echo ""
 if [[ "$SKIP_TESTS" == false ]]; then
     echo "🧪 Running tests..."
     cd "$PROJECT_ROOT"
+    (cd web && npm ci && npm run build:embed && npm run test -- --run && npm run lint)
     if ! go test -race -short ./...; then
         echo -e "${RED}Error: Tests failed${NC}"
         exit 1
@@ -141,6 +149,7 @@ fi
 if [[ "$SKIP_BUILD" == false ]]; then
     echo "🔨 Building binaries..."
     cd "$PROJECT_ROOT"
+    (cd web && npm ci && npm run build:embed)
 
     # Build for all platforms
     make build-all || {

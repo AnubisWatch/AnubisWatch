@@ -108,6 +108,48 @@ func TestFindConfig_Default(t *testing.T) {
 	}
 }
 
+func TestFindConfig_LocalYAML(t *testing.T) {
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpDir := t.TempDir()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(origDir)
+
+	t.Setenv("ANUBIS_CONFIG", "")
+	if err := os.WriteFile("anubis.yaml", []byte("server:\n  port: 8080\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if result := findConfig(); result != "./anubis.yaml" {
+		t.Fatalf("expected ./anubis.yaml, got %s", result)
+	}
+}
+
+func TestConfigPathFromArgs(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "long flag with value", args: []string{"anubis", "serve", "--config", "custom.yaml"}, want: "custom.yaml"},
+		{name: "long flag equals", args: []string{"anubis", "serve", "--config=custom.json"}, want: "custom.json"},
+		{name: "short flag", args: []string{"anubis", "config", "validate", "-c", "short.yaml"}, want: "short.yaml"},
+		{name: "missing", args: []string{"anubis", "serve"}, want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := configPathFromArgs(tt.args); got != tt.want {
+				t.Fatalf("expected %q, got %q", tt.want, got)
+			}
+		})
+	}
+}
+
 // TestEnsureConfigDir tests ensureConfigDir function
 func TestEnsureConfigDir(t *testing.T) {
 	// Test with directory path

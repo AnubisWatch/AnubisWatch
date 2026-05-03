@@ -102,10 +102,17 @@ config:
       autoCert: false
       acmeEmail: ""
 
+  dashboard:
+    enabled: true
+
+  auth:
+    type: local
+    local:
+      adminEmail: admin@anubiswatch.local
+
   # Storage configuration
   storage:
     path: "/var/lib/anubis/data"
-    retentionDays: 90
     encryptionKey: ""
 
   # Logging configuration

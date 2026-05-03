@@ -29,7 +29,7 @@ export function Judgments() {
   const [timeRange, setTimeRange] = useState('24h')
   const [refreshing, setRefreshing] = useState(false)
 
-  const judgments: Judgment[] = judgmentsData?.data || []
+  const judgments: Judgment[] = judgmentsData || []
 
   const handleRefresh = async () => {
     setRefreshing(true)

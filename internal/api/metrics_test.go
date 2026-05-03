@@ -44,6 +44,20 @@ func TestHandleMetrics(t *testing.T) {
 	}
 }
 
+func TestMetricsRoute_PublicWithoutAuth(t *testing.T) {
+	config := core.ServerConfig{Port: 8080}
+	logger := newTestLogger()
+	server := NewRESTServer(config, core.AuthConfig{Enabled: core.BoolPtr(true)}, newMockStorage(), &mockProbeEngine{}, &mockAlertManager{}, &mockAuthenticator{}, &mockClusterManager{}, nil, nil, nil, nil, logger)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	server.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected public metrics endpoint to return %d without auth, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+}
+
 // TestHandleMetrics_Content checks that metrics contains expected Prometheus format
 func TestHandleMetrics_Content(t *testing.T) {
 	config := core.ServerConfig{Port: 8080}

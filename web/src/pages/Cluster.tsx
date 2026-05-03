@@ -12,7 +12,6 @@ import {
   Shield,
   Zap,
   RefreshCw,
-  Cpu,
   Globe,
   Terminal,
   AlertCircle
@@ -48,19 +47,13 @@ export function Cluster() {
   const term = clusterData?.term || 0
   const peerCount = clusterData?.peer_count || 0
 
-  // Mock nodes data - backend doesn't provide per-node metrics yet
   const nodes = [
     {
       id: nodeId,
-      region: 'default',
-      status: 'healthy' as const,
-      role: isLeader ? 'leader' as const : 'follower' as const,
+      region: isClustered ? 'cluster' : 'local',
+      status: (state === 'leader' || state === 'follower' || state === 'standalone' || state === 'solo') ? 'healthy' as const : 'unknown' as const,
+      role: state,
       last_contact: 'now',
-      uptime: '0d 0h',
-      version: 'v1.0.0',
-      cpu: 45,
-      memory: 62,
-      disk: 34
     }
   ]
 
@@ -260,9 +253,7 @@ export function Cluster() {
               <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-4">Status</th>
               <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-4">Role</th>
               <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-4">Region</th>
-              <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-4">Resources</th>
-              <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-4">Uptime</th>
-              <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-4">Version</th>
+              <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-4">Last Contact</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-700/50">
@@ -306,25 +297,7 @@ export function Cluster() {
                   </div>
                 </td>
                 <td className="px-6 py-4">
-                  <div className="flex items-center gap-4">
-                    <div className="flex items-center gap-2" title="CPU">
-                      <Cpu className="w-4 h-4 text-gray-500" />
-                      <div className="w-12 h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full ${node.cpu > 70 ? 'bg-rose-500' : node.cpu > 50 ? 'bg-amber-500' : 'bg-emerald-500'}`} style={{ width: `${node.cpu}%` }} />
-                      </div>
-                      <span className="text-xs text-gray-400">{node.cpu}%</span>
-                    </div>
-                    <div className="flex items-center gap-2" title="Memory">
-                      <Database className="w-4 h-4 text-gray-500" />
-                      <span className="text-xs text-gray-400">{node.memory}%</span>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-6 py-4">
-                  <span className="text-sm text-gray-400 font-mono">{node.uptime}</span>
-                </td>
-                <td className="px-6 py-4">
-                  <span className="text-sm text-gray-400 font-mono">{node.version}</span>
+                  <span className="text-sm text-gray-400 font-mono">{node.last_contact}</span>
                 </td>
               </tr>
             ))}

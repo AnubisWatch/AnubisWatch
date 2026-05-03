@@ -399,6 +399,42 @@ func TestMain_Help(t *testing.T) {
 	}
 }
 
+func TestMain_CheckAliasHelp(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
+		os.Args = []string{"anubis", "check", "--help"}
+		main()
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestMain_CheckAliasHelp")
+	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("check alias failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Usage: anubis judge") {
+		t.Fatalf("expected judge help from check alias, got: %s", output)
+	}
+}
+
+func TestMain_SoulAliasHelp(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
+		os.Args = []string{"anubis", "soul"}
+		main()
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestMain_SoulAliasHelp")
+	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_PROCESS=1")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("soul alias failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "Souls Management") {
+		t.Fatalf("expected souls help from soul alias, got: %s", output)
+	}
+}
+
 func TestMain_NoArgs(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_PROCESS") == "1" {
 		os.Args = []string{"anubis"}

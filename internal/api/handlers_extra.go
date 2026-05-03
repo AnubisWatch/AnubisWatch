@@ -349,6 +349,20 @@ func (s *RESTServer) querySouls(q core.WidgetQuery, workspace string) (interface
 		return map[string]int{"count": len(souls)}, nil
 	case "list":
 		return souls, nil
+	case "status_distribution":
+		distribution := map[string]int{
+			"healthy":   0,
+			"unhealthy": 0,
+			"unknown":   0,
+		}
+		for _, soul := range souls {
+			status := s.soulWithLatestJudgment(soul).Status
+			if _, ok := distribution[status]; !ok {
+				status = "unknown"
+			}
+			distribution[status]++
+		}
+		return distribution, nil
 	default:
 		return map[string]int{"count": len(souls)}, nil
 	}
@@ -470,6 +484,9 @@ func (s *RESTServer) queryStats(q core.WidgetQuery, workspace string) (interface
 
 func (s *RESTServer) queryAlerts(q core.WidgetQuery) (interface{}, error) {
 	stats := s.alert.GetStats()
+	if q.Metric == "count" {
+		return map[string]int{"count": stats.ActiveIncidents}, nil
+	}
 	return map[string]interface{}{
 		"channels": len(s.alert.ListChannels()),
 		"rules":    len(s.alert.ListRules()),

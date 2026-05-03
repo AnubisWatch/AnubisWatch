@@ -173,6 +173,158 @@ describe('ApiClient', () => {
         })
       )
     })
+
+    it('adds default protocol config for simple soul forms', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 201,
+        json: () => Promise.resolve({ id: 'soul-1' }),
+      })
+
+      await api.post('/souls', {
+        name: 'Example HTTPS',
+        type: 'http',
+        target: 'https://example.com',
+        enabled: true,
+        weight: 60,
+        timeout: 10,
+      })
+
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/v1/souls',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            name: 'Example HTTPS',
+            type: 'http',
+            target: 'https://example.com',
+            enabled: true,
+            weight: '60s',
+            timeout: '10s',
+            http: {
+              method: 'GET',
+              valid_status: [200],
+              headers: {},
+            },
+          }),
+        })
+      )
+    })
+
+    it('adds default DNS config for DNS souls', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 201,
+        json: () => Promise.resolve({ id: 'soul-1' }),
+      })
+
+      await api.post('/souls', {
+        name: 'Example DNS',
+        type: 'dns',
+        target: 'example.com',
+        enabled: true,
+        weight: 60,
+        timeout: 10,
+      })
+
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/v1/souls',
+        expect.objectContaining({
+          body: JSON.stringify({
+            name: 'Example DNS',
+            type: 'dns',
+            target: 'example.com',
+            enabled: true,
+            weight: '60s',
+            timeout: '10s',
+            dns: { record_type: 'A' },
+          }),
+        })
+      )
+    })
+
+    it('serializes alert rule form fields to backend conditions', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 201,
+        json: () => Promise.resolve({ id: 'rule-1' }),
+      })
+
+      await api.post('/rules', {
+        name: 'High Latency',
+        condition: 'response_time',
+        threshold: 5000,
+        duration: 60,
+        consecutive: 3,
+        severity: 'warning',
+        enabled: true,
+        channels: ['channel-1'],
+      })
+
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/v1/rules',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            name: 'High Latency',
+            severity: 'warning',
+            enabled: true,
+            channels: ['channel-1'],
+            conditions: [
+              {
+                type: 'threshold',
+                metric: 'latency_ms',
+                operator: '>',
+                value: 5000,
+                window: '60s',
+              },
+            ],
+            scope: { type: 'all' },
+            cooldown: '5m',
+          }),
+        })
+      )
+    })
+
+    it('serializes status page theme names to backend theme objects', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 201,
+        json: () => Promise.resolve({ id: 'page-1' }),
+      })
+
+      await api.post('/status-pages', {
+        name: 'API Status',
+        slug: 'api-status',
+        description: 'Public status',
+        theme: 'dark',
+        enabled: true,
+        souls: ['soul-1'],
+        uptime_days: 90,
+      })
+
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/v1/status-pages',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            name: 'API Status',
+            slug: 'api-status',
+            description: 'Public status',
+            theme: {
+              primary_color: '#fbbf24',
+              background_color: '#0f172a',
+              text_color: '#f8fafc',
+              accent_color: '#14b8a6',
+              font_family: 'system-ui, -apple-system, sans-serif',
+            },
+            enabled: true,
+            souls: ['soul-1'],
+            uptime_days: 90,
+          }),
+        })
+      )
+    })
   })
 
   describe('backend response normalization', () => {
@@ -248,6 +400,71 @@ describe('ApiClient', () => {
         { status: 'passed', latency: 5, error: 'HTTP 200 in 5ms' },
         { status: 'failed', latency: 10, error: 'connection refused' },
       ])
+    })
+
+    it('normalizes backend alert rules for the alerts page', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          data: [
+            {
+              id: 'rule-1',
+              name: 'High Latency',
+              enabled: true,
+              severity: 'critical',
+              channels: ['channel-1'],
+              conditions: [
+                {
+                  type: 'threshold',
+                  metric: 'latency_ms',
+                  operator: '>',
+                  value: 5000,
+                  window: '60s',
+                },
+              ],
+            },
+          ],
+          pagination: { total: 1, offset: 0, limit: 50, has_more: false },
+        }),
+      })
+
+      const result = await api.get<{
+        data: Array<{ condition: string; threshold: number; duration: number; severity: string }>
+      }>('/rules')
+
+      expect(result.data[0].condition).toBe('response_time')
+      expect(result.data[0].threshold).toBe(5000)
+      expect(result.data[0].duration).toBe(60)
+      expect(result.data[0].severity).toBe('critical')
+    })
+
+    it('normalizes backend status pages for the status pages list', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve([
+          {
+            id: 'page-1',
+            name: 'API Status',
+            slug: 'api-status',
+            enabled: true,
+            custom_domain: 'status.example.com',
+            theme: {
+              primary_color: '#fbbf24',
+              background_color: '#0f172a',
+              text_color: '#f8fafc',
+              accent_color: '#14b8a6',
+            },
+            souls: [],
+          },
+        ]),
+      })
+
+      const result = await api.get<Array<{ domain?: string; theme?: string }>>('/status-pages')
+
+      expect(result[0].domain).toBe('status.example.com')
+      expect(result[0].theme).toBe('dark')
     })
   })
 

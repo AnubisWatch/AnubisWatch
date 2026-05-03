@@ -108,17 +108,17 @@ For clustered deployments, backup from the leader:
 #!/bin/bash
 # cluster-backup-anubis.sh
 
-LEADER_API="http://$(anubis cluster-status | jq -r '.leader'):8443"
+ANUBIS_API="${ANUBIS_API:-http://localhost:8443}"
 BACKUP_DIR="/backup/anubis-cluster"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 
 # Get cluster state via API
 curl -s -H "Authorization: Bearer $API_TOKEN" \
-    "$LEADER_API/api/v1/cluster/status" > \
+    "$ANUBIS_API/api/v1/cluster/status" > \
     "$BACKUP_DIR/cluster-status-$TIMESTAMP.json"
 
-# Backup all nodes
-for node in $(anubis necropolis | jq -r '.nodes[].address'); do
+# Backup all known nodes. Set this from your inventory or service discovery.
+for node in ${ANUBIS_CLUSTER_NODES:-anubis-1:22 anubis-2:22 anubis-3:22}; do
     NODE_DIR="$BACKUP_DIR/node-${node%:*}"
     mkdir -p "$NODE_DIR"
     
@@ -248,7 +248,7 @@ systemctl start anubis
 2. **Restore the failed node:**
    ```bash
    # After hardware fix
-   anubis serve --bootstrap=false
+   anubis serve --cluster --bootstrap=false
    ```
 
 3. **Rejoin cluster:**
@@ -470,8 +470,9 @@ For sensitive data, enable storage encryption:
 # anubis.yaml
 storage:
   path: "/var/lib/anubis"
-  encryption_key: "${ANUBIS_ENCRYPTION_KEY}"  # 32-byte key
-  encryption_enabled: true
+  encryption:
+    enabled: true
+    key: "${ANUBIS_ENCRYPTION_KEY}"  # 32-byte key
 ```
 
 ---

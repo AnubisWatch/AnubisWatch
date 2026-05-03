@@ -23,7 +23,7 @@ run: build ## Build and run the server
 	./bin/$(BINARY) serve
 
 dev: ## Run in development mode (single node, no TLS)
-	go run ./cmd/anubis serve --single --config ./anubis.yaml
+	go run ./cmd/anubis serve --single --config ./configs/anubis.yaml
 
 clean: ## Clean build artifacts
 	rm -rf bin/ web/dist/

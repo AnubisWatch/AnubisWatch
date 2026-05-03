@@ -24,22 +24,11 @@ import {
   Loader2,
   X
 } from 'lucide-react'
-import { useChannels, useRules } from '../api/hooks'
+import { useChannels, useIncidents, useRules } from '../api/hooks'
 import type { AlertChannel, AlertRule } from '../api/client'
 
 type Severity = 'critical' | 'warning' | 'info'
 type ChannelType = 'slack' | 'email' | 'pagerduty' | 'webhook' | 'discord'
-
-interface AlertHistoryItem {
-  id: string
-  rule: string
-  soul: string
-  severity: Severity
-  status: 'active' | 'resolved' | 'acknowledged'
-  triggered_at: string
-  resolved_at?: string
-  message: string
-}
 
 const severityConfig: Record<Severity, { icon: typeof AlertCircle; color: string; bg: string; label: string }> = {
   critical: { icon: AlertCircle, color: 'text-rose-400', bg: 'bg-rose-500/10', label: 'Critical' },
@@ -54,9 +43,6 @@ const channelConfig: Record<ChannelType, { icon: typeof Mail; color: string; bg:
   webhook: { icon: Webhook, color: 'text-emerald-400', bg: 'bg-emerald-500/10', label: 'Webhook' },
   discord: { icon: MessageSquare, color: 'text-indigo-400', bg: 'bg-indigo-500/10', label: 'Discord' },
 }
-
-// Mock alert history - backend doesn't have this yet
-const alertHistory: AlertHistoryItem[] = []
 
 export function Alerts() {
   const [activeTab, setActiveTab] = useState<'rules' | 'channels' | 'history'>('rules')
@@ -127,9 +113,18 @@ export function Alerts() {
     deleteRule
   } = useRules()
 
+  const {
+    incidents,
+    loading: incidentsLoading,
+    error: incidentsError,
+    refetch: refetchIncidents,
+    acknowledgeIncident
+  } = useIncidents()
+
   const handleRefresh = async () => {
     if (activeTab === 'channels') await refetchChannels()
     if (activeTab === 'rules') await refetchRules()
+    if (activeTab === 'history') await refetchIncidents()
   }
 
   const handleTestChannel = async (id: string) => {
@@ -200,7 +195,7 @@ export function Alerts() {
         consecutive: ruleConsecutive,
         duration: ruleDuration,
         enabled: ruleEnabled,
-        channels: []
+        channels: channels.filter(channel => channel.enabled).map(channel => channel.id)
       } as Omit<AlertRule, 'id'>)
       setShowRuleModal(false)
       resetRuleForm()
@@ -216,8 +211,8 @@ export function Alerts() {
     activeRules: rules.filter(r => r.enabled).length,
     totalChannels: channels.length,
     activeChannels: channels.filter(c => c.enabled).length,
-    activeAlerts: alertHistory.filter(a => a.status === 'active').length,
-    criticalAlerts: alertHistory.filter(a => a.severity === 'critical' && a.status === 'active').length,
+    activeAlerts: incidents.filter(a => a.status === 'open').length,
+    criticalAlerts: incidents.filter(a => a.severity === 'critical' && a.status === 'open').length,
   }
 
   const filteredRules = rules.filter(rule => {
@@ -350,7 +345,7 @@ export function Alerts() {
         {[
           { id: 'rules' as const, label: 'Alert Rules', count: stats.totalRules },
           { id: 'channels' as const, label: 'Channels', count: stats.totalChannels },
-          { id: 'history' as const, label: 'History', count: alertHistory.length },
+          { id: 'history' as const, label: 'History', count: incidents.length },
         ].map((tab) => (
           <button
             key={tab.id}
@@ -606,7 +601,16 @@ export function Alerts() {
 
       {activeTab === 'history' && (
         <div className="bg-gradient-to-br from-gray-900 to-gray-800/50 border border-gray-700/50 rounded-2xl overflow-hidden" role="tabpanel" id="alerts-panel-history" aria-labelledby="alerts-tab-history">
-          {alertHistory.length === 0 ? (
+          {incidentsLoading ? (
+            <div className="flex items-center justify-center py-16" role="status" aria-label="Loading alert history">
+              <div className="w-8 h-8 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
+            </div>
+          ) : incidentsError ? (
+            <div className="text-center py-16">
+              <AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
+              <p className="text-gray-400">{incidentsError}</p>
+            </div>
+          ) : incidents.length === 0 ? (
             <div className="text-center py-16">
               <Bell className="w-12 h-12 text-gray-600 mx-auto mb-4" />
               <h3 className="text-lg font-semibold text-white mb-2">No alert history yet</h3>
@@ -625,31 +629,31 @@ export function Alerts() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-700/50">
-                {alertHistory.map((alert) => (
+                {incidents.map((alert) => (
                   <tr key={alert.id} className="hover:bg-gray-800/30 transition-colors">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">
                         {getSeverityIcon(alert.severity)}
                         <div>
-                          <p className="font-semibold text-white">{alert.rule}</p>
-                          <p className="text-xs text-gray-500 mt-0.5">{alert.message}</p>
+                          <p className="font-semibold text-white">Incident {alert.id}</p>
+                          <p className="text-xs text-gray-500 mt-0.5">Rule {alert.rule_id}</p>
                         </div>
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <span className="text-gray-400">{alert.soul}</span>
+                      <span className="text-gray-400">{alert.soul_name || alert.soul_id}</span>
                     </td>
                     <td className="px-6 py-4">
                       {getSeverityBadge(alert.severity)}
                     </td>
                     <td className="px-6 py-4">
                       <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${
-                        alert.status === 'active' ? 'bg-rose-500/10 text-rose-400' :
+                        alert.status === 'open' ? 'bg-rose-500/10 text-rose-400' :
                         alert.status === 'resolved' ? 'bg-emerald-500/10 text-emerald-400' :
                         'bg-amber-500/10 text-amber-400'
                       }`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${
-                          alert.status === 'active' ? 'bg-rose-500' :
+                          alert.status === 'open' ? 'bg-rose-500' :
                           alert.status === 'resolved' ? 'bg-emerald-500' :
                           'bg-amber-500'
                         }`} />
@@ -657,12 +661,15 @@ export function Alerts() {
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      <span className="text-gray-400 text-sm">{new Date(alert.triggered_at).toLocaleString()}</span>
+                      <span className="text-gray-400 text-sm">{new Date(alert.started_at).toLocaleString()}</span>
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center justify-end gap-2">
-                        {alert.status === 'active' && (
-                          <button className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 text-emerald-400 rounded-lg text-sm font-medium hover:bg-emerald-500/20 transition-colors">
+                        {alert.status === 'open' && (
+                          <button
+                            onClick={() => acknowledgeIncident(alert.id)}
+                            className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/10 text-emerald-400 rounded-lg text-sm font-medium hover:bg-emerald-500/20 transition-colors"
+                          >
                             <Check className="w-4 h-4" />
                             Acknowledge
                           </button>

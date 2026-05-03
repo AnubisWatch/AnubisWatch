@@ -153,7 +153,7 @@ docker logs -f anubis-1
 
 ```bash
 # All nodes
-curl http://localhost:8080/api/health
-curl http://localhost:8081/api/health
-curl http://localhost:8082/api/health
+curl http://localhost:8080/health
+curl http://localhost:8081/health
+curl http://localhost:8082/health
 ```

@@ -14,20 +14,26 @@ metadata:
   namespace: anubiswatch
 data:
   anubis.yaml: |
-    data_dir: /data
-    log_level: info
     server:
-      bind_addr: 0.0.0.0:8080
-    raft:
+      host: 0.0.0.0
+      port: 8080
+      tls:
+        enabled: false
+    storage:
+      path: /data
+    necropolis:
       enabled: true
       bind_addr: 0.0.0.0:7946
-      election_timeout: 1s
-      heartbeat_timeout: 500ms
-    storage:
-      path: /data/anubis.db
-      retention_days: 30
-    alerts:
-      enabled: true
+      raft:
+        bind_addr: 0.0.0.0:7946
+        election_timeout: 1s
+        heartbeat_timeout: 500ms
+    auth:
+      type: local
+    logging:
+      level: info
+      format: json
+      output: stdout
 
 ---
 apiVersion: v1
@@ -101,6 +107,7 @@ spec:
             - /bin/anubis
           args:
             - serve
+            - --cluster
             - --config
             - /etc/anubis/anubis.yaml
           ports:
@@ -112,13 +119,13 @@ spec:
               protocol: TCP
           livenessProbe:
             httpGet:
-              path: /api/health
+              path: /health
               port: http
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
             httpGet:
-              path: /api/ready
+              path: /ready
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5

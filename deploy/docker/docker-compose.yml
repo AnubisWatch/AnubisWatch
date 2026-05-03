@@ -12,6 +12,7 @@ services:
       - "8080:8080"
       - "7946:7946"
     environment:
+      ANUBIS_CONFIG: /etc/anubis/anubis.yaml
       ANUBIS_NODE_ID: anubis-1
       ANUBIS_DATA_DIR: /data
       ANUBIS_LOG_LEVEL: info
@@ -21,7 +22,7 @@ services:
     networks:
       - anubis-network
     healthcheck:
-      test: ["CMD", "/bin/anubis", "judge"]
+      test: ["CMD", "/bin/anubis", "health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -40,6 +41,7 @@ services:
       - "8081:8080"
       - "7947:7946"
     environment:
+      ANUBIS_CONFIG: /etc/anubis/anubis.yaml
       ANUBIS_NODE_ID: anubis-2
       ANUBIS_DATA_DIR: /data
       ANUBIS_LOG_LEVEL: info
@@ -52,7 +54,7 @@ services:
       anubis-1:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "/bin/anubis", "judge"]
+      test: ["CMD", "/bin/anubis", "health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -71,6 +73,7 @@ services:
       - "8082:8080"
       - "7948:7946"
     environment:
+      ANUBIS_CONFIG: /etc/anubis/anubis.yaml
       ANUBIS_NODE_ID: anubis-3
       ANUBIS_DATA_DIR: /data
       ANUBIS_LOG_LEVEL: info
@@ -83,7 +86,7 @@ services:
       anubis-1:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "/bin/anubis", "judge"]
+      test: ["CMD", "/bin/anubis", "health"]
       interval: 30s
       timeout: 10s
       retries: 3

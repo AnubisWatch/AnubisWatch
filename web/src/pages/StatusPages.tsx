@@ -30,6 +30,15 @@ interface ServiceStatus {
   uptime: string
 }
 
+function displayTheme(theme: StatusPage['theme']): string {
+  if (!theme) return 'Dark'
+  if (typeof theme === 'string') {
+    return theme.charAt(0).toUpperCase() + theme.slice(1)
+  }
+  const background = theme.background_color
+  return background === '#ffffff' || background === '#f8fafc' ? 'Light' : 'Custom'
+}
+
 export function StatusPages() {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
@@ -345,7 +354,7 @@ export function StatusPages() {
                   <p className="text-xs text-gray-500 mb-1">Theme</p>
                   <div className="flex items-center gap-2">
                     <Palette className="w-4 h-4 text-purple-400" />
-                    <p className="text-lg font-semibold text-purple-400 capitalize">{page.theme || 'dark'}</p>
+                    <p className="text-lg font-semibold text-purple-400">{displayTheme(page.theme)}</p>
                   </div>
                 </div>
                 <div>

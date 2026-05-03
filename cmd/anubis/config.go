@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // getSystemConfigPath returns system-wide config path
@@ -16,6 +17,11 @@ func getSystemConfigPath() string {
 	default: // Linux
 		return "/etc/anubis/anubis.json"
 	}
+}
+
+func getSystemConfigPaths() []string {
+	jsonPath := getSystemConfigPath()
+	return []string{jsonPath, strings.TrimSuffix(jsonPath, ".json") + ".yaml"}
 }
 
 // getUserConfigPath returns user-specific config path
@@ -40,33 +46,58 @@ func getUserConfigPath() string {
 	}
 }
 
+func getUserConfigPaths() []string {
+	jsonPath := getUserConfigPath()
+	return []string{jsonPath, strings.TrimSuffix(jsonPath, ".json") + ".yaml"}
+}
+
 // findConfig finds the first existing config file in order of priority
-// Priority: ANUBIS_CONFIG env > ./anubis.json > User config > System config
+// Priority: ANUBIS_CONFIG env > local config > user config > system config
 func findConfig() string {
 	// 1. Environment variable (highest priority)
 	if env := os.Getenv("ANUBIS_CONFIG"); env != "" {
 		return env
 	}
 
-	// 2. Local directory (for project-specific configs)
-	if _, err := os.Stat("./anubis.json"); err == nil {
-		return "./anubis.json"
+	for _, candidate := range []string{"./anubis.json", "./anubis.yaml"} {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
 	}
 
-	// 3. User config
-	userConfig := getUserConfigPath()
-	if _, err := os.Stat(userConfig); err == nil {
-		return userConfig
+	for _, candidate := range getUserConfigPaths() {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
 	}
 
-	// 4. System config
-	systemConfig := getSystemConfigPath()
-	if _, err := os.Stat(systemConfig); err == nil {
-		return systemConfig
+	for _, candidate := range getSystemConfigPaths() {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
 	}
 
 	// Default: local directory (will be created)
 	return "./anubis.json"
+}
+
+func configPathFromArgs(args []string) string {
+	for i, arg := range args {
+		if (arg == "--config" || arg == "-c") && i+1 < len(args) {
+			return args[i+1]
+		}
+		if strings.HasPrefix(arg, "--config=") {
+			return strings.TrimPrefix(arg, "--config=")
+		}
+	}
+	return ""
+}
+
+func findConfigFromArgs(args []string) string {
+	if configPath := configPathFromArgs(args); configPath != "" {
+		return configPath
+	}
+	return findConfig()
 }
 
 // ensureConfigDir creates config directory if needed
@@ -94,9 +125,9 @@ func getInstanceName(configPath string) string {
 
 	// If it's a standard path, use "default" or derive from context
 	switch configPath {
-	case getUserConfigPath():
+	case getUserConfigPaths()[0], getUserConfigPaths()[1]:
 		return "user-default"
-	case getSystemConfigPath():
+	case getSystemConfigPaths()[0], getSystemConfigPaths()[1]:
 		return "system"
 	default:
 		// Use directory name as instance name

@@ -50,7 +50,7 @@ sleep 3
 
 echo ""
 echo "2. Testing Health Endpoint..."
-curl -s http://localhost:18080/api/v1/health | grep -q "not found" && echo "   ✓ Server responding"
+curl -fsS http://localhost:18080/health | grep -q '"status"' && echo "   ✓ Server responding"
 
 echo ""
 echo "3. Authenticating..."
@@ -70,10 +70,13 @@ curl -s -X POST http://localhost:18080/api/v1/souls \
   -d '{
     "name": "Google DNS",
     "type": "dns",
-    "target": "8.8.8.8",
-    "interval": "30s",
+    "target": "dns.google",
+    "weight": "30s",
     "timeout": "5s",
-    "enabled": true
+    "enabled": true,
+    "dns": {
+      "record_type": "A"
+    }
   }' > /dev/null
 echo "   ✓ DNS soul created"
 
@@ -85,9 +88,14 @@ curl -s -X POST http://localhost:18080/api/v1/souls \
     "name": "HTTPBin API",
     "type": "http",
     "target": "https://httpbin.org/get",
-    "interval": "60s",
+    "weight": "60s",
     "timeout": "10s",
-    "enabled": true
+    "enabled": true,
+    "http": {
+      "method": "GET",
+      "valid_status": [200],
+      "headers": {}
+    }
   }' > /dev/null
 echo "   ✓ HTTP soul created"
 
@@ -99,7 +107,7 @@ echo "   ✓ $SOUL_COUNT soul(s) registered"
 
 echo ""
 echo "6. Checking Status Page (Public)..."
-STATUS=$(curl -s http://localhost:18080/api/v1/status)
+STATUS=$(curl -s http://localhost:18080/public/status)
 echo "   ✓ Status: $(echo "$STATUS" | grep -o '"status":"[^"]*"' | head -1 | cut -d'"' -f4)"
 
 echo ""

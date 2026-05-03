@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
 var (
@@ -26,13 +29,13 @@ func main() {
 			initConfig()
 		case "watch":
 			quickWatch()
-		case "judge":
+		case "judge", "check":
 			judgeCommand()
 		case "summon":
 			summonNode()
 		case "banish":
 			banishNode()
-		case "necropolis":
+		case "necropolis", "cluster-status":
 			showCluster()
 		case "version":
 			showVersion()
@@ -52,7 +55,7 @@ func main() {
 			logsCommand()
 		case "config":
 			configCommand()
-		case "souls":
+		case "souls", "soul":
 			soulsCommand()
 		case "help", "-h", "--help":
 			printUsage()
@@ -78,9 +81,11 @@ Commands:
   judge           Show all current verdicts (status table)
   judge <name>    Force-check a specific soul
   judge --all     Force-check all souls now
+  check <name>    Alias for judge <name>
   summon <addr>   Add node to cluster
   banish <id>     Remove node from cluster
   necropolis      Show cluster status
+  cluster-status  Alias for necropolis
   version         Show version information
   health          Self health check
   backup          Create or manage backups
@@ -90,6 +95,7 @@ Commands:
   logs            View recent logs
   config          Configuration management
   souls           Souls management
+  soul            Alias for souls
   help            Show this help
 
 Subcommands:
@@ -217,21 +223,10 @@ func serve() {
 		Level: getLogLevel(),
 	}))
 
-	// Parse serve flags
-	configFlag := ""
-	for i, arg := range os.Args {
-		if (arg == "--config" || arg == "-c") && i+1 < len(os.Args) {
-			configFlag = os.Args[i+1]
-			break
-		}
-		if strings.HasPrefix(arg, "--config=") {
-			configFlag = strings.TrimPrefix(arg, "--config=")
-			break
-		}
-	}
+	serveOpts := parseServeOptions(os.Args)
 
 	// Determine config path
-	configPath := configFlag
+	configPath := serveOpts.ConfigPath
 	if configPath == "" {
 		configPath = findConfig()
 	}
@@ -247,8 +242,18 @@ func serve() {
 
 	// Use the refactored server initialization
 	opts := ServerOptions{
-		ConfigPath: configPath,
-		Logger:     logger,
+		ConfigPath:    configPath,
+		Logger:        logger,
+		SingleNode:    serveOpts.SingleNode,
+		Cluster:       serveOpts.Cluster,
+		ClusterSet:    serveOpts.ClusterSet,
+		Bootstrap:     serveOpts.Bootstrap,
+		BootstrapSet:  serveOpts.BootstrapSet,
+		JoinAddrs:     serveOpts.JoinAddrs,
+		NodeName:      serveOpts.NodeName,
+		Region:        serveOpts.Region,
+		BindAddr:      serveOpts.BindAddr,
+		AdvertiseAddr: serveOpts.AdvertiseAddr,
 	}
 
 	deps, err := BuildServerDependencies(opts)
@@ -275,5 +280,107 @@ func serve() {
 
 	if err := server.Stop(shutdownCtx); err != nil {
 		logger.Error("error during shutdown", "err", err)
+	}
+}
+
+type serveOptions struct {
+	ConfigPath    string
+	SingleNode    bool
+	Cluster       bool
+	ClusterSet    bool
+	Bootstrap     bool
+	BootstrapSet  bool
+	JoinAddrs     []string
+	NodeName      string
+	Region        string
+	BindAddr      string
+	AdvertiseAddr string
+}
+
+func parseServeOptions(args []string) serveOptions {
+	opts := serveOptions{ConfigPath: configPathFromArgs(args)}
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--single":
+			opts.SingleNode = true
+		case arg == "--cluster":
+			opts.Cluster = true
+			opts.ClusterSet = true
+		case strings.HasPrefix(arg, "--cluster="):
+			opts.Cluster = parseBoolFlagValue(strings.TrimPrefix(arg, "--cluster="))
+			opts.ClusterSet = true
+		case arg == "--bootstrap":
+			opts.Cluster = true
+			opts.ClusterSet = true
+			opts.Bootstrap = true
+			opts.BootstrapSet = true
+		case strings.HasPrefix(arg, "--bootstrap="):
+			opts.Bootstrap = parseBoolFlagValue(strings.TrimPrefix(arg, "--bootstrap="))
+			opts.BootstrapSet = true
+			if opts.Bootstrap {
+				opts.Cluster = true
+				opts.ClusterSet = true
+			}
+		case arg == "--join" && i+1 < len(args):
+			opts.Cluster = true
+			opts.ClusterSet = true
+			opts.JoinAddrs = append(opts.JoinAddrs, args[i+1])
+			i++
+		case strings.HasPrefix(arg, "--join="):
+			opts.Cluster = true
+			opts.ClusterSet = true
+			opts.JoinAddrs = append(opts.JoinAddrs, strings.TrimPrefix(arg, "--join="))
+		case (arg == "--node-name" || arg == "--node-id") && i+1 < len(args):
+			opts.NodeName = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--node-name="):
+			opts.NodeName = strings.TrimPrefix(arg, "--node-name=")
+		case strings.HasPrefix(arg, "--node-id="):
+			opts.NodeName = strings.TrimPrefix(arg, "--node-id=")
+		case arg == "--region" && i+1 < len(args):
+			opts.Region = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--region="):
+			opts.Region = strings.TrimPrefix(arg, "--region=")
+		case (arg == "--bind" || arg == "--bind-addr") && i+1 < len(args):
+			opts.BindAddr = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--bind="):
+			opts.BindAddr = strings.TrimPrefix(arg, "--bind=")
+		case strings.HasPrefix(arg, "--bind-addr="):
+			opts.BindAddr = strings.TrimPrefix(arg, "--bind-addr=")
+		case arg == "--advertise-addr" && i+1 < len(args):
+			opts.AdvertiseAddr = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--advertise-addr="):
+			opts.AdvertiseAddr = strings.TrimPrefix(arg, "--advertise-addr=")
+		}
+	}
+	return opts
+}
+
+func parseBoolFlagValue(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func raftPeerFromJoinAddr(addr string) core.RaftPeer {
+	id := addr
+	if host, _, err := net.SplitHostPort(addr); err == nil && host != "" {
+		id = host
+	}
+	id = strings.NewReplacer(":", "-", ".", "-", "[", "", "]", "").Replace(id)
+	if id == "" {
+		id = addr
+	}
+	return core.RaftPeer{
+		ID:      id,
+		Address: addr,
+		Role:    core.RoleVoter,
 	}
 }

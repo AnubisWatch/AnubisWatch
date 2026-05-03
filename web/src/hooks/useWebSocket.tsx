@@ -1,28 +1,5 @@
-import { createContext, useEffect, useRef, useState, ReactNode, useCallback } from 'react'
-
-interface WebSocketMessage {
-  type: 'judgment' | 'alert' | 'status' | 'ping' | 'pong'
-  data: unknown
-  timestamp: string
-}
-
-interface WebSocketContextType {
-  connected: boolean
-  messages: WebSocketMessage[]
-  send: (data: unknown) => void
-  lastMessage: WebSocketMessage | null
-  connect: () => void
-  disconnect: () => void
-}
-
-const WebSocketContext = createContext<WebSocketContextType>({
-  connected: false,
-  messages: [],
-  send: () => {},
-  lastMessage: null,
-  connect: () => {},
-  disconnect: () => {}
-})
+import { useEffect, useRef, useState, ReactNode, useCallback } from 'react'
+import { WebSocketContext, type WebSocketMessage } from './webSocketContext'
 
 interface WebSocketProviderProps {
   children: ReactNode
@@ -52,19 +29,21 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
         setConnected(true)
         reconnectAttemptsRef.current = 0
 
-        // Send auth token
-        ws.send(JSON.stringify({ type: 'auth', token }))
-
-        // Subscribe to real-time updates
+        // Authentication happens during the WebSocket handshake via secure cookie.
         ws.send(JSON.stringify({
           type: 'subscribe',
-          channels: ['judgments', 'alerts', 'status']
+          events: ['judgment', 'alert', 'incident', 'soul', 'stats', 'status']
         }))
       }
 
       ws.onmessage = (event) => {
         try {
-          const message: WebSocketMessage = JSON.parse(event.data)
+          const raw = JSON.parse(event.data) as WebSocketMessage
+          const message: WebSocketMessage = {
+            ...raw,
+            data: raw.data ?? raw.payload,
+            timestamp: typeof raw.timestamp === 'string' ? raw.timestamp : new Date().toISOString()
+          }
           setLastMessage(message)
           setMessages(prev => [...prev.slice(-50), message]) // Keep last 50 messages
 

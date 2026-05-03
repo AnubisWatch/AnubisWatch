@@ -102,7 +102,9 @@ export const useSoulStore = create<SoulStore>((set, get) => ({
   updateSoul: async (id, soul) => {
     set({ loading: true, error: null })
     try {
-      const result = await api.put<Soul>(`/souls/${id}`, soul)
+      const existing = get().souls.find((s) => s.id === id)
+      const payload = existing ? { ...existing, ...soul, id } : soul
+      const result = await api.put<Soul>(`/souls/${id}`, payload)
       if (result) {
         set((state) => ({
           souls: state.souls.map((s) => (s.id === id ? result : s)),

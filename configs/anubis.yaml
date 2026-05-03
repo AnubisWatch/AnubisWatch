@@ -43,6 +43,10 @@ souls:
     tags:
       - "production"
       - "dns"
+    dns:
+      record_type: "A"
+      expected:
+        - "1.1.1.1"
 
   - name: "HTTPbin Health"
     type: "http"
@@ -61,8 +65,12 @@ channels:
   - name: "Admin Alerts"
     type: "email"
     enabled: true
-    config:
-      to: "admin@example.com"
+    email:
+      smtp_host: "smtp.example.com"
+      smtp_port: 587
+      from: "anubis@example.com"
+      to:
+        - "admin@example.com"
 
 verdicts:
   rules:

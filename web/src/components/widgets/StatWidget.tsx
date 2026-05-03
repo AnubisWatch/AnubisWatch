@@ -33,7 +33,7 @@ export function StatWidget({ widget, dashboardId }: StatWidgetProps) {
 
   if (loading) return <div className="flex items-center justify-center h-full"><div className="w-6 h-6 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" /></div>
 
-  const value = data ? Object.values(data)[0] ?? '—' : '—'
+  const value = data ? data[widget.query.metric] ?? Object.values(data)[0] ?? '—' : '—'
   const label = widget.query.metric
 
   return (

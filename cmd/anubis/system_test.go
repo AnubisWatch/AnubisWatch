@@ -491,20 +491,42 @@ func TestStatusCommand_WithJudgments(t *testing.T) {
 
 func TestLogsCommand_FollowFlag(t *testing.T) {
 	tmpDir := t.TempDir()
-	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
-
 	logDir := filepath.Join(tmpDir, "logs")
 	os.MkdirAll(logDir, 0755)
 	logPath := filepath.Join(logDir, "anubis.log")
-	os.WriteFile(logPath, []byte("log line"), 0644)
+	os.WriteFile(logPath, []byte("log line\n"), 0644)
 
-	oldArgs := os.Args
-	os.Args = []string{"anubis", "logs", "--follow"}
-	defer func() { os.Args = oldArgs }()
+	ctx, cancel := context.WithCancel(context.Background())
+	var output bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- followLogFile(ctx, logPath, int64(len("log line\n")), &output)
+	}()
 
-	output := captureStdoutSystem(logsCommand)
-	if !strings.Contains(output, "Follow mode not implemented") {
-		t.Errorf("Expected follow message, got: %s", output)
+	time.Sleep(50 * time.Millisecond)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatalf("failed to open log file: %v", err)
+	}
+	if _, err := f.WriteString("followed line\n"); err != nil {
+		t.Fatalf("failed to append log line: %v", err)
+	}
+	f.Close()
+
+	deadline := time.After(2 * time.Second)
+	for !strings.Contains(output.String(), "followed line") {
+		select {
+		case <-deadline:
+			cancel()
+			t.Fatalf("expected followed log line, got: %s", output.String())
+		default:
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("followLogFile returned error: %v", err)
 	}
 }
 
@@ -553,7 +575,7 @@ func TestStatusCommand_StorageError(t *testing.T) {
 		t.Errorf("Expected not accessible, got: %s", output)
 	}
 }
-func TestLogsCommand_FollowWithLines(t *testing.T) {
+func TestLogsCommand_WithLines(t *testing.T) {
 	tmpDir := t.TempDir()
 	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
 
@@ -563,15 +585,15 @@ func TestLogsCommand_FollowWithLines(t *testing.T) {
 	os.WriteFile(logPath, []byte("line1\nline2\nline3\nline4\nline5"), 0644)
 
 	oldArgs := os.Args
-	os.Args = []string{"anubis", "logs", "-f", "-n", "2"}
+	os.Args = []string{"anubis", "logs", "-n", "2"}
 	defer func() { os.Args = oldArgs }()
 
 	output := captureStdoutSystem(logsCommand)
 	if !strings.Contains(output, "line4") {
 		t.Errorf("Expected line4 in output, got: %s", output)
 	}
-	if !strings.Contains(output, "Follow mode not implemented") {
-		t.Errorf("Expected follow message, got: %s", output)
+	if strings.Contains(output, "line3") {
+		t.Errorf("Expected only last 2 lines, got: %s", output)
 	}
 }
 

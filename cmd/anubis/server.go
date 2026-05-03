@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -221,8 +222,18 @@ func (s *Server) WaitForShutdown() {
 
 // ServerOptions holds options for building server dependencies
 type ServerOptions struct {
-	ConfigPath string
-	Logger     *slog.Logger
+	ConfigPath    string
+	Logger        *slog.Logger
+	SingleNode    bool
+	Cluster       bool
+	ClusterSet    bool
+	Bootstrap     bool
+	BootstrapSet  bool
+	JoinAddrs     []string
+	NodeName      string
+	Region        string
+	BindAddr      string
+	AdvertiseAddr string
 }
 
 // grpcProbeAdapter adapts probe.Engine to grpcapi.ProbeEngine
@@ -402,6 +413,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 			cfg.Storage.Path = envDir
 		}
 	}
+	applyServerOptionOverrides(cfg, opts)
 
 	// Create data directory
 	if err := os.MkdirAll(cfg.Storage.Path, 0755); err != nil {
@@ -545,6 +557,89 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		StatusPageHandler: statusPageHandler,
 		MCPServer:         mcpServer,
 	}, nil
+}
+
+func applyServerOptionOverrides(cfg *core.Config, opts ServerOptions) {
+	if envPort := os.Getenv("ANUBIS_HTTP_PORT"); envPort != "" {
+		if port, err := strconv.Atoi(envPort); err == nil {
+			cfg.Server.Port = port
+		}
+	}
+
+	if envNodeID := os.Getenv("ANUBIS_NODE_ID"); envNodeID != "" && opts.NodeName == "" {
+		opts.NodeName = envNodeID
+	}
+	if envBind := os.Getenv("ANUBIS_BIND_ADDR"); envBind != "" && opts.BindAddr == "" {
+		opts.BindAddr = envBind
+	}
+	if envRaftPort := os.Getenv("ANUBIS_RAFT_PORT"); envRaftPort != "" && opts.BindAddr == "" {
+		opts.BindAddr = "0.0.0.0:" + envRaftPort
+	}
+
+	if opts.SingleNode {
+		cfg.Necropolis.Enabled = false
+		cfg.Necropolis.Raft.Bootstrap = false
+		cfg.Necropolis.Raft.Peers = nil
+	}
+
+	if opts.ClusterSet {
+		cfg.Necropolis.Enabled = opts.Cluster
+	}
+	if opts.Cluster || opts.Bootstrap || len(opts.JoinAddrs) > 0 {
+		cfg.Necropolis.Enabled = true
+	}
+	if opts.BootstrapSet {
+		cfg.Necropolis.Raft.Bootstrap = opts.Bootstrap
+	}
+
+	if opts.NodeName != "" {
+		cfg.Necropolis.NodeName = opts.NodeName
+		cfg.Necropolis.Raft.NodeID = opts.NodeName
+	}
+	if opts.Region != "" {
+		cfg.Necropolis.Region = opts.Region
+		cfg.Necropolis.Raft.Region = opts.Region
+	}
+	if opts.BindAddr != "" {
+		cfg.Necropolis.BindAddr = opts.BindAddr
+		cfg.Necropolis.Raft.BindAddr = opts.BindAddr
+	}
+	if opts.AdvertiseAddr != "" {
+		cfg.Necropolis.AdvertiseAddr = opts.AdvertiseAddr
+		cfg.Necropolis.Raft.AdvertiseAddr = opts.AdvertiseAddr
+	}
+
+	for _, addr := range opts.JoinAddrs {
+		if addr == "" {
+			continue
+		}
+		cfg.Necropolis.Raft.Peers = append(cfg.Necropolis.Raft.Peers, raftPeerFromJoinAddr(addr))
+	}
+
+	if cfg.Necropolis.Enabled {
+		if cfg.Necropolis.NodeName == "" {
+			if hostname, err := os.Hostname(); err == nil && hostname != "" {
+				cfg.Necropolis.NodeName = hostname
+			} else {
+				cfg.Necropolis.NodeName = "jackal-1"
+			}
+		}
+		if cfg.Necropolis.Region == "" {
+			cfg.Necropolis.Region = "default"
+		}
+		if cfg.Necropolis.Raft.NodeID == "" {
+			cfg.Necropolis.Raft.NodeID = cfg.Necropolis.NodeName
+		}
+		if cfg.Necropolis.Raft.BindAddr == "" {
+			cfg.Necropolis.Raft.BindAddr = cfg.Necropolis.BindAddr
+		}
+		if cfg.Necropolis.Raft.AdvertiseAddr == "" {
+			cfg.Necropolis.Raft.AdvertiseAddr = cfg.Necropolis.AdvertiseAddr
+		}
+		if cfg.Necropolis.Raft.Region == "" {
+			cfg.Necropolis.Raft.Region = cfg.Necropolis.Region
+		}
+	}
 }
 
 // probeStorageAdapter adapts storage.CobaltDB to probe.Storage interface

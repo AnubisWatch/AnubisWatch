@@ -21,9 +21,16 @@ data:
         {{- end }}
       {{- end }}
 
+    auth:
+      type: {{ .Values.config.auth.type | quote }}
+      local:
+        admin_email: {{ .Values.config.auth.local.adminEmail | quote }}
+
+    dashboard:
+      enabled: {{ .Values.config.dashboard.enabled }}
+
     storage:
       path: {{ .Values.config.storage.path | quote }}
-      retention_days: {{ .Values.config.storage.retentionDays }}
       {{- if .Values.config.storage.encryptionKey }}
       encryption:
         enabled: true
@@ -33,12 +40,15 @@ data:
     logging:
       level: {{ .Values.config.logging.level | quote }}
       format: {{ .Values.config.logging.format | quote }}
+      output: stdout
 
     {{- if .Values.config.necropolis.enabled }}
     necropolis:
       enabled: true
       region: {{ .Values.config.necropolis.region | quote }}
       bind_addr: "0.0.0.0:7946"
+      raft:
+        bind_addr: "0.0.0.0:7946"
     {{- end }}
 
     souls:

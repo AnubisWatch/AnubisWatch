@@ -1,6 +1,9 @@
 package core
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // VerdictsConfig holds alert rules configuration
 type VerdictsConfig struct {
@@ -308,6 +311,66 @@ func (c AuthConfig) validate() error {
 		if c.LDAP.BaseDN == "" {
 			return &ConfigError{Field: "auth.ldap.base_dn", Message: "LDAP base DN is required"}
 		}
+	}
+	if c.Type == "local" && c.IsEnabled() {
+		if c.Local.AdminEmail == "" {
+			return &ConfigError{Field: "auth.local.admin_email", Message: "admin email is required when local auth is enabled"}
+		}
+		if c.Local.AdminPassword == "" {
+			return &ConfigError{Field: "auth.local.admin_password", Message: "admin password is required when local auth is enabled"}
+		}
+	}
+	if c.Type == "local" && c.Local.AdminPassword != "" && c.Local.AdminEmail == "" {
+		return &ConfigError{Field: "auth.local.admin_email", Message: "admin email is required when admin password is configured"}
+	}
+	if c.Local.AdminPassword != "" && !isBcryptHash(c.Local.AdminPassword) {
+		if err := validateAdminPassword(c.Local.AdminPassword); err != nil {
+			return &ConfigError{Field: "auth.local.admin_password", Message: err.Error()}
+		}
+	}
+	return nil
+}
+
+func isBcryptHash(password string) bool {
+	return strings.HasPrefix(password, "$2a$") ||
+		strings.HasPrefix(password, "$2b$") ||
+		strings.HasPrefix(password, "$2y$")
+}
+
+func validateAdminPassword(password string) error {
+	if len(password) < 12 {
+		return fmt.Errorf("password must be at least 12 characters")
+	}
+
+	var hasUpper, hasLower, hasDigit, hasSpecial bool
+	for _, r := range password {
+		switch {
+		case r >= 'A' && r <= 'Z':
+			hasUpper = true
+		case r >= 'a' && r <= 'z':
+			hasLower = true
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		default:
+			hasSpecial = true
+		}
+	}
+
+	classes := 0
+	if hasUpper {
+		classes++
+	}
+	if hasLower {
+		classes++
+	}
+	if hasDigit {
+		classes++
+	}
+	if hasSpecial {
+		classes++
+	}
+	if classes < 3 {
+		return fmt.Errorf("password must contain at least 3 of: uppercase, lowercase, digits, special characters")
 	}
 	return nil
 }

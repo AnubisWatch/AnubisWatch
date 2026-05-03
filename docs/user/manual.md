@@ -18,7 +18,7 @@
 1. Open your browser and navigate to `http://localhost:8080`
 2. Login with default credentials:
    - Email: `admin@anubis.watch`
-   - Password: `admin`
+   - Password: `SecurePass123!`
 3. **Important:** Change the default password immediately!
 
 ### Dashboard Overview
@@ -421,11 +421,11 @@ anubis judge
 # Cluster status
 anubis necropolis
 
-# Soul details
-anubis soul <id>
+# Export soul definitions
+anubis souls export --format json
 
-# Recent judgments
-anubis judgments --soul <id> --limit 10
+# Current judgments
+anubis judge
 
 # Force check
 anubis check <soul-id>
@@ -434,8 +434,8 @@ anubis check <soul-id>
 curl http://localhost:8080/metrics
 
 # Health checks
-curl http://localhost:8080/api/health
-curl http://localhost:8080/api/ready
+curl http://localhost:8080/health
+curl http://localhost:8080/ready
 ```
 
 ### Getting Help

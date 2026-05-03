@@ -21,18 +21,18 @@ storage:
   path: "/var/lib/anubis/data"
   encryption:
     enabled: true
-    key: "${ANUBIS_ENCRYPTION_KEY}"  # 32-byte AES-256 key from env
+    key: "${ANUBIS_ENCRYPTION_KEY:-replace-with-32-byte-key}"  # 32-byte AES-256 key from env
   timeseries:
     compaction:
       raw_to_minute: 48h
-      minute_to_five: 7d
-      five_to_hour: 30d
-      hour_to_day: 365d
+      minute_to_five: 168h
+      five_to_hour: 720h
+      hour_to_day: 8760h
     retention:
       raw: 48h
-      minute: 30d
-      five: 90d
-      hour: 365d
+      minute: 720h
+      five: 2160h
+      hour: 8760h
       day: unlimited
 
 # Cluster (Necropolis) — Single-node mode by default
@@ -233,7 +233,7 @@ channels:
   - name: "ops-slack"
     type: slack
     slack:
-      webhook_url: "${SLACK_WEBHOOK_URL}"
+      webhook_url: "${SLACK_WEBHOOK_URL:-https://hooks.slack.com/services/example/example/example}"
       channel: "#ops-alerts"
       username: "AnubisWatch"
       icon_emoji: ":anubis:"
@@ -242,7 +242,7 @@ channels:
   - name: "dev-discord"
     type: discord
     discord:
-      webhook_url: "${DISCORD_WEBHOOK_URL}"
+      webhook_url: "${DISCORD_WEBHOOK_URL:-https://discord.com/api/webhooks/example/example}"
       username: "AnubisWatch"
 
   - name: "ops-email"
@@ -251,8 +251,8 @@ channels:
       smtp_host: "smtp.example.com"
       smtp_port: 587
       starttls: true
-      username: "${SMTP_USER}"
-      password: "${SMTP_PASS}"
+      username: "${SMTP_USER:-smtp-user}"
+      password: "${SMTP_PASS:-smtp-password}"
       from: "anubis@example.com"
       to: ["ops@example.com", "cto@example.com"]
       subject_template: "[{{ .Severity }}] {{ .Soul.Name }} — {{ .Judgment.Status }}"
@@ -260,7 +260,7 @@ channels:
   - name: "pagerduty-oncall"
     type: pagerduty
     pagerduty:
-      integration_key: "${PAGERDUTY_INTEGRATION_KEY}"
+      integration_key: "${PAGERDUTY_INTEGRATION_KEY:-pagerduty-example-key}"
       severity_map:
         critical: "critical"
         warning: "warning"
@@ -281,45 +281,51 @@ channels:
 verdicts:
   rules:
     - name: "Service Down - Critical"
-      scope: "all"
-      condition:
-        type: consecutive_failures
-        threshold: 3
+      scope:
+        type: all
+      conditions:
+        - type: consecutive_failures
+          threshold: 3
       severity: critical
       channels: ["ops-slack", "pagerduty-oncall", "ntfy-push"]
       cooldown: 5m
 
     - name: "Service Degraded"
-      scope: "all"
-      condition:
-        type: threshold
-        metric: latency_p95
-        operator: ">"
-        value: "500ms"
-        window: 5m
+      scope:
+        type: all
+      conditions:
+        - type: threshold
+          metric: latency_p95
+          operator: ">"
+          value: "500ms"
+          window: 5m
       severity: warning
       channels: ["ops-slack", "dev-discord"]
       cooldown: 15m
 
     - name: "Certificate Expiring"
-      scope: "tag:security"
-      condition:
-        type: threshold
-        metric: tls_days_until_expiry
-        operator: "<"
-        value: 14
+      scope:
+        type: tag
+        tags: ["security"]
+      conditions:
+        - type: threshold
+          metric: tls_days_until_expiry
+          operator: "<"
+          value: 14
       severity: warning
       channels: ["ops-email", "ops-slack"]
       cooldown: 24h
 
     - name: "DNS Propagation Issues"
-      scope: "type:dns"
-      condition:
-        type: threshold
-        metric: propagation_percent
-        operator: "<"
-        value: 100
-        window: 5m
+      scope:
+        type: type
+        soul_types: ["dns"]
+      conditions:
+        - type: threshold
+          metric: propagation_percent
+          operator: "<"
+          value: 100
+          window: 5m
       severity: warning
       channels: ["ops-slack"]
       cooldown: 30m

@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Activity, AlertTriangle, CheckCircle2, Clock, Zap, X } from 'lucide-react'
 import { formatDistanceToNow } from '../utils/date'
+import { useWebSocket, type WebSocketMessage } from '../hooks/webSocketContext'
 
 interface Event {
   id: string
@@ -15,35 +16,13 @@ interface EventsFeedProps {
 }
 
 export function EventsFeed({ maxEvents = 10 }: EventsFeedProps) {
-  const [events, setEvents] = useState<Event[]>([])
+  const { messages } = useWebSocket()
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
 
-  // Simulate real-time events (in production, this would come from WebSocket)
-  useEffect(() => {
-    // Initial events
-    setEvents([
-      {
-        id: '1',
-        type: 'success',
-        message: 'Health check passed',
-        soulName: 'API Server',
-        timestamp: new Date(Date.now() - 1000 * 60 * 2).toISOString()
-      },
-      {
-        id: '2',
-        type: 'info',
-        message: 'Configuration updated',
-        timestamp: new Date(Date.now() - 1000 * 60 * 15).toISOString()
-      },
-      {
-        id: '3',
-        type: 'warning',
-        message: 'High latency detected',
-        soulName: 'Database',
-        timestamp: new Date(Date.now() - 1000 * 60 * 30).toISOString()
-      }
-    ])
-  }, [])
+  const events = useMemo(
+    () => messages.map(messageToEvent).filter((event): event is Event => event !== null),
+    [messages]
+  )
 
   const dismissEvent = (id: string) => {
     setDismissed(prev => new Set(prev).add(id))
@@ -118,4 +97,69 @@ export function EventsFeed({ maxEvents = 10 }: EventsFeedProps) {
       ))}
     </div>
   )
+}
+
+function messageToEvent(message: WebSocketMessage): Event | null {
+  const payload = isRecord(message.data) ? message.data : {}
+  const timestamp = message.timestamp || new Date().toISOString()
+  const id = `${message.type}-${timestamp}-${String(payload.id ?? payload.soul_id ?? '')}`
+
+  switch (message.type) {
+    case 'judgment': {
+      const status = String(payload.status ?? '').toLowerCase()
+      const passed = status === 'alive' || status === 'healthy' || status === 'passed'
+      return {
+        id,
+        type: passed ? 'success' : 'error',
+        message: passed ? 'Health check passed' : 'Health check failed',
+        soulName: stringValue(payload.soul_name) ?? stringValue(payload.soul_id),
+        timestamp
+      }
+    }
+    case 'alert':
+      return {
+        id,
+        type: severityToEventType(payload.severity),
+        message: stringValue(payload.message) ?? 'Alert triggered',
+        soulName: stringValue(payload.soul_name) ?? stringValue(payload.soul_id),
+        timestamp
+      }
+    case 'incident':
+      return {
+        id,
+        type: severityToEventType(payload.severity),
+        message: `Incident ${String(payload.status ?? 'updated')}`,
+        soulName: stringValue(payload.soul_name) ?? stringValue(payload.soul_id),
+        timestamp
+      }
+    case 'soul_update':
+      return {
+        id,
+        type: 'info',
+        message: 'Soul updated',
+        soulName: stringValue(payload.name) ?? stringValue(payload.id),
+        timestamp
+      }
+    default:
+      return null
+  }
+}
+
+function severityToEventType(severity: unknown): Event['type'] {
+  switch (severity) {
+    case 'critical':
+      return 'error'
+    case 'warning':
+      return 'warning'
+    default:
+      return 'info'
+  }
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

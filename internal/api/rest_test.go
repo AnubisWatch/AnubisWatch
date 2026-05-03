@@ -5707,6 +5707,39 @@ func TestHandleGetRule_AlertManager(t *testing.T) {
 	}
 }
 
+func TestHandleOpenAPIJSONIncludesPublicRoutes(t *testing.T) {
+	server := &RESTServer{}
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:  httptest.NewRequest("GET", "/api/openapi.json", nil),
+		Response: rec,
+	}
+
+	if err := server.handleOpenAPIJSON(ctx); err != nil {
+		t.Fatalf("handleOpenAPIJSON failed: %v", err)
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if contentType := rec.Header().Get("Content-Type"); contentType != "application/json" {
+		t.Fatalf("expected application/json content type, got %q", contentType)
+	}
+
+	var spec struct {
+		Paths map[string]any `json:"paths"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &spec); err != nil {
+		t.Fatalf("openapi response is not valid JSON: %v", err)
+	}
+
+	for _, path := range []string{"/health", "/ready", "/metrics", "/api/openapi.json", "/api/docs", "/public/status", "/status/{slug}"} {
+		if _, ok := spec.Paths[path]; !ok {
+			t.Fatalf("expected OpenAPI spec to include %s", path)
+		}
+	}
+}
+
 // mockAuthenticatorWithWeakPassword returns a policy error on password change/reset
 type mockAuthenticatorWithWeakPassword struct{ mockAuthenticator }
 

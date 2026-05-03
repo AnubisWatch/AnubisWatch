@@ -14,7 +14,7 @@ NC='\033[0m'
 
 REPO="AnubisWatch/anubiswatch"
 INSTALL_DIR="/usr/local/bin"
-VERSION="latest"
+VERSION="${VERSION:-latest}"
 
 print_banner() {
     echo -e "${BLUE}"
@@ -58,18 +58,34 @@ check_deps() {
     log_success "Dependencies OK"
 }
 
+get_latest_version() {
+    if command -v curl &> /dev/null; then
+        curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | \
+            grep '"tag_name":' | \
+            sed -E 's/.*"([^"]+)".*/\1/'
+    else
+        wget -qO- "https://api.github.com/repos/${REPO}/releases/latest" | \
+            grep '"tag_name":' | \
+            sed -E 's/.*"([^"]+)".*/\1/'
+    fi
+}
+
 download_binary() {
-    local filename="anubis_${PLATFORM}_${ARCH}.tar.gz"
+    if [ "$VERSION" = "latest" ]; then
+        VERSION="$(get_latest_version)"
+    fi
+
+    local binary_name="anubis-${PLATFORM}-${ARCH}"
+    local filename="${binary_name}.tar.gz"
     local url="https://github.com/${REPO}/releases/download/${VERSION}/${filename}"
     local tmpdir=$(mktemp -d)
 
-    log_info "Downloading..."
+    log_info "Downloading ${VERSION}..."
     if command -v curl &> /dev/null; then
         curl -fsSL "$url" -o "${tmpdir}/${filename}" || {
-            log_warn "Download failed, using local build"
-            cp ./anubis "${INSTALL_DIR}/anubis" 2>/dev/null || true
+            log_error "Download failed: $url"
             rm -rf "$tmpdir"
-            return
+            return 1
         }
     else
         wget -q "$url" -O "${tmpdir}/${filename}"
@@ -78,10 +94,10 @@ download_binary() {
     tar -xzf "${tmpdir}/${filename}" -C "$tmpdir"
     
     if [ -w "$INSTALL_DIR" ]; then
-        mv "${tmpdir}/anubis" "${INSTALL_DIR}/anubis"
+        mv "${tmpdir}/${binary_name}" "${INSTALL_DIR}/anubis"
         chmod +x "${INSTALL_DIR}/anubis"
     else
-        sudo mv "${tmpdir}/anubis" "${INSTALL_DIR}/anubis"
+        sudo mv "${tmpdir}/${binary_name}" "${INSTALL_DIR}/anubis"
         sudo chmod +x "${INSTALL_DIR}/anubis"
     fi
     

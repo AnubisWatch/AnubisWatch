@@ -156,16 +156,15 @@ iptables -L -n
 **Solutions:**
 ```yaml
 # Option 1: Skip verification (not recommended for production)
-tls:
-  insecure_skip_verify: true
+souls:
+  - name: internal-api
+    type: http
+    target: https://internal.example.com/health
+    http:
+      insecure_skip_verify: true
 
-# Option 2: Add custom CA
-tls:
-  ca_cert_file: "/path/to/ca.pem"
-
-# Option 3: Use system certificates
-tls:
-  use_system_certs: true
+# Option 2: Install your internal CA into the OS trust store
+# so default certificate verification can remain enabled.
 ```
 
 ### Timeout Issues
@@ -228,12 +227,13 @@ du -sh /path/to/data/*
 ```yaml
 # Configure retention policy
 storage:
-  retention_days: 30  # Keep 30 days of data
-  
-# Enable log compaction
-storage:
-  compaction_interval: "1h"
-  compaction_threshold: 10000
+  timeseries:
+    retention:
+      raw: "48h"
+      minute: "720h"
+      five: "2160h"
+      hour: "8760h"
+      day: "unlimited"
 ```
 
 ### Data Corruption
@@ -401,8 +401,8 @@ storage:
   downsampling:
     enabled: true
     raw_retention: "24h"
-    hourly_retention: "7d"
-    daily_retention: "90d"
+    hourly_retention: "168h"
+    daily_retention: "2160h"
 ```
 
 ### Slow API Responses

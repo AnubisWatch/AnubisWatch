@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { api, ApiResponse, Soul, Judgment, AlertChannel, AlertRule, Stats, ClusterStatus, StatusPage, User, CustomDashboard } from './client'
+import { api, ApiResponse, Soul, Judgment, AlertChannel, AlertRule, Incident, Stats, ClusterStatus, StatusPage, User, CustomDashboard } from './client'
 
 // Generic hook for API calls
 function useApi<T>(
@@ -72,7 +72,9 @@ export function useSouls() {
   }
 
   const updateSoul = async (id: string, soul: Partial<Soul>) => {
-    const result = await api.put<Soul>(`/souls/${id}`, soul)
+    const existing = data?.data.find((s) => s.id === id)
+    const payload = existing ? { ...existing, ...soul, id } : soul
+    const result = await api.put<Soul>(`/souls/${id}`, payload)
     await fetchSouls()
     return result
   }
@@ -107,7 +109,8 @@ export function useSoul(id: string | undefined) {
 
   const updateSoul = async (soul: Partial<Soul>) => {
     if (!id) return
-    const result = await api.put<Soul>(`/souls/${id}`, soul)
+    const payload = data ? { ...data, ...soul, id } : soul
+    const result = await api.put<Soul>(`/souls/${id}`, payload)
     refetch()
     return result
   }
@@ -142,7 +145,7 @@ export function useSoulJudgments(soulId: string | undefined) {
 
 // Judgments API hooks
 export function useJudgments() {
-  return useApi<ApiResponse<Judgment[]>>(() => api.get<ApiResponse<Judgment[]>>('/judgments'))
+  return useApi<Judgment[]>(() => api.get<Judgment[]>('/judgments'))
 }
 
 // Alerts API hooks
@@ -174,7 +177,9 @@ export function useChannels() {
   }
 
   const updateChannel = async (id: string, channel: Partial<AlertChannel>) => {
-    const result = await api.put<AlertChannel>(`/channels/${id}`, channel)
+    const existing = data?.data.find((c) => c.id === id)
+    const payload = existing ? { ...existing, ...channel, id } : channel
+    const result = await api.put<AlertChannel>(`/channels/${id}`, payload)
     await fetchChannels()
     return result
   }
@@ -228,7 +233,9 @@ export function useRules() {
   }
 
   const updateRule = async (id: string, rule: Partial<AlertRule>) => {
-    const result = await api.put<AlertRule>(`/rules/${id}`, rule)
+    const existing = data?.data.find((r) => r.id === id)
+    const payload = existing ? { ...existing, ...rule, id } : rule
+    const result = await api.put<AlertRule>(`/rules/${id}`, payload)
     await fetchRules()
     return result
   }
@@ -252,6 +259,53 @@ export function useRules() {
 // Stats API hook
 export function useStats() {
   return useApi<Stats>(() => api.get<Stats>('/stats/overview'))
+}
+
+// Incidents API hooks
+export function useIncidents() {
+  const [data, setData] = useState<Incident[] | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchIncidents = useCallback(async () => {
+    setLoading(true)
+    try {
+      const result = await api.get<Incident[]>('/incidents')
+      setData(result ?? [])
+      setError(null)
+      return result ?? []
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error')
+      throw err
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchIncidents().catch(() => {
+      // Error state is set by fetchIncidents.
+    })
+  }, [fetchIncidents])
+
+  const acknowledgeIncident = async (id: string) => {
+    await api.post(`/incidents/${id}/acknowledge`)
+    await fetchIncidents()
+  }
+
+  const resolveIncident = async (id: string) => {
+    await api.post(`/incidents/${id}/resolve`)
+    await fetchIncidents()
+  }
+
+  return {
+    incidents: data || [],
+    loading,
+    error,
+    refetch: fetchIncidents,
+    acknowledgeIncident,
+    resolveIncident,
+  }
 }
 
 // Cluster API hook

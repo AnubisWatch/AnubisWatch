@@ -7,11 +7,13 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +35,35 @@ func newTestDB(t *testing.T) *storage.CobaltDB {
 		t.Fatalf("failed to create test DB: %v", err)
 	}
 	return db
+}
+
+type prefixFailStore struct {
+	values map[string][]byte
+}
+
+func (s *prefixFailStore) Get(key string) ([]byte, error) {
+	value, ok := s.values[key]
+	if !ok {
+		return nil, errors.New("not found")
+	}
+	return value, nil
+}
+
+func (s *prefixFailStore) Put(key string, value []byte) error {
+	if s.values == nil {
+		s.values = make(map[string][]byte)
+	}
+	s.values[key] = value
+	return nil
+}
+
+func (s *prefixFailStore) Delete(key string) error {
+	delete(s.values, key)
+	return nil
+}
+
+func (s *prefixFailStore) PrefixScan(prefix string) (map[string][]byte, error) {
+	return nil, errors.New("prefix scan failed")
 }
 
 func TestConfig_Validate(t *testing.T) {
@@ -2476,10 +2507,37 @@ func TestManager_DeleteCertificate_NotFound(t *testing.T) {
 
 // TestNewManager_LoadCertificatesError tests NewManager when loadCertificates fails
 func TestNewManager_LoadCertificatesError(t *testing.T) {
-	// This test is difficult to implement because loadCertificates
-	// only fails when storage.PrefixScan fails, which requires
-	// specific storage error conditions
-	t.Skip("Requires storage error injection")
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey failed: %v", err)
+	}
+	keyBytes, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("MarshalECPrivateKey failed: %v", err)
+	}
+
+	store := &prefixFailStore{
+		values: map[string][]byte{
+			"acme/account_key": pem.EncodeToMemory(&pem.Block{
+				Type:  "EC PRIVATE KEY",
+				Bytes: keyBytes,
+			}),
+		},
+	}
+	cfg := Config{
+		Enabled:   true,
+		Provider:  ProviderLetsEncryptStaging,
+		Email:     "test@example.com",
+		AcceptTOS: true,
+	}
+
+	_, err = NewManager(store, cfg)
+	if err == nil {
+		t.Fatal("Expected NewManager to fail when certificate PrefixScan fails")
+	}
+	if !strings.Contains(err.Error(), "failed to load certificates") {
+		t.Fatalf("Expected load certificates error, got %v", err)
+	}
 }
 
 // TestLoadCertificates_WithInvalidCertFormat tests loading certificates with invalid format

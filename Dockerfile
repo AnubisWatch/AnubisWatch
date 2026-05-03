@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.26.2-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git nodejs npm
@@ -10,12 +10,9 @@ WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy dashboard source and build
-COPY web/ ./web/
-RUN cd web && npm ci && npm run build
-
-# Copy Go source
+# Copy source and build the embedded dashboard assets
 COPY . .
+RUN cd web && npm ci && npm run build:embed
 
 # Build binary
 RUN CGO_ENABLED=0 GOOS=linux go build \
@@ -29,13 +26,12 @@ FROM alpine:latest
 # Install ca-certificates for HTTPS
 RUN apk --no-cache add ca-certificates
 
-WORKDIR /root/
-
 # Copy binary
-COPY --from=builder /build/anubis .
+COPY --from=builder /build/anubis /bin/anubis
 
 # Expose ports
 EXPOSE 8080 8443 9090 7946
 
 # Run
-CMD ["./anubis", "serve", "--single"]
+ENTRYPOINT ["/bin/anubis"]
+CMD ["serve", "--single"]

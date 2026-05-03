@@ -42,7 +42,7 @@ detect_arch() {
             echo "arm64"
             ;;
         armv7l)
-            echo "armv7"
+            echo "arm"
             ;;
         *)
             echo "unsupported"
@@ -93,19 +93,18 @@ download_binary() {
     local tmpdir=$4
 
     local binary_name="anubis-${os}-${arch}"
-    if [ "$os" = "windows" ]; then
-        binary_name="${binary_name}.exe"
-    fi
-
-    local download_url="https://github.com/${REPO}/releases/download/${version}/${binary_name}"
+    local archive_name="${binary_name}.tar.gz"
+    local download_url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
 
     echo -e "${BLUE}Downloading AnubisWatch ${version}...${NC}"
 
-    if ! curl -fsSL -o "${tmpdir}/anubis" "$download_url"; then
+    if ! curl -fsSL -o "${tmpdir}/${archive_name}" "$download_url"; then
         echo -e "${RED}✗ Failed to download binary${NC}"
         return 1
     fi
 
+    tar -xzf "${tmpdir}/${archive_name}" -C "$tmpdir"
+    mv "${tmpdir}/${binary_name}" "${tmpdir}/anubis"
     chmod +x "${tmpdir}/anubis"
     echo -e "${GREEN}✓ Downloaded successfully${NC}"
 }

@@ -5,14 +5,19 @@ package api_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/alert"
+	restapi "github.com/AnubisWatch/anubiswatch/internal/api"
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 	"github.com/AnubisWatch/anubiswatch/internal/storage"
 )
@@ -20,6 +25,7 @@ import (
 // integrationTestServer provides a test server with all dependencies
 type integrationTestServer struct {
 	storage *storage.CobaltDB
+	alert   *alert.Manager
 	logger  *slog.Logger
 	tmpDir  string
 }
@@ -57,6 +63,7 @@ func setupIntegrationTest(t *testing.T) *integrationTestServer {
 
 	ts := &integrationTestServer{
 		storage: db,
+		alert:   alertMgr,
 		logger:  logger,
 		tmpDir:  tmpDir,
 	}
@@ -73,32 +80,127 @@ func setupIntegrationTest(t *testing.T) *integrationTestServer {
 // TestIntegration_SoulLifecycle tests creating, reading, updating, and deleting souls
 func TestIntegration_SoulLifecycle(t *testing.T) {
 	ts := setupIntegrationTest(t)
-	_ = ts
+	ctx := context.Background()
 
-	// This is a placeholder for the full integration test
-	// In a real implementation, we would:
-	// 1. Create a soul via HTTP POST
-	// 2. Verify the soul was created
-	// 3. Get the soul via HTTP GET
-	// 4. Update the soul via HTTP PUT
-	// 5. Delete the soul via HTTP DELETE
+	ws := &core.Workspace{ID: "default", Name: "Default"}
+	if err := ts.storage.SaveWorkspace(ctx, ws); err != nil {
+		t.Fatalf("Failed to save workspace: %v", err)
+	}
 
-	t.Skip("Integration tests require running server - skipped in short mode")
+	soul := &core.Soul{
+		ID:          "integration-soul-1",
+		Name:        "Integration HTTP Soul",
+		Type:        core.CheckHTTP,
+		Target:      "https://example.com/health",
+		WorkspaceID: "default",
+		Enabled:     true,
+		Weight:      core.Duration{Duration: time.Minute},
+		Timeout:     core.Duration{Duration: 5 * time.Second},
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+	}
+	if err := ts.storage.SaveSoul(ctx, soul); err != nil {
+		t.Fatalf("Failed to save soul: %v", err)
+	}
+
+	retrieved, err := ts.storage.GetSoul(ctx, "default", soul.ID)
+	if err != nil {
+		t.Fatalf("Failed to get soul: %v", err)
+	}
+	if retrieved.Name != soul.Name || retrieved.Target != soul.Target {
+		t.Fatalf("Unexpected soul after create: %#v", retrieved)
+	}
+
+	retrieved.Enabled = false
+	retrieved.Name = "Integration HTTP Soul Disabled"
+	retrieved.UpdatedAt = time.Now()
+	if err := ts.storage.SaveSoul(ctx, retrieved); err != nil {
+		t.Fatalf("Failed to update soul: %v", err)
+	}
+
+	listed, err := ts.storage.ListSouls(ctx, "default", 0, 10)
+	if err != nil {
+		t.Fatalf("Failed to list souls: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Enabled || listed[0].Name != "Integration HTTP Soul Disabled" {
+		t.Fatalf("Unexpected souls after update: %#v", listed)
+	}
+
+	if err := ts.storage.DeleteSoul(ctx, "default", soul.ID); err != nil {
+		t.Fatalf("Failed to delete soul: %v", err)
+	}
+	if _, err := ts.storage.GetSoul(ctx, "default", soul.ID); err == nil {
+		t.Fatal("Expected error after deleting soul")
+	}
 }
 
 // TestIntegration_AlertFlow tests the full alert flow
 func TestIntegration_AlertFlow(t *testing.T) {
 	ts := setupIntegrationTest(t)
-	_ = ts
 
-	// This is a placeholder for the full integration test
-	// In a real implementation, we would:
-	// 1. Create an alert channel
-	// 2. Create an alert rule
-	// 3. Trigger a judgment that matches the rule
-	// 4. Verify the alert was dispatched
+	channel := &core.AlertChannel{
+		ID:          "integration-channel-1",
+		Name:        "Integration Webhook",
+		Type:        core.ChannelWebHook,
+		Enabled:     true,
+		WorkspaceID: "default",
+		Config: map[string]interface{}{
+			"url": "https://example.com/webhook",
+		},
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := ts.alert.RegisterChannel(channel); err != nil {
+		t.Fatalf("Failed to register channel: %v", err)
+	}
 
-	t.Skip("Integration tests require running server - skipped in short mode")
+	rule := &core.AlertRule{
+		ID:          "integration-rule-1",
+		Name:        "Integration Status Rule",
+		Enabled:     true,
+		WorkspaceID: "default",
+		Scope:       core.RuleScope{Type: "all"},
+		Conditions: []core.AlertCondition{{
+			Type:   "status_for",
+			Status: string(core.SoulDead),
+		}},
+		Channels:    []string{channel.ID},
+		Severity:    core.SeverityCritical,
+		Cooldown:    core.Duration{Duration: 5 * time.Minute},
+		AutoResolve: true,
+		CreatedAt:   time.Now(),
+	}
+	if err := ts.alert.RegisterRule(rule); err != nil {
+		t.Fatalf("Failed to register rule: %v", err)
+	}
+
+	if _, err := ts.storage.GetAlertChannel(channel.ID, "default"); err != nil {
+		t.Fatalf("Failed to retrieve persisted channel: %v", err)
+	}
+	if _, err := ts.storage.GetAlertRule(rule.ID, "default"); err != nil {
+		t.Fatalf("Failed to retrieve persisted rule: %v", err)
+	}
+
+	if got, err := ts.alert.GetChannel(channel.ID); err != nil || got.Name != channel.Name {
+		t.Fatalf("Failed to retrieve channel from alert manager: channel=%#v err=%v", got, err)
+	}
+
+	if got, err := ts.alert.GetRule(rule.ID); err != nil || got.Name != rule.Name {
+		t.Fatalf("Failed to retrieve rule from alert manager: rule=%#v err=%v", got, err)
+	}
+
+	if err := ts.alert.DeleteRuleWithWorkspace(rule.ID, "default"); err != nil {
+		t.Fatalf("Failed to delete alert rule: %v", err)
+	}
+	if err := ts.alert.DeleteChannelWithWorkspace(channel.ID, "default"); err != nil {
+		t.Fatalf("Failed to delete alert channel: %v", err)
+	}
+	if _, err := ts.storage.GetAlertRule(rule.ID, "default"); err == nil {
+		t.Fatal("Expected error after deleting alert rule")
+	}
+	if _, err := ts.storage.GetAlertChannel(channel.ID, "default"); err == nil {
+		t.Fatal("Expected error after deleting alert channel")
+	}
 }
 
 // TestIntegration_JudgmentStorage tests judgment storage and retrieval
@@ -325,9 +427,95 @@ func TestIntegration_WorkspaceIsolation(t *testing.T) {
 // HTTP integration tests
 
 func TestIntegration_HTTPRoutes(t *testing.T) {
-	// This test would start a real HTTP server and test endpoints
-	// Skipping for now as it requires more setup
-	t.Skip("HTTP integration tests require full server setup")
+	ts := setupIntegrationTest(t)
+	port := reserveIntegrationPort(t)
+
+	server := restapi.NewRESTServer(
+		core.ServerConfig{Host: "127.0.0.1", Port: port},
+		core.AuthConfig{Enabled: core.BoolPtr(false)},
+		&restStorageAdapter{store: ts.storage},
+		nil,
+		ts.alert,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		ts.logger,
+	)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Start()
+	}()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = server.Stop(ctx)
+	})
+
+	baseURL := "http://127.0.0.1:" + fmt.Sprint(port)
+	waitForIntegrationHTTP(t, baseURL+"/health", errCh)
+
+	for _, tc := range []struct {
+		path     string
+		contains string
+	}{
+		{path: "/health", contains: "healthy"},
+		{path: "/ready", contains: "ready"},
+		{path: "/metrics", contains: "anubis_build_info"},
+		{path: "/api/openapi.json", contains: `"/metrics"`},
+	} {
+		resp, err := http.Get(baseURL + tc.path)
+		if err != nil {
+			t.Fatalf("GET %s failed: %v", tc.path, err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			t.Fatalf("Failed to read %s response: %v", tc.path, readErr)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s returned %d: %s", tc.path, resp.StatusCode, string(body))
+		}
+		if !strings.Contains(string(body), tc.contains) {
+			t.Fatalf("GET %s response missing %q: %s", tc.path, tc.contains, string(body))
+		}
+	}
+}
+
+func reserveIntegrationPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to reserve port: %v", err)
+	}
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port
+}
+
+func waitForIntegrationHTTP(t *testing.T, url string, errCh <-chan error) {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case err := <-errCh:
+			t.Fatalf("HTTP server exited before readiness: %v", err)
+		case <-deadline:
+			t.Fatalf("Timed out waiting for %s", url)
+		default:
+		}
+
+		resp, err := http.Get(url)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // Helper types for integration tests
@@ -498,4 +686,36 @@ func (a *restStorageAdapter) SaveJourneyNoCtx(journey *core.JourneyConfig) error
 
 func (a *restStorageAdapter) DeleteJourneyNoCtx(id string) error {
 	return a.store.DeleteJourneyNoCtx(id)
+}
+
+func (a *restStorageAdapter) GetDashboardNoCtx(id string) (*core.CustomDashboard, error) {
+	return a.store.GetDashboardNoCtx(id)
+}
+
+func (a *restStorageAdapter) ListDashboardsNoCtx() ([]*core.CustomDashboard, error) {
+	return a.store.ListDashboardsNoCtx()
+}
+
+func (a *restStorageAdapter) SaveDashboardNoCtx(dashboard *core.CustomDashboard) error {
+	return a.store.SaveDashboardNoCtx(dashboard)
+}
+
+func (a *restStorageAdapter) DeleteDashboardNoCtx(id string) error {
+	return a.store.DeleteDashboardNoCtx(id)
+}
+
+func (a *restStorageAdapter) GetMaintenanceWindow(id string) (*core.MaintenanceWindow, error) {
+	return a.store.GetMaintenanceWindow(id)
+}
+
+func (a *restStorageAdapter) ListMaintenanceWindows() ([]*core.MaintenanceWindow, error) {
+	return a.store.ListMaintenanceWindows()
+}
+
+func (a *restStorageAdapter) SaveMaintenanceWindow(w *core.MaintenanceWindow) error {
+	return a.store.SaveMaintenanceWindow(w)
+}
+
+func (a *restStorageAdapter) DeleteMaintenanceWindow(id string) error {
+	return a.store.DeleteMaintenanceWindow(id)
 }

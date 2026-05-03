@@ -126,7 +126,60 @@ function normalizeApiValue(value: unknown): unknown {
     }
   }
 
+  if ('id' in normalized && 'conditions' in normalized && 'channels' in normalized && 'enabled' in normalized) {
+    normalizeAlertRule(normalized)
+  }
+
+  if ('id' in normalized && 'slug' in normalized && 'enabled' in normalized && 'souls' in normalized) {
+    normalizeStatusPage(normalized)
+  }
+
   return normalized
+}
+
+function normalizeStatusPage(page: Record<string, unknown>) {
+  if (!page.domain && typeof page.custom_domain === 'string') {
+    page.domain = page.custom_domain
+  }
+  if (isRecord(page.theme)) {
+    const background = page.theme.background_color
+    page.theme = background === '#ffffff' || background === '#f8fafc' ? 'light' : 'dark'
+  }
+}
+
+function normalizeAlertRule(rule: Record<string, unknown>) {
+  const conditions = Array.isArray(rule.conditions) ? rule.conditions : []
+  const firstCondition = isRecord(conditions[0]) ? conditions[0] : {}
+
+  if (!rule.condition && firstCondition.type) {
+    rule.condition = alertConditionToUICondition(firstCondition)
+  }
+  if (rule.threshold === undefined) {
+    const value = firstCondition.value ?? firstCondition.threshold
+    rule.threshold = typeof value === 'number' ? value : Number(value || 0)
+  }
+  if (rule.duration === undefined) {
+    rule.duration = parseDurationSeconds(firstCondition.window ?? firstCondition.duration, 0)
+  }
+  if (rule.consecutive === undefined && firstCondition.type === 'consecutive_failures') {
+    rule.consecutive = typeof firstCondition.threshold === 'number' ? firstCondition.threshold : Number(firstCondition.threshold || 1)
+  }
+  if (!rule.severity) {
+    rule.severity = 'warning'
+  }
+}
+
+function alertConditionToUICondition(condition: Record<string, unknown>): string {
+  if (condition.type === 'failure_rate') {
+    return 'error_rate'
+  }
+  if (condition.type === 'consecutive_failures') {
+    return 'downtime'
+  }
+  if (condition.metric === 'tls_expiry_days') {
+    return 'ssl_expiry'
+  }
+  return 'response_time'
 }
 
 function serializeApiBody(body: unknown): unknown {
@@ -161,9 +214,112 @@ function serializeApiBody(body: unknown): unknown {
     delete serialized.http_config
     delete serialized.tcp_config
     delete serialized.dns_config
+    addDefaultCheckConfig(serialized)
+  }
+
+  if ('condition' in serialized && 'threshold' in serialized && !('conditions' in serialized)) {
+    serialized.conditions = [uiRuleToAlertCondition(serialized)]
+    serialized.scope = serialized.scope || { type: 'all' }
+    serialized.cooldown = serialized.cooldown || '5m'
+    delete serialized.condition
+    delete serialized.threshold
+    delete serialized.duration
+    delete serialized.consecutive
+  }
+
+  if ('slug' in serialized && 'souls' in serialized && 'theme' in serialized && typeof serialized.theme === 'string') {
+    serialized.theme = statusPageThemeFromName(serialized.theme)
   }
 
   return serialized
+}
+
+function statusPageThemeFromName(theme: string): Record<string, string> {
+  if (theme === 'light') {
+    return {
+      primary_color: '#d97706',
+      background_color: '#ffffff',
+      text_color: '#111827',
+      accent_color: '#0d9488',
+      font_family: 'system-ui, -apple-system, sans-serif',
+    }
+  }
+
+  return {
+    primary_color: '#fbbf24',
+    background_color: '#0f172a',
+    text_color: '#f8fafc',
+    accent_color: '#14b8a6',
+    font_family: 'system-ui, -apple-system, sans-serif',
+  }
+}
+
+function uiRuleToAlertCondition(rule: Record<string, unknown>): Record<string, unknown> {
+  const threshold = typeof rule.threshold === 'number' ? rule.threshold : Number(rule.threshold || 0)
+  const duration = typeof rule.duration === 'number' ? rule.duration : Number(rule.duration || 60)
+  const consecutive = typeof rule.consecutive === 'number' ? rule.consecutive : Number(rule.consecutive || 1)
+
+  switch (rule.condition) {
+    case 'error_rate':
+      return { type: 'failure_rate', threshold, window: `${duration}s` }
+    case 'downtime':
+      return { type: 'consecutive_failures', threshold: consecutive, status: 'dead', window: `${duration}s` }
+    case 'ssl_expiry':
+      return { type: 'threshold', metric: 'tls_expiry_days', operator: '<', value: threshold, window: `${duration}s` }
+    case 'response_time':
+    default:
+      return { type: 'threshold', metric: 'latency_ms', operator: '>', value: threshold, window: `${duration}s` }
+  }
+}
+
+function addDefaultCheckConfig(soul: Record<string, unknown>) {
+  switch (soul.type) {
+    case 'http':
+      if (!soul.http) {
+        soul.http = { method: 'GET', valid_status: [200], headers: {} }
+      }
+      break
+    case 'tcp':
+      if (!soul.tcp) {
+        soul.tcp = {}
+      }
+      break
+    case 'dns':
+      if (!soul.dns) {
+        soul.dns = { record_type: 'A' }
+      }
+      break
+    case 'udp':
+      if (!soul.udp) {
+        soul.udp = {}
+      }
+      break
+    case 'smtp':
+      if (!soul.smtp) {
+        soul.smtp = {}
+      }
+      break
+    case 'icmp':
+      if (!soul.icmp) {
+        soul.icmp = { count: 4, interval: '1s', max_loss_percent: 100 }
+      }
+      break
+    case 'grpc':
+      if (!soul.grpc) {
+        soul.grpc = { metadata: {} }
+      }
+      break
+    case 'websocket':
+      if (!soul.websocket) {
+        soul.websocket = { headers: {}, ping_check: true }
+      }
+      break
+    case 'tls':
+      if (!soul.tls) {
+        soul.tls = { expiry_warn_days: 30, expiry_critical_days: 7 }
+      }
+      break
+  }
 }
 
 class ApiClient {
@@ -323,6 +479,22 @@ export interface AlertRule {
   created_at?: string
 }
 
+export interface Incident {
+  id: string
+  rule_id: string
+  soul_id: string
+  soul_name?: string
+  workspace_id?: string
+  status: 'open' | 'acknowledged' | 'resolved'
+  severity: 'critical' | 'warning' | 'info'
+  started_at: string
+  acked_at?: string
+  resolved_at?: string
+  acked_by?: string
+  resolved_by?: string
+  escalation_level?: number
+}
+
 export interface Stats {
   souls?: {
     total: number
@@ -359,7 +531,8 @@ export interface StatusPage {
   description?: string
   workspace_id?: string
   domain?: string
-  theme?: 'dark' | 'light' | 'custom'
+  custom_domain?: string
+  theme?: 'dark' | 'light' | 'auto' | 'custom' | Record<string, string>
   souls?: string[]
   subscribers?: number
   created_at?: string

@@ -869,18 +869,76 @@ func TestHandleClusterPeers_NotLeader(t *testing.T) {
 	}
 }
 
-// TestHandleListChannels_StorageError tests listing channels when storage fails
-func TestHandleListChannels_StorageError(t *testing.T) {
-	// Note: This handler uses s.alert.ListChannels(), not store
-	// Skipping as it requires alert manager setup
-	t.Skip("Skipped - handler uses alert manager, not storage")
+// TestHandleListChannels_EmptyAlertManager tests listing channels from an empty alert manager
+func TestHandleListChannels_EmptyAlertManager(t *testing.T) {
+	server := newTestServerWithStorage(newMockStorage())
+	server.alert = &mockAlertManager{channels: make(map[string]*core.AlertChannel)}
+
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:   httptest.NewRequest("GET", "/api/v1/channels?offset=5&limit=10", nil),
+		Response:  rec,
+		Workspace: "default",
+	}
+
+	if err := server.handleListChannels(ctx); err != nil {
+		t.Fatalf("handleListChannels failed: %v", err)
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var response struct {
+		Data       []core.AlertChannel `json:"data"`
+		Pagination Pagination          `json:"pagination"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("Decode response failed: %v", err)
+	}
+
+	if len(response.Data) != 0 {
+		t.Fatalf("Expected no channels, got %d", len(response.Data))
+	}
+	if response.Pagination.Total != 0 || response.Pagination.Offset != 5 || response.Pagination.Limit != 10 || response.Pagination.HasMore {
+		t.Fatalf("Unexpected pagination: %+v", response.Pagination)
+	}
 }
 
-// TestHandleListRules_StorageError tests listing rules when storage fails
-func TestHandleListRules_StorageError(t *testing.T) {
-	// Note: This handler uses s.alert.ListRules(), not store
-	// Skipping as it requires alert manager setup
-	t.Skip("Skipped - handler uses alert manager, not storage")
+// TestHandleListRules_EmptyAlertManager tests listing rules from an empty alert manager
+func TestHandleListRules_EmptyAlertManager(t *testing.T) {
+	server := newTestServerWithStorage(newMockStorage())
+	server.alert = &mockAlertManager{rules: make(map[string]*core.AlertRule)}
+
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:   httptest.NewRequest("GET", "/api/v1/rules?offset=3&limit=7", nil),
+		Response:  rec,
+		Workspace: "default",
+	}
+
+	if err := server.handleListRules(ctx); err != nil {
+		t.Fatalf("handleListRules failed: %v", err)
+	}
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var response struct {
+		Data       []core.AlertRule `json:"data"`
+		Pagination Pagination       `json:"pagination"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatalf("Decode response failed: %v", err)
+	}
+
+	if len(response.Data) != 0 {
+		t.Fatalf("Expected no rules, got %d", len(response.Data))
+	}
+	if response.Pagination.Total != 0 || response.Pagination.Offset != 3 || response.Pagination.Limit != 7 || response.Pagination.HasMore {
+		t.Fatalf("Unexpected pagination: %+v", response.Pagination)
+	}
 }
 
 // TestHandleListWorkspaces_StorageError tests listing workspaces when storage fails
@@ -2394,6 +2452,39 @@ func TestHandleDashboardQuery(t *testing.T) {
 	}
 }
 
+func TestHandleDashboardQuery_SoulStatusDistribution(t *testing.T) {
+	store := newMockStorage()
+	now := time.Now()
+	store.SaveSoul(nil, &core.Soul{ID: "soul-1", Name: "Healthy Soul"})
+	store.SaveSoul(nil, &core.Soul{ID: "soul-2", Name: "Unhealthy Soul"})
+	store.SaveSoul(nil, &core.Soul{ID: "soul-3", Name: "Unknown Soul"})
+	store.SaveJudgment(context.Background(), &core.Judgment{ID: "j1", SoulID: "soul-1", Status: core.SoulAlive, Timestamp: now})
+	store.SaveJudgment(context.Background(), &core.Judgment{ID: "j2", SoulID: "soul-2", Status: core.SoulDead, Timestamp: now})
+	server := newTestServerWithJourney(store, nil)
+
+	query := core.WidgetQuery{Source: "souls", Metric: "status_distribution"}
+	body, _ := json.Marshal(query)
+
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:  httptest.NewRequest("POST", "/api/v1/dashboards/dash-1/query", bytes.NewReader(body)),
+		Response: rec,
+		Params:   map[string]string{"id": "dash-1"},
+	}
+
+	if err := server.handleDashboardQuery(ctx); err != nil {
+		t.Fatalf("handleDashboardQuery failed: %v", err)
+	}
+
+	var result map[string]int
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if result["healthy"] != 1 || result["unhealthy"] != 1 || result["unknown"] != 1 {
+		t.Fatalf("unexpected status distribution: %#v", result)
+	}
+}
+
 func TestHandleDashboardQuery_InvalidData(t *testing.T) {
 	store := newMockStorage()
 	server := newTestServerWithJourney(store, nil)
@@ -2482,6 +2573,14 @@ func TestHandleDashboardQuery_Alerts(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("Expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var result map[string]int
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if _, ok := result["count"]; !ok {
+		t.Fatalf("expected count metric in alerts query response, got %#v", result)
 	}
 }
 

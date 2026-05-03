@@ -35,7 +35,7 @@ export function GaugeWidget({ widget, dashboardId }: GaugeWidgetProps) {
     return <div className="flex items-center justify-center h-full"><div className="w-6 h-6 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" /></div>
   }
 
-  const rawValue = data ? Object.values(data)[0] ?? 0 : 0
+  const rawValue = data ? data[widget.query.metric] ?? Object.values(data)[0] ?? 0 : 0
   const value = typeof rawValue === 'number' ? rawValue : 0
 
   // Normalize to 0-100 for display

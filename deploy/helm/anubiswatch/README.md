@@ -40,9 +40,13 @@ helm install anubiswatch anubiswatch/anubiswatch \
 | `image.repository` | Image repository | `anubiswatch/anubis` |
 | `image.tag` | Image tag | `3.0.0` |
 | `statefulSet.replicas` | Number of cluster nodes | `3` |
-| `config.logLevel` | Log level (debug/info/warn/error) | `info` |
-| `config.storage.retentionDays` | Data retention in days | `30` |
+| `config.logging.level` | Log level (debug/info/warn/error) | `info` |
+| `config.storage.path` | Data directory mounted in the container | `/data` |
+| `config.necropolis.enabled` | Enable cluster mode | `false` |
 | `service.type` | Service type | `ClusterIP` |
+| `service.httpPort` | HTTP service port | `8080` |
+| `service.grpcPort` | gRPC service port | `9090` |
+| `service.clusterPort` | Raft service port | `7946` |
 | `ingress.enabled` | Enable ingress | `false` |
 | `persistence.enabled` | Enable persistent storage | `true` |
 | `persistence.size` | Storage size | `10Gi` |
@@ -68,9 +72,12 @@ persistence:
   storageClass: fast-ssd
 
 config:
-  logLevel: warn
+  logging:
+    level: warn
   storage:
-    retentionDays: 90
+    path: /data
+  necropolis:
+    enabled: true
 
 monitoring:
   enabled: true
@@ -78,6 +85,7 @@ monitoring:
     enabled: true
 
 pdb:
+  enabled: true
   minAvailable: 3
 ```
 

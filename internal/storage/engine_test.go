@@ -1125,9 +1125,31 @@ func TestCobaltDB_ListJudgmentsNoCtx(t *testing.T) {
 }
 
 func TestCobaltDB_GetJudgmentNoCtx(t *testing.T) {
-	t.Skip("GetJudgmentNoCtx searches by ID suffix but judgments are stored by timestamp")
-	// This test would require judgments to be keyed by ID for direct lookup
-	// Currently GetJudgmentNoCtx uses PrefixScan and suffix matching
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	judgment := &core.Judgment{
+		ID:        "test-judgment",
+		SoulID:    "judgment-soul",
+		Timestamp: time.Now().UTC(),
+		Status:    core.SoulAlive,
+		Message:   "stored with timestamp key",
+	}
+	if err := db.SaveJudgment(ctx, judgment); err != nil {
+		t.Fatalf("SaveJudgment failed: %v", err)
+	}
+
+	retrieved, err := db.GetJudgmentNoCtx(judgment.ID)
+	if err != nil {
+		t.Fatalf("GetJudgmentNoCtx failed: %v", err)
+	}
+	if retrieved.ID != judgment.ID {
+		t.Fatalf("Expected judgment ID %q, got %q", judgment.ID, retrieved.ID)
+	}
+	if !retrieved.Timestamp.Equal(judgment.Timestamp) {
+		t.Fatalf("Expected timestamp %s, got %s", judgment.Timestamp, retrieved.Timestamp)
+	}
 }
 
 func TestCobaltDB_DeleteChannelNoCtx(t *testing.T) {

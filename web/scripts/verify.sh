@@ -1,6 +1,11 @@
 #!/bin/bash
 # Full System Verification Script
 
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
 echo "═══════════════════════════════════════════════════"
 echo "⚖️  AnubisWatch Full System Verification"
 echo "═══════════════════════════════════════════════════"
@@ -10,7 +15,7 @@ PASS=0
 FAIL=0
 
 check() {
-    if [ $1 -eq 0 ]; then
+    if [ "$1" -eq 0 ]; then
         echo "✓ $2"
         PASS=$((PASS+1))
     else
@@ -19,35 +24,37 @@ check() {
     fi
 }
 
+run_check() {
+    local name="$1"
+    shift
+    if "$@"; then
+        check 0 "$name"
+    else
+        check 1 "$name"
+    fi
+}
+
+cd "$PROJECT_ROOT"
+
 echo "1. Build Tests"
 echo "───────────────────────────────────────────────────"
-CGO_ENABLED=0 go build -o /tmp/anubis-verify ./cmd/anubis 2>/dev/null
-check $? "Go binary build"
-
-cd web && npm run build 2>/dev/null && cd ..
-check $? "Frontend build"
+run_check "Embedded frontend build" bash -c "cd web && npm run build:embed >/dev/null"
+run_check "Go binary build" bash -c "CGO_ENABLED=0 go build -o /tmp/anubis-verify ./cmd/anubis >/dev/null"
 
 echo ""
 echo "2. Unit Tests"
 echo "───────────────────────────────────────────────────"
-go test -short ./... 2>/dev/null | grep -q "FAIL"
-if [ $? -eq 0 ]; then
-    check 1 "Go unit tests"
-else
-    check 0 "Go unit tests"
-fi
-
-cd web && npm run test 2>/dev/null | grep -q "passed" && cd ..
-check $? "Frontend unit tests"
+run_check "Go unit tests" go test -short ./...
+run_check "Frontend unit tests" bash -c "cd web && npm run test >/dev/null"
 
 echo ""
 echo "3. Deployment Files"
 echo "───────────────────────────────────────────────────"
-[ -f Dockerfile ] && check 0 "Dockerfile exists" || check 1 "Dockerfile exists"
-[ -f docker-compose.yml ] && check 0 "docker-compose.yml exists" || check 1 "docker-compose.yml exists"
-[ -d deploy/k8s ] && check 0 "K8s manifests exist" || check 1 "K8s manifests exist"
-[ -f deploy/helm/anubiswatch/Chart.yaml ] && check 0 "Helm chart exists" || check 1 "Helm chart exists"
-[ -f .github/workflows/ci.yml ] && check 0 "CI workflow exists" || check 1 "CI workflow exists"
+run_check "Dockerfile exists" test -f Dockerfile
+run_check "docker-compose.yml exists" test -f docker-compose.yml
+run_check "K8s manifests exist" test -d deploy/k8s
+run_check "Helm chart exists" test -f deploy/helm/anubiswatch/Chart.yaml
+run_check "CI workflow exists" test -f .github/workflows/ci.yml
 
 echo ""
 echo "═══════════════════════════════════════════════════"

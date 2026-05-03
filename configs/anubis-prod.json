@@ -2,26 +2,33 @@
   "server": {
     "host": "0.0.0.0",
     "port": 8081,
-    "tls": false
+    "tls": {
+      "enabled": false
+    }
   },
   "storage": {
-    "path": "C:\\Users\\ersin\\AppData\\Roaming\\AnubisWatch",
-    "retention_days": 90,
-    "encryption": false
+    "path": "./data/prod",
+    "encryption": {
+      "enabled": false
+    }
   },
   "auth": {
     "enabled": true,
     "type": "local",
     "local": {
       "admin_email": "admin@anubis.watch",
-      "admin_password": "admin"
+      "admin_password": "SecurePass123!"
     }
   },
-  "necropolis": false,
+  "necropolis": {
+    "enabled": false
+  },
   "dashboard": {
-      "enabled": true,
+    "enabled": true,
+    "branding": {
       "theme": "dark"
-    },
+    }
+  },
   "logging": {
     "level": "info",
     "format": "json"

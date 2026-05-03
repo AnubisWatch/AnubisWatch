@@ -140,7 +140,7 @@ export function Dashboard() {
 
   // Prepare chart data from judgments
   const chartData = useMemo(() => {
-    if (!judgmentsData?.data || judgmentsData.data.length === 0) {
+    if (!judgmentsData || judgmentsData.length === 0) {
       // Return empty data for last 12 hours
       return Array.from({ length: 12 }, (_, i) => ({
         time: `${i}:00`,
@@ -151,7 +151,7 @@ export function Dashboard() {
       }))
     }
 
-    const judgments = judgmentsData.data
+    const judgments = judgmentsData
     const now = new Date()
     const hours = 12
     const data = []

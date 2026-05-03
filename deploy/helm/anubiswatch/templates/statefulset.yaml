@@ -36,16 +36,19 @@ spec:
             - serve
             - --config
             - /etc/anubis/anubis.yaml
+            {{- if .Values.config.necropolis.enabled }}
+            - --cluster
+            {{- end }}
           ports:
             - name: http
-              containerPort: 8080
+              containerPort: {{ .Values.service.httpPort }}
               protocol: TCP
             - name: raft
-              containerPort: 7946
+              containerPort: {{ .Values.service.clusterPort }}
               protocol: TCP
           livenessProbe:
             httpGet:
-              path: /api/health
+              path: /health
               port: http
             initialDelaySeconds: 30
             periodSeconds: 10
@@ -53,7 +56,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /api/ready
+              path: /ready
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
@@ -66,7 +69,7 @@ spec:
               mountPath: /etc/anubis
               readOnly: true
             - name: data
-              mountPath: {{ .Values.config.dataDir }}
+              mountPath: {{ .Values.config.storage.path }}
           env:
             - name: ANUBIS_NODE_ID
               valueFrom:

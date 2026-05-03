@@ -50,6 +50,7 @@ type AlertRule struct {
 	Scope       RuleScope         `json:"scope" yaml:"scope"`
 	Conditions  []AlertCondition  `json:"conditions" yaml:"conditions"`
 	Channels    []string          `json:"channels" yaml:"channels"`
+	Severity    Severity          `json:"severity" yaml:"severity"`
 	Cooldown    Duration          `json:"cooldown" yaml:"cooldown"`
 	AutoResolve bool              `json:"auto_resolve" yaml:"auto_resolve"`
 	Escalation  *EscalationPolicy `json:"escalation,omitempty" yaml:"escalation,omitempty"`

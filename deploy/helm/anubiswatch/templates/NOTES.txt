@@ -30,5 +30,5 @@ Access the application using port-forward:
 {{- end }}
 
 Default login:
-  Email: {{ .Values.config.auth.admin_email }}
+  Email: {{ .Values.config.auth.local.adminEmail }}
   Password: {{ .Values.secrets.adminPassword }}

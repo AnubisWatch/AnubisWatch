@@ -198,6 +198,15 @@ describe('useSoulStore', () => {
     const result = await useSoulStore.getState().updateSoul('1', { name: 'Soul 1 Updated' })
 
     expect(result).toEqual(updatedSoul)
+    expect(mockPut).toHaveBeenCalledWith('/souls/1', {
+      id: '1',
+      name: 'Soul 1 Updated',
+      type: 'http',
+      target: 'https://a.com',
+      enabled: true,
+      weight: 1,
+      timeout: 5,
+    })
     expect(useSoulStore.getState().souls[0].name).toBe('Soul 1 Updated')
   })
 

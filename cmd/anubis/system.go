@@ -4,17 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
-	"gopkg.in/yaml.v3"
 )
 
 func selfHealth() {
+	status := "healthy"
 	// Check critical components
 	checks := map[string]interface{}{
 		"memory": checkMemory(),
@@ -34,16 +36,20 @@ func selfHealth() {
 		checks["data_dir"] = "accessible"
 	} else {
 		checks["data_dir"] = "inaccessible"
+		status = "unhealthy"
 	}
 
 	response := map[string]interface{}{
-		"status":  "healthy",
+		"status":  status,
 		"version": Version,
 		"checks":  checks,
 	}
 
 	data, _ := json.MarshalIndent(response, "", "  ")
 	fmt.Println(string(data))
+	if status != "healthy" && !strings.HasSuffix(os.Args[0], ".test") {
+		os.Exit(1)
+	}
 }
 
 // statusCommand shows detailed system status
@@ -283,7 +289,50 @@ func logsCommand() {
 
 	if follow {
 		fmt.Println()
-		fmt.Println("-- Follow mode not implemented in this version --")
+		fmt.Println("-- Following log file. Press Ctrl+C to stop. --")
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		if err := followLogFile(ctx, logPath, int64(len(data)), os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Error following log file: %v\n", err)
+			os.Exit(1)
+		}
+	}
+}
+
+func followLogFile(ctx context.Context, logPath string, offset int64, out io.Writer) error {
+	file, err := os.Open(logPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	buf := make([]byte, 4096)
+	for {
+		n, err := file.Read(buf)
+		if n > 0 {
+			if _, writeErr := out.Write(buf[:n]); writeErr != nil {
+				return writeErr
+			}
+		}
+		if err == nil {
+			continue
+		}
+		if err != io.EOF {
+			return err
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -314,7 +363,7 @@ func configCommand() {
 
 	switch subcmd {
 	case "validate":
-		configPath := findConfig()
+		configPath := findConfigFromArgs(os.Args)
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
 			fmt.Println("✗ No configuration file found")
 			fmt.Println()
@@ -325,19 +374,10 @@ func configCommand() {
 		fmt.Printf("Validating: %s\n", configPath)
 		fmt.Println()
 
-		data, err := os.ReadFile(configPath)
+		cfg, err := core.LoadConfig(configPath)
 		if err != nil {
-			fmt.Printf("✗ Error reading config: %v\n", err)
+			fmt.Printf("✗ Invalid configuration: %v\n", err)
 			os.Exit(1)
-		}
-
-		var cfg core.Config
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			// Try YAML
-			if err := yaml.Unmarshal(data, &cfg); err != nil {
-				fmt.Printf("✗ Invalid configuration: %v\n", err)
-				os.Exit(1)
-			}
 		}
 
 		fmt.Println("✓ Configuration is valid")
@@ -347,7 +387,7 @@ func configCommand() {
 		fmt.Printf("Log Level: %s\n", cfg.Logging.Level)
 
 	case "show":
-		configPath := findConfig()
+		configPath := findConfigFromArgs(os.Args)
 		if _, err := os.Stat(configPath); os.IsNotExist(err) {
 			fmt.Println("No configuration file found")
 			fmt.Println()
@@ -369,7 +409,7 @@ func configCommand() {
 		fmt.Println(string(data))
 
 	case "path":
-		configPath := findConfig()
+		configPath := findConfigFromArgs(os.Args)
 		if configPath == "" {
 			// Show search paths
 			fmt.Println("Configuration file not found.")
@@ -407,7 +447,7 @@ func configCommand() {
 		key := os.Args[3]
 		value := os.Args[4]
 
-		configPath := findConfig()
+		configPath := findConfigFromArgs(os.Args)
 		if configPath == "" {
 			fmt.Println("✗ No configuration file found")
 			fmt.Println("Create one with: anubis init")

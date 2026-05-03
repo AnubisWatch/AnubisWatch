@@ -33,6 +33,13 @@ spec:
             {{- toYaml .Values.securityContext | nindent 12 }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - serve
+            - --config
+            - /etc/anubis/anubis.yaml
+            {{- if .Values.config.necropolis.enabled }}
+            - --cluster
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.httpPort }}
@@ -40,7 +47,7 @@ spec:
             - name: grpc
               containerPort: {{ .Values.service.grpcPort }}
               protocol: TCP
-            {{- if .Values.config.raft.enabled }}
+            {{- if .Values.config.necropolis.enabled }}
             - name: raft
               containerPort: {{ .Values.service.clusterPort }}
               protocol: TCP
@@ -78,7 +85,7 @@ spec:
               mountPath: /data
           livenessProbe:
             httpGet:
-              path: /api/v1/health
+              path: /health
               port: http
             initialDelaySeconds: 10
             periodSeconds: 30
@@ -86,7 +93,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /api/v1/health
+              path: /ready
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10

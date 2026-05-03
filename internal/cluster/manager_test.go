@@ -86,10 +86,18 @@ func TestManager_IsClustered(t *testing.T) {
 
 	tests := []struct {
 		name              string
+		enabled           bool
 		bootstrap         bool
 		peers             []core.RaftPeer
 		expectedClustered bool
 	}{
+		{
+			name:              "enabled cluster mode",
+			enabled:           true,
+			bootstrap:         false,
+			peers:             []core.RaftPeer{},
+			expectedClustered: true,
+		},
 		{
 			name:              "bootstrap mode",
 			bootstrap:         true,
@@ -116,7 +124,7 @@ func TestManager_IsClustered(t *testing.T) {
 			cfg.Bootstrap = tt.bootstrap
 			cfg.Peers = tt.peers
 
-			manager, err := NewManager(core.NecropolisConfig{Raft: cfg}, db, newTestLogger())
+			manager, err := NewManager(core.NecropolisConfig{Enabled: tt.enabled, Raft: cfg}, db, newTestLogger())
 			if err != nil {
 				t.Fatalf("NewManager failed: %v", err)
 			}

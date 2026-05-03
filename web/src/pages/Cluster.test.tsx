@@ -69,8 +69,8 @@ describe('Cluster', () => {
     expect(screen.getByText('5')).toBeInTheDocument()
     expect(screen.getByText('Disabled')).toBeInTheDocument()
     expect(screen.getByRole('cell', { name: /node-1/ })).toBeInTheDocument()
-    // solo appears in Role card and State section (2 times)
-    expect(screen.getAllByText('solo')).toHaveLength(2)
+    // solo appears in role card, state section, and node role cell.
+    expect(screen.getAllByText('solo')).toHaveLength(3)
     // Term appears in overview and in Raft section (2 times)
     expect(screen.getAllByText('1')).toHaveLength(2)
   })

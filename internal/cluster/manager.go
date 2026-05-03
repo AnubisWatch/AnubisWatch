@@ -93,7 +93,7 @@ func NewManager(cfg core.NecropolisConfig, db *storage.CobaltDB, logger *slog.Lo
 		config:      cfg.Raft,
 		db:          db,
 		logger:      logger.With("component", "cluster"),
-		isClustered: cfg.Raft.Bootstrap || len(cfg.Raft.Peers) > 0,
+		isClustered: cfg.Enabled || cfg.Raft.Bootstrap || len(cfg.Raft.Peers) > 0,
 	}
 
 	// Create Raft storage components

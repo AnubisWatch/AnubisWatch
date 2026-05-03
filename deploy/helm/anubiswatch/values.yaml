@@ -61,6 +61,17 @@ autoscaling:
   targetCPUUtilizationPercentage: 80
   targetMemoryUtilizationPercentage: 80
 
+pdb:
+  enabled: false
+  minAvailable: 1
+
+monitoring:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+
 persistence:
   enabled: true
   storageClass: ""
@@ -73,35 +84,27 @@ statefulSet:
   updateStrategy:
     type: RollingUpdate
 
-service:
-  type: ClusterIP
-  httpPort: 8080
-  grpcPort: 9090
-  clusterPort: 7946
-
 config:
   server:
     port: 8080
-    tls: false
-    dashboard_enabled: true
-    cors_origins: ["*"]
+    tls:
+      enabled: false
+    allowedOrigins: ["*"]
+
+  dashboard:
+    enabled: true
 
   auth:
     type: local
-    admin_email: admin@anubiswatch.local
-    session_ttl: 24h
+    local:
+      adminEmail: admin@anubiswatch.local
 
   storage:
-    data_dir: /data
-    encryption_enabled: false
+    path: /data
+    encryption:
+      enabled: false
 
-  probe:
-    max_concurrent: 100
-    queue_size: 1000
-    timeout_multiplier: 1.5
-    default_interval: 60s
-
-  raft:
+  necropolis:
     enabled: false
 
   logging:

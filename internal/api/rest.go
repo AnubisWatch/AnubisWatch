@@ -312,7 +312,7 @@ func (s *RESTServer) setupRoutes() {
 	// Health
 	s.router.Handle("GET", "/health", s.handleHealth)
 	s.router.Handle("GET", "/ready", s.handleReady)
-	s.router.Handle("GET", "/metrics", s.requireAuth(s.handleMetrics))
+	s.router.Handle("GET", "/metrics", s.handleMetrics)
 
 	// OpenAPI / Swagger (no auth required)
 	s.router.Handle("GET", "/api/openapi.json", s.handleOpenAPIJSON)
@@ -516,8 +516,91 @@ func (s *RESTServer) handleOpenAPIJSON(ctx *Context) error {
 	ctx.Response.Header().Set("Content-Type", "application/json")
 	ctx.Response.Header().Set("Cache-Control", "public, max-age=3600")
 	ctx.Response.WriteHeader(http.StatusOK)
-	ctx.Response.Write(openapiJSON)
+	ctx.Response.Write(buildOpenAPIJSON())
 	return nil
+}
+
+func buildOpenAPIJSON() []byte {
+	var spec map[string]any
+	if err := json.Unmarshal(openapiJSON, &spec); err != nil {
+		return openapiJSON
+	}
+
+	paths, ok := spec["paths"].(map[string]any)
+	if !ok {
+		paths = map[string]any{}
+		spec["paths"] = paths
+	}
+
+	for path, definition := range publicOpenAPIPaths() {
+		if _, exists := paths[path]; !exists {
+			paths[path] = definition
+		}
+	}
+
+	data, err := json.Marshal(spec)
+	if err != nil {
+		return openapiJSON
+	}
+	return data
+}
+
+func publicOpenAPIPaths() map[string]any {
+	return map[string]any{
+		"/metrics": map[string]any{
+			"get": map[string]any{
+				"summary": "Prometheus metrics",
+				"tags":    []any{"System"},
+				"responses": map[string]any{
+					"200": map[string]any{"description": "Prometheus metrics"},
+				},
+			},
+		},
+		"/api/openapi.json": map[string]any{
+			"get": map[string]any{
+				"summary": "OpenAPI JSON specification",
+				"tags":    []any{"System"},
+				"responses": map[string]any{
+					"200": map[string]any{"description": "OpenAPI document"},
+				},
+			},
+		},
+		"/api/docs": map[string]any{
+			"get": map[string]any{
+				"summary": "Swagger UI documentation",
+				"tags":    []any{"System"},
+				"responses": map[string]any{
+					"200": map[string]any{"description": "Interactive API documentation"},
+				},
+			},
+		},
+		"/public/status": map[string]any{
+			"get": map[string]any{
+				"summary": "Public system status",
+				"tags":    []any{"Status Pages"},
+				"responses": map[string]any{
+					"200": map[string]any{"description": "Public status summary"},
+				},
+			},
+		},
+		"/status/{slug}": map[string]any{
+			"get": map[string]any{
+				"summary": "Public status page",
+				"tags":    []any{"Status Pages"},
+				"parameters": []any{
+					map[string]any{
+						"name":     "slug",
+						"in":       "path",
+						"required": true,
+						"schema":   map[string]any{"type": "string"},
+					},
+				},
+				"responses": map[string]any{
+					"200": map[string]any{"description": "Rendered public status page or JSON status document"},
+				},
+			},
+		},
+	}
 }
 
 func (s *RESTServer) handleOpenAPIDocs(ctx *Context) error {

@@ -1007,9 +1007,29 @@ func TestInitACMEManager_NoAutoCert(t *testing.T) {
 
 // Test initACMEManager with TLS and AutoCert enabled
 func TestInitACMEManager_WithAutoCert(t *testing.T) {
-	t.Skip("Skipping test - requires full storage setup for ACME manager")
-	// This test would require a full storage.CobaltDB instance
-	// which is complex to set up in unit tests
+	dataDir := t.TempDir()
+	cfg := &core.Config{
+		Storage: core.StorageConfig{Path: dataDir},
+		Server: core.ServerConfig{
+			TLS: core.TLSServerConfig{
+				Enabled:   true,
+				AutoCert:  true,
+				ACMEEmail: "test@example.com",
+			},
+		},
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	store, err := storage.NewEngine(core.StorageConfig{Path: dataDir}, logger)
+	if err != nil {
+		t.Fatalf("NewEngine failed: %v", err)
+	}
+	defer store.Close()
+
+	result := initACMEManager(cfg, store, logger)
+	if result == nil {
+		t.Fatal("Expected ACME manager when TLS AutoCert is enabled")
+	}
 }
 
 // Test getLogLevel with all valid values

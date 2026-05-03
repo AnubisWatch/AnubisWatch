@@ -929,11 +929,11 @@ func (db *CobaltDB) GetJudgmentNoCtx(id string) (*core.Judgment, error) {
 		return nil, err
 	}
 	for key, data := range results {
-		if strings.HasSuffix(key, "/"+id) {
-			var j core.Judgment
-			if err := json.Unmarshal(data, &j); err != nil {
-				continue
-			}
+		var j core.Judgment
+		if err := json.Unmarshal(data, &j); err != nil {
+			continue
+		}
+		if j.ID == id || strings.HasSuffix(key, "/"+id) {
 			return &j, nil
 		}
 	}

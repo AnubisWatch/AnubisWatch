@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
-	"github.com/AnubisWatch/anubiswatch/internal/storage"
 )
 
 // Manager handles ACME certificate operations
@@ -25,7 +24,7 @@ import (
 //
 //go:generate echo "The Judgment Never Sleeps"
 type Manager struct {
-	storage          *storage.CobaltDB
+	storage          certificateStore
 	accountKey       crypto.PrivateKey
 	accountEmail     string
 	provider         Provider
@@ -35,6 +34,13 @@ type Manager struct {
 	directoryURL     string
 	certPath         string
 	challengeHandler *ChallengeHandler
+}
+
+type certificateStore interface {
+	Get(key string) ([]byte, error)
+	Put(key string, value []byte) error
+	Delete(key string) error
+	PrefixScan(prefix string) (map[string][]byte, error)
 }
 
 // Provider represents the ACME provider type
@@ -80,7 +86,7 @@ type ChallengeHandler struct {
 }
 
 // NewManager creates a new ACME manager
-func NewManager(storage *storage.CobaltDB, config Config) (*Manager, error) {
+func NewManager(store certificateStore, config Config) (*Manager, error) {
 	if !config.AcceptTOS {
 		return nil, &core.ConfigError{Message: "Terms of Service must be accepted"}
 	}
@@ -94,7 +100,7 @@ func NewManager(storage *storage.CobaltDB, config Config) (*Manager, error) {
 	}
 
 	// Load or create account key
-	accountKey, err := loadOrCreateAccountKey(storage)
+	accountKey, err := loadOrCreateAccountKey(store)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load account key: %w", err)
 	}
@@ -104,7 +110,7 @@ func NewManager(storage *storage.CobaltDB, config Config) (*Manager, error) {
 	}
 
 	m := &Manager{
-		storage:          storage,
+		storage:          store,
 		accountKey:       accountKey,
 		accountEmail:     config.Email,
 		provider:         config.Provider,
@@ -124,7 +130,7 @@ func NewManager(storage *storage.CobaltDB, config Config) (*Manager, error) {
 }
 
 // loadOrCreateAccountKey loads or generates the ACME account private key
-func loadOrCreateAccountKey(db *storage.CobaltDB) (crypto.PrivateKey, error) {
+func loadOrCreateAccountKey(db certificateStore) (crypto.PrivateKey, error) {
 	keyData, err := db.Get("acme/account_key")
 	if err == nil && len(keyData) > 0 {
 		// Parse existing key

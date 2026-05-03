@@ -6,37 +6,35 @@ metadata:
 data:
   anubis.yaml: |
     server:
+      host: 0.0.0.0
       port: 8080
-      tls: false
-      dashboard_enabled: true
-      cors_origins: ["*"]
+      tls:
+        enabled: false
+      allowed_origins: ["*"]
 
     auth:
       type: local
-      admin_email: admin@anubiswatch.local
-      session_ttl: 24h
+      local:
+        admin_email: admin@anubiswatch.local
+
+    dashboard:
+      enabled: true
 
     storage:
-      data_dir: /data
-      encryption_enabled: false
+      path: /data
+      encryption:
+        enabled: false
 
-    probe:
-      max_concurrent: 100
-      queue_size: 1000
-      timeout_multiplier: 1.5
-      default_interval: 60s
-
-    raft:
+    necropolis:
       enabled: false
-      bind_addr: "0.0.0.0:7946"
-      advertise_addr: ""
-      peers: []
 
-    alert:
-      default_channels: []
-      throttle_interval: 5m
-      max_retries: 3
+    channels: []
+
+    verdicts:
+      rules: []
+      escalation: []
 
     logging:
       level: info
       format: json
+      output: stdout

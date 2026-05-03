@@ -55,8 +55,8 @@ jobs:
           if [ -f web/package.json ]; then
             cd web
             npm ci
-            npm run build
-            echo "Dashboard built successfully"
+            npm run build:embed
+            echo "Embedded dashboard built successfully"
           else
             echo "No web/dashboard found (web/package.json missing), skipping dashboard build"
           fi
@@ -117,9 +117,15 @@ jobs:
         with:
           path: artifacts
           pattern: '*-archive'
+          merge-multiple: true
 
       - name: List artifacts
         run: ls -la artifacts/ || true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum *.tar.gz *.zip > checksums.txt
 
       - name: Create Release
         uses: softprops/action-gh-release@v3

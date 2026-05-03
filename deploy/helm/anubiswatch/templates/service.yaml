@@ -30,7 +30,7 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
-    - port: {{ .Values.service.raftPort }}
+    - port: {{ .Values.service.clusterPort }}
       targetPort: raft
       protocol: TCP
       name: raft

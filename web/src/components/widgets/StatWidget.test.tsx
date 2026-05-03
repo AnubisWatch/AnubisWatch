@@ -33,6 +33,12 @@ describe('StatWidget', () => {
     await waitFor(() => expect(screen.getByText(/1[,.]234[,.]567/)).toBeInTheDocument())
   })
 
+  it('uses the configured metric key when multiple values are returned', async () => {
+    mocks.post.mockResolvedValue({ total: 10, uptime: 99.5 })
+    render(<StatWidget widget={makeWidget({ query: { source: 'stats', metric: 'uptime', time_range: '1h' } })} dashboardId="d1" />)
+    await waitFor(() => expect(screen.getByText('99.5')).toBeInTheDocument())
+  })
+
   it('displays the metric label', async () => {
     mocks.post.mockResolvedValue({ cpu_usage: 42 })
     render(<StatWidget widget={makeWidget()} dashboardId="d1" />)

@@ -38,6 +38,8 @@ describe('Login', () => {
     expect(screen.getByPlaceholderText('priest@anubis.watch')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('••••••••')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /enter the temple/i })).toBeInTheDocument()
+    expect(screen.getByText('admin@anubis.watch')).toBeInTheDocument()
+    expect(screen.getByText('SecurePass123!')).toBeInTheDocument()
   })
 
   it('toggles password visibility', () => {

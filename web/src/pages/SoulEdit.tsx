@@ -44,6 +44,7 @@ export function SoulEdit() {
     try {
       await updateSoul({
         name: formData.name,
+        type: formData.type,
         target: formData.target,
         enabled: formData.enabled,
         weight: formData.weight,

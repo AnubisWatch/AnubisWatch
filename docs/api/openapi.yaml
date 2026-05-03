@@ -519,6 +519,11 @@ paths:
 
   /health:
     get:
+      servers:
+        - url: http://localhost:8080
+          description: Local development server
+        - url: https://api.anubis.watch
+          description: Production server
       tags:
         - System
       summary: Health check
@@ -541,6 +546,11 @@ paths:
 
   /ready:
     get:
+      servers:
+        - url: http://localhost:8080
+          description: Local development server
+        - url: https://api.anubis.watch
+          description: Production server
       tags:
         - System
       summary: Readiness check
@@ -561,6 +571,11 @@ paths:
 
   /metrics:
     get:
+      servers:
+        - url: http://localhost:8080
+          description: Local development server
+        - url: https://api.anubis.watch
+          description: Production server
       tags:
         - System
       summary: Prometheus metrics

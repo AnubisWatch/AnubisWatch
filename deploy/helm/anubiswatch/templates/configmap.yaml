@@ -7,29 +7,30 @@ metadata:
 data:
   anubis.yaml: |
     server:
+      host: 0.0.0.0
       port: {{ .Values.config.server.port }}
-      tls: {{ .Values.config.server.tls }}
-      dashboard_enabled: {{ .Values.config.server.dashboard_enabled }}
-      cors_origins: {{ .Values.config.server.cors_origins | toJson }}
+      grpc_port: {{ .Values.service.grpcPort }}
+      tls:
+        enabled: {{ .Values.config.server.tls.enabled }}
+      allowed_origins: {{ .Values.config.server.allowedOrigins | toJson }}
 
     auth:
       type: {{ .Values.config.auth.type }}
-      admin_email: {{ .Values.config.auth.admin_email }}
-      session_ttl: {{ .Values.config.auth.session_ttl }}
+      local:
+        admin_email: {{ .Values.config.auth.local.adminEmail | quote }}
+
+    dashboard:
+      enabled: {{ .Values.config.dashboard.enabled }}
 
     storage:
-      data_dir: {{ .Values.config.storage.data_dir }}
-      encryption_enabled: {{ .Values.config.storage.encryption_enabled }}
+      path: {{ .Values.config.storage.path }}
+      encryption:
+        enabled: {{ .Values.config.storage.encryption.enabled }}
 
-    probe:
-      max_concurrent: {{ .Values.config.probe.max_concurrent }}
-      queue_size: {{ .Values.config.probe.queue_size }}
-      timeout_multiplier: {{ .Values.config.probe.timeout_multiplier }}
-      default_interval: {{ .Values.config.probe.default_interval }}
-
-    raft:
-      enabled: {{ .Values.config.raft.enabled }}
+    necropolis:
+      enabled: {{ .Values.config.necropolis.enabled }}
 
     logging:
       level: {{ .Values.config.logging.level }}
       format: {{ .Values.config.logging.format }}
+      output: stdout

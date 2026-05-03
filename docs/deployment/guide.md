@@ -34,28 +34,31 @@ Access the dashboard at `http://localhost:8080`
 Create `anubis.yaml`:
 
 ```yaml
-data_dir: /var/lib/anubis
-log_level: info
-
 server:
-  bind_addr: 0.0.0.0:8080
+  host: 0.0.0.0
+  port: 8080
   tls:
     enabled: true
-    cert_file: /etc/anubis/server.crt
-    key_file: /etc/anubis/server.key
+    cert: /etc/anubis/server.crt
+    key: /etc/anubis/server.key
 
 storage:
-  path: /var/lib/anubis/anubis.db
-  retention_days: 30
+  path: /var/lib/anubis/data
 
-alerts:
-  enabled: true
-  smtp:
-    enabled: true
-    host: smtp.gmail.com
-    port: 587
-    username: alerts@example.com
-    password: ${SMTP_PASSWORD}
+logging:
+  level: info
+  format: json
+
+channels:
+  - name: smtp
+    type: email
+    email:
+      smtp_host: smtp.gmail.com
+      smtp_port: 587
+      username: alerts@example.com
+      password: ${SMTP_PASSWORD}
+      from: alerts@example.com
+      to: [ops@example.com]
 ```
 
 ### Systemd Service
@@ -208,15 +211,18 @@ persistence:
   storageClass: fast-ssd
 
 config:
-  logLevel: warn
+  logging:
+    level: warn
   storage:
-    retentionDays: 90
-  alerts:
-    enabled: true
-    smtp:
-      enabled: true
-      host: smtp.gmail.com
-      port: 587
+    path: /var/lib/anubis/data
+  channels:
+    - name: smtp
+      type: email
+      email:
+        smtp_host: smtp.gmail.com
+        smtp_port: 587
+        from: alerts@example.com
+        to: [ops@example.com]
 
 monitoring:
   enabled: true
@@ -310,6 +316,6 @@ kubectl logs -f anubiswatch-0 -n anubiswatch
 curl http://localhost:8080/metrics
 
 # Health check
-curl http://localhost:8080/api/health
-curl http://localhost:8080/api/ready
+curl http://localhost:8080/health
+curl http://localhost:8080/ready
 ```

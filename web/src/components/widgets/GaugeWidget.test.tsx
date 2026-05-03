@@ -49,6 +49,12 @@ describe('GaugeWidget', () => {
     await waitFor(() => expect(screen.getByText('100.0%')).toBeInTheDocument())
   })
 
+  it('uses the configured metric key when multiple values are returned', async () => {
+    mocks.post.mockResolvedValue({ total: 10, uptime: 75 })
+    render(<GaugeWidget widget={makeWidget({ query: { source: 'stats', metric: 'uptime', time_range: '1h' } })} dashboardId="d1" />)
+    await waitFor(() => expect(screen.getByText('75.0%')).toBeInTheDocument())
+  })
+
   it('applies lt threshold color when value is below threshold', async () => {
     mocks.post.mockResolvedValue({ cpu_usage: 30 })
     render(

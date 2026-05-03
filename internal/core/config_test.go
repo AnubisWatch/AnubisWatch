@@ -1176,7 +1176,22 @@ func TestAuthConfigValidate(t *testing.T) {
 	}{
 		{
 			name:      "valid local auth",
-			config:    AuthConfig{Type: "local"},
+			config:    AuthConfig{Type: "local", Local: LocalAuth{AdminEmail: "admin@anubis.watch", AdminPassword: "SecurePass123!"}},
+			wantError: false,
+		},
+		{
+			name:      "local auth password without email",
+			config:    AuthConfig{Type: "local", Local: LocalAuth{AdminPassword: "SecurePass123!"}},
+			wantError: true,
+		},
+		{
+			name:      "local auth weak password",
+			config:    AuthConfig{Type: "local", Local: LocalAuth{AdminEmail: "admin@anubis.watch", AdminPassword: "weak"}},
+			wantError: true,
+		},
+		{
+			name:      "local auth bcrypt password",
+			config:    AuthConfig{Type: "local", Local: LocalAuth{AdminEmail: "admin@anubis.watch", AdminPassword: "$2a$12$abcdefghijklmnopqrstuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu"}},
 			wantError: false,
 		},
 		{
