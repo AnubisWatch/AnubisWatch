@@ -63,6 +63,7 @@ type Store interface {
 	ListJourneysNoCtx(workspace string, offset, limit int) ([]interface{}, error)
 	SaveJourneyNoCtx(j interface{}) error
 	DeleteJourneyNoCtx(id string) error
+	RunJourneyNoCtx(journeyID string) (interface{}, error)
 	ListJourneyRunsNoCtx(journeyID string, limit int) ([]interface{}, error)
 	GetJourneyRunNoCtx(journeyID, runID string) (interface{}, error)
 
@@ -326,6 +327,40 @@ func ruleToPB(r interface{}) *v1.Rule {
 
 // journeyToPB converts a core.JourneyConfig to protobuf Journey
 func journeyRunToPB(r interface{}) *v1.JourneyRun {
+	if run, ok := r.(*core.JourneyRun); ok {
+		var startedAt, completedAt *timestamppb.Timestamp
+		if run.StartedAt > 0 {
+			startedAt = timestamppb.New(time.UnixMilli(run.StartedAt))
+		}
+		if run.CompletedAt > 0 {
+			completedAt = timestamppb.New(time.UnixMilli(run.CompletedAt))
+		}
+		steps := make([]*v1.JourneyStepResult, 0, len(run.Steps))
+		for _, step := range run.Steps {
+			steps = append(steps, &v1.JourneyStepResult{
+				Name:       step.Name,
+				StepIndex:  int32(step.StepIndex),
+				DurationMs: step.Duration,
+				Status:     string(step.Status),
+				Message:    step.Message,
+				Extracted:  step.Extracted,
+			})
+		}
+		return &v1.JourneyRun{
+			Id:          run.ID,
+			JourneyId:   run.JourneyID,
+			Workspace:   run.WorkspaceID,
+			JackalId:    run.JackalID,
+			Region:      run.Region,
+			StartedAt:   startedAt,
+			CompletedAt: completedAt,
+			DurationMs:  run.Duration,
+			Status:      string(run.Status),
+			Steps:       steps,
+			Variables:   run.Variables,
+		}
+	}
+
 	type hasStepResultFields interface {
 		GetName() string
 		GetStepIndex() int
@@ -1225,18 +1260,24 @@ func (s *Server) DeleteJourney(ctx context.Context, req *v1.DeleteJourneyRequest
 }
 
 func (s *Server) RunJourney(ctx context.Context, req *v1.RunJourneyRequest) (*v1.RunJourneyResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	journey, err := s.store.GetJourneyNoCtx(req.Id)
 	if err != nil || journey == nil {
 		return nil, status.Errorf(codes.NotFound, "journey not found: %s", req.Id)
 	}
 
+	run, err := s.store.RunJourneyNoCtx(req.Id)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to run journey: %v", err)
+	}
+	pbRun := journeyRunToPB(run)
+	if pbRun == nil {
+		return nil, status.Errorf(codes.Internal, "failed to convert journey run")
+	}
+
 	return &v1.RunJourneyResponse{
 		JourneyId: req.Id,
-		Status:    "executing",
-		Message:   "Journey execution triggered",
+		Status:    pbRun.Status,
+		Message:   fmt.Sprintf("Journey execution completed with status %s", pbRun.Status),
 	}, nil
 }
 

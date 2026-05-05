@@ -182,6 +182,24 @@ func (m *mockGRPCStore) SaveJourneyNoCtx(j interface{}) error {
 	return nil
 }
 func (m *mockGRPCStore) DeleteJourneyNoCtx(id string) error { delete(m.journeys, id); return nil }
+func (m *mockGRPCStore) RunJourneyNoCtx(journeyID string) (interface{}, error) {
+	if _, ok := m.journeys[journeyID]; !ok {
+		return nil, fmt.Errorf("journey not found")
+	}
+	now := time.Now().UnixMilli()
+	run := &mockJourneyRun{
+		id:          fmt.Sprintf("run_%d", len(m.journeyRuns)+1),
+		journeyID:   journeyID,
+		workspaceID: "default",
+		status:      "alive",
+		startedAt:   now,
+		completedAt: now,
+		duration:    1,
+		variables:   map[string]string{},
+	}
+	m.journeyRuns = append([]interface{}{run}, m.journeyRuns...)
+	return run, nil
+}
 func (m *mockGRPCStore) ListJourneyRunsNoCtx(journeyID string, limit int) ([]interface{}, error) {
 	var result []interface{}
 	for _, r := range m.journeyRuns {
@@ -896,8 +914,11 @@ func TestServer_RunJourney(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunJourney failed: %v", err)
 	}
-	if resp.Status != "executing" {
-		t.Errorf("Expected executing, got %s", resp.Status)
+	if resp.Status != "alive" {
+		t.Errorf("Expected alive, got %s", resp.Status)
+	}
+	if len(store.journeyRuns) != 1 {
+		t.Errorf("Expected 1 stored run, got %d", len(store.journeyRuns))
 	}
 }
 

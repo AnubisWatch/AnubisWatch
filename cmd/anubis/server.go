@@ -247,7 +247,8 @@ func (a *grpcProbeAdapter) ForceCheck(soulID string) (interface{}, error) {
 
 // grpcStorageAdapter wraps restStorageAdapter to return interface{} for gRPC compatibility
 type grpcStorageAdapter struct {
-	inner *restStorageAdapter
+	inner   *restStorageAdapter
+	journey *journey.Executor
 }
 
 func (a *grpcStorageAdapter) GetSoulNoCtx(id string) (interface{}, error) {
@@ -354,6 +355,16 @@ func (a *grpcStorageAdapter) SaveJourneyNoCtx(j interface{}) error {
 }
 func (a *grpcStorageAdapter) DeleteJourneyNoCtx(id string) error {
 	return a.inner.DeleteJourneyNoCtx(id)
+}
+func (a *grpcStorageAdapter) RunJourneyNoCtx(journeyID string) (interface{}, error) {
+	if a.journey == nil {
+		return nil, fmt.Errorf("journey executor not available")
+	}
+	j, err := a.inner.GetJourneyNoCtx(journeyID)
+	if err != nil {
+		return nil, err
+	}
+	return a.journey.RunOnce(context.Background(), j)
 }
 func (a *grpcStorageAdapter) ListEvents(soulID string, limit int) ([]interface{}, error) {
 	events, err := a.inner.store.ListAlertEvents(soulID, limit)
@@ -516,7 +527,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	// Initialize gRPC server
 	var grpcServer *grpcapi.Server
 	if cfg.Server.GRPCPort > 0 {
-		grpcStore := &grpcStorageAdapter{inner: restStore}
+		grpcStore := &grpcStorageAdapter{inner: restStore, journey: journeyExec}
 		// Build TLS config for gRPC server from server TLS config
 		var grpcTLSConfig *tls.Config
 		if cfg.Server.TLS.Enabled && cfg.Server.TLS.Cert != "" && cfg.Server.TLS.Key != "" {
