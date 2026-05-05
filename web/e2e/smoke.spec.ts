@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import type { Browser, Page } from '@playwright/test'
+import type { Browser, Locator, Page } from '@playwright/test'
 import { startServer, TestServer } from './server'
 
 let server: TestServer
@@ -14,6 +14,22 @@ type CreatedSoul = {
 type CreatedDashboard = {
   id: string
   name: string
+}
+
+type SoulCreatePayload = {
+  name: string
+  type: string
+  target: string
+  enabled: boolean
+  http?: unknown
+  tcp?: { send?: string; expect_regex?: string }
+  udp?: { send_hex?: string; expect_contains?: string }
+  dns?: { record_type?: string; expected?: string[] }
+  icmp?: { count?: number; interval?: string; max_loss_percent?: number }
+  smtp?: { starttls?: boolean; banner_contains?: string }
+  grpc?: { service?: string; metadata?: Record<string, string> }
+  websocket?: { headers?: Record<string, string>; ping_check?: boolean; send?: string; expect_contains?: string }
+  tls?: { expiry_warn_days?: number; expiry_critical_days?: number }
 }
 
 test.beforeAll(async () => {
@@ -206,6 +222,40 @@ async function createSoulViaUI(page: Page, soul: { name: string; type: string; t
   await expect(page.getByRole('heading', { name: 'Add New Soul' })).not.toBeVisible()
   await expect(page.getByText(soul.name)).toBeVisible({ timeout: 10000 })
   return createdSoul
+}
+
+async function submitDisabledSoulViaModal(
+  page: Page,
+  soul: { name: string; type: string; target: string },
+  fillProtocolFields: (dialog: Locator) => Promise<void>
+): Promise<SoulCreatePayload> {
+  await page.getByRole('button', { name: /Add Soul/i }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('heading', { name: 'Add New Soul' })).toBeVisible()
+
+  await dialog.getByPlaceholder('e.g., Production API').fill(soul.name)
+  await dialog.getByLabel('Soul type').selectOption(soul.type)
+  await dialog.locator('[data-testid="soul-target"]').fill(soul.target)
+  await fillProtocolFields(dialog)
+  await dialog.getByLabel('Enable monitoring immediately').uncheck()
+
+  const createPromise = page.waitForResponse(
+    (res) => res.url().endsWith('/api/v1/souls') && res.request().method() === 'POST'
+  )
+  await page.getByRole('button', { name: /Create Soul/i }).click()
+  const createRes = await createPromise
+  expect(createRes.status()).toBe(201)
+
+  const payload = createRes.request().postDataJSON() as SoulCreatePayload
+  expect(payload.name).toBe(soul.name)
+  expect(payload.type).toBe(soul.type)
+  expect(payload.target).toBe(soul.target)
+  expect(payload.enabled).toBe(false)
+  expect(payload.http).toBeUndefined()
+
+  await expect(page.getByRole('heading', { name: 'Add New Soul' })).not.toBeVisible()
+  await expect(page.getByText(soul.name)).toBeVisible({ timeout: 10000 })
+  return payload
 }
 
 const lightModePages = [
@@ -448,6 +498,126 @@ test.describe('AnubisWatch E2E Smoke', () => {
       await expect(page.getByText(/Check passed|Check failed/i)).toBeVisible({ timeout: 10000 })
       await page.goto(`${server.baseURL}/souls`)
       await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 10000 })
+    }
+  })
+
+  test('submits protocol-specific soul modal payloads without leaking HTTP config', async ({ page }) => {
+    await loginAndOpenSouls(page)
+
+    const runID = Date.now()
+    const cases: Array<{
+      type: string
+      target: string
+      fill: (dialog: Locator) => Promise<void>
+      expectPayload: (payload: SoulCreatePayload) => void
+    }> = [
+      {
+        type: 'tcp',
+        target: '127.0.0.1:443',
+        fill: async (dialog) => {
+          await dialog.getByLabel('Send Text').fill('PING')
+          await dialog.getByLabel('Expected Banner Regex').fill('^PONG')
+        },
+        expectPayload: (payload) => {
+          expect(payload.tcp).toEqual({ send: 'PING', expect_regex: '^PONG' })
+        },
+      },
+      {
+        type: 'udp',
+        target: '127.0.0.1:53',
+        fill: async (dialog) => {
+          await dialog.getByLabel('UDP Send Hex').fill('DEADBEEF')
+          await dialog.getByLabel('Expected Response Text').fill('ok')
+        },
+        expectPayload: (payload) => {
+          expect(payload.udp).toEqual({ send_hex: 'DEADBEEF', expect_contains: 'ok' })
+        },
+      },
+      {
+        type: 'dns',
+        target: 'example.com',
+        fill: async (dialog) => {
+          await dialog.getByLabel('DNS Record Type').selectOption('AAAA')
+          await dialog.getByLabel('Expected DNS Values').fill('2001:db8::1, 2001:db8::2')
+        },
+        expectPayload: (payload) => {
+          expect(payload.dns).toEqual({ record_type: 'AAAA', expected: ['2001:db8::1', '2001:db8::2'] })
+        },
+      },
+      {
+        type: 'icmp',
+        target: '127.0.0.1',
+        fill: async (dialog) => {
+          await dialog.getByLabel('ICMP Count').fill('2')
+          await dialog.getByLabel('Interval Seconds').fill('3')
+          await dialog.getByLabel('Max Loss Percent').fill('50')
+        },
+        expectPayload: (payload) => {
+          expect(payload.icmp).toEqual({ count: 2, interval: '3s', max_loss_percent: 50 })
+        },
+      },
+      {
+        type: 'smtp',
+        target: '127.0.0.1:25',
+        fill: async (dialog) => {
+          await dialog.getByLabel('Require STARTTLS').uncheck()
+          await dialog.getByLabel('Expected SMTP Banner').fill('Postfix')
+        },
+        expectPayload: (payload) => {
+          expect(payload.smtp).toEqual({ starttls: false, banner_contains: 'Postfix' })
+        },
+      },
+      {
+        type: 'grpc',
+        target: '127.0.0.1:443',
+        fill: async (dialog) => {
+          await dialog.getByLabel('gRPC Service Name').fill('grpc.health.v1.Health')
+        },
+        expectPayload: (payload) => {
+          expect(payload.grpc).toEqual({ service: 'grpc.health.v1.Health', metadata: {} })
+        },
+      },
+      {
+        type: 'websocket',
+        target: 'ws://127.0.0.1:8080/health',
+        fill: async (dialog) => {
+          await dialog.getByLabel('Send WebSocket ping').uncheck()
+          await dialog.getByLabel('Send Message').fill('ping')
+          await dialog.getByLabel('Expected Message Text').fill('pong')
+        },
+        expectPayload: (payload) => {
+          expect(payload.websocket).toEqual({
+            headers: {},
+            ping_check: false,
+            send: 'ping',
+            expect_contains: 'pong',
+          })
+        },
+      },
+      {
+        type: 'tls',
+        target: 'example.com:443',
+        fill: async (dialog) => {
+          await dialog.getByLabel('Expiry Warning Days').fill('21')
+          await dialog.getByLabel('Expiry Critical Days').fill('5')
+        },
+        expectPayload: (payload) => {
+          expect(payload.tls).toEqual({ expiry_warn_days: 21, expiry_critical_days: 5 })
+        },
+      },
+    ]
+
+    for (const soulCase of cases) {
+      const payload = await submitDisabledSoulViaModal(
+        page,
+        {
+          name: `E2E ${soulCase.type.toUpperCase()} Modal Soul ${runID}`,
+          type: soulCase.type,
+          target: soulCase.target,
+        },
+        soulCase.fill
+      )
+      soulCase.expectPayload(payload)
     }
   })
 
