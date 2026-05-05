@@ -23,7 +23,7 @@ interface MaintenanceWindow {
   id: string
   name: string
   description: string
-  workspace_id: string
+  workspace_id?: string
   soul_ids: string[]
   tags: string[]
   start_time: string
@@ -142,8 +142,7 @@ export function Maintenance() {
         recurring: formRecurring === 'none' ? '' : formRecurring,
         enabled: formEnabled,
         tags: formTags.split(',').map(t => t.trim()).filter(Boolean),
-        soul_ids: [],
-        workspace_id: 'default'
+        soul_ids: []
       }
 
       if (editing) {

@@ -179,6 +179,7 @@ async function loginAndOpenSouls(page: Page) {
   await page.goto(`${server.baseURL}/souls`)
   await page.waitForURL('**/souls')
   await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('div.fixed.bottom-4.right-4').filter({ hasText: 'Live' })).toBeVisible({ timeout: 10000 })
 }
 
 async function createSoulViaUI(page: Page, soul: { name: string; type: string; target: string }): Promise<CreatedSoul> {
@@ -187,8 +188,8 @@ async function createSoulViaUI(page: Page, soul: { name: string; type: string; t
   await expect(dialog.getByRole('heading', { name: 'Add New Soul' })).toBeVisible()
 
   await dialog.getByPlaceholder('e.g., Production API').fill(soul.name)
-  await dialog.locator('select').selectOption(soul.type)
-  await dialog.getByPlaceholder('https://api.example.com/health').fill(soul.target)
+  await dialog.getByLabel('Soul type').selectOption(soul.type)
+  await dialog.locator('[data-testid="soul-target"]').fill(soul.target)
 
   const createPromise = page.waitForResponse(
     (res) => res.url().endsWith('/api/v1/souls') && res.request().method() === 'POST'

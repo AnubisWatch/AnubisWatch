@@ -80,7 +80,7 @@ func NewWebSocketServer(logger *slog.Logger, authenticator Authenticator, allowe
 		ipLimits:         make(map[string]*connectionLimiter),
 		maxConnsPerIP:    10,          // max 10 concurrent connections per IP
 		maxConnsPerUser:  5,           // max 5 concurrent connections per user
-		connRateLimit:    10,          // max 10 connection attempts per minute per IP
+		connRateLimit:    60,          // max 60 connection attempts per minute per IP
 		rateLimitWindow:  time.Minute, // 1 minute window
 		messageRateLimit: 60,          // max 60 messages per minute per client (VULN-005 fix)
 		messageWindow:    time.Minute, // 1 minute window for message rate limiting
@@ -341,16 +341,14 @@ func (c *WSClient) handleMessage(data []byte) {
 	case "subscribe":
 		// Subscribe to events
 		for _, event := range msg.Events {
-			room := fmt.Sprintf("event:%s", event)
-			c.JoinRoom(room)
+			c.JoinRoom(workspaceEventRoom(c.Workspace, event))
 		}
 		c.send <- c.createSuccessMessage("subscribed", msg.Events)
 
 	case "unsubscribe":
 		// Unsubscribe from events
 		for _, event := range msg.Events {
-			room := fmt.Sprintf("event:%s", event)
-			c.LeaveRoom(room)
+			c.LeaveRoom(workspaceEventRoom(c.Workspace, event))
 		}
 		c.send <- c.createSuccessMessage("unsubscribed", msg.Events)
 
@@ -515,6 +513,13 @@ func (s *WebSocketServer) BroadcastToWorkspace(workspace string, msg WSMessage) 
 	s.broadcastToRoom(room, msg)
 }
 
+func workspaceEventRoom(workspace, event string) string {
+	if workspace == "" {
+		return fmt.Sprintf("event:%s", event)
+	}
+	return fmt.Sprintf("workspace:%s:event:%s", workspace, event)
+}
+
 // BroadcastToRoom broadcasts a message to a specific room
 func (s *WebSocketServer) broadcastToRoom(room string, msg WSMessage) {
 	s.mu.RLock()
@@ -552,14 +557,7 @@ func (s *WebSocketServer) BroadcastJudgment(judgment *core.Judgment) {
 		Payload:   judgment,
 	}
 
-	// Broadcast to workspace room
-	s.BroadcastToWorkspace(judgment.WorkspaceID, msg)
-
-	// Also broadcast to event room
-	s.broadcastToRoom("event:judgment", msg)
-
-	// Add to general broadcast
-	s.broadcast <- msg
+	s.broadcastTenantEvent(judgment.WorkspaceID, "judgment", msg)
 }
 
 // BroadcastAlert broadcasts an alert to connected clients
@@ -570,16 +568,7 @@ func (s *WebSocketServer) BroadcastAlert(event *core.AlertEvent) {
 		Payload:   event,
 	}
 
-	// Broadcast to workspace room
-	if event.WorkspaceID != "" {
-		s.BroadcastToWorkspace(event.WorkspaceID, msg)
-	}
-
-	// Also broadcast to event room
-	s.broadcastToRoom("event:alert", msg)
-
-	// Add to general broadcast
-	s.broadcast <- msg
+	s.broadcastTenantEvent(event.WorkspaceID, "alert", msg)
 }
 
 // BroadcastStats broadcasts stats update to connected clients
@@ -591,7 +580,8 @@ func (s *WebSocketServer) BroadcastStats(workspace string, stats interface{}) {
 	}
 
 	if workspace != "" {
-		s.BroadcastToWorkspace(workspace, msg)
+		s.broadcastToRoom(workspaceEventRoom(workspace, "stats"), msg)
+		return
 	}
 
 	s.broadcastToRoom("event:stats", msg)
@@ -606,12 +596,7 @@ func (s *WebSocketServer) BroadcastIncident(incident *core.Incident) {
 		Payload:   incident,
 	}
 
-	if incident.WorkspaceID != "" {
-		s.BroadcastToWorkspace(incident.WorkspaceID, msg)
-	}
-
-	s.broadcastToRoom("event:incident", msg)
-	s.broadcast <- msg
+	s.broadcastTenantEvent(incident.WorkspaceID, "incident", msg)
 }
 
 // BroadcastSoulUpdate broadcasts a soul update to connected clients
@@ -622,9 +607,16 @@ func (s *WebSocketServer) BroadcastSoulUpdate(soul *core.Soul) {
 		Payload:   soul,
 	}
 
-	s.BroadcastToWorkspace(soul.WorkspaceID, msg)
-	s.broadcastToRoom("event:soul", msg)
-	s.broadcast <- msg
+	s.broadcastTenantEvent(soul.WorkspaceID, "soul", msg)
+}
+
+func (s *WebSocketServer) broadcastTenantEvent(workspace, event string, msg WSMessage) {
+	if workspace == "" {
+		s.broadcastToRoom(workspaceEventRoom("", event), msg)
+		s.broadcast <- msg
+		return
+	}
+	s.broadcastToRoom(workspaceEventRoom(workspace, event), msg)
 }
 
 // BroadcastClusterEvent broadcasts a cluster lifecycle event (jackal join/leave,
@@ -678,8 +670,7 @@ func (s *WebSocketServer) SubscribeClient(clientID string, events []string) {
 	}
 
 	for _, event := range events {
-		room := fmt.Sprintf("event:%s", event)
-		client.JoinRoom(room)
+		client.JoinRoom(workspaceEventRoom(client.Workspace, event))
 	}
 
 	s.logger.Debug("Client subscribed", "client_id", clientID, "events", events)
@@ -696,8 +687,7 @@ func (s *WebSocketServer) UnsubscribeClient(clientID string, events []string) {
 	}
 
 	for _, event := range events {
-		room := fmt.Sprintf("event:%s", event)
-		client.LeaveRoom(room)
+		client.LeaveRoom(workspaceEventRoom(client.Workspace, event))
 	}
 
 	s.logger.Debug("Client unsubscribed", "client_id", clientID, "events", events)

@@ -461,6 +461,45 @@ func (m *Manager) sendToChannel(ctx context.Context, event *core.AlertEvent, cha
 	return err
 }
 
+// TestChannel sends a synthetic notification through a configured channel.
+func (m *Manager) TestChannel(ctx context.Context, id string, workspace string) error {
+	channel, err := m.GetChannel(id)
+	if err != nil {
+		return err
+	}
+	if channel == nil {
+		return fmt.Errorf("channel not found: %s", id)
+	}
+	if workspace == "" {
+		workspace = "default"
+	}
+	channelWorkspace := channel.WorkspaceID
+	if channelWorkspace == "" {
+		channelWorkspace = "default"
+	}
+	if channelWorkspace != workspace {
+		return fmt.Errorf("channel %s does not belong to workspace %s", id, workspace)
+	}
+
+	event := &core.AlertEvent{
+		ID:          core.GenerateID(),
+		ChannelID:   id,
+		SoulID:      "test",
+		SoulName:    "AnubisWatch Test",
+		WorkspaceID: channelWorkspace,
+		Status:      core.SoulDegraded,
+		Severity:    core.SeverityInfo,
+		Message:     "This is a test notification from AnubisWatch.",
+		Details: map[string]string{
+			"channel": channel.Name,
+			"purpose": "configuration test",
+		},
+		Timestamp: time.Now(),
+	}
+
+	return m.sendToChannel(ctx, event, channel)
+}
+
 // registerDispatchers registers all built-in channel dispatchers
 func (m *Manager) registerDispatchers() {
 	m.dispatchers[core.ChannelSlack] = &SlackDispatcher{logger: m.logger}
@@ -505,7 +544,7 @@ func (m *Manager) ruleApplies(rule *core.AlertRule, soul *core.Soul) bool {
 		}
 		return false
 	default:
-		return true
+		return false
 	}
 }
 

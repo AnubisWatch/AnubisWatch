@@ -17,7 +17,6 @@ import {
   MessageSquare,
   Phone,
   Webhook,
-  MoreHorizontal,
   Settings,
   BellRing,
   ToggleRight,
@@ -50,9 +49,12 @@ export function Alerts() {
   const [severityFilter, setSeverityFilter] = useState('all')
   const [showChannelModal, setShowChannelModal] = useState(false)
   const [showRuleModal, setShowRuleModal] = useState(false)
+  const [editingChannel, setEditingChannel] = useState<AlertChannel | null>(null)
+  const [editingRule, setEditingRule] = useState<AlertRule | null>(null)
   const [testingChannel, setTestingChannel] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<{ id: string; success: boolean; message: string } | null>(null)
   const [saving, setSaving] = useState(false)
+  const [ruleFormError, setRuleFormError] = useState<string | null>(null)
 
   // Channel form state
   const [chName, setChName] = useState('')
@@ -78,6 +80,7 @@ export function Alerts() {
     setChEmail('')
     setChSlackUrl('')
     setChEnabled(true)
+    setEditingChannel(null)
     setSaving(false)
   }
 
@@ -89,7 +92,34 @@ export function Alerts() {
     setRuleConsecutive(3)
     setRuleDuration(60)
     setRuleEnabled(true)
+    setRuleFormError(null)
+    setEditingRule(null)
     setSaving(false)
+  }
+
+  const handleOpenEditChannel = (channel: AlertChannel) => {
+    resetChannelForm()
+    setEditingChannel(channel)
+    setChName(channel.name)
+    setChType(channel.type as ChannelType)
+    setChWebhookUrl(typeof channel.config?.url === 'string' ? channel.config.url : '')
+    setChEmail(typeof channel.config?.email === 'string' ? channel.config.email : '')
+    setChSlackUrl(typeof channel.config?.webhook_url === 'string' ? channel.config.webhook_url : '')
+    setChEnabled(channel.enabled)
+    setShowChannelModal(true)
+  }
+
+  const handleOpenEditRule = (rule: AlertRule) => {
+    resetRuleForm()
+    setEditingRule(rule)
+    setRuleName(rule.name)
+    setRuleCondition(rule.condition || 'response_time')
+    setRuleThreshold(rule.threshold || 5000)
+    setRuleSeverity(rule.severity as Severity)
+    setRuleConsecutive(rule.consecutive || 3)
+    setRuleDuration(rule.duration || 60)
+    setRuleEnabled(rule.enabled)
+    setShowRuleModal(true)
   }
 
   const {
@@ -159,7 +189,7 @@ export function Alerts() {
     await deleteRule(id)
   }
 
-  const handleCreateChannel = async () => {
+  const handleSaveChannel = async () => {
     if (!chName.trim()) return
     setSaving(true)
     try {
@@ -168,12 +198,17 @@ export function Alerts() {
       else if (chType === 'email') config.email = chEmail
       else if (chType === 'slack') config.webhook_url = chSlackUrl
 
-      await createChannel({
+      const payload = {
         name: chName,
         type: chType,
         config,
         enabled: chEnabled
-      } as Omit<AlertChannel, 'id'>)
+      } as Omit<AlertChannel, 'id'>
+      if (editingChannel) {
+        await updateChannel(editingChannel.id, payload)
+      } else {
+        await createChannel(payload)
+      }
       setShowChannelModal(false)
       resetChannelForm()
     } catch {
@@ -183,11 +218,16 @@ export function Alerts() {
     }
   }
 
-  const handleCreateRule = async () => {
+  const handleSaveRule = async () => {
     if (!ruleName.trim()) return
+    const enabledChannelIds = channels.filter(channel => channel.enabled).map(channel => channel.id)
+    if (enabledChannelIds.length === 0) {
+      setRuleFormError('At least one enabled channel is required before creating a rule.')
+      return
+    }
     setSaving(true)
     try {
-      await createRule({
+      const payload = {
         name: ruleName,
         condition: ruleCondition,
         threshold: ruleThreshold,
@@ -195,12 +235,17 @@ export function Alerts() {
         consecutive: ruleConsecutive,
         duration: ruleDuration,
         enabled: ruleEnabled,
-        channels: channels.filter(channel => channel.enabled).map(channel => channel.id)
-      } as Omit<AlertRule, 'id'>)
+        channels: enabledChannelIds
+      } as Omit<AlertRule, 'id'>
+      if (editingRule) {
+        await updateRule(editingRule.id, payload)
+      } else {
+        await createRule(payload)
+      }
       setShowRuleModal(false)
       resetRuleForm()
-    } catch {
-      // Failed to create rule
+    } catch (err) {
+      setRuleFormError(err instanceof Error ? err.message : 'Failed to save rule')
     } finally {
       setSaving(false)
     }
@@ -489,7 +534,12 @@ export function Alerts() {
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center justify-end gap-1">
-                        <button className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" aria-label={`Edit rule`} title="Edit">
+                        <button
+                          onClick={() => handleOpenEditRule(rule)}
+                          className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
+                          aria-label={`Edit rule ${rule.name}`}
+                          title="Edit"
+                        >
                           <Edit className="w-4 h-4" />
                         </button>
                         <button
@@ -566,6 +616,7 @@ export function Alerts() {
                     <ToggleRight className={`w-4 h-4 ${channel.enabled ? 'text-emerald-400' : ''}`} />
                   </button>
                   <button
+                    onClick={() => handleOpenEditChannel(channel)}
                     className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
                     aria-label={`Edit channel ${channel.name}`}
                     title="Edit"
@@ -674,9 +725,6 @@ export function Alerts() {
                             Acknowledge
                           </button>
                         )}
-                        <button className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors">
-                          <MoreHorizontal className="w-4 h-4" />
-                        </button>
                       </div>
                     </td>
                   </tr>
@@ -694,15 +742,15 @@ export function Alerts() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="channel-modal-title"
-          onKeyDown={(e) => { if (e.key === 'Escape') setShowChannelModal(false) }}
+          onKeyDown={(e) => { if (e.key === 'Escape') { setShowChannelModal(false); resetChannelForm() } }}
         >
           <div className="bg-gray-900 border border-gray-700/50 rounded-2xl w-full max-w-lg">
             <div className="flex items-center justify-between p-6 border-b border-gray-700/50">
               <div>
-                <h2 id="channel-modal-title" className="text-xl font-semibold text-white">Add Notification Channel</h2>
+                <h2 id="channel-modal-title" className="text-xl font-semibold text-white">{editingChannel ? 'Edit Notification Channel' : 'Add Notification Channel'}</h2>
                 <p className="text-sm text-gray-400 mt-1">Where alerts will be sent</p>
               </div>
-              <button onClick={() => setShowChannelModal(false)} className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800 transition-colors" aria-label="Close dialog">
+              <button onClick={() => { setShowChannelModal(false); resetChannelForm() }} className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800 transition-colors" aria-label="Close dialog">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -795,13 +843,13 @@ export function Alerts() {
             </div>
 
             <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-700/50">
-              <button onClick={() => setShowChannelModal(false)} className="px-5 py-2.5 text-gray-400 hover:text-white transition-colors">Cancel</button>
+              <button onClick={() => { setShowChannelModal(false); resetChannelForm() }} className="px-5 py-2.5 text-gray-400 hover:text-white transition-colors">Cancel</button>
               <button
-                onClick={handleCreateChannel}
+                onClick={handleSaveChannel}
                 disabled={saving || !chName.trim()}
                 className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl transition-colors font-medium"
               >
-                {saving ? 'Creating...' : 'Add Channel'}
+                {saving ? 'Saving...' : editingChannel ? 'Save Channel' : 'Add Channel'}
               </button>
             </div>
           </div>
@@ -815,15 +863,15 @@ export function Alerts() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="rule-modal-title"
-          onKeyDown={(e) => { if (e.key === 'Escape') setShowRuleModal(false) }}
+          onKeyDown={(e) => { if (e.key === 'Escape') { setShowRuleModal(false); resetRuleForm() } }}
         >
           <div className="bg-gray-900 border border-gray-700/50 rounded-2xl w-full max-w-lg">
             <div className="flex items-center justify-between p-6 border-b border-gray-700/50">
               <div>
-                <h2 id="rule-modal-title" className="text-xl font-semibold text-white">Add Alert Rule</h2>
+                <h2 id="rule-modal-title" className="text-xl font-semibold text-white">{editingRule ? 'Edit Alert Rule' : 'Add Alert Rule'}</h2>
                 <p className="text-sm text-gray-400 mt-1">Define when to trigger alerts</p>
               </div>
-              <button onClick={() => setShowRuleModal(false)} className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800 transition-colors" aria-label="Close dialog">
+              <button onClick={() => { setShowRuleModal(false); resetRuleForm() }} className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800 transition-colors" aria-label="Close dialog">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -920,16 +968,22 @@ export function Alerts() {
                 />
                 <span className="text-sm text-gray-300">Enabled</span>
               </label>
+
+              {ruleFormError && (
+                <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+                  {ruleFormError}
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-700/50">
-              <button onClick={() => setShowRuleModal(false)} className="px-5 py-2.5 text-gray-400 hover:text-white transition-colors">Cancel</button>
+              <button onClick={() => { setShowRuleModal(false); resetRuleForm() }} className="px-5 py-2.5 text-gray-400 hover:text-white transition-colors">Cancel</button>
               <button
-                onClick={handleCreateRule}
-                disabled={saving || !ruleName.trim()}
+                onClick={handleSaveRule}
+                disabled={saving || !ruleName.trim() || channels.filter(channel => channel.enabled).length === 0}
                 className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl transition-colors font-medium"
               >
-                {saving ? 'Creating...' : 'Add Rule'}
+                {saving ? 'Saving...' : editingRule ? 'Save Rule' : 'Add Rule'}
               </button>
             </div>
           </div>

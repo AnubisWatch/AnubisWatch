@@ -11,6 +11,13 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
+func defaultWorkspace(workspaceID string) string {
+	if workspaceID == "" {
+		return "default"
+	}
+	return workspaceID
+}
+
 // SaveVerdict saves a verdict to storage
 func (db *CobaltDB) SaveVerdict(ctx context.Context, v *core.Verdict) error {
 	if v.ID == "" {
@@ -166,6 +173,7 @@ func (db *CobaltDB) SaveJourney(ctx context.Context, j *core.JourneyConfig) erro
 	if workspaceID == "" {
 		workspaceID = "default"
 	}
+	j.WorkspaceID = workspaceID
 
 	key := fmt.Sprintf("%s/journeys/%s", workspaceID, j.ID)
 
@@ -398,7 +406,7 @@ func (db *CobaltDB) ListJudgments(ctx context.Context, soulID string, start, end
 	}
 
 	judgments := make([]*core.Judgment, 0, len(results))
-	for _, data := range results {
+	for key, data := range results {
 		if data == nil {
 			continue
 		}
@@ -406,6 +414,9 @@ func (db *CobaltDB) ListJudgments(ctx context.Context, soulID string, start, end
 		if err := json.Unmarshal(data, &j); err != nil {
 			db.logger.Warn("failed to unmarshal judgment", "err", err)
 			continue
+		}
+		if j.WorkspaceID == "" {
+			j.WorkspaceID = strings.SplitN(key, "/", 2)[0]
 		}
 		if j.Timestamp.After(start) && j.Timestamp.Before(end) {
 			judgments = append(judgments, &j)
@@ -750,7 +761,9 @@ func (db *CobaltDB) SaveAlertEvent(event *core.AlertEvent) error {
 	if event.ID == "" {
 		event.ID = core.GenerateID()
 	}
-	key := fmt.Sprintf("default/alerts/events/%s/%d", event.SoulID, event.Timestamp.UnixNano())
+	workspaceID := defaultWorkspace(event.WorkspaceID)
+	event.WorkspaceID = workspaceID
+	key := fmt.Sprintf("%s/alerts/events/%s/%d/%s", workspaceID, event.SoulID, event.Timestamp.UnixNano(), event.ID)
 	data, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("failed to marshal event: %w", err)
@@ -760,14 +773,18 @@ func (db *CobaltDB) SaveAlertEvent(event *core.AlertEvent) error {
 
 // ListAlertEvents returns alert events for a soul
 func (db *CobaltDB) ListAlertEvents(soulID string, limit int) ([]*core.AlertEvent, error) {
-	prefix := fmt.Sprintf("default/alerts/events/%s/", soulID)
-	results, err := db.PrefixScan(prefix)
+	results, err := db.PrefixScan("")
 	if err != nil {
 		return nil, err
 	}
 
 	events := make([]*core.AlertEvent, 0, len(results))
-	for _, data := range results {
+	pathPart := fmt.Sprintf("/alerts/events/%s/", soulID)
+	legacyPrefix := fmt.Sprintf("alerts/events/%s/", soulID)
+	for key, data := range results {
+		if !strings.Contains(key, pathPart) && !strings.HasPrefix(key, legacyPrefix) {
+			continue
+		}
 		if data == nil {
 			continue
 		}
@@ -775,6 +792,9 @@ func (db *CobaltDB) ListAlertEvents(soulID string, limit int) ([]*core.AlertEven
 		if err := json.Unmarshal(data, &event); err != nil {
 			db.logger.Warn("failed to unmarshal event", "err", err)
 			continue
+		}
+		if event.WorkspaceID == "" {
+			event.WorkspaceID = strings.SplitN(key, "/", 2)[0]
 		}
 		events = append(events, &event)
 	}
@@ -792,7 +812,9 @@ func (db *CobaltDB) ListAlertEvents(soulID string, limit int) ([]*core.AlertEven
 
 // SaveIncident saves an incident
 func (db *CobaltDB) SaveIncident(incident *core.Incident) error {
-	key := fmt.Sprintf("default/alerts/incidents/%s", incident.ID)
+	workspaceID := defaultWorkspace(incident.WorkspaceID)
+	incident.WorkspaceID = workspaceID
+	key := fmt.Sprintf("%s/alerts/incidents/%s", workspaceID, incident.ID)
 	data, err := json.Marshal(incident)
 	if err != nil {
 		return fmt.Errorf("failed to marshal incident: %w", err)
@@ -802,28 +824,38 @@ func (db *CobaltDB) SaveIncident(incident *core.Incident) error {
 
 // GetIncident retrieves an incident by ID
 func (db *CobaltDB) GetIncident(id string) (*core.Incident, error) {
-	key := fmt.Sprintf("default/alerts/incidents/%s", id)
-	data, err := db.Get(key)
+	results, err := db.PrefixScan("")
 	if err != nil {
 		return nil, err
 	}
-	var incident core.Incident
-	if err := json.Unmarshal(data, &incident); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal incident: %w", err)
+	for key, data := range results {
+		if !strings.HasSuffix(key, "/alerts/incidents/"+id) && key != "alerts/incidents/"+id {
+			continue
+		}
+		var incident core.Incident
+		if err := json.Unmarshal(data, &incident); err != nil {
+			continue
+		}
+		if incident.WorkspaceID == "" {
+			incident.WorkspaceID = strings.SplitN(key, "/", 2)[0]
+		}
+		return &incident, nil
 	}
-	return &incident, nil
+	return nil, &core.NotFoundError{Entity: "incident", ID: id}
 }
 
 // ListActiveIncidents returns all non-resolved incidents
 func (db *CobaltDB) ListActiveIncidents() ([]*core.Incident, error) {
-	prefix := "default/alerts/incidents/"
-	results, err := db.PrefixScan(prefix)
+	results, err := db.PrefixScan("")
 	if err != nil {
 		return nil, err
 	}
 
 	incidents := make([]*core.Incident, 0, len(results))
-	for _, data := range results {
+	for key, data := range results {
+		if !strings.Contains(key, "/alerts/incidents/") && !strings.HasPrefix(key, "alerts/incidents/") {
+			continue
+		}
 		if data == nil {
 			continue
 		}
@@ -831,6 +863,9 @@ func (db *CobaltDB) ListActiveIncidents() ([]*core.Incident, error) {
 		if err := json.Unmarshal(data, &incident); err != nil {
 			db.logger.Warn("failed to unmarshal incident", "err", err)
 			continue
+		}
+		if incident.WorkspaceID == "" {
+			incident.WorkspaceID = strings.SplitN(key, "/", 2)[0]
 		}
 		if incident.Status != core.IncidentResolved {
 			incidents = append(incidents, &incident)
@@ -842,7 +877,9 @@ func (db *CobaltDB) ListActiveIncidents() ([]*core.Incident, error) {
 // StatusPage repository methods
 
 func (db *CobaltDB) SaveStatusPage(page *core.StatusPage) error {
-	key := fmt.Sprintf("default/statuspages/%s", page.ID)
+	workspaceID := defaultWorkspace(page.WorkspaceID)
+	page.WorkspaceID = workspaceID
+	key := fmt.Sprintf("%s/statuspages/%s", workspaceID, page.ID)
 	data, err := json.Marshal(page)
 	if err != nil {
 		return err
@@ -851,11 +888,11 @@ func (db *CobaltDB) SaveStatusPage(page *core.StatusPage) error {
 }
 
 func (db *CobaltDB) GetStatusPage(id string) (*core.StatusPage, error) {
-	key := fmt.Sprintf("default/statuspages/%s", id)
-	data, err := db.Get(key)
+	key, data, err := db.findStatusPageData(id)
 	if err != nil {
 		return nil, err
 	}
+	_ = key
 	var page core.StatusPage
 	if err := json.Unmarshal(data, &page); err != nil {
 		return nil, err
@@ -890,12 +927,15 @@ func (db *CobaltDB) GetStatusPageBySlug(slug string) (*core.StatusPage, error) {
 }
 
 func (db *CobaltDB) ListStatusPages() ([]*core.StatusPage, error) {
-	results, err := db.PrefixScan("default/statuspages/")
+	results, err := db.PrefixScan("")
 	if err != nil {
 		return nil, err
 	}
 	pages := make([]*core.StatusPage, 0, len(results))
-	for _, data := range results {
+	for key, data := range results {
+		if !strings.Contains(key, "/statuspages/") || strings.Contains(key, "/statuspages/subscriptions/") {
+			continue
+		}
 		var page core.StatusPage
 		if err := json.Unmarshal(data, &page); err != nil {
 			db.logger.Warn("failed to unmarshal status page", "err", err)
@@ -907,8 +947,27 @@ func (db *CobaltDB) ListStatusPages() ([]*core.StatusPage, error) {
 }
 
 func (db *CobaltDB) DeleteStatusPage(id string) error {
-	key := fmt.Sprintf("default/statuspages/%s", id)
+	key, _, err := db.findStatusPageData(id)
+	if err != nil {
+		return err
+	}
 	return db.Delete(key)
+}
+
+func (db *CobaltDB) findStatusPageData(id string) (string, []byte, error) {
+	results, err := db.PrefixScan("")
+	if err != nil {
+		return "", nil, err
+	}
+	for key, data := range results {
+		if strings.Contains(key, "/statuspages/subscriptions/") {
+			continue
+		}
+		if strings.HasSuffix(key, "/statuspages/"+id) {
+			return key, data, nil
+		}
+	}
+	return "", nil, &core.NotFoundError{Entity: "statuspage", ID: id}
 }
 
 func (db *CobaltDB) SaveStatusPageSubscription(sub *core.StatusPageSubscription) error {
@@ -946,8 +1005,13 @@ func (db *CobaltDB) DeleteStatusPageSubscription(subscriptionID string) error {
 }
 
 func (db *CobaltDB) GetUptimeHistory(soulID string, days int) ([]core.UptimeDay, error) {
+	workspaceID := "default"
+	if soul, err := db.GetSoulNoCtx(soulID); err == nil {
+		workspaceID = defaultWorkspace(soul.WorkspaceID)
+	}
+
 	// Get judgments for the soul
-	keyPrefix := fmt.Sprintf("default/judgments/%s/", soulID)
+	keyPrefix := fmt.Sprintf("%s/judgments/%s/", workspaceID, soulID)
 	results, err := db.PrefixScan(keyPrefix)
 	if err != nil {
 		return nil, err
@@ -988,14 +1052,15 @@ func (db *CobaltDB) GetUptimeHistory(soulID string, days int) ([]core.UptimeDay,
 	uptimeDays := make([]core.UptimeDay, 0, len(dayStats))
 	for date, stats := range dayStats {
 		uptime := 0.0
-		status := "operational"
+		status := "unknown"
 		if stats.total > 0 {
 			uptime = float64(stats.up) / float64(stats.total) * 100
+			status = "operational"
 			if uptime < 99 {
 				status = "degraded"
 			}
 			if uptime < 95 {
-				status = "down"
+				status = "dead"
 			}
 		}
 		uptimeDays = append(uptimeDays, core.UptimeDay{
@@ -1014,7 +1079,9 @@ func (db *CobaltDB) GetUptimeHistory(soulID string, days int) ([]core.UptimeDay,
 }
 
 func (db *CobaltDB) SaveDashboard(dashboard *core.CustomDashboard) error {
-	key := fmt.Sprintf("default/dashboards/%s", dashboard.ID)
+	workspaceID := defaultWorkspace(dashboard.WorkspaceID)
+	dashboard.WorkspaceID = workspaceID
+	key := fmt.Sprintf("%s/dashboards/%s", workspaceID, dashboard.ID)
 	data, err := json.Marshal(dashboard)
 	if err != nil {
 		return err
@@ -1023,8 +1090,7 @@ func (db *CobaltDB) SaveDashboard(dashboard *core.CustomDashboard) error {
 }
 
 func (db *CobaltDB) GetDashboard(id string) (*core.CustomDashboard, error) {
-	key := fmt.Sprintf("default/dashboards/%s", id)
-	data, err := db.Get(key)
+	_, data, err := db.findDashboardData(id)
 	if err != nil {
 		return nil, err
 	}
@@ -1036,13 +1102,16 @@ func (db *CobaltDB) GetDashboard(id string) (*core.CustomDashboard, error) {
 }
 
 func (db *CobaltDB) ListDashboards() ([]*core.CustomDashboard, error) {
-	results, err := db.PrefixScan("default/dashboards/")
+	results, err := db.PrefixScan("")
 	if err != nil {
 		return nil, err
 	}
 
 	var dashboards []*core.CustomDashboard
-	for _, data := range results {
+	for key, data := range results {
+		if !strings.Contains(key, "/dashboards/") {
+			continue
+		}
 		var dashboard core.CustomDashboard
 		if err := json.Unmarshal(data, &dashboard); err != nil {
 			continue
@@ -1053,8 +1122,24 @@ func (db *CobaltDB) ListDashboards() ([]*core.CustomDashboard, error) {
 }
 
 func (db *CobaltDB) DeleteDashboard(id string) error {
-	key := fmt.Sprintf("default/dashboards/%s", id)
+	key, _, err := db.findDashboardData(id)
+	if err != nil {
+		return err
+	}
 	return db.Delete(key)
+}
+
+func (db *CobaltDB) findDashboardData(id string) (string, []byte, error) {
+	results, err := db.PrefixScan("")
+	if err != nil {
+		return "", nil, err
+	}
+	for key, data := range results {
+		if strings.HasSuffix(key, "/dashboards/"+id) {
+			return key, data, nil
+		}
+	}
+	return "", nil, &core.NotFoundError{Entity: "dashboard", ID: id}
 }
 
 // MaintenanceWindow storage methods
@@ -1063,7 +1148,9 @@ func (db *CobaltDB) SaveMaintenanceWindow(w *core.MaintenanceWindow) error {
 	if w.ID == "" {
 		w.ID = core.GenerateID()
 	}
-	key := fmt.Sprintf("default/maintenance/%s", w.ID)
+	workspaceID := defaultWorkspace(w.WorkspaceID)
+	w.WorkspaceID = workspaceID
+	key := fmt.Sprintf("%s/maintenance/%s", workspaceID, w.ID)
 	data, err := json.Marshal(w)
 	if err != nil {
 		return fmt.Errorf("failed to marshal maintenance window: %w", err)
@@ -1072,11 +1159,11 @@ func (db *CobaltDB) SaveMaintenanceWindow(w *core.MaintenanceWindow) error {
 }
 
 func (db *CobaltDB) GetMaintenanceWindow(id string) (*core.MaintenanceWindow, error) {
-	key := fmt.Sprintf("default/maintenance/%s", id)
-	data, err := db.Get(key)
+	key, data, err := db.findMaintenanceWindowData(id)
 	if err != nil {
 		return nil, err
 	}
+	_ = key
 	var w core.MaintenanceWindow
 	if err := json.Unmarshal(data, &w); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal maintenance window: %w", err)
@@ -1085,13 +1172,15 @@ func (db *CobaltDB) GetMaintenanceWindow(id string) (*core.MaintenanceWindow, er
 }
 
 func (db *CobaltDB) ListMaintenanceWindows() ([]*core.MaintenanceWindow, error) {
-	prefix := "default/maintenance/"
-	results, err := db.PrefixScan(prefix)
+	results, err := db.PrefixScan("")
 	if err != nil {
 		return nil, err
 	}
 	windows := make([]*core.MaintenanceWindow, 0, len(results))
-	for _, data := range results {
+	for key, data := range results {
+		if !strings.Contains(key, "/maintenance/") {
+			continue
+		}
 		if data == nil {
 			continue
 		}
@@ -1106,6 +1195,22 @@ func (db *CobaltDB) ListMaintenanceWindows() ([]*core.MaintenanceWindow, error) 
 }
 
 func (db *CobaltDB) DeleteMaintenanceWindow(id string) error {
-	key := fmt.Sprintf("default/maintenance/%s", id)
+	key, _, err := db.findMaintenanceWindowData(id)
+	if err != nil {
+		return err
+	}
 	return db.Delete(key)
+}
+
+func (db *CobaltDB) findMaintenanceWindowData(id string) (string, []byte, error) {
+	results, err := db.PrefixScan("")
+	if err != nil {
+		return "", nil, err
+	}
+	for key, data := range results {
+		if strings.HasSuffix(key, "/maintenance/"+id) {
+			return key, data, nil
+		}
+	}
+	return "", nil, &core.NotFoundError{Entity: "maintenance", ID: id}
 }

@@ -19,11 +19,11 @@ export function BarChartWidget({ widget, dashboardId }: BarChartWidgetProps) {
     const fetch = async () => {
       setLoading(true)
       try {
-        const result = await api.post<Array<Record<string, unknown>>>(
+        const result = await api.post<Array<Record<string, unknown>> | Record<string, unknown>>(
           `/dashboards/${dashboardId}/query`,
           widget.query
         )
-        if (!cancelled) setData(result || [])
+        if (!cancelled) setData(Array.isArray(result) ? result : result ? [result] : [])
       } catch {
         // silently handle
       } finally {

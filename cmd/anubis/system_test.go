@@ -92,6 +92,39 @@ func TestExportCommand_Souls(t *testing.T) {
 	}
 }
 
+func TestExportCommand_SoulsIncludesNonDefaultWorkspace(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
+
+	store, err := openLocalStorage()
+	if err != nil {
+		t.Fatalf("Failed to open storage: %v", err)
+	}
+
+	ctx := context.Background()
+	tenantCtx := core.ContextWithWorkspaceID(ctx, "tenant-a")
+	if err := store.SaveWorkspace(ctx, &core.Workspace{ID: "tenant-a", Name: "Tenant A"}); err != nil {
+		t.Fatalf("Failed to save workspace: %v", err)
+	}
+	soul := &core.Soul{ID: "tenant-soul", Name: "tenant soul", Type: "http", Target: "https://tenant.example.com", WorkspaceID: "tenant-a"}
+	if err := store.SaveSoul(tenantCtx, soul); err != nil {
+		t.Fatalf("Failed to save soul: %v", err)
+	}
+	store.Close()
+
+	oldArgs := os.Args
+	os.Args = []string{"anubis", "export", "souls"}
+	defer func() { os.Args = oldArgs }()
+
+	output := captureStdoutSystem(exportCommand)
+	if !strings.Contains(output, "tenant soul") {
+		t.Errorf("Expected non-default workspace soul name in output, got: %s", output)
+	}
+	if !strings.Contains(output, "https://tenant.example.com") {
+		t.Errorf("Expected non-default workspace target in output, got: %s", output)
+	}
+}
+
 func TestExportCommand_Config(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "anubis.json")
@@ -486,6 +519,39 @@ func TestStatusCommand_WithJudgments(t *testing.T) {
 	}
 	if !strings.Contains(output, "Total:     3") {
 		t.Errorf("Expected 3 total souls, got: %s", output)
+	}
+}
+
+func TestStatusCommand_IncludesNonDefaultWorkspaceSouls(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("ANUBIS_DATA_DIR", tmpDir)
+
+	store, err := openLocalStorage()
+	if err != nil {
+		t.Fatalf("Failed to open storage: %v", err)
+	}
+	ctx := context.Background()
+	tenantCtx := core.ContextWithWorkspaceID(ctx, "tenant-a")
+	if err := store.SaveWorkspace(ctx, &core.Workspace{ID: "tenant-a", Name: "Tenant A"}); err != nil {
+		t.Fatalf("Failed to save workspace: %v", err)
+	}
+
+	soul := &core.Soul{ID: "tenant-alive", Name: "tenant-alive", Type: "http", Target: "https://tenant.example.com", WorkspaceID: "tenant-a"}
+	if err := store.SaveSoul(tenantCtx, soul); err != nil {
+		t.Fatalf("Failed to save soul: %v", err)
+	}
+	now := time.Now()
+	if err := store.SaveJudgment(tenantCtx, &core.Judgment{ID: "tenant-j1", SoulID: "tenant-alive", WorkspaceID: "tenant-a", Status: core.SoulAlive, Timestamp: now, Duration: 100}); err != nil {
+		t.Fatalf("Failed to save judgment: %v", err)
+	}
+	store.Close()
+
+	output := captureStdoutSystem(statusCommand)
+	if !strings.Contains(output, "Total:     1") {
+		t.Errorf("Expected 1 total soul across workspaces, got: %s", output)
+	}
+	if !strings.Contains(output, "Alive:   1") {
+		t.Errorf("Expected tenant alive soul to be counted, got: %s", output)
 	}
 }
 

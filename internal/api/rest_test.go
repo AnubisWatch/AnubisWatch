@@ -30,6 +30,7 @@ type mockStorage struct {
 	channels          map[string]*core.AlertChannel
 	rules             map[string]*core.AlertRule
 	workspaces        map[string]*core.Workspace
+	statusPages       map[string]*core.StatusPage
 	journeys          map[string]*core.JourneyConfig
 	dashboards        map[string]*core.CustomDashboard
 	windows           map[string]*core.MaintenanceWindow
@@ -39,14 +40,15 @@ type mockStorage struct {
 
 func newMockStorage() *mockStorage {
 	return &mockStorage{
-		souls:      make(map[string]*core.Soul),
-		judgments:  make(map[string]*core.Judgment),
-		channels:   make(map[string]*core.AlertChannel),
-		rules:      make(map[string]*core.AlertRule),
-		workspaces: make(map[string]*core.Workspace),
-		journeys:   make(map[string]*core.JourneyConfig),
-		dashboards: make(map[string]*core.CustomDashboard),
-		windows:    make(map[string]*core.MaintenanceWindow),
+		souls:       make(map[string]*core.Soul),
+		judgments:   make(map[string]*core.Judgment),
+		channels:    make(map[string]*core.AlertChannel),
+		rules:       make(map[string]*core.AlertRule),
+		workspaces:  make(map[string]*core.Workspace),
+		statusPages: make(map[string]*core.StatusPage),
+		journeys:    make(map[string]*core.JourneyConfig),
+		dashboards:  make(map[string]*core.CustomDashboard),
+		windows:     make(map[string]*core.MaintenanceWindow),
 	}
 }
 
@@ -328,13 +330,29 @@ func (m *mockStorage) GetStatsNoCtx(ws string, start, end time.Time) (*core.Stat
 
 // StatusPage methods
 func (m *mockStorage) GetStatusPageNoCtx(id string) (*core.StatusPage, error) {
+	if page, ok := m.statusPages[id]; ok {
+		return page, nil
+	}
 	return nil, fmt.Errorf("status page not found")
 }
 func (m *mockStorage) ListStatusPagesNoCtx() ([]*core.StatusPage, error) {
-	return []*core.StatusPage{}, nil
+	pages := make([]*core.StatusPage, 0, len(m.statusPages))
+	for _, page := range m.statusPages {
+		pages = append(pages, page)
+	}
+	return pages, nil
 }
-func (m *mockStorage) SaveStatusPageNoCtx(page *core.StatusPage) error { return nil }
-func (m *mockStorage) DeleteStatusPageNoCtx(id string) error           { return nil }
+func (m *mockStorage) SaveStatusPageNoCtx(page *core.StatusPage) error {
+	m.statusPages[page.ID] = page
+	return nil
+}
+func (m *mockStorage) DeleteStatusPageNoCtx(id string) error {
+	if _, ok := m.statusPages[id]; !ok {
+		return fmt.Errorf("status page not found")
+	}
+	delete(m.statusPages, id)
+	return nil
+}
 func (m *mockStorage) GetJourneyNoCtx(id string) (*core.JourneyConfig, error) {
 	return m.journeys[id], nil
 }
@@ -420,8 +438,9 @@ func (p *mockProbeEngine) ForceCheck(soulID string) (*core.Judgment, error) {
 
 // mockAlertManager implements AlertManager interface
 type mockAlertManager struct {
-	channels map[string]*core.AlertChannel
-	rules    map[string]*core.AlertRule
+	channels  map[string]*core.AlertChannel
+	rules     map[string]*core.AlertRule
+	incidents []*core.Incident
 }
 
 func (a *mockAlertManager) GetStats() core.AlertManagerStats {
@@ -448,10 +467,34 @@ func (a *mockAlertManager) ListRules() []*core.AlertRule {
 	return rules
 }
 func (a *mockAlertManager) ListChannelsByWorkspace(workspace string) []*core.AlertChannel {
-	return a.ListChannels()
+	if workspace == "" {
+		workspace = "default"
+	}
+	if a.channels == nil {
+		return nil
+	}
+	channels := make([]*core.AlertChannel, 0, len(a.channels))
+	for _, ch := range a.channels {
+		if ch.WorkspaceID == "" || ch.WorkspaceID == workspace {
+			channels = append(channels, ch)
+		}
+	}
+	return channels
 }
 func (a *mockAlertManager) ListRulesByWorkspace(workspace string) []*core.AlertRule {
-	return a.ListRules()
+	if workspace == "" {
+		workspace = "default"
+	}
+	if a.rules == nil {
+		return nil
+	}
+	rules := make([]*core.AlertRule, 0, len(a.rules))
+	for _, r := range a.rules {
+		if r.WorkspaceID == "" || r.WorkspaceID == workspace {
+			rules = append(rules, r)
+		}
+	}
+	return rules
 }
 func (a *mockAlertManager) GetChannel(id string) (*core.AlertChannel, error) {
 	if a.channels == nil {
@@ -487,6 +530,16 @@ func (a *mockAlertManager) RegisterRule(rule *core.AlertRule) error {
 	a.rules[rule.ID] = rule
 	return nil
 }
+func (a *mockAlertManager) TestChannel(ctx context.Context, id string, workspace string) error {
+	ch, err := a.GetChannel(id)
+	if err != nil {
+		return err
+	}
+	if ch.WorkspaceID != "" && workspace != "" && ch.WorkspaceID != workspace {
+		return fmt.Errorf("channel %s does not belong to workspace %s", id, workspace)
+	}
+	return nil
+}
 func (a *mockAlertManager) DeleteChannel(id string) error {
 	if a.channels != nil {
 		delete(a.channels, id)
@@ -509,7 +562,7 @@ func (a *mockAlertManager) AcknowledgeIncident(incidentID, userID, workspace str
 	return nil
 }
 func (a *mockAlertManager) ResolveIncident(incidentID, userID, workspace string) error { return nil }
-func (a *mockAlertManager) ListActiveIncidents() []*core.Incident                      { return nil }
+func (a *mockAlertManager) ListActiveIncidents() []*core.Incident                      { return a.incidents }
 
 // failingAlertManager is an AlertManager that always returns errors
 type failingAlertManager struct{}
@@ -529,6 +582,9 @@ func (a *failingAlertManager) RegisterChannel(ch *core.AlertChannel) error {
 	return fmt.Errorf("alert error")
 }
 func (a *failingAlertManager) RegisterRule(rule *core.AlertRule) error {
+	return fmt.Errorf("alert error")
+}
+func (a *failingAlertManager) TestChannel(ctx context.Context, id string, workspace string) error {
 	return fmt.Errorf("alert error")
 }
 func (a *failingAlertManager) DeleteChannel(id string) error { return fmt.Errorf("alert error") }
@@ -865,6 +921,86 @@ func TestHandleCreateSoul(t *testing.T) {
 	}
 	if _, ok := probe.souls[created.ID]; !ok {
 		t.Fatalf("expected created soul to be assigned to probe")
+	}
+}
+
+func TestHandleCreateSoulRejectsInvalidBusinessRules(t *testing.T) {
+	tests := []struct {
+		name string
+		soul core.Soul
+	}{
+		{
+			name: "unknown type",
+			soul: core.Soul{
+				Name:   "Bogus",
+				Type:   core.CheckType("bogus"),
+				Target: "example.com",
+			},
+		},
+		{
+			name: "http missing protocol config",
+			soul: core.Soul{
+				Name:   "HTTP Without Config",
+				Type:   core.CheckHTTP,
+				Target: "https://example.com",
+			},
+		},
+		{
+			name: "tcp target missing port",
+			soul: core.Soul{
+				Name:   "TCP Missing Port",
+				Type:   core.CheckTCP,
+				Target: "example.com",
+				TCP:    &core.TCPConfig{},
+			},
+		},
+		{
+			name: "tls critical threshold exceeds warning",
+			soul: core.Soul{
+				Name:   "TLS Bad Threshold",
+				Type:   core.CheckTLS,
+				Target: "example.com:443",
+				TLS:    &core.TLSConfig{ExpiryWarnDays: 7, ExpiryCriticalDays: 30},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			storage := newMockStorage()
+			probe := &mockProbeEngine{}
+			router := &Router{routes: make(map[string]map[string]Handler)}
+			server := &RESTServer{
+				config:     core.ServerConfig{Host: "localhost", Port: 8080},
+				authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+				store:      storage,
+				probe:      probe,
+				router:     router,
+				auth:       &mockAuthenticator{},
+				logger:     newTestLogger(),
+				cluster:    &mockClusterManager{},
+			}
+
+			router.Handle("POST", "/api/v1/souls", server.requireRole(server.handleCreateSoul, "souls:*"))
+
+			body, _ := json.Marshal(tt.soul)
+			req := httptest.NewRequest("POST", "/api/v1/souls", bytes.NewBuffer(body))
+			req.Header.Set("Authorization", "Bearer valid-token")
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Fatalf("expected status 400, got %d: %s", w.Code, w.Body.String())
+			}
+			if len(storage.souls) != 0 {
+				t.Fatalf("invalid soul was saved: %#v", storage.souls)
+			}
+			if len(probe.souls) != 0 {
+				t.Fatalf("invalid soul was assigned to probe: %#v", probe.souls)
+			}
+		})
 	}
 }
 
@@ -1246,6 +1382,19 @@ func TestContextHelpers(t *testing.T) {
 	if errorResponse["error"] != "test error" {
 		t.Errorf("expected 'test error', got '%s'", errorResponse["error"])
 	}
+
+	w = httptest.NewRecorder()
+	ctx.Response = w
+	err = ctx.JSON(http.StatusNoContent, nil)
+	if err != nil {
+		t.Errorf("NoContent JSON helper failed: %v", err)
+	}
+	if w.Code != http.StatusNoContent {
+		t.Errorf("expected 204, got %d", w.Code)
+	}
+	if w.Body.Len() != 0 {
+		t.Errorf("expected empty 204 body, got %q", w.Body.String())
+	}
 }
 
 func TestHandleGetSoul_Success(t *testing.T) {
@@ -1311,6 +1460,56 @@ func TestHandleUpdateSoul(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleUpdateSoulRejectsInvalidBusinessRules(t *testing.T) {
+	storage := newMockStorage()
+	storage.SaveSoul(context.Background(), &core.Soul{
+		ID:          "soul-to-update",
+		Name:        "Original",
+		Type:        core.CheckHTTP,
+		Target:      "https://example.com",
+		WorkspaceID: "default",
+		HTTP:        &core.HTTPConfig{Method: "GET", ValidStatus: []int{200}},
+	})
+
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		router:     router,
+		auth:       &mockAuthenticator{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("PUT", "/api/v1/souls/:id", server.requireAuth(server.handleUpdateSoul))
+
+	invalid := core.Soul{
+		Name:   "Invalid Update",
+		Type:   core.CheckWebSocket,
+		Target: "https://example.com/socket",
+		WebSocket: &core.WebSocketConfig{
+			PingCheck: true,
+		},
+	}
+	body, _ := json.Marshal(invalid)
+
+	req := httptest.NewRequest("PUT", "/api/v1/souls/soul-to-update", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d: %s", w.Code, w.Body.String())
+	}
+	stored := storage.souls["soul-to-update"]
+	if stored.Name != "Original" || stored.Type != core.CheckHTTP {
+		t.Fatalf("invalid update changed stored soul: %#v", stored)
 	}
 }
 
@@ -1446,6 +1645,46 @@ func TestHandleCreateRule(t *testing.T) {
 	}
 }
 
+func TestHandleCreateRuleRejectsInvalidRule(t *testing.T) {
+	storage := newMockStorage()
+	alert := &mockAlertManager{}
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		router:     router,
+		auth:       &mockAuthenticator{},
+		alert:      alert,
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("POST", "/api/v1/rules", server.requireAuth(server.handleCreateRule))
+
+	rule := core.AlertRule{
+		Name:       "Invalid Rule",
+		Enabled:    true,
+		Scope:      core.RuleScope{Type: "all"},
+		Conditions: []core.AlertCondition{{Type: "status_change", From: "alive", To: "dead"}},
+	}
+	body, _ := json.Marshal(rule)
+
+	req := httptest.NewRequest("POST", "/api/v1/rules", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(alert.rules) != 0 {
+		t.Fatalf("invalid rule should not be registered, got %d rules", len(alert.rules))
+	}
+}
+
 func TestHandleAcknowledgeIncident(t *testing.T) {
 	storage := newMockStorage()
 	alert := &mockAlertManager{}
@@ -1564,6 +1803,13 @@ func TestHandleCreateStatusPage(t *testing.T) {
 
 func TestHandleUpdateStatusPage(t *testing.T) {
 	storage := newMockStorage()
+	storage.SaveStatusPageNoCtx(&core.StatusPage{
+		ID:          "page-1",
+		WorkspaceID: "default",
+		Name:        "Original Status Page",
+		Slug:        "original-status",
+		CreatedAt:   time.Now().Add(-time.Hour),
+	})
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
 		config:     core.ServerConfig{Host: "localhost", Port: 8080},
@@ -1599,6 +1845,7 @@ func TestHandleUpdateStatusPage(t *testing.T) {
 
 func TestHandleDeleteStatusPage(t *testing.T) {
 	storage := newMockStorage()
+	storage.SaveStatusPageNoCtx(&core.StatusPage{ID: "page-1", WorkspaceID: "default", Name: "Delete Me"})
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
 		config:     core.ServerConfig{Host: "localhost", Port: 8080},
@@ -1620,6 +1867,9 @@ func TestHandleDeleteStatusPage(t *testing.T) {
 
 	if w.Code != http.StatusNoContent {
 		t.Errorf("expected status 204, got %d: %s", w.Code, w.Body.String())
+	}
+	if _, ok := storage.statusPages["page-1"]; ok {
+		t.Fatal("expected status page to be deleted")
 	}
 }
 
@@ -1643,13 +1893,15 @@ func TestHandleDeleteStatusPage_StorageError(t *testing.T) {
 
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("expected status 500, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
 func TestHandleListStatusPages(t *testing.T) {
 	storage := newMockStorage()
+	storage.SaveStatusPageNoCtx(&core.StatusPage{ID: "default-page", WorkspaceID: "default", Name: "Default Page"})
+	storage.SaveStatusPageNoCtx(&core.StatusPage{ID: "other-page", WorkspaceID: "other", Name: "Other Page"})
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
 		config:     core.ServerConfig{Host: "localhost", Port: 8080},
@@ -1672,10 +1924,18 @@ func TestHandleListStatusPages(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
+	var pages []*core.StatusPage
+	if err := json.NewDecoder(w.Body).Decode(&pages); err != nil {
+		t.Fatalf("failed to decode pages: %v", err)
+	}
+	if len(pages) != 1 || pages[0].ID != "default-page" {
+		t.Fatalf("expected only default workspace page, got %#v", pages)
+	}
 }
 
 func TestHandleGetStatusPage(t *testing.T) {
 	storage := newMockStorage()
+	storage.SaveStatusPageNoCtx(&core.StatusPage{ID: "page-1", WorkspaceID: "default", Name: "Status Page"})
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
 		config:     core.ServerConfig{Host: "localhost", Port: 8080},
@@ -1695,9 +1955,29 @@ func TestHandleGetStatusPage(t *testing.T) {
 
 	router.ServeHTTP(w, req)
 
-	// May return 200 or 404 depending on implementation
-	if w.Code != http.StatusOK && w.Code != http.StatusNotFound {
-		t.Errorf("expected status 200 or 404, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleGetStatusPageRejectsOtherWorkspace(t *testing.T) {
+	storage := newMockStorage()
+	storage.SaveStatusPageNoCtx(&core.StatusPage{ID: "page-1", WorkspaceID: "other", Name: "Other Status Page"})
+	server := newTestServerWithStorage(storage)
+
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:   httptest.NewRequest("GET", "/api/v1/status-pages/page-1", nil),
+		Response:  rec,
+		Params:    map[string]string{"id": "page-1"},
+		Workspace: "default",
+	}
+
+	if err := server.handleGetStatusPage(ctx); err != nil {
+		t.Fatalf("handleGetStatusPage failed: %v", err)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -2076,6 +2356,11 @@ func TestHandleMe(t *testing.T) {
 
 func TestHandleStatsOverview(t *testing.T) {
 	storage := newMockStorage()
+	now := time.Now()
+	storage.SaveSoul(context.Background(), &core.Soul{ID: "soul-alive", Name: "Alive", Type: core.CheckHTTP, Target: "https://example.com", WorkspaceID: "default"})
+	storage.SaveSoul(context.Background(), &core.Soul{ID: "soul-dead", Name: "Dead", Type: core.CheckHTTP, Target: "https://example.org", WorkspaceID: "default"})
+	storage.SaveJudgment(context.Background(), &core.Judgment{ID: "j-alive", SoulID: "soul-alive", Status: core.SoulAlive, Duration: 100 * time.Millisecond, Timestamp: now})
+	storage.SaveJudgment(context.Background(), &core.Judgment{ID: "j-dead", SoulID: "soul-dead", Status: core.SoulDead, Duration: 300 * time.Millisecond, Timestamp: now})
 	alert := &mockAlertManager{}
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
@@ -2099,6 +2384,20 @@ func TestHandleStatsOverview(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var overview map[string]map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&overview); err != nil {
+		t.Fatalf("failed to decode overview: %v", err)
+	}
+	if overview["souls"]["total"].(float64) != 2 {
+		t.Fatalf("expected 2 souls, got %#v", overview["souls"])
+	}
+	if overview["judgments"]["today"].(float64) != 2 || overview["judgments"]["failures"].(float64) != 1 {
+		t.Fatalf("unexpected judgment overview: %#v", overview["judgments"])
+	}
+	if overview["judgments"]["avg_latency_ms"].(float64) != 200 {
+		t.Fatalf("expected avg latency 200ms, got %#v", overview["judgments"]["avg_latency_ms"])
 	}
 }
 
@@ -2155,7 +2454,7 @@ func TestHandleListIncidents(t *testing.T) {
 	}
 }
 
-func TestHandleTestChannel(t *testing.T) {
+func TestHandleListIncidentsFiltersWorkspace(t *testing.T) {
 	storage := newMockStorage()
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
@@ -2164,6 +2463,59 @@ func TestHandleTestChannel(t *testing.T) {
 		store:      storage,
 		router:     router,
 		auth:       &mockAuthenticator{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+		alert: &mockAlertManager{incidents: []*core.Incident{
+			{ID: "default-incident", WorkspaceID: "default", Status: core.IncidentOpen},
+			{ID: "other-incident", WorkspaceID: "other", Status: core.IncidentOpen},
+			{ID: "legacy-incident", Status: core.IncidentOpen},
+		}},
+	}
+
+	router.Handle("GET", "/api/v1/incidents", server.requireAuth(server.handleListIncidents))
+
+	req := httptest.NewRequest("GET", "/api/v1/incidents", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var incidents []core.Incident
+	if err := json.NewDecoder(w.Body).Decode(&incidents); err != nil {
+		t.Fatalf("failed to decode incidents: %v", err)
+	}
+	if len(incidents) != 2 {
+		t.Fatalf("expected 2 incidents for caller workspace, got %d: %#v", len(incidents), incidents)
+	}
+	for _, incident := range incidents {
+		if incident.WorkspaceID == "other" {
+			t.Fatalf("incident from another workspace leaked: %#v", incident)
+		}
+	}
+}
+
+func TestHandleTestChannel(t *testing.T) {
+	storage := newMockStorage()
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	alertManager := &mockAlertManager{channels: map[string]*core.AlertChannel{
+		"ch-1": {
+			ID:          "ch-1",
+			Name:        "Test Channel",
+			Type:        core.ChannelWebHook,
+			WorkspaceID: "default",
+		},
+	}}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		router:     router,
+		auth:       &mockAuthenticator{},
+		alert:      alertManager,
 		logger:     newTestLogger(),
 		cluster:    &mockClusterManager{},
 	}
@@ -2571,7 +2923,14 @@ func TestHandleGetRule(t *testing.T) {
 func TestHandleUpdateRule(t *testing.T) {
 	storage := newMockStorage()
 	alert := &mockAlertManager{}
-	storage.SaveRuleNoCtx(&core.AlertRule{ID: "ruleToUpdate", Name: "Original", Enabled: true})
+	storage.SaveRuleNoCtx(&core.AlertRule{
+		ID:         "ruleToUpdate",
+		Name:       "Original",
+		Enabled:    true,
+		Scope:      core.RuleScope{Type: "all"},
+		Conditions: []core.AlertCondition{{Type: "status_change", From: "alive", To: "dead"}},
+		Channels:   []string{"channel-1"},
+	})
 
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
@@ -2588,9 +2947,11 @@ func TestHandleUpdateRule(t *testing.T) {
 	router.Handle("PUT", "/api/v1/rules/:id", server.requireAuth(server.handleUpdateRule))
 
 	updated := core.AlertRule{
-		Name:    "Updated Rule",
-		Enabled: true,
-		Scope:   core.RuleScope{Type: "all"},
+		Name:       "Updated Rule",
+		Enabled:    true,
+		Scope:      core.RuleScope{Type: "all"},
+		Conditions: []core.AlertCondition{{Type: "status_change", From: "alive", To: "dead"}},
+		Channels:   []string{"channel-1"},
 	}
 	body, _ := json.Marshal(updated)
 
@@ -4650,6 +5011,30 @@ func TestHandleUpdateConfig(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("Expected status %d, got %d", http.StatusOK, rec.Code)
 	}
+
+	var updated map[string]interface{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v", err)
+	}
+	if updated["theme"] != "light" {
+		t.Fatalf("expected updated theme to be returned, got %#v", updated["theme"])
+	}
+
+	getRec := httptest.NewRecorder()
+	getCtx := &Context{
+		Request:  httptest.NewRequest("GET", "/api/v1/config", nil),
+		Response: getRec,
+	}
+	if err := server.handleGetConfig(getCtx); err != nil {
+		t.Fatalf("handleGetConfig failed: %v", err)
+	}
+	var persisted map[string]interface{}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &persisted); err != nil {
+		t.Fatalf("Failed to unmarshal get response: %v", err)
+	}
+	if persisted["theme"] != "light" {
+		t.Fatalf("expected updated theme from subsequent get, got %#v", persisted["theme"])
+	}
 }
 
 func TestHandleUpdateConfig_InvalidJSON(t *testing.T) {
@@ -4675,7 +5060,8 @@ func TestHandleUpdateConfig_InvalidJSON(t *testing.T) {
 
 func TestHandleListMaintenanceWindows(t *testing.T) {
 	store := newMockStorage()
-	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", Name: "Window 1"})
+	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", WorkspaceID: "default", Name: "Window 1"})
+	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-2", WorkspaceID: "other", Name: "Other Window"})
 	server := newTestServerWithStorage(store)
 
 	rec := httptest.NewRecorder()
@@ -4700,6 +5086,9 @@ func TestHandleListMaintenanceWindows(t *testing.T) {
 	if len(result) != 1 {
 		t.Errorf("Expected 1 window, got %d", len(result))
 	}
+	if result[0].ID != "mw-1" {
+		t.Fatalf("expected only default workspace window, got %#v", result)
+	}
 }
 
 func TestHandleCreateMaintenanceWindow(t *testing.T) {
@@ -4721,6 +5110,19 @@ func TestHandleCreateMaintenanceWindow(t *testing.T) {
 
 	if rec.Code != http.StatusCreated {
 		t.Errorf("Expected status %d, got %d", http.StatusCreated, rec.Code)
+	}
+	var created core.MaintenanceWindow
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("failed to decode created window: %v", err)
+	}
+	if created.WorkspaceID != "default" {
+		t.Fatalf("expected workspace default, got %q", created.WorkspaceID)
+	}
+	if created.ID == "" {
+		t.Fatal("expected generated maintenance window ID")
+	}
+	if created.CreatedAt.IsZero() || created.UpdatedAt.IsZero() {
+		t.Fatalf("expected server-managed timestamps, got created=%v updated=%v", created.CreatedAt, created.UpdatedAt)
 	}
 }
 
@@ -4745,7 +5147,7 @@ func TestHandleCreateMaintenanceWindow_InvalidJSON(t *testing.T) {
 
 func TestHandleGetMaintenanceWindow(t *testing.T) {
 	store := newMockStorage()
-	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", Name: "Window 1"})
+	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", WorkspaceID: "default", Name: "Window 1"})
 	server := newTestServerWithStorage(store)
 
 	rec := httptest.NewRecorder()
@@ -4762,6 +5164,28 @@ func TestHandleGetMaintenanceWindow(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("Expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+}
+
+func TestHandleGetMaintenanceWindowRejectsOtherWorkspace(t *testing.T) {
+	store := newMockStorage()
+	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", WorkspaceID: "other", Name: "Other Window"})
+	server := newTestServerWithStorage(store)
+
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:   httptest.NewRequest("GET", "/api/v1/maintenance/mw-1", nil),
+		Response:  rec,
+		Params:    map[string]string{"id": "mw-1"},
+		Workspace: "default",
+	}
+
+	err := server.handleGetMaintenanceWindow(ctx)
+	if err != nil {
+		t.Fatalf("handleGetMaintenanceWindow failed: %v", err)
+	}
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("Expected status %d, got %d", http.StatusForbidden, rec.Code)
 	}
 }
 
@@ -4787,7 +5211,7 @@ func TestHandleGetMaintenanceWindow_NotFound(t *testing.T) {
 
 func TestHandleUpdateMaintenanceWindow(t *testing.T) {
 	store := newMockStorage()
-	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", Name: "Window 1"})
+	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", WorkspaceID: "default", Name: "Window 1"})
 	server := newTestServerWithStorage(store)
 
 	body, _ := json.Marshal(map[string]interface{}{
@@ -4842,7 +5266,7 @@ func TestHandleUpdateMaintenanceWindow(t *testing.T) {
 
 func TestHandleUpdateMaintenanceWindow_InvalidJSON(t *testing.T) {
 	store := newMockStorage()
-	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", Name: "Window 1"})
+	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", WorkspaceID: "default", Name: "Window 1"})
 	server := newTestServerWithStorage(store)
 
 	rec := httptest.NewRecorder()
@@ -4884,7 +5308,7 @@ func TestHandleUpdateMaintenanceWindow_NotFound(t *testing.T) {
 
 func TestHandleUpdateMaintenanceWindow_InvalidTypes(t *testing.T) {
 	store := newMockStorage()
-	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", Name: "Window 1"})
+	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", WorkspaceID: "default", Name: "Window 1"})
 	server := newTestServerWithStorage(store)
 
 	body, _ := json.Marshal(map[string]interface{}{
@@ -4922,7 +5346,7 @@ func TestHandleUpdateMaintenanceWindow_InvalidTypes(t *testing.T) {
 
 func TestHandleDeleteMaintenanceWindow(t *testing.T) {
 	store := newMockStorage()
-	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", Name: "Window 1"})
+	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", WorkspaceID: "default", Name: "Window 1"})
 	server := newTestServerWithStorage(store)
 
 	rec := httptest.NewRecorder()

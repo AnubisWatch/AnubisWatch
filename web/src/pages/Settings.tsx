@@ -26,6 +26,7 @@ import {
 import { api } from '../api/client'
 import { useAuth, useStats } from '../api/hooks'
 import { useThemeStore, applyTheme } from '../stores/themeStore'
+import { Link } from 'react-router-dom'
 
 type TabId = 'general' | 'security' | 'notifications' | 'storage' | 'integrations'
 
@@ -416,9 +417,12 @@ export function Settings() {
                             <p className="text-sm text-gray-500">{item.desc}</p>
                           </div>
                         </div>
-                        <button className="relative inline-flex h-6 w-11 items-center rounded-full bg-gray-700 transition-colors">
-                          <span className="inline-block h-4 w-4 transform rounded-full bg-white translate-x-1 transition-transform" />
-                        </button>
+                        <Link
+                          to="/alerts"
+                          className="px-3 py-1.5 bg-gray-800 text-gray-300 hover:text-white hover:bg-gray-700 rounded-lg text-sm transition-colors"
+                        >
+                          Configure
+                        </Link>
                       </div>
                     );
                   })}
@@ -453,17 +457,12 @@ export function Settings() {
                     <label className="block text-sm font-medium text-gray-300 mb-2">
                       Storage Path
                     </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={editedConfig.storage_path || '/var/lib/anubis'}
-                        onChange={(e) => handleChange('storage_path', e.target.value)}
-                        className="flex-1 bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
-                      />
-                      <button className="px-4 py-3 bg-gray-800 text-white rounded-xl hover:bg-gray-700 transition-colors">
-                        Browse
-                      </button>
-                    </div>
+                    <input
+                      type="text"
+                      value={editedConfig.storage_path || '/var/lib/anubis'}
+                      onChange={(e) => handleChange('storage_path', e.target.value)}
+                      className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
+                    />
                   </div>
 
                   <div className="pt-6 border-t border-gray-700/50">

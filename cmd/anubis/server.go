@@ -677,11 +677,15 @@ func (a *restStorageAdapter) SaveSoul(ctx context.Context, soul *core.Soul) erro
 }
 
 func (a *restStorageAdapter) DeleteSoul(ctx context.Context, id string) error {
-	return a.store.DeleteSoul(ctx, "default", id)
+	soul, err := a.store.GetSoulNoCtx(id)
+	if err != nil {
+		return err
+	}
+	return a.store.DeleteSoul(ctx, soul.WorkspaceID, id)
 }
 
 func (a *restStorageAdapter) DeleteSoulNoCtx(id string) error {
-	return a.store.DeleteSoul(context.Background(), "default", id)
+	return a.DeleteSoul(context.Background(), id)
 }
 
 func (a *restStorageAdapter) GetJudgmentNoCtx(id string) (*core.Judgment, error) {

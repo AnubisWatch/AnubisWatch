@@ -9,10 +9,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
+	"github.com/AnubisWatch/anubiswatch/internal/storage"
 )
 
 func selfHealth() {
@@ -50,6 +52,61 @@ func selfHealth() {
 	if status != "healthy" && !strings.HasSuffix(os.Args[0], ".test") {
 		os.Exit(1)
 	}
+}
+
+func systemSouls(ctx context.Context, store *storage.CobaltDB) ([]*core.Soul, error) {
+	results, err := store.PrefixScan("")
+	if err != nil {
+		return nil, err
+	}
+
+	souls := make([]*core.Soul, 0)
+	for key, data := range results {
+		if data == nil || (!strings.Contains(key, "/souls/") && !strings.HasPrefix(key, "souls/")) {
+			continue
+		}
+		var soul core.Soul
+		if err := json.Unmarshal(data, &soul); err != nil {
+			continue
+		}
+		if soul.WorkspaceID == "" {
+			soul.WorkspaceID = core.WorkspaceIDFromContext(ctx)
+		}
+		souls = append(souls, &soul)
+	}
+
+	sort.Slice(souls, func(i, j int) bool {
+		if souls[i].WorkspaceID == souls[j].WorkspaceID {
+			return souls[i].ID < souls[j].ID
+		}
+		return souls[i].WorkspaceID < souls[j].WorkspaceID
+	})
+
+	return souls, nil
+}
+
+func systemWorkspaceIDs(ctx context.Context, store *storage.CobaltDB, souls []*core.Soul) []string {
+	ids := map[string]struct{}{"default": {}}
+
+	if workspaces, err := store.ListWorkspaces(ctx); err == nil {
+		for _, ws := range workspaces {
+			if ws != nil && ws.ID != "" {
+				ids[ws.ID] = struct{}{}
+			}
+		}
+	}
+	for _, soul := range souls {
+		if soul != nil && soul.WorkspaceID != "" {
+			ids[soul.WorkspaceID] = struct{}{}
+		}
+	}
+
+	out := make([]string, 0, len(ids))
+	for id := range ids {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // statusCommand shows detailed system status
@@ -91,8 +148,8 @@ func statusCommand() {
 
 	ctx := context.Background()
 
-	// Count souls
-	souls, err := store.ListSouls(ctx, "default", 0, 10000)
+	// Count souls across all workspaces.
+	souls, err := systemSouls(ctx, store)
 	if err != nil {
 		souls = []*core.Soul{}
 	}
@@ -130,9 +187,15 @@ func statusCommand() {
 	fmt.Printf("Workspaces: %d\n", len(workspaces))
 
 	// Count alert channels and rules
-	channels, _ := store.ListAlertChannels("")
-	rules, _ := store.ListAlertRules("")
-	fmt.Printf("Alerts:     %d channels, %d rules\n", len(channels), len(rules))
+	channelCount := 0
+	ruleCount := 0
+	for _, workspaceID := range systemWorkspaceIDs(ctx, store, souls) {
+		channels, _ := store.ListAlertChannels(workspaceID)
+		rules, _ := store.ListAlertRules(workspaceID)
+		channelCount += len(channels)
+		ruleCount += len(rules)
+	}
+	fmt.Printf("Alerts:     %d channels, %d rules\n", channelCount, ruleCount)
 
 	// Count status pages
 	pages, _ := store.ListStatusPages()
@@ -184,7 +247,7 @@ func exportCommand() {
 
 	switch subcmd {
 	case "souls":
-		souls, err := store.ListSouls(ctx, "default", 0, 10000)
+		souls, err := systemSouls(ctx, store)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error listing souls: %v\n", err)
 			os.Exit(1)

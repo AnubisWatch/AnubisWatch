@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -8,6 +9,15 @@ import (
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
+
+type journeyListItem struct {
+	*core.JourneyConfig
+	StepCount   int     `json:"step_count"`
+	LastRun     string  `json:"last_run,omitempty"`
+	LastStatus  string  `json:"last_status"`
+	AvgDuration float64 `json:"avg_duration"`
+	SuccessRate float64 `json:"success_rate"`
+}
 
 // handleListJourneys lists all journeys
 func (s *RESTServer) handleListJourneys(ctx *Context) error {
@@ -20,7 +30,12 @@ func (s *RESTServer) handleListJourneys(ctx *Context) error {
 		return ctx.Error(http.StatusInternalServerError, "failed to retrieve journeys")
 	}
 
-	return ctx.JSON(http.StatusOK, journeys)
+	items := make([]journeyListItem, 0, len(journeys))
+	for _, journey := range journeys {
+		items = append(items, s.buildJourneyListItem(ctx.Request.Context(), workspace, journey))
+	}
+
+	return ctx.JSON(http.StatusOK, items)
 }
 
 // handleCreateJourney creates a new journey
@@ -29,9 +44,12 @@ func (s *RESTServer) handleCreateJourney(ctx *Context) error {
 	if err := ctx.Bind(&journey); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid journey data")
 	}
+	if err := validateJourneyForAPI(&journey); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
 
 	journey.ID = core.GenerateID()
-	journey.WorkspaceID = ctx.Workspace
+	journey.WorkspaceID = contextWorkspace(ctx)
 	journey.CreatedAt = time.Now()
 	journey.UpdatedAt = time.Now()
 
@@ -54,7 +72,7 @@ func (s *RESTServer) handleGetJourney(ctx *Context) error {
 	}
 
 	// IDOR protection: Check if journey belongs to user's workspace
-	if journey.WorkspaceID != ctx.Workspace {
+	if !sameWorkspace(journey.WorkspaceID, contextWorkspace(ctx)) {
 		return ctx.Error(http.StatusForbidden, "access denied")
 	}
 
@@ -73,7 +91,7 @@ func (s *RESTServer) handleUpdateJourney(ctx *Context) error {
 	if err != nil {
 		return ctx.Error(http.StatusNotFound, "journey not found")
 	}
-	if existing.WorkspaceID != ctx.Workspace {
+	if !sameWorkspace(existing.WorkspaceID, contextWorkspace(ctx)) {
 		return ctx.Error(http.StatusForbidden, "access denied")
 	}
 
@@ -81,9 +99,13 @@ func (s *RESTServer) handleUpdateJourney(ctx *Context) error {
 	if err := ctx.Bind(&journey); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid journey data")
 	}
+	if err := validateJourneyForAPI(&journey); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
 
 	journey.ID = id
-	journey.WorkspaceID = ctx.Workspace
+	journey.WorkspaceID = contextWorkspace(ctx)
+	journey.CreatedAt = existing.CreatedAt
 	journey.UpdatedAt = time.Now()
 
 	if err := s.store.SaveJourneyNoCtx(&journey); err != nil {
@@ -105,7 +127,7 @@ func (s *RESTServer) handleDeleteJourney(ctx *Context) error {
 	if err != nil {
 		return ctx.Error(http.StatusNotFound, "journey not found")
 	}
-	if journey.WorkspaceID != ctx.Workspace {
+	if !sameWorkspace(journey.WorkspaceID, contextWorkspace(ctx)) {
 		return ctx.Error(http.StatusForbidden, "access denied")
 	}
 
@@ -128,15 +150,109 @@ func (s *RESTServer) handleRunJourney(ctx *Context) error {
 	}
 
 	// IDOR protection: Check if journey belongs to user's workspace
-	if journey.WorkspaceID != ctx.Workspace {
+	if !sameWorkspace(journey.WorkspaceID, contextWorkspace(ctx)) {
 		return ctx.Error(http.StatusForbidden, "access denied")
 	}
 
-	return ctx.JSON(http.StatusAccepted, map[string]interface{}{
+	if s.journey == nil {
+		return ctx.Error(http.StatusServiceUnavailable, "journey executor not available")
+	}
+
+	run, err := s.journey.RunOnce(ctx.Request.Context(), journey)
+	if err != nil {
+		return s.internalError(ctx, err, "failed to run journey")
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]interface{}{
 		"journey_id": journey.ID,
-		"status":     "executing",
-		"message":    "Journey execution triggered",
+		"run_id":     run.ID,
+		"status":     run.Status,
+		"duration":   run.Duration,
 	})
+}
+
+func validateJourneyForAPI(journey *core.JourneyConfig) error {
+	if journey.Name == "" {
+		return fmt.Errorf("journey name is required")
+	}
+	if len(journey.Steps) == 0 {
+		return fmt.Errorf("journey must have at least one step")
+	}
+	for i, step := range journey.Steps {
+		if step.Name == "" {
+			return fmt.Errorf("journey step %d name is required", i+1)
+		}
+		if step.Target == "" {
+			return fmt.Errorf("journey step %d target is required", i+1)
+		}
+	}
+	if journey.Weight.Duration <= 0 {
+		journey.Weight.Duration = time.Minute
+	}
+	if journey.Timeout.Duration <= 0 {
+		journey.Timeout.Duration = 30 * time.Second
+	}
+	for i := range journey.Steps {
+		if journey.Steps[i].Type == "" {
+			journey.Steps[i].Type = core.CheckHTTP
+		}
+		if journey.Steps[i].Timeout.Duration <= 0 {
+			journey.Steps[i].Timeout.Duration = 10 * time.Second
+		}
+	}
+	return nil
+}
+
+func (s *RESTServer) buildJourneyListItem(ctx context.Context, workspace string, journey *core.JourneyConfig) journeyListItem {
+	item := journeyListItem{
+		JourneyConfig: journey,
+		StepCount:     len(journey.Steps),
+		LastStatus:    "unknown",
+		SuccessRate:   0,
+	}
+
+	if s.journey == nil {
+		return item
+	}
+
+	runs, err := s.journey.ListRuns(ctx, workspace, journey.ID, 100)
+	if err != nil || len(runs) == 0 {
+		return item
+	}
+
+	item.LastStatus = journeyRunUIStatus(runs[0].Status)
+	item.LastRun = time.UnixMilli(runs[0].StartedAt).UTC().Format(time.RFC3339)
+
+	var totalDuration int64
+	successes := 0
+	counted := 0
+	for _, run := range runs {
+		if run == nil {
+			continue
+		}
+		totalDuration += run.Duration
+		if run.Status == core.SoulAlive {
+			successes++
+		}
+		counted++
+	}
+	if counted > 0 {
+		item.AvgDuration = float64(totalDuration) / float64(counted)
+		item.SuccessRate = float64(successes) / float64(counted) * 100
+	}
+
+	return item
+}
+
+func journeyRunUIStatus(status core.SoulStatus) string {
+	switch status {
+	case core.SoulAlive:
+		return "passed"
+	case core.SoulDead:
+		return "failed"
+	default:
+		return "pending"
+	}
 }
 
 // handleListJourneyRuns lists runs for a journey
@@ -199,14 +315,52 @@ func (s *RESTServer) handleMCPTools(ctx *Context) error {
 // handleSoulLogs returns logs for a soul
 func (s *RESTServer) handleSoulLogs(ctx *Context) error {
 	id := ctx.Params["id"]
-	logs := []map[string]interface{}{
-		{
-			"timestamp": time.Now().Add(-5 * time.Minute).Format(time.RFC3339),
-			"level":     "info",
-			"message":   "Health check passed",
-			"soul_id":   id,
-		},
+
+	soul, err := s.store.GetSoulNoCtx(id)
+	if err == nil && soul == nil {
+		err = fmt.Errorf("soul not found")
 	}
+	if err != nil {
+		return ctx.Error(http.StatusNotFound, "soul not found")
+	}
+	if !sameWorkspace(soul.WorkspaceID, contextWorkspace(ctx)) {
+		return ctx.Error(http.StatusForbidden, "access denied")
+	}
+
+	limit := 50
+	if raw := ctx.Request.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 200 {
+			limit = parsed
+		}
+	}
+
+	judgments, err := s.store.ListJudgmentsNoCtx(id, time.Now().Add(-30*24*time.Hour), time.Now(), limit)
+	if err != nil {
+		return s.internalError(ctx, err, "failed to list soul logs")
+	}
+
+	logs := make([]map[string]interface{}, 0, len(judgments))
+	for _, judgment := range judgments {
+		level := "info"
+		message := "Health check passed"
+		if judgment.Status != core.SoulAlive {
+			level = "error"
+			message = "Health check failed"
+			if judgment.Message != "" {
+				message = judgment.Message
+			}
+		}
+		logs = append(logs, map[string]interface{}{
+			"timestamp":   judgment.Timestamp.Format(time.RFC3339),
+			"level":       level,
+			"message":     message,
+			"soul_id":     id,
+			"judgment_id": judgment.ID,
+			"status":      judgment.Status,
+			"duration":    judgment.Duration.String(),
+		})
+	}
+
 	return ctx.JSON(http.StatusOK, logs)
 }
 
@@ -217,7 +371,17 @@ func (s *RESTServer) handleListDashboards(ctx *Context) error {
 	if err != nil {
 		return s.internalError(ctx, err, "failed to list dashboards")
 	}
-	return ctx.JSON(http.StatusOK, dashboards)
+	workspace := contextWorkspace(ctx)
+	filtered := make([]*core.CustomDashboard, 0, len(dashboards))
+	for _, dashboard := range dashboards {
+		if dashboard == nil {
+			continue
+		}
+		if sameWorkspace(dashboard.WorkspaceID, workspace) {
+			filtered = append(filtered, dashboard)
+		}
+	}
+	return ctx.JSON(http.StatusOK, filtered)
 }
 
 func (s *RESTServer) handleCreateDashboard(ctx *Context) error {
@@ -227,7 +391,7 @@ func (s *RESTServer) handleCreateDashboard(ctx *Context) error {
 	}
 
 	dashboard.ID = core.GenerateID()
-	dashboard.WorkspaceID = ctx.Workspace
+	dashboard.WorkspaceID = contextWorkspace(ctx)
 	dashboard.CreatedAt = time.Now()
 	dashboard.UpdatedAt = time.Now()
 
@@ -249,7 +413,7 @@ func (s *RESTServer) handleGetDashboard(ctx *Context) error {
 	}
 
 	// IDOR protection: Check if dashboard belongs to user's workspace
-	if dashboard.WorkspaceID != ctx.Workspace {
+	if !sameWorkspace(dashboard.WorkspaceID, contextWorkspace(ctx)) {
 		return ctx.Error(http.StatusForbidden, "access denied")
 	}
 
@@ -267,7 +431,7 @@ func (s *RESTServer) handleUpdateDashboard(ctx *Context) error {
 	if err != nil {
 		return ctx.Error(http.StatusNotFound, "dashboard not found")
 	}
-	if existing.WorkspaceID != ctx.Workspace {
+	if !sameWorkspace(existing.WorkspaceID, contextWorkspace(ctx)) {
 		return ctx.Error(http.StatusForbidden, "access denied")
 	}
 
@@ -277,7 +441,8 @@ func (s *RESTServer) handleUpdateDashboard(ctx *Context) error {
 	}
 
 	dashboard.ID = id
-	dashboard.WorkspaceID = ctx.Workspace
+	dashboard.WorkspaceID = contextWorkspace(ctx)
+	dashboard.CreatedAt = existing.CreatedAt
 	dashboard.UpdatedAt = time.Now()
 
 	if err := s.store.SaveDashboardNoCtx(&dashboard); err != nil {
@@ -298,7 +463,7 @@ func (s *RESTServer) handleDeleteDashboard(ctx *Context) error {
 	if err != nil {
 		return ctx.Error(http.StatusNotFound, "dashboard not found")
 	}
-	if dashboard.WorkspaceID != ctx.Workspace {
+	if !sameWorkspace(dashboard.WorkspaceID, contextWorkspace(ctx)) {
 		return ctx.Error(http.StatusForbidden, "access denied")
 	}
 
@@ -310,6 +475,17 @@ func (s *RESTServer) handleDeleteDashboard(ctx *Context) error {
 
 // handleDashboardQuery resolves a widget query and returns data
 func (s *RESTServer) handleDashboardQuery(ctx *Context) error {
+	id := ctx.Params["id"]
+	if id != "" {
+		dashboard, err := s.store.GetDashboardNoCtx(id)
+		if err != nil || dashboard == nil {
+			return ctx.Error(http.StatusNotFound, "dashboard not found")
+		}
+		if !sameWorkspace(dashboard.WorkspaceID, contextWorkspace(ctx)) {
+			return ctx.Error(http.StatusForbidden, "access denied")
+		}
+	}
+
 	var query core.WidgetQuery
 	if err := ctx.Bind(&query); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid query")
@@ -326,7 +502,7 @@ func (s *RESTServer) handleDashboardQuery(ctx *Context) error {
 	case "stats":
 		result, err = s.queryStats(query, ctx.Workspace)
 	case "alerts":
-		result, err = s.queryAlerts(query)
+		result, err = s.queryAlerts(query, ctx.Workspace)
 	default:
 		return ctx.Error(http.StatusBadRequest, "unknown query source: "+query.Source)
 	}
@@ -482,14 +658,20 @@ func (s *RESTServer) queryStats(q core.WidgetQuery, workspace string) (interface
 	}, nil
 }
 
-func (s *RESTServer) queryAlerts(q core.WidgetQuery) (interface{}, error) {
+func (s *RESTServer) queryAlerts(q core.WidgetQuery, workspace string) (interface{}, error) {
 	stats := s.alert.GetStats()
+	activeIncidents := 0
+	for _, incident := range s.alert.ListActiveIncidents() {
+		if incident != nil && sameWorkspace(incident.WorkspaceID, workspace) {
+			activeIncidents++
+		}
+	}
 	if q.Metric == "count" {
-		return map[string]int{"count": stats.ActiveIncidents}, nil
+		return map[string]int{"count": activeIncidents}, nil
 	}
 	return map[string]interface{}{
-		"channels": len(s.alert.ListChannels()),
-		"rules":    len(s.alert.ListRules()),
+		"channels": len(s.alert.ListChannelsByWorkspace(workspace)),
+		"rules":    len(s.alert.ListRulesByWorkspace(workspace)),
 		"stats":    stats,
 	}, nil
 }

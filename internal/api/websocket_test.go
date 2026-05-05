@@ -133,6 +133,17 @@ func TestWSClient_createMessage(t *testing.T) {
 	}
 }
 
+func TestWebSocketServer_DefaultConnectionRateLimitAllowsRouteSmoke(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger, &mockAuthenticator{}, nil)
+
+	for i := 0; i < 30; i++ {
+		if !server.checkRateLimit("127.0.0.1") {
+			t.Fatalf("connection attempt %d should be allowed by default rate limit", i+1)
+		}
+	}
+}
+
 // TestWSClient_createSuccessMessage tests success message creation
 func TestWSClient_createSuccessMessage(t *testing.T) {
 	client := &WSClient{
@@ -262,6 +273,69 @@ func TestWebSocketServer_BroadcastSoulUpdate(t *testing.T) {
 
 	// Give broadcast time to process
 	time.Sleep(50 * time.Millisecond)
+}
+
+func TestWebSocketServer_BroadcastSoulUpdateStaysInWorkspace(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger, &mockAuthenticator{}, nil)
+	server.Start()
+	defer server.Stop()
+
+	ws1Client := &WSClient{
+		ID:        "ws1-client",
+		Workspace: "ws1",
+		Rooms:     make(map[string]bool),
+		send:      make(chan []byte, 10),
+		server:    server,
+	}
+	ws2Client := &WSClient{
+		ID:        "ws2-client",
+		Workspace: "ws2",
+		Rooms:     make(map[string]bool),
+		send:      make(chan []byte, 10),
+		server:    server,
+	}
+
+	server.mu.Lock()
+	server.clients[ws1Client.ID] = ws1Client
+	server.clients[ws2Client.ID] = ws2Client
+	server.mu.Unlock()
+
+	server.SubscribeClient(ws1Client.ID, []string{"soul"})
+	server.SubscribeClient(ws2Client.ID, []string{"soul"})
+
+	server.BroadcastSoulUpdate(&core.Soul{
+		ID:          "soul-ws1",
+		Name:        "Workspace 1 Soul",
+		WorkspaceID: "ws1",
+	})
+
+	time.Sleep(50 * time.Millisecond)
+
+	ws1Messages := drainWSMessages(ws1Client.send)
+	ws2Messages := drainWSMessages(ws2Client.send)
+
+	if len(ws1Messages) != 1 {
+		t.Fatalf("expected ws1 client to receive exactly one soul update, got %d messages: %v", len(ws1Messages), ws1Messages)
+	}
+	if len(ws2Messages) != 0 {
+		t.Fatalf("expected ws2 client to receive no ws1 update, got %d messages: %v", len(ws2Messages), ws2Messages)
+	}
+	if !strings.Contains(ws1Messages[0], `"type":"soul_update"`) || !strings.Contains(ws1Messages[0], `"soul-ws1"`) {
+		t.Fatalf("unexpected ws1 message: %s", ws1Messages[0])
+	}
+}
+
+func drainWSMessages(ch chan []byte) []string {
+	messages := []string{}
+	for {
+		select {
+		case msg := <-ch:
+			messages = append(messages, string(msg))
+		default:
+			return messages
+		}
+	}
 }
 
 // TestIsWebSocketRequest tests the WebSocket request detection

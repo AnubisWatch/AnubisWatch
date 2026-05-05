@@ -287,10 +287,9 @@ func (ts *TimeSeriesStore) compactToResolution(srcRes, tgtRes TimeResolution, th
 		"src_bucket", srcBucket,
 		"tgt_bucket", tgtBucket)
 
-	// Find all souls with data in source resolution
+	// Find all souls with data in source resolution.
 	// Pattern: {workspace}/ts/{soul}/{resolution}/{timestamp}
-	prefix := "default/ts/"
-	results, err := ts.db.PrefixScan(prefix)
+	results, err := ts.db.PrefixScan("")
 	if err != nil {
 		return err
 	}
@@ -304,25 +303,16 @@ func (ts *TimeSeriesStore) compactToResolution(srcRes, tgtRes TimeResolution, th
 	aggregations := make(map[targetKey][]*JudgmentSummary)
 
 	for key, data := range results {
-		if !strings.Contains(key, "/ts/") || !strings.Contains(key, string(srcRes)) {
-			continue
-		}
-
 		// Parse key: {workspace}/ts/{soul}/{resolution}/{timestamp}
 		parts := strings.Split(key, "/")
-		if len(parts) < 5 {
+		if len(parts) != 5 || parts[1] != "ts" || parts[3] != string(srcRes) {
 			continue
 		}
 
 		workspaceID := parts[0]
 		soulID := parts[2]
-		resolution := parts[3]
 		tsUnix, err := strconv.ParseInt(parts[4], 10, 64)
 		if err != nil {
-			continue
-		}
-
-		if resolution != string(srcRes) {
 			continue
 		}
 

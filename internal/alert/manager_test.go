@@ -163,6 +163,11 @@ func TestRuleApplies(t *testing.T) {
 			scope:    core.RuleScope{Type: "type", SoulTypes: []string{"tcp"}},
 			expected: false,
 		},
+		{
+			name:     "unknown scope does not apply",
+			scope:    core.RuleScope{Type: "unknown"},
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {

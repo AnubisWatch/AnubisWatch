@@ -682,6 +682,7 @@ func (h *Handler) renderStatusPage(page *core.StatusPage, data *core.StatusPageD
         .day-operational { background: #22c55e; }
         .day-degraded { background: #f59e0b; }
         .day-dead { background: #ef4444; }
+        .day-unknown { background: rgba(148, 163, 184, 0.35); }
         footer {
             text-align: center;
             padding: 2rem;

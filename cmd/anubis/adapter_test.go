@@ -52,6 +52,9 @@ func TestRestStorageAdapter_CRUD(t *testing.T) {
 	if err := adapter.DeleteSoulNoCtx("soul-1"); err != nil {
 		t.Fatalf("DeleteSoulNoCtx failed: %v", err)
 	}
+	if err := adapter.SaveSoul(ctx, soul); err != nil {
+		t.Fatalf("SaveSoul before DeleteSoul failed: %v", err)
+	}
 	if err := adapter.DeleteSoul(ctx, "soul-1"); err != nil {
 		t.Fatalf("DeleteSoul failed: %v", err)
 	}
@@ -237,6 +240,31 @@ func TestRestStorageAdapter_CRUD(t *testing.T) {
 	}
 	if err := adapter.DeleteMaintenanceWindow("mw-1"); err != nil {
 		t.Fatalf("DeleteMaintenanceWindow failed: %v", err)
+	}
+}
+
+func TestRestStorageAdapter_DeleteSoulUsesStoredWorkspace(t *testing.T) {
+	db := setupTestStore(t)
+	adapter := &restStorageAdapter{store: db}
+	ctx := context.Background()
+
+	soul := &core.Soul{
+		ID:          "tenant-soul",
+		Name:        "Tenant Soul",
+		Type:        core.CheckHTTP,
+		Target:      "https://example.com",
+		WorkspaceID: "tenant-a",
+	}
+	if err := adapter.SaveSoul(ctx, soul); err != nil {
+		t.Fatalf("SaveSoul failed: %v", err)
+	}
+
+	if err := adapter.DeleteSoul(ctx, "tenant-soul"); err != nil {
+		t.Fatalf("DeleteSoul failed: %v", err)
+	}
+
+	if _, err := db.GetSoul(ctx, "tenant-a", "tenant-soul"); err == nil {
+		t.Fatal("expected tenant soul to be deleted from tenant-a workspace")
 	}
 }
 

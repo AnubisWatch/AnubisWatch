@@ -37,12 +37,59 @@ export function Judgments() {
     setTimeout(() => setRefreshing(false), 500)
   }
 
+  const timeRangeCutoff = () => {
+    const now = Date.now()
+    switch (timeRange) {
+      case '1h': return now - 60 * 60 * 1000
+      case '7d': return now - 7 * 24 * 60 * 60 * 1000
+      case '30d': return now - 30 * 24 * 60 * 60 * 1000
+      case '24h':
+      default:
+        return now - 24 * 60 * 60 * 1000
+    }
+  }
+
   const filteredJudgments = judgments.filter(j => {
     const matchesFilter = filter === 'all' || j.status === filter
     const matchesSearch = (j.soul_name?.toLowerCase().includes(search.toLowerCase()) ||
                          j.region?.toLowerCase().includes(search.toLowerCase()))
-    return matchesFilter && matchesSearch
+    const timestamp = new Date(j.timestamp).getTime()
+    const matchesTimeRange = Number.isNaN(timestamp) || timestamp >= timeRangeCutoff()
+    return matchesFilter && matchesSearch && matchesTimeRange
   })
+
+  const csvCell = (value: unknown) => {
+    const text = value === undefined || value === null ? '' : String(value)
+    return `"${text.replace(/"/g, '""')}"`
+  }
+
+  const handleExport = () => {
+    const header = ['id', 'soul_id', 'soul_name', 'status', 'latency_ms', 'purity', 'region', 'timestamp', 'error']
+    const rows = filteredJudgments.map(j => [
+      j.id,
+      j.soul_id,
+      j.soul_name || '',
+      j.status,
+      j.latency,
+      j.purity || 0,
+      j.region || '',
+      j.timestamp,
+      j.error || '',
+    ])
+    const csv = [
+      header.map(csvCell).join(','),
+      ...rows.map(row => row.map(csvCell).join(',')),
+    ].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `anubis-judgments-${timeRange}.csv`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  }
 
   const stats = {
     total: judgments.length,
@@ -87,7 +134,11 @@ export function Judgments() {
           >
             <RefreshCw className="w-5 h-5" />
           </button>
-          <button className="flex items-center gap-2 px-4 py-2.5 bg-gray-800 hover:bg-gray-700 text-white rounded-xl transition-all font-medium">
+          <button
+            onClick={handleExport}
+            disabled={filteredJudgments.length === 0}
+            className="flex items-center gap-2 px-4 py-2.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl transition-all font-medium"
+          >
             <Download className="w-4 h-4" />
             Export
           </button>

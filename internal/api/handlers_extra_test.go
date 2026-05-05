@@ -103,6 +103,9 @@ func TestHandleCreateJourney(t *testing.T) {
 	if result.ID == "" {
 		t.Error("Expected journey ID to be generated")
 	}
+	if result.WorkspaceID != "default" {
+		t.Errorf("Expected workspace default, got %q", result.WorkspaceID)
+	}
 }
 
 // TestHandleCreateJourney_InvalidData tests handleCreateJourney with invalid data
@@ -160,6 +163,14 @@ func TestHandleUpdateJourney(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("Expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var result core.JourneyConfig
+	if err := json.NewDecoder(rec.Body).Decode(&result); err != nil {
+		t.Fatalf("failed to decode updated journey: %v", err)
+	}
+	if result.WorkspaceID != "default" {
+		t.Errorf("Expected workspace default, got %q", result.WorkspaceID)
 	}
 }
 
@@ -356,12 +367,14 @@ func TestHandleMCPTools(t *testing.T) {
 // TestHandleRunJourney tests handleRunJourney
 func TestHandleRunJourney(t *testing.T) {
 	store := newMockStorage()
-	server := newTestServerWithStorage(store)
+	journeyExec := &mockJourneyExecutor{}
+	server := newTestServerWithJourney(store, journeyExec)
 
 	// Create a journey first
 	store.SaveJourneyNoCtx(&core.JourneyConfig{
-		ID:   "journey-1",
-		Name: "Test Journey",
+		ID:          "journey-1",
+		Name:        "Test Journey",
+		WorkspaceID: "default",
 		Steps: []core.JourneyStep{
 			{Name: "Step 1", Target: "http://example.com"},
 		},
@@ -379,8 +392,8 @@ func TestHandleRunJourney(t *testing.T) {
 		t.Fatalf("handleRunJourney failed: %v", err)
 	}
 
-	if rec.Code != http.StatusAccepted {
-		t.Errorf("Expected status %d, got %d", http.StatusAccepted, rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Errorf("Expected status %d, got %d", http.StatusOK, rec.Code)
 	}
 
 	var result map[string]interface{}
@@ -392,8 +405,8 @@ func TestHandleRunJourney(t *testing.T) {
 		t.Errorf("Expected journey_id journey-1, got %s", result["journey_id"])
 	}
 
-	if result["status"] != "executing" {
-		t.Errorf("Expected status executing, got %s", result["status"])
+	if result["run_id"] != "run-1" {
+		t.Errorf("Expected run_id run-1, got %s", result["run_id"])
 	}
 }
 
@@ -467,6 +480,21 @@ func TestHandleDeleteJourney_NotFound(t *testing.T) {
 func TestHandleSoulLogs(t *testing.T) {
 	store := newMockStorage()
 	server := newTestServerWithStorage(store)
+	store.SaveSoulNoCtx(&core.Soul{
+		ID:          "soul-1",
+		Name:        "Test Soul",
+		Type:        core.CheckHTTP,
+		Target:      "https://example.com",
+		WorkspaceID: "default",
+	})
+	store.SaveJudgment(context.Background(), &core.Judgment{
+		ID:        "judgment-1",
+		SoulID:    "soul-1",
+		Status:    core.SoulDead,
+		Message:   "connection refused",
+		Duration:  150 * time.Millisecond,
+		Timestamp: time.Now(),
+	})
 
 	rec := httptest.NewRecorder()
 	ctx := &Context{
@@ -489,8 +517,11 @@ func TestHandleSoulLogs(t *testing.T) {
 		t.Fatalf("Failed to unmarshal response: %v", err)
 	}
 
-	if len(result) == 0 {
-		t.Error("Expected at least one log entry")
+	if len(result) != 1 {
+		t.Fatalf("Expected one log entry, got %d", len(result))
+	}
+	if result[0]["message"] != "connection refused" {
+		t.Fatalf("Expected real judgment message, got %v", result[0]["message"])
 	}
 }
 
@@ -2103,6 +2134,23 @@ type mockJourneyExecutor struct {
 	runs       []*core.JourneyRun
 	getRunErr  error
 	listRunErr error
+	runOnceErr error
+}
+
+func (m *mockJourneyExecutor) RunOnce(ctx context.Context, journey *core.JourneyConfig) (*core.JourneyRun, error) {
+	if m.runOnceErr != nil {
+		return nil, m.runOnceErr
+	}
+	run := &core.JourneyRun{
+		ID:          "run-1",
+		JourneyID:   journey.ID,
+		WorkspaceID: journey.WorkspaceID,
+		StartedAt:   time.Now().UnixMilli(),
+		CompletedAt: time.Now().UnixMilli(),
+		Status:      core.SoulAlive,
+	}
+	m.runs = append([]*core.JourneyRun{run}, m.runs...)
+	return run, nil
 }
 
 func (m *mockJourneyExecutor) ListRuns(ctx context.Context, workspaceID, journeyID string, limit int) ([]*core.JourneyRun, error) {
@@ -2283,6 +2331,38 @@ func TestHandleListDashboards(t *testing.T) {
 	}
 }
 
+func TestHandleListDashboards_FiltersWorkspace(t *testing.T) {
+	store := newMockStorage()
+	store.SaveDashboardNoCtx(&core.CustomDashboard{ID: "default-dash", Name: "Default", WorkspaceID: "default"})
+	store.SaveDashboardNoCtx(&core.CustomDashboard{ID: "other-dash", Name: "Other", WorkspaceID: "other"})
+	server := newTestServerWithJourney(store, nil)
+
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:   httptest.NewRequest("GET", "/api/v1/dashboards", nil),
+		Response:  rec,
+		Workspace: "default",
+	}
+
+	if err := server.handleListDashboards(ctx); err != nil {
+		t.Fatalf("handleListDashboards failed: %v", err)
+	}
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var dashboards []core.CustomDashboard
+	if err := json.NewDecoder(rec.Body).Decode(&dashboards); err != nil {
+		t.Fatalf("failed to decode dashboards: %v", err)
+	}
+	if len(dashboards) != 1 {
+		t.Fatalf("expected 1 dashboard, got %d: %#v", len(dashboards), dashboards)
+	}
+	if dashboards[0].ID != "default-dash" {
+		t.Fatalf("expected default-dash, got %q", dashboards[0].ID)
+	}
+}
+
 func TestHandleCreateDashboard(t *testing.T) {
 	store := newMockStorage()
 	server := newTestServerWithJourney(store, nil)
@@ -2429,6 +2509,7 @@ func TestHandleDeleteDashboard(t *testing.T) {
 
 func TestHandleDashboardQuery(t *testing.T) {
 	store := newMockStorage()
+	store.SaveDashboardNoCtx(&core.CustomDashboard{ID: "dash-1", WorkspaceID: "default"})
 	store.SaveSoul(nil, &core.Soul{ID: "soul-1", Name: "Test Soul"})
 	server := newTestServerWithJourney(store, nil)
 
@@ -2454,6 +2535,7 @@ func TestHandleDashboardQuery(t *testing.T) {
 
 func TestHandleDashboardQuery_SoulStatusDistribution(t *testing.T) {
 	store := newMockStorage()
+	store.SaveDashboardNoCtx(&core.CustomDashboard{ID: "dash-1", WorkspaceID: "default"})
 	now := time.Now()
 	store.SaveSoul(nil, &core.Soul{ID: "soul-1", Name: "Healthy Soul"})
 	store.SaveSoul(nil, &core.Soul{ID: "soul-2", Name: "Unhealthy Soul"})
@@ -2487,6 +2569,7 @@ func TestHandleDashboardQuery_SoulStatusDistribution(t *testing.T) {
 
 func TestHandleDashboardQuery_InvalidData(t *testing.T) {
 	store := newMockStorage()
+	store.SaveDashboardNoCtx(&core.CustomDashboard{ID: "dash-1", WorkspaceID: "default"})
 	server := newTestServerWithJourney(store, nil)
 
 	rec := httptest.NewRecorder()
@@ -2504,6 +2587,7 @@ func TestHandleDashboardQuery_InvalidData(t *testing.T) {
 
 func TestHandleDashboardQuery_Judgments(t *testing.T) {
 	store := newMockStorage()
+	store.SaveDashboardNoCtx(&core.CustomDashboard{ID: "dash-1", WorkspaceID: "default"})
 	store.SaveSoul(nil, &core.Soul{ID: "soul-1", Name: "Test Soul"})
 	server := newTestServerWithJourney(store, nil)
 
@@ -2529,6 +2613,7 @@ func TestHandleDashboardQuery_Judgments(t *testing.T) {
 
 func TestHandleDashboardQuery_Stats(t *testing.T) {
 	store := newMockStorage()
+	store.SaveDashboardNoCtx(&core.CustomDashboard{ID: "dash-1", WorkspaceID: "default"})
 	store.SaveSoul(nil, &core.Soul{ID: "soul-1", Name: "Test Soul"})
 	server := newTestServerWithJourney(store, nil)
 
@@ -2554,6 +2639,7 @@ func TestHandleDashboardQuery_Stats(t *testing.T) {
 
 func TestHandleDashboardQuery_Alerts(t *testing.T) {
 	store := newMockStorage()
+	store.SaveDashboardNoCtx(&core.CustomDashboard{ID: "dash-1", WorkspaceID: "default"})
 	server := newTestServerWithJourney(store, nil)
 
 	query := core.WidgetQuery{Source: "alerts", Metric: "count"}
@@ -2586,6 +2672,7 @@ func TestHandleDashboardQuery_Alerts(t *testing.T) {
 
 func TestHandleDashboardQuery_UnknownSource(t *testing.T) {
 	store := newMockStorage()
+	store.SaveDashboardNoCtx(&core.CustomDashboard{ID: "dash-1", WorkspaceID: "default"})
 	server := newTestServerWithJourney(store, nil)
 
 	query := core.WidgetQuery{Source: "unknown", Metric: "count"}
@@ -2601,6 +2688,49 @@ func TestHandleDashboardQuery_UnknownSource(t *testing.T) {
 	err := server.handleDashboardQuery(ctx)
 	if err == nil && rec.Code != http.StatusBadRequest {
 		t.Errorf("Expected bad request, got status %d", rec.Code)
+	}
+}
+
+func TestHandleDashboardQuery_NotFound(t *testing.T) {
+	store := newMockStorage()
+	server := newTestServerWithJourney(store, nil)
+
+	query := core.WidgetQuery{Source: "souls", Metric: "count"}
+	body, _ := json.Marshal(query)
+
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:   httptest.NewRequest("POST", "/api/v1/dashboards/missing/query", bytes.NewReader(body)),
+		Response:  rec,
+		Params:    map[string]string{"id": "missing"},
+		Workspace: "default",
+	}
+
+	err := server.handleDashboardQuery(ctx)
+	if err == nil && rec.Code != http.StatusNotFound {
+		t.Errorf("Expected not found, got status %d", rec.Code)
+	}
+}
+
+func TestHandleDashboardQuery_IDOR(t *testing.T) {
+	store := newMockStorage()
+	store.SaveDashboardNoCtx(&core.CustomDashboard{ID: "dash-1", WorkspaceID: "other"})
+	server := newTestServerWithJourney(store, nil)
+
+	query := core.WidgetQuery{Source: "souls", Metric: "count"}
+	body, _ := json.Marshal(query)
+
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:   httptest.NewRequest("POST", "/api/v1/dashboards/dash-1/query", bytes.NewReader(body)),
+		Response:  rec,
+		Params:    map[string]string{"id": "dash-1"},
+		Workspace: "default",
+	}
+
+	err := server.handleDashboardQuery(ctx)
+	if err == nil && rec.Code != http.StatusForbidden {
+		t.Errorf("Expected forbidden, got status %d", rec.Code)
 	}
 }
 
@@ -2762,7 +2892,7 @@ func TestQueryAlerts(t *testing.T) {
 	store := newMockStorage()
 	server := newTestServerWithJourney(store, nil)
 
-	result, err := server.queryAlerts(core.WidgetQuery{})
+	result, err := server.queryAlerts(core.WidgetQuery{}, "default")
 	if err != nil {
 		t.Fatalf("queryAlerts failed: %v", err)
 	}
@@ -2773,6 +2903,52 @@ func TestQueryAlerts(t *testing.T) {
 	}
 	if _, exists := m["channels"]; !exists {
 		t.Error("Expected 'channels' key in alerts result")
+	}
+}
+
+func TestQueryAlertsFiltersWorkspace(t *testing.T) {
+	store := newMockStorage()
+	alerts := &mockAlertManager{
+		channels: map[string]*core.AlertChannel{
+			"default-channel": {ID: "default-channel", WorkspaceID: "default"},
+			"other-channel":   {ID: "other-channel", WorkspaceID: "other"},
+		},
+		rules: map[string]*core.AlertRule{
+			"default-rule": {ID: "default-rule", WorkspaceID: "default"},
+			"other-rule":   {ID: "other-rule", WorkspaceID: "other"},
+		},
+		incidents: []*core.Incident{
+			{ID: "default-incident", WorkspaceID: "default", Status: core.IncidentOpen},
+			{ID: "other-incident", WorkspaceID: "other", Status: core.IncidentOpen},
+		},
+	}
+	server := NewRESTServer(core.ServerConfig{Port: 8080}, core.AuthConfig{Enabled: core.BoolPtr(true)}, store, &mockProbeEngine{}, alerts, &mockAuthenticator{}, &mockClusterManager{}, nil, nil, nil, nil, newTestLogger())
+
+	countResult, err := server.queryAlerts(core.WidgetQuery{Metric: "count"}, "default")
+	if err != nil {
+		t.Fatalf("queryAlerts count failed: %v", err)
+	}
+	countMap, ok := countResult.(map[string]int)
+	if !ok {
+		t.Fatalf("expected map[string]int, got %T", countResult)
+	}
+	if countMap["count"] != 1 {
+		t.Fatalf("expected 1 default incident, got %d", countMap["count"])
+	}
+
+	summaryResult, err := server.queryAlerts(core.WidgetQuery{}, "default")
+	if err != nil {
+		t.Fatalf("queryAlerts summary failed: %v", err)
+	}
+	summaryMap, ok := summaryResult.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map[string]interface{}, got %T", summaryResult)
+	}
+	if summaryMap["channels"] != 1 {
+		t.Fatalf("expected 1 default channel, got %v", summaryMap["channels"])
+	}
+	if summaryMap["rules"] != 1 {
+		t.Fatalf("expected 1 default rule, got %v", summaryMap["rules"])
 	}
 }
 

@@ -88,7 +88,8 @@ describe('Cluster', () => {
     expect(screen.getAllByText('3')).toHaveLength(2)
     expect(screen.getByText('Enabled')).toBeInTheDocument()
     expect(screen.getByText('999')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /join cluster/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /join cluster/i })).not.toBeInTheDocument()
+    expect(screen.getByText('Add Node')).toBeInTheDocument()
     // leader appears in role cell, state card, and table role badge
     expect(screen.getAllByText('leader')).toHaveLength(3)
   })
@@ -101,7 +102,8 @@ describe('Cluster', () => {
     render(<Cluster />)
 
     expect(screen.getByRole('cell', { name: /follower-2/ })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /join cluster/i })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /join cluster/i })).not.toBeInTheDocument()
+    expect(screen.getByText('Add Node')).toBeInTheDocument()
     // follower appears in role cell, state card, and table role badge
     expect(screen.getAllByText('follower')).toHaveLength(3)
   })

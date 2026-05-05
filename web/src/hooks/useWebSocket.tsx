@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, ReactNode, useCallback } from 'react'
+import { AUTH_TOKEN_CHANGED_EVENT } from '../api/authEvents'
 import { WebSocketContext, type WebSocketMessage } from './webSocketContext'
 
 interface WebSocketProviderProps {
@@ -12,11 +13,19 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reconnectAttemptsRef = useRef(0)
+  const shouldReconnectRef = useRef(false)
   const maxReconnectAttempts = 5
 
   const connect = useCallback(() => {
     const token = localStorage.getItem('auth_token')
-    if (!token) return
+    if (!token) {
+      shouldReconnectRef.current = false
+      return
+    }
+    shouldReconnectRef.current = true
+    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) {
+      return
+    }
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsUrl = `${protocol}//${window.location.host}/ws`
@@ -25,7 +34,6 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       const ws = new WebSocket(wsUrl)
 
       ws.onopen = () => {
-        console.log('WebSocket connected')
         setConnected(true)
         reconnectAttemptsRef.current = 0
 
@@ -57,15 +65,12 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       }
 
       ws.onclose = () => {
-        console.log('WebSocket disconnected')
         setConnected(false)
         wsRef.current = null
 
-        // Attempt reconnect
-        if (reconnectAttemptsRef.current < maxReconnectAttempts) {
+        if (shouldReconnectRef.current && localStorage.getItem('auth_token') && reconnectAttemptsRef.current < maxReconnectAttempts) {
           reconnectAttemptsRef.current++
           const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000)
-          console.log(`Reconnecting in ${delay}ms... (attempt ${reconnectAttemptsRef.current})`)
 
           reconnectTimeoutRef.current = setTimeout(() => {
             connect()
@@ -84,6 +89,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   }, [])
 
   const disconnect = useCallback(() => {
+    shouldReconnectRef.current = false
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current)
       reconnectTimeoutRef.current = null
@@ -116,20 +122,25 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     }
   }, [connect, disconnect])
 
-  // Listen for storage changes (login/logout)
+  // Listen for auth changes in this tab and cross-tab storage changes.
   useEffect(() => {
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === 'auth_token') {
-        if (e.newValue) {
-          connect()
-        } else {
-          disconnect()
-        }
+    const syncConnection = () => {
+      if (localStorage.getItem('auth_token')) {
+        connect()
+      } else {
+        disconnect()
       }
+    }
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'auth_token') syncConnection()
     }
 
     window.addEventListener('storage', handleStorage)
-    return () => window.removeEventListener('storage', handleStorage)
+    window.addEventListener(AUTH_TOKEN_CHANGED_EVENT, syncConnection)
+    return () => {
+      window.removeEventListener('storage', handleStorage)
+      window.removeEventListener(AUTH_TOKEN_CHANGED_EVENT, syncConnection)
+    }
   }, [connect, disconnect])
 
   return (

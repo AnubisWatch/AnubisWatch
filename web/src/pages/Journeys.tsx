@@ -130,6 +130,7 @@ export function Journeys() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [runningId, setRunningId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [editingJourney, setEditingJourney] = useState<Journey | null>(null)
 
   // Create form state
   const [formName, setFormName] = useState('')
@@ -157,11 +158,35 @@ export function Journeys() {
     setFormTimeout(30)
     setFormContinueOnFailure(false)
     setFormSteps([])
+    setEditingJourney(null)
     setSaving(false)
   }
 
   const handleOpenCreateModal = () => {
     resetForm()
+    setShowCreateModal(true)
+  }
+
+  const handleOpenEditModal = (journey: Journey) => {
+    setEditingJourney(journey)
+    setFormName(journey.name)
+    setFormDescription(journey.description || '')
+    setFormInterval(journey.weight || 60)
+    setFormTimeout(journey.timeout || 30)
+    setFormContinueOnFailure(Boolean(journey.continue_on_failure))
+    setFormSteps((journey.steps || []).map(step => ({
+      name: step.name || '',
+      type: step.type || 'http',
+      target: step.target || '',
+      timeout: step.timeout || 10,
+      assertions: (step.assertions || []).map(assertion => ({
+        type: assertion.type || 'status_code',
+        target: assertion.target || '',
+        operator: assertion.operator || 'equals',
+        expected: assertion.expected || '',
+      })),
+    })))
+    setSaving(false)
     setShowCreateModal(true)
   }
 
@@ -203,22 +228,23 @@ export function Journeys() {
     setFormSteps(updated)
   }
 
-  const handleCreateJourney = async () => {
+  const handleSaveJourney = async () => {
     if (!formName.trim()) return
     if (formSteps.length === 0) return
 
     setSaving(true)
     try {
-      await createJourney({
+      const payload: Omit<Journey, 'id'> = {
         name: formName,
         description: formDescription,
-        enabled: true,
+        enabled: editingJourney?.enabled ?? true,
         weight: formInterval,
         timeout: formTimeout,
         step_count: formSteps.length,
-        last_status: 'unknown' as const,
-        avg_duration: 0,
-        success_rate: 100,
+        last_status: editingJourney?.last_status || 'unknown',
+        avg_duration: editingJourney?.avg_duration || 0,
+        success_rate: editingJourney?.success_rate ?? 100,
+        last_run: editingJourney?.last_run,
         steps: formSteps.map(s => ({
           name: s.name,
           type: s.type,
@@ -232,12 +258,16 @@ export function Journeys() {
           }))
         })),
         continue_on_failure: formContinueOnFailure
-      } as Omit<Journey, 'id'>
-      )
+      }
+      if (editingJourney) {
+        await updateJourney(editingJourney.id, payload)
+      } else {
+        await createJourney(payload)
+      }
       setShowCreateModal(false)
       resetForm()
     } catch {
-      // Failed to create journey
+      // Failed to save journey
     } finally {
       setSaving(false)
     }
@@ -567,7 +597,7 @@ export function Journeys() {
                   >
                     {journey.enabled ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                   </button>
-                  <button className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" title="Edit" aria-label={`Edit journey ${journey.name}`}>
+                  <button onClick={() => handleOpenEditModal(journey)} className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" title="Edit" aria-label={`Edit journey ${journey.name}`}>
                     <Edit className="w-4 h-4" />
                   </button>
                   <button
@@ -619,7 +649,7 @@ export function Journeys() {
         </>
       )}
 
-      {/* Create Modal */}
+      {/* Create/Edit Modal */}
       {showCreateModal && (
         <div
           className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
@@ -631,10 +661,10 @@ export function Journeys() {
           <div className="bg-gray-900 border border-gray-700/50 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between p-6 border-b border-gray-700/50">
               <div>
-                <h2 id="journey-modal-title" className="text-xl font-semibold text-white">Create Journey</h2>
+                <h2 id="journey-modal-title" className="text-xl font-semibold text-white">{editingJourney ? 'Edit Journey' : 'Create Journey'}</h2>
                 <p className="text-sm text-gray-400 mt-1">Multi-step synthetic monitoring workflow</p>
               </div>
-              <button onClick={() => setShowCreateModal(false)} className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800 transition-colors" aria-label="Close dialog">
+              <button onClick={() => { setShowCreateModal(false); resetForm() }} className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800 transition-colors" aria-label="Close dialog">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -643,8 +673,9 @@ export function Journeys() {
               {/* Basic Info */}
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Name</label>
+                  <label htmlFor="journey-name" className="block text-sm font-medium text-gray-300 mb-2">Name</label>
                   <input
+                    id="journey-name"
                     type="text"
                     value={formName}
                     onChange={(e) => setFormName(e.target.value)}
@@ -653,8 +684,9 @@ export function Journeys() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Description</label>
+                  <label htmlFor="journey-description" className="block text-sm font-medium text-gray-300 mb-2">Description</label>
                   <textarea
+                    id="journey-description"
                     value={formDescription}
                     onChange={(e) => setFormDescription(e.target.value)}
                     placeholder="Describe what this journey monitors..."
@@ -664,8 +696,9 @@ export function Journeys() {
                 </div>
                 <div className="grid grid-cols-3 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">Interval (s)</label>
+                    <label htmlFor="journey-interval" className="block text-sm font-medium text-gray-300 mb-2">Interval (s)</label>
                     <input
+                      id="journey-interval"
                       type="number"
                       value={formInterval}
                       onChange={(e) => setFormInterval(parseInt(e.target.value) || 60)}
@@ -675,8 +708,9 @@ export function Journeys() {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">Timeout (s)</label>
+                    <label htmlFor="journey-timeout" className="block text-sm font-medium text-gray-300 mb-2">Timeout (s)</label>
                     <input
+                      id="journey-timeout"
                       type="number"
                       value={formTimeout}
                       onChange={(e) => setFormTimeout(parseInt(e.target.value) || 30)}
@@ -802,20 +836,20 @@ export function Journeys() {
 
             <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-700/50">
               <button
-                onClick={() => setShowCreateModal(false)}
+                onClick={() => { setShowCreateModal(false); resetForm() }}
                 className="px-5 py-2.5 text-gray-400 hover:text-white transition-colors"
               >
                 Cancel
               </button>
               <button
-                onClick={handleCreateJourney}
+                onClick={() => { void handleSaveJourney() }}
                 disabled={saving || !formName.trim() || formSteps.length === 0}
                 className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl transition-colors font-medium"
               >
                 {saving ? (
-                  <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Creating...</span>
+                  <span className="flex items-center gap-2"><Loader2 className="w-4 h-4 animate-spin" /> Saving...</span>
                 ) : (
-                  'Create Journey'
+                  editingJourney ? 'Save Journey' : 'Create Journey'
                 )}
               </button>
             </div>
