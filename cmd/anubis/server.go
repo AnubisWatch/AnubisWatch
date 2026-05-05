@@ -356,11 +356,11 @@ func (a *grpcStorageAdapter) SaveJourneyNoCtx(j interface{}) error {
 func (a *grpcStorageAdapter) DeleteJourneyNoCtx(id string) error {
 	return a.inner.DeleteJourneyNoCtx(id)
 }
-func (a *grpcStorageAdapter) RunJourneyNoCtx(journeyID string) (interface{}, error) {
+func (a *grpcStorageAdapter) RunJourneyNoCtx(workspace, journeyID string) (interface{}, error) {
 	if a.journey == nil {
 		return nil, fmt.Errorf("journey executor not available")
 	}
-	j, err := a.inner.GetJourneyNoCtx(journeyID)
+	j, err := a.inner.store.GetJourney(context.Background(), workspace, journeyID)
 	if err != nil {
 		return nil, err
 	}
@@ -377,8 +377,8 @@ func (a *grpcStorageAdapter) ListEvents(soulID string, limit int) ([]interface{}
 	}
 	return result, nil
 }
-func (a *grpcStorageAdapter) ListJourneyRunsNoCtx(journeyID string, limit int) ([]interface{}, error) {
-	runs, err := a.inner.store.QueryJourneyRuns(context.Background(), "default", journeyID, limit)
+func (a *grpcStorageAdapter) ListJourneyRunsNoCtx(workspace, journeyID string, limit int) ([]interface{}, error) {
+	runs, err := a.inner.store.QueryJourneyRuns(context.Background(), workspace, journeyID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -388,8 +388,8 @@ func (a *grpcStorageAdapter) ListJourneyRunsNoCtx(journeyID string, limit int) (
 	}
 	return result, nil
 }
-func (a *grpcStorageAdapter) GetJourneyRunNoCtx(journeyID, runID string) (interface{}, error) {
-	return a.inner.store.GetJourneyRun(context.Background(), "default", journeyID, runID)
+func (a *grpcStorageAdapter) GetJourneyRunNoCtx(workspace, journeyID, runID string) (interface{}, error) {
+	return a.inner.store.GetJourneyRun(context.Background(), workspace, journeyID, runID)
 }
 
 // BuildServerDependencies builds all server dependencies

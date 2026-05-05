@@ -63,9 +63,9 @@ type Store interface {
 	ListJourneysNoCtx(workspace string, offset, limit int) ([]interface{}, error)
 	SaveJourneyNoCtx(j interface{}) error
 	DeleteJourneyNoCtx(id string) error
-	RunJourneyNoCtx(journeyID string) (interface{}, error)
-	ListJourneyRunsNoCtx(journeyID string, limit int) ([]interface{}, error)
-	GetJourneyRunNoCtx(journeyID, runID string) (interface{}, error)
+	RunJourneyNoCtx(workspace, journeyID string) (interface{}, error)
+	ListJourneyRunsNoCtx(workspace, journeyID string, limit int) ([]interface{}, error)
+	GetJourneyRunNoCtx(workspace, journeyID, runID string) (interface{}, error)
 
 	ListEvents(soulID string, limit int) ([]interface{}, error)
 }
@@ -523,6 +523,39 @@ func pbToJourneyConfig(req *v1.CreateJourneyRequest) map[string]interface{} {
 	cfg["enabled"] = req.Enabled
 	cfg["workspace_id"] = req.Workspace
 	return cfg
+}
+
+func workspaceFromContext(ctx context.Context) (string, error) {
+	user, ok := GetUserFromContext(ctx)
+	if !ok {
+		return "", status.Error(codes.Unauthenticated, "unauthenticated")
+	}
+	if user.Workspace == "" {
+		return "default", nil
+	}
+	return user.Workspace, nil
+}
+
+func journeyWorkspace(j interface{}) string {
+	if journey, ok := j.(*core.JourneyConfig); ok {
+		return journey.WorkspaceID
+	}
+	if m, ok := j.(map[string]interface{}); ok {
+		if ws, ok := m["workspace_id"].(string); ok {
+			return ws
+		}
+	}
+	if hf, ok := j.(interface{ GetWorkspaceID() string }); ok {
+		return hf.GetWorkspaceID()
+	}
+	return ""
+}
+
+func ensureJourneyWorkspace(j interface{}, workspace string) error {
+	if ws := journeyWorkspace(j); ws != "" && ws != workspace {
+		return status.Error(codes.PermissionDenied, "access denied: journey belongs to another workspace")
+	}
+	return nil
 }
 
 // --- Soul RPCs ---
@@ -1188,9 +1221,17 @@ func (s *Server) GetJourney(ctx context.Context, req *v1.GetJourneyRequest) (*v1
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	j, err := s.store.GetJourneyNoCtx(req.Id)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "journey not found: %s", req.Id)
+	}
+	if err := ensureJourneyWorkspace(j, workspace); err != nil {
+		return nil, err
 	}
 	if pb := journeyToPB(j); pb != nil {
 		return pb, nil
@@ -1202,12 +1243,18 @@ func (s *Server) CreateJourney(ctx context.Context, req *v1.CreateJourneyRequest
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	journeyData := pbToJourneyConfig(req)
+	journeyData["workspace_id"] = workspace
 	if err := s.store.SaveJourneyNoCtx(journeyData); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create journey: %v", err)
 	}
 
-	journeys, _ := s.store.ListJourneysNoCtx("", 0, 1)
+	journeys, _ := s.store.ListJourneysNoCtx(workspace, 0, 1)
 	if len(journeys) > 0 {
 		if pb := journeyToPB(journeys[0]); pb != nil {
 			return pb, nil
@@ -1220,9 +1267,17 @@ func (s *Server) UpdateJourney(ctx context.Context, req *v1.UpdateJourneyRequest
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	existing, err := s.store.GetJourneyNoCtx(req.Id)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "journey not found: %s", req.Id)
+	}
+	if err := ensureJourneyWorkspace(existing, workspace); err != nil {
+		return nil, err
 	}
 
 	if m, ok := existing.(map[string]interface{}); ok {
@@ -1253,6 +1308,17 @@ func (s *Server) UpdateJourney(ctx context.Context, req *v1.UpdateJourneyRequest
 func (s *Server) DeleteJourney(ctx context.Context, req *v1.DeleteJourneyRequest) (*emptypb.Empty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	existing, err := s.store.GetJourneyNoCtx(req.Id)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "journey not found: %s", req.Id)
+	}
+	if err := ensureJourneyWorkspace(existing, workspace); err != nil {
+		return nil, err
+	}
 	if err := s.store.DeleteJourneyNoCtx(req.Id); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete journey: %v", err)
 	}
@@ -1260,12 +1326,20 @@ func (s *Server) DeleteJourney(ctx context.Context, req *v1.DeleteJourneyRequest
 }
 
 func (s *Server) RunJourney(ctx context.Context, req *v1.RunJourneyRequest) (*v1.RunJourneyResponse, error) {
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	journey, err := s.store.GetJourneyNoCtx(req.Id)
 	if err != nil || journey == nil {
 		return nil, status.Errorf(codes.NotFound, "journey not found: %s", req.Id)
 	}
+	if err := ensureJourneyWorkspace(journey, workspace); err != nil {
+		return nil, err
+	}
 
-	run, err := s.store.RunJourneyNoCtx(req.Id)
+	run, err := s.store.RunJourneyNoCtx(workspace, req.Id)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to run journey: %v", err)
 	}
@@ -1282,12 +1356,17 @@ func (s *Server) RunJourney(ctx context.Context, req *v1.RunJourneyRequest) (*v1
 }
 
 func (s *Server) ListJourneyRuns(ctx context.Context, req *v1.ListJourneyRunsRequest) (*v1.ListJourneyRunsResponse, error) {
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	limit := int(req.Limit)
 	if limit <= 0 {
 		limit = 20
 	}
 
-	runsIface, err := s.store.ListJourneyRunsNoCtx(req.JourneyId, limit)
+	runsIface, err := s.store.ListJourneyRunsNoCtx(workspace, req.JourneyId, limit)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list journey runs: %v", err)
 	}
@@ -1306,7 +1385,12 @@ func (s *Server) ListJourneyRuns(ctx context.Context, req *v1.ListJourneyRunsReq
 }
 
 func (s *Server) GetJourneyRun(ctx context.Context, req *v1.GetJourneyRunRequest) (*v1.JourneyRun, error) {
-	run, err := s.store.GetJourneyRunNoCtx(req.JourneyId, req.RunId)
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	run, err := s.store.GetJourneyRunNoCtx(workspace, req.JourneyId, req.RunId)
 	if err != nil || run == nil {
 		return nil, status.Errorf(codes.NotFound, "journey run not found: %s", req.RunId)
 	}

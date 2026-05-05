@@ -182,7 +182,7 @@ func (m *mockGRPCStore) SaveJourneyNoCtx(j interface{}) error {
 	return nil
 }
 func (m *mockGRPCStore) DeleteJourneyNoCtx(id string) error { delete(m.journeys, id); return nil }
-func (m *mockGRPCStore) RunJourneyNoCtx(journeyID string) (interface{}, error) {
+func (m *mockGRPCStore) RunJourneyNoCtx(workspace, journeyID string) (interface{}, error) {
 	if _, ok := m.journeys[journeyID]; !ok {
 		return nil, fmt.Errorf("journey not found")
 	}
@@ -190,7 +190,7 @@ func (m *mockGRPCStore) RunJourneyNoCtx(journeyID string) (interface{}, error) {
 	run := &mockJourneyRun{
 		id:          fmt.Sprintf("run_%d", len(m.journeyRuns)+1),
 		journeyID:   journeyID,
-		workspaceID: "default",
+		workspaceID: workspace,
 		status:      "alive",
 		startedAt:   now,
 		completedAt: now,
@@ -200,10 +200,13 @@ func (m *mockGRPCStore) RunJourneyNoCtx(journeyID string) (interface{}, error) {
 	m.journeyRuns = append([]interface{}{run}, m.journeyRuns...)
 	return run, nil
 }
-func (m *mockGRPCStore) ListJourneyRunsNoCtx(journeyID string, limit int) ([]interface{}, error) {
+func (m *mockGRPCStore) ListJourneyRunsNoCtx(workspace, journeyID string, limit int) ([]interface{}, error) {
 	var result []interface{}
 	for _, r := range m.journeyRuns {
-		if jr, ok := r.(interface{ GetJourneyID() string }); ok && jr.GetJourneyID() == journeyID {
+		if jr, ok := r.(interface {
+			GetWorkspaceID() string
+			GetJourneyID() string
+		}); ok && jr.GetWorkspaceID() == workspace && jr.GetJourneyID() == journeyID {
 			result = append(result, r)
 			if limit > 0 && len(result) >= limit {
 				break
@@ -212,12 +215,13 @@ func (m *mockGRPCStore) ListJourneyRunsNoCtx(journeyID string, limit int) ([]int
 	}
 	return result, nil
 }
-func (m *mockGRPCStore) GetJourneyRunNoCtx(journeyID, runID string) (interface{}, error) {
+func (m *mockGRPCStore) GetJourneyRunNoCtx(workspace, journeyID, runID string) (interface{}, error) {
 	for _, r := range m.journeyRuns {
 		if jr, ok := r.(interface {
+			GetWorkspaceID() string
 			GetJourneyID() string
 			GetID() string
-		}); ok && jr.GetJourneyID() == journeyID && jr.GetID() == runID {
+		}); ok && jr.GetWorkspaceID() == workspace && jr.GetJourneyID() == journeyID && jr.GetID() == runID {
 			return r, nil
 		}
 	}
@@ -291,13 +295,18 @@ func (m *mockRule) GetCreatedAt() time.Time { return time.Time{} }
 
 // mockJourney implements a minimal journey with getters
 type mockJourney struct {
-	id, name string
+	id, name, workspaceID string
 }
 
-func (m *mockJourney) GetID() string            { return m.id }
-func (m *mockJourney) GetName() string          { return m.name }
-func (m *mockJourney) GetEnabled() bool         { return true }
-func (m *mockJourney) GetWorkspaceID() string   { return "default" }
+func (m *mockJourney) GetID() string    { return m.id }
+func (m *mockJourney) GetName() string  { return m.name }
+func (m *mockJourney) GetEnabled() bool { return true }
+func (m *mockJourney) GetWorkspaceID() string {
+	if m.workspaceID != "" {
+		return m.workspaceID
+	}
+	return "default"
+}
 func (m *mockJourney) GetDescription() string   { return "" }
 func (m *mockJourney) GetWeight() time.Duration { return 0 }
 func (m *mockJourney) GetSteps() []interface{}  { return nil }
@@ -890,6 +899,17 @@ func TestServer_GetJourney(t *testing.T) {
 	}
 }
 
+func TestServer_GetJourney_DeniesOtherWorkspace(t *testing.T) {
+	store := newMockGRPCStore()
+	store.journeys["j_1"] = &mockJourney{id: "j_1", name: "test", workspaceID: "tenant-b"}
+	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
+
+	_, err := srv.GetJourney(testUserContext(), &v1.GetJourneyRequest{Id: "j_1"})
+	if err == nil {
+		t.Fatal("Expected GetJourney to deny cross-workspace access")
+	}
+}
+
 func TestServer_UpdateJourney(t *testing.T) {
 	store := newMockGRPCStore()
 	store.journeys["j_1"] = map[string]interface{}{"id": "j_1", "name": "old"}
@@ -925,7 +945,8 @@ func TestServer_RunJourney(t *testing.T) {
 func TestServer_ListJourneyRuns(t *testing.T) {
 	store := newMockGRPCStore()
 	store.journeyRuns = []interface{}{
-		&mockJourneyRun{id: "run_1", journeyID: "j_1", status: "success"},
+		&mockJourneyRun{id: "run_1", journeyID: "j_1", workspaceID: "default", status: "success"},
+		&mockJourneyRun{id: "run_2", journeyID: "j_1", workspaceID: "tenant-b", status: "failed"},
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
@@ -941,7 +962,7 @@ func TestServer_ListJourneyRuns(t *testing.T) {
 func TestServer_GetJourneyRun(t *testing.T) {
 	store := newMockGRPCStore()
 	store.journeyRuns = []interface{}{
-		&mockJourneyRun{id: "run_1", journeyID: "j_1", status: "success"},
+		&mockJourneyRun{id: "run_1", journeyID: "j_1", workspaceID: "default", status: "success"},
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 

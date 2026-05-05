@@ -35,11 +35,11 @@ func (m *failingMockGRPCStore) ListEvents(soulID string, limit int) ([]interface
 	return m.mockGRPCStore.ListEvents(soulID, limit)
 }
 
-func (m *failingMockGRPCStore) GetJourneyRunNoCtx(journeyID, runID string) (interface{}, error) {
+func (m *failingMockGRPCStore) GetJourneyRunNoCtx(workspace, journeyID, runID string) (interface{}, error) {
 	if m.getJourneyRunErr {
 		return nil, fmt.Errorf("db error")
 	}
-	return m.mockGRPCStore.GetJourneyRunNoCtx(journeyID, runID)
+	return m.mockGRPCStore.GetJourneyRunNoCtx(workspace, journeyID, runID)
 }
 
 func (m *failingMockGRPCStore) ListSoulsNoCtx(ws string, o, l int) ([]interface{}, error) {

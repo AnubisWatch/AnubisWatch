@@ -402,13 +402,13 @@ func TestGrpcStorageAdapter_CRUD(t *testing.T) {
 	_ = events
 
 	// JourneyRuns
-	runs, err := adapter.ListJourneyRunsNoCtx("journey-1", 10)
+	runs, err := adapter.ListJourneyRunsNoCtx("default", "journey-1", 10)
 	if err != nil {
 		t.Fatalf("ListJourneyRunsNoCtx failed: %v", err)
 	}
 	_ = runs
 
-	_, err = adapter.GetJourneyRunNoCtx("journey-1", "run-1")
+	_, err = adapter.GetJourneyRunNoCtx("default", "journey-1", "run-1")
 	if err == nil {
 		t.Error("expected error for missing journey run")
 	}
