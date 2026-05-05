@@ -76,7 +76,7 @@ func TestServer_StreamJudgments_StoreError(t *testing.T) {
 	store := &failingMockGRPCStore{mockGRPCStore: newMockGRPCStore(), listJudgmentsErr: true}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	ctx, cancel := context.WithTimeout(testUserContext(), 150*time.Millisecond)
 	defer cancel()
 
 	soulID := "s1"
@@ -94,7 +94,7 @@ func TestServer_StreamJudgments_SendError(t *testing.T) {
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(testUserContext(), 1100*time.Millisecond)
 	defer cancel()
 
 	soulID := "s1"
@@ -109,7 +109,7 @@ func TestServer_StreamVerdicts_StoreError(t *testing.T) {
 	store := &failingMockGRPCStore{mockGRPCStore: newMockGRPCStore(), listEventsErr: true}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	ctx, cancel := context.WithTimeout(testUserContext(), 150*time.Millisecond)
 	defer cancel()
 
 	soulID := "s1"
@@ -127,7 +127,7 @@ func TestServer_StreamVerdicts_SendError(t *testing.T) {
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(testUserContext(), 1100*time.Millisecond)
 	defer cancel()
 
 	soulID := "s1"

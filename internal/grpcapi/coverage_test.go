@@ -254,6 +254,93 @@ func TestSoulToPB_NilInterface(t *testing.T) {
 	}
 }
 
+func TestCoreTypesToPB(t *testing.T) {
+	now := time.Now()
+
+	soul := soulToPB(&core.Soul{
+		ID:          "soul-1",
+		WorkspaceID: "tenant-a",
+		Name:        "API",
+		Type:        core.CheckHTTP,
+		Target:      "https://example.com",
+		Weight:      core.Duration{Duration: 30 * time.Second},
+		Timeout:     core.Duration{Duration: 5 * time.Second},
+		Enabled:     true,
+		CreatedAt:   now,
+	})
+	if soul == nil || soul.Id != "soul-1" || soul.Workspace != "tenant-a" || soul.Interval != 30 {
+		t.Fatalf("unexpected soul pb: %+v", soul)
+	}
+
+	judgment := judgmentToPB(&core.Judgment{
+		ID:        "judgment-1",
+		SoulID:    "soul-1",
+		Status:    core.SoulAlive,
+		Duration:  120 * time.Millisecond,
+		Timestamp: now,
+	})
+	if judgment == nil || judgment.Id != "judgment-1" || judgment.LatencyMs != 120 {
+		t.Fatalf("unexpected judgment pb: %+v", judgment)
+	}
+
+	channel := channelToPB(&core.AlertChannel{
+		ID:          "channel-1",
+		WorkspaceID: "tenant-a",
+		Name:        "Slack",
+		Type:        core.ChannelSlack,
+		Enabled:     true,
+		Config:      map[string]interface{}{"channel": "#ops"},
+		CreatedAt:   now,
+	})
+	if channel == nil || channel.Id != "channel-1" || channel.Config["channel"] != "#ops" {
+		t.Fatalf("unexpected channel pb: %+v", channel)
+	}
+
+	rule := ruleToPB(&core.AlertRule{
+		ID:          "rule-1",
+		WorkspaceID: "tenant-a",
+		Name:        "Critical",
+		Enabled:     true,
+		Channels:    []string{"channel-1"},
+		CreatedAt:   now,
+	})
+	if rule == nil || rule.Id != "rule-1" || rule.ChannelId != "channel-1" {
+		t.Fatalf("unexpected rule pb: %+v", rule)
+	}
+
+	journey := journeyToPB(&core.JourneyConfig{
+		ID:          "journey-1",
+		WorkspaceID: "tenant-a",
+		Name:        "Checkout",
+		Weight:      core.Duration{Duration: time.Minute},
+		Enabled:     true,
+		Steps: []core.JourneyStep{{
+			Name:    "home",
+			Type:    core.CheckHTTP,
+			Target:  "https://example.com",
+			Timeout: core.Duration{Duration: 3 * time.Second},
+		}},
+		CreatedAt: now,
+	})
+	if journey == nil || journey.Id != "journey-1" || len(journey.Steps) != 1 {
+		t.Fatalf("unexpected journey pb: %+v", journey)
+	}
+
+	verdict := eventToVerdict(&core.AlertEvent{
+		ID:           "event-1",
+		SoulID:       "soul-1",
+		SoulName:     "API",
+		ChannelID:    "channel-1",
+		Severity:     core.SeverityCritical,
+		Message:      "down",
+		Timestamp:    now,
+		Acknowledged: true,
+	})
+	if verdict == nil || verdict.Id != "event-1" || verdict.Status != "acknowledged" {
+		t.Fatalf("unexpected verdict pb: %+v", verdict)
+	}
+}
+
 // =============================================================================
 // channelToPB tests
 // =============================================================================
@@ -932,7 +1019,7 @@ func TestStreamJudgments_EmptySoulID(t *testing.T) {
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(testUserContext(), 100*time.Millisecond)
 	defer cancel()
 
 	stream := &mockJudgmentsStream{ctx: ctx}
@@ -949,7 +1036,7 @@ func TestStreamJudgments_CanceledContext(t *testing.T) {
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(testUserContext())
 	cancel()
 
 	soulID := "s1"
@@ -968,7 +1055,7 @@ func TestStreamVerdicts_EmptySoulID(t *testing.T) {
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(testUserContext(), 100*time.Millisecond)
 	defer cancel()
 
 	stream := &mockVerdictsStream{ctx: ctx}
@@ -985,7 +1072,7 @@ func TestStreamVerdicts_CanceledContext(t *testing.T) {
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(testUserContext())
 	cancel()
 
 	soulID := "s1"

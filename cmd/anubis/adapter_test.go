@@ -414,6 +414,88 @@ func TestGrpcStorageAdapter_CRUD(t *testing.T) {
 	}
 }
 
+func TestGrpcStorageAdapter_SaveMapPayloads(t *testing.T) {
+	db := setupTestStore(t)
+	adapter := &grpcStorageAdapter{inner: &restStorageAdapter{store: db}}
+
+	if err := adapter.SaveSoulNoCtx(map[string]interface{}{
+		"id":           "map-soul",
+		"workspace_id": "tenant-a",
+		"name":         "Map Soul",
+		"type":         "http",
+		"target":       "https://example.com",
+		"interval":     "30s",
+		"timeout":      "5s",
+		"enabled":      true,
+		"tags":         []string{"api"},
+	}); err != nil {
+		t.Fatalf("SaveSoulNoCtx map failed: %v", err)
+	}
+	soul, err := db.GetSoul(context.Background(), "tenant-a", "map-soul")
+	if err != nil {
+		t.Fatalf("GetSoul failed: %v", err)
+	}
+	if soul.WorkspaceID != "tenant-a" || soul.Weight.Duration != 30*time.Second {
+		t.Fatalf("unexpected soul conversion: %+v", soul)
+	}
+
+	if err := adapter.SaveChannelNoCtx(map[string]interface{}{
+		"id":           "map-channel",
+		"workspace_id": "tenant-a",
+		"name":         "Slack",
+		"type":         "slack",
+		"enabled":      true,
+		"webhook_url":  "https://hooks.example.test",
+	}); err != nil {
+		t.Fatalf("SaveChannelNoCtx map failed: %v", err)
+	}
+	channel, err := db.GetAlertChannel("map-channel", "tenant-a")
+	if err != nil {
+		t.Fatalf("GetAlertChannel failed: %v", err)
+	}
+	if channel.Config["webhook_url"] != "https://hooks.example.test" {
+		t.Fatalf("channel config was not preserved: %+v", channel.Config)
+	}
+
+	if err := adapter.SaveRuleNoCtx(map[string]interface{}{
+		"id":           "map-rule",
+		"workspace_id": "tenant-a",
+		"name":         "Rule",
+		"enabled":      true,
+		"channels":     []string{"map-channel"},
+		"severity":     "critical",
+		"cooldown":     "2m",
+	}); err != nil {
+		t.Fatalf("SaveRuleNoCtx map failed: %v", err)
+	}
+	rule, err := db.GetAlertRule("map-rule", "tenant-a")
+	if err != nil {
+		t.Fatalf("GetAlertRule failed: %v", err)
+	}
+	if rule.Severity != core.SeverityCritical || rule.Cooldown.Duration != 2*time.Minute {
+		t.Fatalf("unexpected rule conversion: %+v", rule)
+	}
+
+	if err := adapter.SaveJourneyNoCtx(map[string]interface{}{
+		"id":           "map-journey",
+		"workspace_id": "tenant-a",
+		"name":         "Journey",
+		"description":  "Synthetic flow",
+		"interval":     "45s",
+		"timeout":      "20s",
+		"enabled":      true,
+	}); err != nil {
+		t.Fatalf("SaveJourneyNoCtx map failed: %v", err)
+	}
+	journey, err := db.GetJourney(context.Background(), "tenant-a", "map-journey")
+	if err != nil {
+		t.Fatalf("GetJourney failed: %v", err)
+	}
+	if journey.Weight.Duration != 45*time.Second || journey.Timeout.Duration != 20*time.Second {
+		t.Fatalf("unexpected journey conversion: %+v", journey)
+	}
+}
+
 func TestClusterAdapter_NilManager(t *testing.T) {
 	// Test with nil manager to hit fallback branches
 	ca := &clusterAdapter{mgr: nil}

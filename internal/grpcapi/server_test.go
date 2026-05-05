@@ -819,6 +819,7 @@ func TestServer_GetSoulJudgments(t *testing.T) {
 
 func TestServer_JudgeSoul(t *testing.T) {
 	store := newMockGRPCStore()
+	store.souls["s1"] = &mockSoul{id: "s1", name: "test"}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
 	_, err := srv.JudgeSoul(testUserContext(), &v1.JudgeSoulRequest{SoulId: "s1"})
@@ -982,7 +983,7 @@ func TestServer_StreamJudgments(t *testing.T) {
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(testUserContext(), 100*time.Millisecond)
 	defer cancel()
 
 	soulID := "s1"
@@ -1000,7 +1001,7 @@ func TestServer_StreamVerdicts(t *testing.T) {
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(testUserContext(), 100*time.Millisecond)
 	defer cancel()
 
 	soulID := "s1"
