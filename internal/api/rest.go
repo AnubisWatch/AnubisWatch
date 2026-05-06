@@ -2562,10 +2562,11 @@ func (s *RESTServer) handleListMaintenanceWindows(ctx *Context) error {
 
 func (s *RESTServer) handleCreateMaintenanceWindow(ctx *Context) error {
 	var w core.MaintenanceWindow
-	// Limit request body size to prevent memory exhaustion
-	ctx.Request.Body = http.MaxBytesReader(ctx.Response, ctx.Request.Body, maxRequestBodySize)
-	if err := json.NewDecoder(ctx.Request.Body).Decode(&w); err != nil {
+	if err := ctx.Bind(&w); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid JSON")
+	}
+	if err := normalizeMaintenanceWindowForSave(&w); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 	w.ID = core.GenerateID()
 	w.WorkspaceID = contextWorkspace(ctx)
@@ -2599,69 +2600,143 @@ func (s *RESTServer) handleUpdateMaintenanceWindow(ctx *Context) error {
 	if !sameWorkspace(w.WorkspaceID, contextWorkspace(ctx)) {
 		return ctx.Error(http.StatusForbidden, "access denied")
 	}
-	var input map[string]interface{}
-	// Limit request body size to prevent memory exhaustion
-	ctx.Request.Body = http.MaxBytesReader(ctx.Response, ctx.Request.Body, maxRequestBodySize)
-	if err := json.NewDecoder(ctx.Request.Body).Decode(&input); err != nil {
+	var input map[string]json.RawMessage
+	if err := ctx.Bind(&input); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid JSON")
 	}
-	// Apply updates with safe type assertions
-	if v, ok := input["name"]; ok {
-		if str, ok := v.(string); ok {
-			w.Name = str
-		}
+	updated := *w
+	updated.SoulIDs = append([]string(nil), w.SoulIDs...)
+	updated.Tags = append([]string(nil), w.Tags...)
+	if err := applyMaintenanceWindowPatch(&updated, input); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
-	if v, ok := input["description"]; ok {
-		if str, ok := v.(string); ok {
-			w.Description = str
-		}
+	if err := normalizeMaintenanceWindowForSave(&updated); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
-	if v, ok := input["soul_ids"]; ok {
-		if ids, ok := v.([]interface{}); ok {
-			w.SoulIDs = make([]string, 0, len(ids))
-			for _, id := range ids {
-				if str, ok := id.(string); ok {
-					w.SoulIDs = append(w.SoulIDs, str)
-				}
-			}
-		}
-	}
-	if v, ok := input["tags"]; ok {
-		if tags, ok := v.([]interface{}); ok {
-			w.Tags = make([]string, 0, len(tags))
-			for _, t := range tags {
-				if str, ok := t.(string); ok {
-					w.Tags = append(w.Tags, str)
-				}
-			}
-		}
-	}
-	if v, ok := input["start_time"]; ok {
-		if str, ok := v.(string); ok {
-			w.StartTime, _ = time.Parse(time.RFC3339, str)
-		}
-	}
-	if v, ok := input["end_time"]; ok {
-		if str, ok := v.(string); ok {
-			w.EndTime, _ = time.Parse(time.RFC3339, str)
-		}
-	}
-	if v, ok := input["recurring"]; ok {
-		if str, ok := v.(string); ok {
-			w.Recurring = str
-		}
-	}
-	if v, ok := input["enabled"]; ok {
-		if b, ok := v.(bool); ok {
-			w.Enabled = b
-		}
-	}
-	w.WorkspaceID = contextWorkspace(ctx)
-	w.UpdatedAt = time.Now().UTC()
-	if err := s.store.SaveMaintenanceWindow(w); err != nil {
+	updated.ID = id
+	updated.WorkspaceID = contextWorkspace(ctx)
+	updated.CreatedAt = w.CreatedAt
+	updated.UpdatedAt = time.Now().UTC()
+	if err := s.store.SaveMaintenanceWindow(&updated); err != nil {
 		return s.internalError(ctx, err, "internal server error")
 	}
-	return ctx.JSON(http.StatusOK, w)
+	return ctx.JSON(http.StatusOK, updated)
+}
+
+func normalizeMaintenanceWindowForSave(w *core.MaintenanceWindow) error {
+	w.Name = strings.TrimSpace(w.Name)
+	w.Description = strings.TrimSpace(w.Description)
+	w.Recurring = strings.TrimSpace(strings.ToLower(w.Recurring))
+	if w.Recurring == "none" {
+		w.Recurring = ""
+	}
+	w.SoulIDs = cleanStringList(w.SoulIDs)
+	w.Tags = cleanStringList(w.Tags)
+
+	if w.Name == "" {
+		return fmt.Errorf("maintenance window name is required")
+	}
+	if w.StartTime.IsZero() {
+		return fmt.Errorf("maintenance window start_time is required")
+	}
+	if w.EndTime.IsZero() {
+		return fmt.Errorf("maintenance window end_time is required")
+	}
+	if !w.EndTime.After(w.StartTime) {
+		return fmt.Errorf("maintenance window end_time must be after start_time")
+	}
+	switch w.Recurring {
+	case "", "daily", "weekly", "monthly":
+		return nil
+	default:
+		return fmt.Errorf("maintenance window recurring must be one of daily, weekly, or monthly")
+	}
+}
+
+func applyMaintenanceWindowPatch(w *core.MaintenanceWindow, input map[string]json.RawMessage) error {
+	if err := applyStringPatch(input, "name", &w.Name); err != nil {
+		return err
+	}
+	if err := applyStringPatch(input, "description", &w.Description); err != nil {
+		return err
+	}
+	if err := applyStringSlicePatch(input, "soul_ids", &w.SoulIDs); err != nil {
+		return err
+	}
+	if err := applyStringSlicePatch(input, "tags", &w.Tags); err != nil {
+		return err
+	}
+	if err := applyTimePatch(input, "start_time", &w.StartTime); err != nil {
+		return err
+	}
+	if err := applyTimePatch(input, "end_time", &w.EndTime); err != nil {
+		return err
+	}
+	if err := applyStringPatch(input, "recurring", &w.Recurring); err != nil {
+		return err
+	}
+	if raw, ok := input["enabled"]; ok {
+		var enabled bool
+		if err := json.Unmarshal(raw, &enabled); err != nil {
+			return fmt.Errorf("maintenance window enabled must be a boolean")
+		}
+		w.Enabled = enabled
+	}
+	return nil
+}
+
+func applyStringPatch(input map[string]json.RawMessage, field string, target *string) error {
+	raw, ok := input[field]
+	if !ok {
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return fmt.Errorf("maintenance window %s must be a string", field)
+	}
+	*target = value
+	return nil
+}
+
+func applyStringSlicePatch(input map[string]json.RawMessage, field string, target *[]string) error {
+	raw, ok := input[field]
+	if !ok {
+		return nil
+	}
+	var value []string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return fmt.Errorf("maintenance window %s must be an array of strings", field)
+	}
+	*target = value
+	return nil
+}
+
+func applyTimePatch(input map[string]json.RawMessage, field string, target *time.Time) error {
+	raw, ok := input[field]
+	if !ok {
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return fmt.Errorf("maintenance window %s must be an RFC3339 timestamp string", field)
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return fmt.Errorf("maintenance window %s must be an RFC3339 timestamp string", field)
+	}
+	*target = parsed
+	return nil
+}
+
+func cleanStringList(values []string) []string {
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			cleaned = append(cleaned, trimmed)
+		}
+	}
+	return cleaned
 }
 
 func (s *RESTServer) handleDeleteMaintenanceWindow(ctx *Context) error {

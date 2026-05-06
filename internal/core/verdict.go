@@ -507,5 +507,5 @@ func (m *MaintenanceWindow) IsActive(now time.Time) bool {
 	if !m.Enabled {
 		return false
 	}
-	return now.After(m.StartTime) && now.Before(m.EndTime)
+	return !now.Before(m.StartTime) && !now.After(m.EndTime)
 }

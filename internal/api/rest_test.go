@@ -5229,7 +5229,15 @@ func TestHandleCreateMaintenanceWindow(t *testing.T) {
 	store := newMockStorage()
 	server := newTestServerWithStorage(store)
 
-	w := core.MaintenanceWindow{Name: "New Window", Enabled: true}
+	w := core.MaintenanceWindow{
+		Name:      "  New Window  ",
+		Enabled:   true,
+		StartTime: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndTime:   time.Date(2030, 1, 1, 2, 0, 0, 0, time.UTC),
+		Recurring: "none",
+		Tags:      []string{" database ", ""},
+		SoulIDs:   []string{" soul-1 ", ""},
+	}
 	body, _ := json.Marshal(w)
 	rec := httptest.NewRecorder()
 	ctx := &Context{
@@ -5255,8 +5263,48 @@ func TestHandleCreateMaintenanceWindow(t *testing.T) {
 	if created.ID == "" {
 		t.Fatal("expected generated maintenance window ID")
 	}
+	if created.Name != "New Window" {
+		t.Fatalf("expected trimmed name, got %q", created.Name)
+	}
+	if created.Recurring != "" {
+		t.Fatalf("expected none recurrence to normalize to empty, got %q", created.Recurring)
+	}
+	if len(created.Tags) != 1 || created.Tags[0] != "database" {
+		t.Fatalf("expected cleaned tags, got %#v", created.Tags)
+	}
+	if len(created.SoulIDs) != 1 || created.SoulIDs[0] != "soul-1" {
+		t.Fatalf("expected cleaned soul IDs, got %#v", created.SoulIDs)
+	}
 	if created.CreatedAt.IsZero() || created.UpdatedAt.IsZero() {
 		t.Fatalf("expected server-managed timestamps, got created=%v updated=%v", created.CreatedAt, created.UpdatedAt)
+	}
+}
+
+func TestHandleCreateMaintenanceWindowRejectsInvalidSchedule(t *testing.T) {
+	store := newMockStorage()
+	server := newTestServerWithStorage(store)
+
+	body, _ := json.Marshal(core.MaintenanceWindow{
+		Name:      "Broken Window",
+		StartTime: time.Date(2030, 1, 2, 0, 0, 0, 0, time.UTC),
+		EndTime:   time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+		Enabled:   true,
+	})
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:  httptest.NewRequest("POST", "/api/v1/maintenance", bytes.NewReader(body)),
+		Response: rec,
+	}
+
+	err := server.handleCreateMaintenanceWindow(ctx)
+	if err != nil {
+		t.Fatalf("Unexpected handler error: %v", err)
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("Expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	if len(store.windows) != 0 {
+		t.Fatal("invalid maintenance window should not be persisted")
 	}
 }
 
@@ -5345,7 +5393,14 @@ func TestHandleGetMaintenanceWindow_NotFound(t *testing.T) {
 
 func TestHandleUpdateMaintenanceWindow(t *testing.T) {
 	store := newMockStorage()
-	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", WorkspaceID: "default", Name: "Window 1"})
+	store.SaveMaintenanceWindow(&core.MaintenanceWindow{
+		ID:          "mw-1",
+		WorkspaceID: "default",
+		Name:        "Window 1",
+		StartTime:   time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndTime:     time.Date(2030, 1, 1, 1, 0, 0, 0, time.UTC),
+		Enabled:     true,
+	})
 	server := newTestServerWithStorage(store)
 
 	body, _ := json.Marshal(map[string]interface{}{
@@ -5400,7 +5455,14 @@ func TestHandleUpdateMaintenanceWindow(t *testing.T) {
 
 func TestHandleUpdateMaintenanceWindow_InvalidJSON(t *testing.T) {
 	store := newMockStorage()
-	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", WorkspaceID: "default", Name: "Window 1"})
+	store.SaveMaintenanceWindow(&core.MaintenanceWindow{
+		ID:          "mw-1",
+		WorkspaceID: "default",
+		Name:        "Window 1",
+		StartTime:   time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndTime:     time.Date(2030, 1, 1, 1, 0, 0, 0, time.UTC),
+		Enabled:     true,
+	})
 	server := newTestServerWithStorage(store)
 
 	rec := httptest.NewRecorder()
@@ -5442,7 +5504,14 @@ func TestHandleUpdateMaintenanceWindow_NotFound(t *testing.T) {
 
 func TestHandleUpdateMaintenanceWindow_InvalidTypes(t *testing.T) {
 	store := newMockStorage()
-	store.SaveMaintenanceWindow(&core.MaintenanceWindow{ID: "mw-1", WorkspaceID: "default", Name: "Window 1"})
+	store.SaveMaintenanceWindow(&core.MaintenanceWindow{
+		ID:          "mw-1",
+		WorkspaceID: "default",
+		Name:        "Window 1",
+		StartTime:   time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndTime:     time.Date(2030, 1, 1, 1, 0, 0, 0, time.UTC),
+		Enabled:     true,
+	})
 	server := newTestServerWithStorage(store)
 
 	body, _ := json.Marshal(map[string]interface{}{
@@ -5461,20 +5530,45 @@ func TestHandleUpdateMaintenanceWindow_InvalidTypes(t *testing.T) {
 
 	err := server.handleUpdateMaintenanceWindow(ctx)
 	if err != nil {
-		t.Fatalf("handleUpdateMaintenanceWindow failed: %v", err)
+		t.Fatalf("Unexpected handler error: %v", err)
 	}
 
-	if rec.Code != http.StatusOK {
-		t.Errorf("Expected status %d, got %d", http.StatusOK, rec.Code)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("Expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleUpdateMaintenanceWindowRejectsInvalidSchedule(t *testing.T) {
+	store := newMockStorage()
+	store.SaveMaintenanceWindow(&core.MaintenanceWindow{
+		ID:          "mw-1",
+		WorkspaceID: "default",
+		Name:        "Window 1",
+		StartTime:   time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC),
+		EndTime:     time.Date(2030, 1, 1, 1, 0, 0, 0, time.UTC),
+		Enabled:     true,
+	})
+	server := newTestServerWithStorage(store)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"end_time": "2029-12-31T23:59:00Z",
+	})
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:  httptest.NewRequest("PUT", "/api/v1/maintenance/mw-1", bytes.NewReader(body)),
+		Response: rec,
+		Params:   map[string]string{"id": "mw-1"},
 	}
 
-	// Should not panic and original values should be preserved where types were wrong
-	var result core.MaintenanceWindow
-	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
-		t.Fatalf("Failed to unmarshal response: %v", err)
+	err := server.handleUpdateMaintenanceWindow(ctx)
+	if err != nil {
+		t.Fatalf("Unexpected handler error: %v", err)
 	}
-	if result.Name != "Window 1" {
-		t.Errorf("Expected original name to be preserved, got %s", result.Name)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("Expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	if !store.windows["mw-1"].EndTime.Equal(time.Date(2030, 1, 1, 1, 0, 0, 0, time.UTC)) {
+		t.Fatalf("invalid update changed stored window: %#v", store.windows["mw-1"])
 	}
 }
 

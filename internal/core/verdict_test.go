@@ -396,3 +396,31 @@ func TestAlertChannel_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestMaintenanceWindow_IsActiveIncludesBoundaries(t *testing.T) {
+	start := time.Date(2030, 1, 1, 10, 0, 0, 0, time.UTC)
+	end := start.Add(2 * time.Hour)
+	window := &MaintenanceWindow{
+		StartTime: start,
+		EndTime:   end,
+		Enabled:   true,
+	}
+
+	if !window.IsActive(start) {
+		t.Fatal("expected maintenance window to be active exactly at start_time")
+	}
+	if !window.IsActive(end) {
+		t.Fatal("expected maintenance window to be active exactly at end_time")
+	}
+	if window.IsActive(start.Add(-time.Nanosecond)) {
+		t.Fatal("expected maintenance window to be inactive before start_time")
+	}
+	if window.IsActive(end.Add(time.Nanosecond)) {
+		t.Fatal("expected maintenance window to be inactive after end_time")
+	}
+
+	window.Enabled = false
+	if window.IsActive(start.Add(time.Hour)) {
+		t.Fatal("expected disabled maintenance window to be inactive")
+	}
+}
