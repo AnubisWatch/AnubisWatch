@@ -100,6 +100,11 @@ type Router struct {
 // Handler is an HTTP handler function
 type Handler func(ctx *Context) error
 
+type hostAwareStatusPageHandler interface {
+	http.Handler
+	CanServeHost(host string) bool
+}
+
 // Middleware wraps handlers
 type Middleware func(Handler) Handler
 
@@ -2471,6 +2476,11 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// ACME challenge routes for Let's Encrypt
 	if r.statusPage != nil && strings.HasPrefix(path, "/.well-known/acme-challenge/") {
 		r.statusPage.ServeHTTP(w, req)
+		return
+	}
+
+	if handler, ok := r.statusPage.(hostAwareStatusPageHandler); ok && handler.CanServeHost(req.Host) {
+		handler.ServeHTTP(w, req)
 		return
 	}
 

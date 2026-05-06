@@ -88,6 +88,46 @@ func (m *mockRepository) DeleteSubscription(subscriptionID string) error {
 	return nil
 }
 
+type domainOnlyRepository struct {
+	mockRepository
+	domain string
+}
+
+func (m *domainOnlyRepository) GetStatusPageByDomain(domain string) (*core.StatusPage, error) {
+	if domain != m.domain {
+		return nil, fmt.Errorf("status page not found")
+	}
+	return m.mockRepository.GetStatusPageByDomain(domain)
+}
+
+func TestHandler_CanServeHost(t *testing.T) {
+	handler := NewHandler(&domainOnlyRepository{domain: "status.example.com"}, nil)
+
+	if !handler.CanServeHost("STATUS.example.com:443") {
+		t.Fatal("expected custom status page host to be recognized")
+	}
+	if handler.CanServeHost("app.example.com") {
+		t.Fatal("expected non-status host to be rejected")
+	}
+}
+
+func TestHandler_ServeHTTP_CustomDomainRoot(t *testing.T) {
+	handler := NewHandler(&domainOnlyRepository{domain: "status.example.com"}, nil)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "status.example.com"
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Test Status Page") {
+		t.Fatalf("Expected rendered status page, got %q", w.Body.String())
+	}
+}
+
 func TestHandler_ServeHTTP_PublicPage(t *testing.T) {
 	repo := &mockRepository{}
 	handler := NewHandler(repo, nil)

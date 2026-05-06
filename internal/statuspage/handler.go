@@ -54,13 +54,20 @@ func NewHandler(repo Repository, acmeMgr *acme.Manager) *Handler {
 	}
 }
 
+// CanServeHost reports whether the request host maps to a custom status page.
+func (h *Handler) CanServeHost(host string) bool {
+	domain := normalizeHost(host)
+	if domain == "" {
+		return false
+	}
+	_, err := h.repository.GetStatusPageByDomain(domain)
+	return err == nil
+}
+
 // ServeHTTP handles status page requests
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Determine which status page to serve
-	domain := r.Host
-	if colonIdx := strings.LastIndex(domain, ":"); colonIdx != -1 {
-		domain = domain[:colonIdx]
-	}
+	domain := normalizeHost(r.Host)
 
 	// Try to find status page by custom domain first
 	page, err := h.repository.GetStatusPageByDomain(domain)
@@ -110,6 +117,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.serveHTML(w, r, page, data)
+}
+
+func normalizeHost(host string) string {
+	domain := strings.TrimSpace(strings.ToLower(host))
+	if colonIdx := strings.LastIndex(domain, ":"); colonIdx != -1 {
+		domain = domain[:colonIdx]
+	}
+	return domain
 }
 
 // extractSlugFromPath extracts the slug from URL path

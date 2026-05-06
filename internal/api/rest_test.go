@@ -4636,6 +4636,61 @@ func TestRouter_ServeHTTP_StatusPageFallback(t *testing.T) {
 	}
 }
 
+type hostAwareStatusHandler struct {
+	hosts map[string]bool
+}
+
+func (h hostAwareStatusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("custom-domain status page"))
+}
+
+func (h hostAwareStatusHandler) CanServeHost(host string) bool {
+	return h.hosts[host]
+}
+
+func TestRouter_ServeHTTP_CustomDomainStatusPageRoot(t *testing.T) {
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	router.statusPage = hostAwareStatusHandler{hosts: map[string]bool{"status.example.com": true}}
+	router.dashboard = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("dashboard"))
+	})
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "status.example.com"
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200 from custom domain status page, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "custom-domain status page") {
+		t.Fatalf("expected custom domain status page response, got %q", w.Body.String())
+	}
+}
+
+func TestRouter_ServeHTTP_DashboardRootWhenHostIsNotStatusPage(t *testing.T) {
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	router.statusPage = hostAwareStatusHandler{hosts: map[string]bool{"status.example.com": true}}
+	router.dashboard = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("dashboard"))
+	})
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "app.example.com"
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200 from dashboard, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "dashboard") {
+		t.Fatalf("expected dashboard response, got %q", w.Body.String())
+	}
+}
+
 // TestRouter_ServeHTTP_ACMEFallback tests ServeHTTP with ACME challenge route
 func TestRouter_ServeHTTP_ACMEFallback(t *testing.T) {
 	router := &Router{routes: make(map[string]map[string]Handler)}
