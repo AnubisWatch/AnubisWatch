@@ -1071,6 +1071,10 @@ func (a *alertStorageAdapter) ListActiveIncidents() ([]*core.Incident, error) {
 	return a.store.ListActiveIncidents()
 }
 
+func (a *alertStorageAdapter) ListMaintenanceWindows() ([]*core.MaintenanceWindow, error) {
+	return a.store.ListMaintenanceWindows()
+}
+
 // statusPageRepository implements statuspage.Repository
 type statusPageRepository struct {
 	store *storage.CobaltDB

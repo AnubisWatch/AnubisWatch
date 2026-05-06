@@ -576,6 +576,10 @@ func (a *alertStorageAdapter) ListActiveIncidents() ([]*core.Incident, error) {
 	return a.store.ListActiveIncidents()
 }
 
+func (a *alertStorageAdapter) ListMaintenanceWindows() ([]*core.MaintenanceWindow, error) {
+	return a.store.ListMaintenanceWindows()
+}
+
 type restStorageAdapter struct {
 	store *storage.CobaltDB
 }

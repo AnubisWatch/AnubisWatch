@@ -288,10 +288,11 @@ func TestCheckConditions(t *testing.T) {
 
 // Mock storage for testing
 type mockAlertStorage struct {
-	channels  map[string]*core.AlertChannel
-	rules     map[string]*core.AlertRule
-	events    []*core.AlertEvent
-	incidents map[string]*core.Incident
+	channels    map[string]*core.AlertChannel
+	rules       map[string]*core.AlertRule
+	events      []*core.AlertEvent
+	incidents   map[string]*core.Incident
+	maintenance []*core.MaintenanceWindow
 }
 
 func (m *mockAlertStorage) SaveChannel(ch *core.AlertChannel) error {
@@ -385,6 +386,10 @@ func (m *mockAlertStorage) ListActiveIncidents() ([]*core.Incident, error) {
 		}
 	}
 	return result, nil
+}
+
+func (m *mockAlertStorage) ListMaintenanceWindows() ([]*core.MaintenanceWindow, error) {
+	return m.maintenance, nil
 }
 
 func TestSlackDispatcher_GetColor(t *testing.T) {
@@ -2582,6 +2587,119 @@ func TestManager_ProcessJudgment_AlertQueued(t *testing.T) {
 		}
 	case <-time.After(100 * time.Millisecond):
 		t.Log("No alert in queue (may be expected depending on condition logic)")
+	}
+}
+
+func TestManager_ProcessJudgment_SuppressedByMaintenance(t *testing.T) {
+	now := time.Now().UTC()
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+		maintenance: []*core.MaintenanceWindow{
+			{
+				ID:          "mw-active",
+				Name:        "Deploy",
+				WorkspaceID: "default",
+				SoulIDs:     []string{"soul-alert"},
+				StartTime:   now.Add(-time.Hour),
+				EndTime:     now.Add(time.Hour),
+				Enabled:     true,
+			},
+		},
+	}
+	m := &Manager{
+		channels:    make(map[string]*core.AlertChannel),
+		rules:       make(map[string]*core.AlertRule),
+		history:     &core.AlertHistory{Entries: make(map[string]*core.AlertHistoryEntry)},
+		incidents:   make(map[string]*core.Incident),
+		dispatchers: make(map[core.AlertChannelType]ChannelDispatcher),
+		stopCh:      make(chan struct{}),
+		queue:       make(chan *core.AlertEvent, 100),
+		logger:      newTestLogger(),
+		storage:     storage,
+	}
+	m.registerDispatchers()
+
+	if err := m.RegisterRule(&core.AlertRule{
+		ID:         "rule-status",
+		Name:       "Status Change Rule",
+		Enabled:    true,
+		Scope:      core.RuleScope{Type: "all"},
+		Conditions: []core.AlertCondition{{Type: "status_change", From: "alive", To: "dead"}},
+	}); err != nil {
+		t.Fatalf("RegisterRule failed: %v", err)
+	}
+
+	m.ProcessJudgment(
+		&core.Soul{ID: "soul-alert", Name: "Alert Soul", WorkspaceID: "default"},
+		core.SoulAlive,
+		&core.Judgment{Status: core.SoulDead, Message: "Soul is dead"},
+	)
+
+	select {
+	case event := <-m.queue:
+		t.Fatalf("expected maintenance to suppress alert, got event %#v", event)
+	default:
+	}
+
+	if m.stats.filteredAlerts != 1 {
+		t.Fatalf("expected filtered alert count 1, got %d", m.stats.filteredAlerts)
+	}
+}
+
+func TestManager_ProcessJudgment_MaintenanceScopeDoesNotSuppressUnmatchedSoul(t *testing.T) {
+	now := time.Now().UTC()
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+		maintenance: []*core.MaintenanceWindow{
+			{
+				ID:          "mw-other",
+				Name:        "Other Service Deploy",
+				WorkspaceID: "default",
+				SoulIDs:     []string{"other-soul"},
+				StartTime:   now.Add(-time.Hour),
+				EndTime:     now.Add(time.Hour),
+				Enabled:     true,
+			},
+		},
+	}
+	m := &Manager{
+		channels:    make(map[string]*core.AlertChannel),
+		rules:       make(map[string]*core.AlertRule),
+		history:     &core.AlertHistory{Entries: make(map[string]*core.AlertHistoryEntry)},
+		incidents:   make(map[string]*core.Incident),
+		dispatchers: make(map[core.AlertChannelType]ChannelDispatcher),
+		stopCh:      make(chan struct{}),
+		queue:       make(chan *core.AlertEvent, 100),
+		logger:      newTestLogger(),
+		storage:     storage,
+	}
+	m.registerDispatchers()
+
+	if err := m.RegisterRule(&core.AlertRule{
+		ID:         "rule-status",
+		Name:       "Status Change Rule",
+		Enabled:    true,
+		Scope:      core.RuleScope{Type: "all"},
+		Conditions: []core.AlertCondition{{Type: "status_change", From: "alive", To: "dead"}},
+	}); err != nil {
+		t.Fatalf("RegisterRule failed: %v", err)
+	}
+
+	m.ProcessJudgment(
+		&core.Soul{ID: "soul-alert", Name: "Alert Soul", WorkspaceID: "default"},
+		core.SoulAlive,
+		&core.Judgment{Status: core.SoulDead, Message: "Soul is dead"},
+	)
+
+	select {
+	case event := <-m.queue:
+		if event.SoulID != "soul-alert" {
+			t.Fatalf("expected alert for soul-alert, got %#v", event)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("expected unmatched maintenance window not to suppress alert")
 	}
 }
 

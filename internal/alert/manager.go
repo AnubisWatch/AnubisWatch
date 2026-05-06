@@ -74,6 +74,10 @@ type AlertStorage interface {
 	ListActiveIncidents() ([]*core.Incident, error)
 }
 
+type maintenanceWindowStorage interface {
+	ListMaintenanceWindows() ([]*core.MaintenanceWindow, error)
+}
+
 // NewManager creates a new alert manager
 func NewManager(storage AlertStorage, logger *slog.Logger) *Manager {
 	m := &Manager{
@@ -314,6 +318,16 @@ func (m *Manager) DeleteRule(id string) error {
 
 // ProcessJudgment evaluates a judgment against alert rules
 func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, judgment *core.Judgment) {
+	if m.isSuppressedByMaintenance(soul, time.Now().UTC()) {
+		m.mu.Lock()
+		m.stats.filteredAlerts++
+		m.mu.Unlock()
+		m.logger.Debug("Alert suppressed by active maintenance window",
+			"soul_id", soul.ID,
+			"workspace", defaultWorkspace(soul.WorkspaceID))
+		return
+	}
+
 	m.mu.RLock()
 	rules := make([]*core.AlertRule, 0, len(m.rules))
 	for _, rule := range m.rules {
@@ -369,6 +383,63 @@ func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, j
 				"soul_id", soul.ID)
 		}
 	}
+}
+
+func (m *Manager) isSuppressedByMaintenance(soul *core.Soul, now time.Time) bool {
+	if m.storage == nil {
+		return false
+	}
+	storage, ok := m.storage.(maintenanceWindowStorage)
+	if !ok {
+		return false
+	}
+	windows, err := storage.ListMaintenanceWindows()
+	if err != nil {
+		m.logger.Warn("Failed to list maintenance windows", "error", err)
+		return false
+	}
+	for _, window := range windows {
+		if window == nil || !window.IsActive(now) {
+			continue
+		}
+		if !sameWorkspace(window.WorkspaceID, soul.WorkspaceID) {
+			continue
+		}
+		if maintenanceAppliesToSoul(window, soul) {
+			return true
+		}
+	}
+	return false
+}
+
+func maintenanceAppliesToSoul(window *core.MaintenanceWindow, soul *core.Soul) bool {
+	if len(window.SoulIDs) == 0 && len(window.Tags) == 0 {
+		return true
+	}
+	for _, id := range window.SoulIDs {
+		if id == soul.ID {
+			return true
+		}
+	}
+	for _, windowTag := range window.Tags {
+		for _, soulTag := range soul.Tags {
+			if windowTag == soulTag {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func defaultWorkspace(workspace string) string {
+	if workspace == "" {
+		return "default"
+	}
+	return workspace
+}
+
+func sameWorkspace(left, right string) bool {
+	return defaultWorkspace(left) == defaultWorkspace(right)
 }
 
 // worker processes alert events
