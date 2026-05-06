@@ -193,7 +193,7 @@ export function Login() {
             <div className="flex items-center justify-center gap-3">
               <LotusIcon />
               <p className="text-xs text-gray-500 font-cormorant text-center italic">
-                Demo offering: <span className="text-[#D4AF37]">admin@anubis.watch</span> / <span className="text-[#D4AF37]">SecurePass123!</span>
+                Use the admin credentials configured for this instance.
               </p>
               <LotusIcon />
             </div>

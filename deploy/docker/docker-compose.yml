@@ -13,6 +13,7 @@ services:
       ANUBIS_CONFIG: /etc/anubis/anubis.yaml
       ANUBIS_NODE_ID: anubis-1
       ANUBIS_DATA_DIR: /data
+      ANUBIS_ADMIN_PASSWORD: ${ANUBIS_ADMIN_PASSWORD}
       ANUBIS_LOG_LEVEL: info
     volumes:
       - anubis-data-1:/data
@@ -42,6 +43,7 @@ services:
       ANUBIS_CONFIG: /etc/anubis/anubis.yaml
       ANUBIS_NODE_ID: anubis-2
       ANUBIS_DATA_DIR: /data
+      ANUBIS_ADMIN_PASSWORD: ${ANUBIS_ADMIN_PASSWORD}
       ANUBIS_LOG_LEVEL: info
     volumes:
       - anubis-data-2:/data
@@ -74,6 +76,7 @@ services:
       ANUBIS_CONFIG: /etc/anubis/anubis.yaml
       ANUBIS_NODE_ID: anubis-3
       ANUBIS_DATA_DIR: /data
+      ANUBIS_ADMIN_PASSWORD: ${ANUBIS_ADMIN_PASSWORD}
       ANUBIS_LOG_LEVEL: info
     volumes:
       - anubis-data-3:/data

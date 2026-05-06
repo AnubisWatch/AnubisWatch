@@ -2,6 +2,7 @@
 # ═══════════════════════════════════════════════════════════
 #
 # Quick start:
+#   export ANUBIS_ADMIN_PASSWORD='change-me-to-a-strong-password'
 #   docker-compose up -d
 #
 # Scale to 3 nodes:
@@ -30,9 +31,10 @@ services:
       - "9090:9090"      # gRPC
     volumes:
       - anubis-data:/data
-      - ./config/anubis.json:/etc/anubis/anubis.json:ro
+      - ./configs/container.anubis.json:/etc/anubis/anubis.json:ro
     environment:
       - ANUBIS_CONFIG=/etc/anubis/anubis.json
+      - ANUBIS_ADMIN_PASSWORD=${ANUBIS_ADMIN_PASSWORD}
       - ANUBIS_LOG_LEVEL=info
       - ANUBIS_DATA_DIR=/data
     networks:
@@ -60,9 +62,10 @@ services:
       - "7947:7946"
     volumes:
       - anubis-data-1:/data
-      - ./config/anubis.json:/etc/anubis/anubis.json:ro
+      - ./configs/container.anubis.json:/etc/anubis/anubis.json:ro
     environment:
       - ANUBIS_CONFIG=/etc/anubis/anubis.json
+      - ANUBIS_ADMIN_PASSWORD=${ANUBIS_ADMIN_PASSWORD}
       - ANUBIS_NODE_ID=anubis-1
       - ANUBIS_BIND_ADDR=0.0.0.0:7946
       - ANUBIS_RAFT_PORT=7946
@@ -88,9 +91,10 @@ services:
       - "7948:7946"
     volumes:
       - anubis-data-2:/data
-      - ./config/anubis.json:/etc/anubis/anubis.json:ro
+      - ./configs/container.anubis.json:/etc/anubis/anubis.json:ro
     environment:
       - ANUBIS_CONFIG=/etc/anubis/anubis.json
+      - ANUBIS_ADMIN_PASSWORD=${ANUBIS_ADMIN_PASSWORD}
       - ANUBIS_NODE_ID=anubis-2
       - ANUBIS_BIND_ADDR=0.0.0.0:7946
       - ANUBIS_RAFT_PORT=7946
@@ -118,9 +122,10 @@ services:
       - "7949:7946"
     volumes:
       - anubis-data-3:/data
-      - ./config/anubis.json:/etc/anubis/anubis.json:ro
+      - ./configs/container.anubis.json:/etc/anubis/anubis.json:ro
     environment:
       - ANUBIS_CONFIG=/etc/anubis/anubis.json
+      - ANUBIS_ADMIN_PASSWORD=${ANUBIS_ADMIN_PASSWORD}
       - ANUBIS_NODE_ID=anubis-3
       - ANUBIS_BIND_ADDR=0.0.0.0:7946
       - ANUBIS_RAFT_PORT=7946

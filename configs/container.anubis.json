@@ -1,13 +1,22 @@
 {
   "server": {
     "host": "0.0.0.0",
-    "port": 9191,
+    "port": 8080,
     "tls": {
       "enabled": false
     }
   },
   "storage": {
-    "path": "./data"
+    "path": "/data",
+    "sync": true
+  },
+  "necropolis": {
+    "enabled": false,
+    "bind_addr": "0.0.0.0:7946",
+    "discovery": {
+      "mode": "mdns",
+      "interval": "30s"
+    }
   },
   "auth": {
     "enabled": true,
@@ -15,6 +24,9 @@
     "local": {
       "admin_email": "admin@anubis.watch",
       "admin_password": "${ANUBIS_ADMIN_PASSWORD}"
+    },
+    "api_keys": {
+      "enabled": true
     }
   },
   "dashboard": {
@@ -29,5 +41,7 @@
     "format": "json",
     "output": "stdout"
   },
-  "souls": []
+  "souls": [],
+  "channels": [],
+  "journeys": []
 }

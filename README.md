@@ -126,9 +126,11 @@ brew install anubiswatch/tap/anubis
 docker pull ghcr.io/anubiswatch/anubiswatch:latest
 
 # Single node
+export ANUBIS_ADMIN_PASSWORD='change-me-to-a-strong-password'
 docker run -d \
   --name anubis \
   -p 8080:8080 \
+  -e ANUBIS_ADMIN_PASSWORD="$ANUBIS_ADMIN_PASSWORD" \
   -v anubis-data:/data \
   ghcr.io/anubiswatch/anubiswatch:latest
 
@@ -137,6 +139,7 @@ docker run -d \
   --name anubis \
   -p 8080:8080 \
   -e ANUBIS_CONFIG=/etc/anubis/anubis.yaml \
+  -e ANUBIS_ADMIN_PASSWORD="$ANUBIS_ADMIN_PASSWORD" \
   -v $(pwd)/anubis.yaml:/etc/anubis/anubis.yaml:ro \
   -v anubis-data:/data \
   ghcr.io/anubiswatch/anubiswatch:latest
