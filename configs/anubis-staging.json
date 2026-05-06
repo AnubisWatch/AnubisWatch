@@ -17,7 +17,7 @@
     "type": "local",
     "local": {
       "admin_email": "admin@anubis.watch",
-      "admin_password": "SecurePass123!"
+      "admin_password": "${ANUBIS_ADMIN_PASSWORD}"
     }
   },
   "necropolis": {

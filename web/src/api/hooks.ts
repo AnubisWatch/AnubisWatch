@@ -109,7 +109,7 @@ export function useSoul(id: string | undefined) {
 
   const updateSoul = async (soul: Partial<Soul>) => {
     if (!id) return
-    const payload = data ? { ...data, ...soul, id } : soul
+    const payload = { ...soul, id }
     const result = await api.put<Soul>(`/souls/${id}`, payload)
     refetch()
     return result

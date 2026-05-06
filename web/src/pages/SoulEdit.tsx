@@ -2,9 +2,17 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import { ArrowLeft, Save, X } from 'lucide-react'
 import { useSoul } from '../api/hooks'
-import type { Soul } from '../api/client'
-
-type SoulType = Soul['type']
+import { SoulProtocolFields } from '../components/SoulProtocolFields'
+import {
+  buildSoulPayload,
+  defaultSoulFormData,
+  nextSoulFormDataForType,
+  soulFormDataFromSoul,
+  soulTargetHints,
+  soulTypeOptions,
+  type SoulFormData,
+  type SoulType,
+} from '../utils/soulForm'
 
 export function SoulEdit() {
   const { id } = useParams()
@@ -13,44 +21,21 @@ export function SoulEdit() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
-  const [formData, setFormData] = useState({
-    name: '',
-    type: 'http' as SoulType,
-    target: '',
-    enabled: true,
-    weight: 60,
-    timeout: 10,
-    tags: [] as string[]
-  })
+  const [formData, setFormData] = useState<SoulFormData>(defaultSoulFormData)
 
   useEffect(() => {
     if (soul) {
-      setFormData({
-        name: soul.name || '',
-        type: soul.type || 'http',
-        target: soul.target || '',
-        enabled: soul.enabled ?? true,
-        weight: typeof soul.weight === 'number' ? soul.weight : 60,
-        timeout: typeof soul.timeout === 'number' ? soul.timeout : 10,
-        tags: soul.tags || []
-      })
+      setFormData(soulFormDataFromSoul(soul))
     }
   }, [soul])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!soul) return
     setSaving(true)
     setSaveError(null)
     try {
-      await updateSoul({
-        name: formData.name,
-        type: formData.type,
-        target: formData.target,
-        enabled: formData.enabled,
-        weight: formData.weight,
-        timeout: formData.timeout,
-        tags: formData.tags
-      })
+      await updateSoul(buildSoulPayload(formData, soul.workspace_id || 'default'))
       navigate(`/souls/${id}`)
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Failed to save')
@@ -109,35 +94,37 @@ export function SoulEdit() {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">Type</label>
+          <label htmlFor="edit-soul-type" className="block text-sm font-medium text-gray-300 mb-2">Type</label>
           <select
+            id="edit-soul-type"
+            aria-label="Soul type"
             value={formData.type}
-            onChange={(e) => setFormData({ ...formData, type: e.target.value as SoulType })}
+            onChange={(e) => setFormData(nextSoulFormDataForType(formData, e.target.value as SoulType))}
             className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
           >
-            <option value="http">HTTP</option>
-            <option value="tcp">TCP</option>
-            <option value="udp">UDP</option>
-            <option value="dns">DNS</option>
-            <option value="icmp">ICMP</option>
-            <option value="smtp">SMTP</option>
-            <option value="grpc">gRPC</option>
-            <option value="websocket">WebSocket</option>
-            <option value="tls">TLS</option>
+            {soulTypeOptions.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
           </select>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">Target URL/Host</label>
+          <label htmlFor="edit-soul-target" className="block text-sm font-medium text-gray-300 mb-2">
+            {soulTargetHints[formData.type].label}
+          </label>
           <input
+            id="edit-soul-target"
             type="text"
             required
             value={formData.target}
             onChange={(e) => setFormData({ ...formData, target: e.target.value })}
-            placeholder="https://api.example.com/health"
+            placeholder={soulTargetHints[formData.type].placeholder}
             className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50"
           />
+          <p className="mt-2 text-xs text-gray-500">{soulTargetHints[formData.type].help}</p>
         </div>
+
+        <SoulProtocolFields formData={formData} setFormData={setFormData} />
 
         <div className="grid grid-cols-2 gap-4">
           <div>

@@ -3,6 +3,9 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -109,7 +112,12 @@ func (d Duration) MarshalJSON() ([]byte, error) {
 	return json.Marshal(d.String())
 }
 
-// validate validates the soul configuration
+// Validate validates the soul configuration for API and runtime use.
+func (s Soul) Validate() error {
+	return s.validate(0)
+}
+
+// validate validates the soul configuration.
 func (s Soul) validate(index int) error {
 	if s.Name == "" {
 		return &ConfigError{Field: fmt.Sprintf("souls[%d].name", index), Message: "name is required"}
@@ -129,6 +137,10 @@ func (s Soul) validate(index int) error {
 	}
 	if !validTypes[s.Type] {
 		return &ConfigError{Field: fmt.Sprintf("souls[%d].type", index), Message: fmt.Sprintf("invalid type: %s", s.Type)}
+	}
+
+	if err := s.validateTarget(index); err != nil {
+		return err
 	}
 
 	// Validate interval
@@ -161,6 +173,10 @@ func (s Soul) validate(index int) error {
 		if s.TCP == nil {
 			return &ConfigError{Field: fmt.Sprintf("souls[%d].tcp", index), Message: "tcp configuration is required for TCP checks"}
 		}
+	case CheckUDP:
+		if s.UDP == nil {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].udp", index), Message: "udp configuration is required for UDP checks"}
+		}
 	case CheckDNS:
 		if s.DNS == nil {
 			return &ConfigError{Field: fmt.Sprintf("souls[%d].dns", index), Message: "dns configuration is required for DNS checks"}
@@ -171,6 +187,85 @@ func (s Soul) validate(index int) error {
 		validRecordTypes := map[string]bool{"A": true, "AAAA": true, "CNAME": true, "MX": true, "TXT": true, "NS": true, "SOA": true, "PTR": true, "SRV": true}
 		if !validRecordTypes[s.DNS.RecordType] {
 			return &ConfigError{Field: fmt.Sprintf("souls[%d].dns.record_type", index), Message: fmt.Sprintf("invalid DNS record type: %s", s.DNS.RecordType)}
+		}
+	case CheckSMTP:
+		if s.SMTP == nil {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].smtp", index), Message: "smtp configuration is required for SMTP checks"}
+		}
+	case CheckIMAP:
+		if s.IMAP == nil {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].imap", index), Message: "imap configuration is required for IMAP checks"}
+		}
+	case CheckICMP:
+		if s.ICMP == nil {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].icmp", index), Message: "icmp configuration is required for ICMP checks"}
+		}
+		if s.ICMP.Count < 0 {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].icmp.count", index), Message: "ICMP count cannot be negative"}
+		}
+		if s.ICMP.Interval.Duration < 0 {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].icmp.interval", index), Message: "ICMP interval cannot be negative"}
+		}
+		if s.ICMP.MaxLossPercent < 0 || s.ICMP.MaxLossPercent > 100 {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].icmp.max_loss_percent", index), Message: "ICMP max loss percent must be between 0 and 100"}
+		}
+	case CheckGRPC:
+		if s.GRPC == nil {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].grpc", index), Message: "grpc configuration is required for gRPC checks"}
+		}
+	case CheckWebSocket:
+		if s.WebSocket == nil {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].websocket", index), Message: "websocket configuration is required for WebSocket checks"}
+		}
+	case CheckTLS:
+		if s.TLS == nil {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].tls", index), Message: "tls configuration is required for TLS checks"}
+		}
+		if s.TLS.ExpiryWarnDays < 0 {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].tls.expiry_warn_days", index), Message: "TLS expiry warn days cannot be negative"}
+		}
+		if s.TLS.ExpiryCriticalDays < 0 {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].tls.expiry_critical_days", index), Message: "TLS expiry critical days cannot be negative"}
+		}
+		if s.TLS.ExpiryWarnDays > 0 && s.TLS.ExpiryCriticalDays > s.TLS.ExpiryWarnDays {
+			return &ConfigError{Field: fmt.Sprintf("souls[%d].tls.expiry_critical_days", index), Message: "TLS critical threshold cannot exceed warning threshold"}
+		}
+	}
+
+	return nil
+}
+
+func (s Soul) validateTarget(index int) error {
+	field := fmt.Sprintf("souls[%d].target", index)
+
+	switch s.Type {
+	case CheckHTTP:
+		u, err := url.Parse(s.Target)
+		if err != nil || u.Hostname() == "" {
+			return &ConfigError{Field: field, Message: "target must be a valid HTTP URL"}
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			return &ConfigError{Field: field, Message: "HTTP target must start with http:// or https://"}
+		}
+	case CheckWebSocket:
+		u, err := url.Parse(s.Target)
+		if err != nil || u.Hostname() == "" {
+			return &ConfigError{Field: field, Message: "target must be a valid WebSocket URL"}
+		}
+		if u.Scheme != "ws" && u.Scheme != "wss" {
+			return &ConfigError{Field: field, Message: "WebSocket target must start with ws:// or wss://"}
+		}
+	case CheckTCP, CheckUDP, CheckSMTP, CheckIMAP, CheckGRPC:
+		if _, _, err := net.SplitHostPort(s.Target); err != nil {
+			return &ConfigError{Field: field, Message: "target must be in host:port format"}
+		}
+	case CheckTLS:
+		target := strings.TrimPrefix(strings.TrimPrefix(s.Target, "https://"), "http://")
+		if !strings.Contains(target, ":") {
+			target += ":443"
+		}
+		if _, _, err := net.SplitHostPort(target); err != nil {
+			return &ConfigError{Field: field, Message: "target must be a host:port pair or HTTPS URL"}
 		}
 	}
 

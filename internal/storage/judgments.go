@@ -17,6 +17,9 @@ func (db *CobaltDB) SaveJudgment(ctx context.Context, j *core.Judgment) error {
 	}
 
 	workspaceID := core.WorkspaceIDFromContext(ctx)
+	if j.WorkspaceID == "" {
+		j.WorkspaceID = workspaceID
+	}
 
 	// Primary key: {workspace}/judgments/{soul}/{timestamp}
 	ts := j.Timestamp.UnixNano()

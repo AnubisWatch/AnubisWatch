@@ -1,14 +1,14 @@
 # AnubisWatch API Reference
 
 **Version:** 1.0  
-**Base URL:** `http://localhost:8443/api/v1`
+**Base URL:** `http://localhost:8080/api/v1`
 
 ## Authentication
 
 All API endpoints (except health checks) require authentication using a Bearer token:
 
 ```bash
-curl -H "Authorization: Bearer <token>" https://localhost:8443/api/v1/souls
+curl -H "Authorization: Bearer <token>" http://localhost:8080/api/v1/souls
 ```
 
 ### Login

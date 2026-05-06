@@ -56,4 +56,16 @@ describe('BarChartWidget', () => {
     )
     await waitFor(() => expect(document.querySelector('.recharts-wrapper')).toBeInTheDocument())
   })
+
+  it('renders key-value object responses such as status distribution', async () => {
+    mocks.post.mockResolvedValue({ healthy: 2, unhealthy: 1, unknown: 0 })
+    render(
+      <BarChartWidget
+        widget={makeWidget({ query: { source: 'souls', metric: 'status_distribution', time_range: '1h' } })}
+        dashboardId="d1"
+      />
+    )
+    await waitFor(() => expect(document.querySelector('.recharts-wrapper')).toBeInTheDocument())
+    expect(screen.queryByText('No data')).not.toBeInTheDocument()
+  })
 })

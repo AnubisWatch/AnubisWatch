@@ -29,10 +29,11 @@ type MCPServer struct {
 
 // MCPTool represents an MCP tool (function)
 type MCPTool struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"inputSchema"`
-	Handler     func(args json.RawMessage) (interface{}, error)
+	Name           string          `json:"name"`
+	Description    string          `json:"description"`
+	InputSchema    json.RawMessage `json:"inputSchema"`
+	Handler        func(args json.RawMessage) (interface{}, error)
+	ContextHandler func(ctx context.Context, args json.RawMessage) (interface{}, error) `json:"-"`
 }
 
 // MCPResource represents an MCP resource
@@ -104,66 +105,66 @@ func NewMCPServer(store Storage, probe ProbeEngine, alert AlertManager, logger *
 func (s *MCPServer) registerBuiltinTools() {
 	// Tool: list_souls
 	s.tools["list_souls"] = MCPTool{
-		Name:        "list_souls",
-		Description: "List all monitored souls (monitors)",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"workspace":{"type":"string","description":"Filter by workspace"},"status":{"type":"string","description":"Filter by status (alive, dead, degraded)"}},"required":[]}`),
-		Handler:     s.handleListSouls,
+		Name:           "list_souls",
+		Description:    "List all monitored souls (monitors)",
+		InputSchema:    json.RawMessage(`{"type":"object","properties":{"workspace":{"type":"string","description":"Filter by workspace"},"status":{"type":"string","description":"Filter by status (alive, dead, degraded)"}},"required":[]}`),
+		ContextHandler: s.handleListSouls,
 	}
 
 	// Tool: get_soul
 	s.tools["get_soul"] = MCPTool{
-		Name:        "get_soul",
-		Description: "Get details of a specific soul",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"soul_id":{"type":"string","description":"The soul ID"}},"required":["soul_id"]}`),
-		Handler:     s.handleGetSoul,
+		Name:           "get_soul",
+		Description:    "Get details of a specific soul",
+		InputSchema:    json.RawMessage(`{"type":"object","properties":{"soul_id":{"type":"string","description":"The soul ID"}},"required":["soul_id"]}`),
+		ContextHandler: s.handleGetSoul,
 	}
 
 	// Tool: force_check
 	s.tools["force_check"] = MCPTool{
-		Name:        "force_check",
-		Description: "Force an immediate health check on a soul",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"soul_id":{"type":"string","description":"The soul ID to check"}},"required":["soul_id"]}`),
-		Handler:     s.handleForceCheck,
+		Name:           "force_check",
+		Description:    "Force an immediate health check on a soul",
+		InputSchema:    json.RawMessage(`{"type":"object","properties":{"soul_id":{"type":"string","description":"The soul ID to check"}},"required":["soul_id"]}`),
+		ContextHandler: s.handleForceCheck,
 	}
 
 	// Tool: get_judgments
 	s.tools["get_judgments"] = MCPTool{
-		Name:        "get_judgments",
-		Description: "Get recent judgments for a soul",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"soul_id":{"type":"string","description":"The soul ID"},"limit":{"type":"integer","description":"Max results (default 10)"}},"required":["soul_id"]}`),
-		Handler:     s.handleGetJudgments,
+		Name:           "get_judgments",
+		Description:    "Get recent judgments for a soul",
+		InputSchema:    json.RawMessage(`{"type":"object","properties":{"soul_id":{"type":"string","description":"The soul ID"},"limit":{"type":"integer","description":"Max results (default 10)"}},"required":["soul_id"]}`),
+		ContextHandler: s.handleGetJudgments,
 	}
 
 	// Tool: list_incidents
 	s.tools["list_incidents"] = MCPTool{
-		Name:        "list_incidents",
-		Description: "List active alert incidents",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","description":"Filter by status (firing, acknowledged, resolved)"}},"required":[]}`),
-		Handler:     s.handleListIncidents,
+		Name:           "list_incidents",
+		Description:    "List active alert incidents",
+		InputSchema:    json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","description":"Filter by status (firing, acknowledged, resolved)"}},"required":[]}`),
+		ContextHandler: s.handleListIncidents,
 	}
 
 	// Tool: get_stats
 	s.tools["get_stats"] = MCPTool{
-		Name:        "get_stats",
-		Description: "Get monitoring statistics",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"workspace":{"type":"string","description":"Filter by workspace"}},"required":[]}`),
-		Handler:     s.handleGetStats,
+		Name:           "get_stats",
+		Description:    "Get monitoring statistics",
+		InputSchema:    json.RawMessage(`{"type":"object","properties":{"workspace":{"type":"string","description":"Filter by workspace"}},"required":[]}`),
+		ContextHandler: s.handleGetStats,
 	}
 
 	// Tool: acknowledge_incident
 	s.tools["acknowledge_incident"] = MCPTool{
-		Name:        "acknowledge_incident",
-		Description: "Acknowledge an alert incident",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"incident_id":{"type":"string","description":"The incident ID"}},"required":["incident_id"]}`),
-		Handler:     s.handleAcknowledgeIncident,
+		Name:           "acknowledge_incident",
+		Description:    "Acknowledge an alert incident",
+		InputSchema:    json.RawMessage(`{"type":"object","properties":{"incident_id":{"type":"string","description":"The incident ID"}},"required":["incident_id"]}`),
+		ContextHandler: s.handleAcknowledgeIncident,
 	}
 
 	// Tool: create_soul
 	s.tools["create_soul"] = MCPTool{
-		Name:        "create_soul",
-		Description: "Create a new monitoring soul",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"Soul name"},"type":{"type":"string","description":"Check type (http, tcp, etc.)"},"target":{"type":"string","description":"Target URL/address"},"interval":{"type":"string","description":"Check interval (e.g., 30s, 1m)"}},"required":["name","type","target"]}`),
-		Handler:     s.handleCreateSoul,
+		Name:           "create_soul",
+		Description:    "Create a new monitoring soul",
+		InputSchema:    json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"Soul name"},"type":{"type":"string","description":"Check type (http, tcp, etc.)"},"target":{"type":"string","description":"Target URL/address"},"interval":{"type":"string","description":"Check interval (e.g., 30s, 1m)"}},"required":["name","type","target"]}`),
+		ContextHandler: s.handleCreateSoul,
 	}
 }
 
@@ -237,14 +238,14 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := s.handleRequest(&req)
+	resp := s.handleRequest(r.Context(), &req)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
 }
 
 // handleRequest processes an MCP request
-func (s *MCPServer) handleRequest(req *MCPRequest) *MCPResponse {
+func (s *MCPServer) handleRequest(ctx context.Context, req *MCPRequest) *MCPResponse {
 	s.logger.Debug("MCP request", "method", req.Method, "id", req.ID)
 
 	switch req.Method {
@@ -253,7 +254,7 @@ func (s *MCPServer) handleRequest(req *MCPRequest) *MCPResponse {
 	case "tools/list":
 		return s.handleListTools(req)
 	case "tools/call":
-		return s.handleCallTool(req)
+		return s.handleCallTool(ctx, req)
 	case "resources/list":
 		return s.handleListResources(req)
 	case "resources/read":
@@ -308,7 +309,7 @@ func (s *MCPServer) handleListTools(req *MCPRequest) *MCPResponse {
 }
 
 // handleCallTool executes a tool
-func (s *MCPServer) handleCallTool(req *MCPRequest) *MCPResponse {
+func (s *MCPServer) handleCallTool(ctx context.Context, req *MCPRequest) *MCPResponse {
 	var params struct {
 		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
@@ -325,7 +326,15 @@ func (s *MCPServer) handleCallTool(req *MCPRequest) *MCPResponse {
 		return s.errorResponse(req.ID, -32601, "Tool not found")
 	}
 
-	result, err := tool.Handler(params.Arguments)
+	var result interface{}
+	var err error
+	if tool.ContextHandler != nil {
+		result, err = tool.ContextHandler(ctx, params.Arguments)
+	} else if tool.Handler != nil {
+		result, err = tool.Handler(params.Arguments)
+	} else {
+		return s.errorResponse(req.ID, -32603, "Tool handler not configured")
+	}
 	if err != nil {
 		return s.errorResponse(req.ID, -32603, err.Error())
 	}
@@ -464,14 +473,15 @@ func (s *MCPServer) writeError(w http.ResponseWriter, id interface{}, code int, 
 
 // Tool handlers
 
-func (s *MCPServer) handleListSouls(args json.RawMessage) (interface{}, error) {
+func (s *MCPServer) handleListSouls(ctx context.Context, args json.RawMessage) (interface{}, error) {
 	var params struct {
 		Workspace string `json:"workspace"`
 		Status    string `json:"status"`
 	}
 	json.Unmarshal(args, &params)
 
-	souls, err := s.store.ListSoulsNoCtx(params.Workspace, 0, 100)
+	workspace := mcpScopedWorkspace(ctx, params.Workspace)
+	souls, err := s.store.ListSoulsNoCtx(workspace, 0, 100)
 	if err != nil {
 		return nil, err
 	}
@@ -489,7 +499,7 @@ func (s *MCPServer) handleListSouls(args json.RawMessage) (interface{}, error) {
 	return souls, nil
 }
 
-func (s *MCPServer) handleGetSoul(args json.RawMessage) (interface{}, error) {
+func (s *MCPServer) handleGetSoul(ctx context.Context, args json.RawMessage) (interface{}, error) {
 	var params struct {
 		SoulID string `json:"soul_id"`
 	}
@@ -497,21 +507,35 @@ func (s *MCPServer) handleGetSoul(args json.RawMessage) (interface{}, error) {
 		return nil, err
 	}
 
-	return s.store.GetSoulNoCtx(params.SoulID)
+	soul, err := s.store.GetSoulNoCtx(params.SoulID)
+	if err != nil || soul == nil {
+		return nil, err
+	}
+	if !mcpCanAccessWorkspace(ctx, soul.WorkspaceID) {
+		return nil, errAccessDenied
+	}
+	return soul, nil
 }
 
-func (s *MCPServer) handleForceCheck(args json.RawMessage) (interface{}, error) {
+func (s *MCPServer) handleForceCheck(ctx context.Context, args json.RawMessage) (interface{}, error) {
 	var params struct {
 		SoulID string `json:"soul_id"`
 	}
 	if err := json.Unmarshal(args, &params); err != nil {
 		return nil, err
+	}
+	soul, err := s.store.GetSoulNoCtx(params.SoulID)
+	if err != nil || soul == nil {
+		return nil, err
+	}
+	if !mcpCanAccessWorkspace(ctx, soul.WorkspaceID) {
+		return nil, errAccessDenied
 	}
 
 	return s.probe.ForceCheck(params.SoulID)
 }
 
-func (s *MCPServer) handleGetJudgments(args json.RawMessage) (interface{}, error) {
+func (s *MCPServer) handleGetJudgments(ctx context.Context, args json.RawMessage) (interface{}, error) {
 	var params struct {
 		SoulID string `json:"soul_id"`
 		Limit  int    `json:"limit"`
@@ -520,29 +544,37 @@ func (s *MCPServer) handleGetJudgments(args json.RawMessage) (interface{}, error
 	if params.Limit == 0 {
 		params.Limit = 10
 	}
+	soul, err := s.store.GetSoulNoCtx(params.SoulID)
+	if err != nil || soul == nil {
+		return nil, err
+	}
+	if !mcpCanAccessWorkspace(ctx, soul.WorkspaceID) {
+		return nil, errAccessDenied
+	}
 
 	end := time.Now()
 	start := end.Add(-24 * time.Hour)
 	return s.store.ListJudgmentsNoCtx(params.SoulID, start, end, params.Limit)
 }
 
-func (s *MCPServer) handleListIncidents(args json.RawMessage) (interface{}, error) {
+func (s *MCPServer) handleListIncidents(ctx context.Context, args json.RawMessage) (interface{}, error) {
 	// Return active incidents
 	return []interface{}{}, nil
 }
 
-func (s *MCPServer) handleGetStats(args json.RawMessage) (interface{}, error) {
+func (s *MCPServer) handleGetStats(ctx context.Context, args json.RawMessage) (interface{}, error) {
 	var params struct {
 		Workspace string `json:"workspace"`
 	}
 	json.Unmarshal(args, &params)
 
+	workspace := mcpScopedWorkspace(ctx, params.Workspace)
 	end := time.Now()
 	start := end.Add(-24 * time.Hour)
-	return s.store.GetStatsNoCtx(params.Workspace, start, end)
+	return s.store.GetStatsNoCtx(workspace, start, end)
 }
 
-func (s *MCPServer) handleAcknowledgeIncident(args json.RawMessage) (interface{}, error) {
+func (s *MCPServer) handleAcknowledgeIncident(ctx context.Context, args json.RawMessage) (interface{}, error) {
 	var params struct {
 		IncidentID string `json:"incident_id"`
 	}
@@ -550,10 +582,10 @@ func (s *MCPServer) handleAcknowledgeIncident(args json.RawMessage) (interface{}
 		return nil, err
 	}
 
-	return nil, s.alert.AcknowledgeIncident(params.IncidentID, "mcp-user", "")
+	return nil, s.alert.AcknowledgeIncident(params.IncidentID, "mcp-user", mcpScopedWorkspace(ctx, ""))
 }
 
-func (s *MCPServer) handleCreateSoul(args json.RawMessage) (interface{}, error) {
+func (s *MCPServer) handleCreateSoul(ctx context.Context, args json.RawMessage) (interface{}, error) {
 	var params struct {
 		Name     string `json:"name"`
 		Type     string `json:"type"`
@@ -571,6 +603,9 @@ func (s *MCPServer) handleCreateSoul(args json.RawMessage) (interface{}, error) 
 		Target:  params.Target,
 		Enabled: true,
 	}
+	if workspace := core.WorkspaceIDFromContext(ctx); workspace != "" {
+		soul.WorkspaceID = workspace
+	}
 
 	if params.Interval != "" {
 		d, _ := time.ParseDuration(params.Interval)
@@ -578,6 +613,21 @@ func (s *MCPServer) handleCreateSoul(args json.RawMessage) (interface{}, error) 
 	}
 
 	return soul, s.store.SaveSoul(context.Background(), soul)
+}
+
+func mcpScopedWorkspace(ctx context.Context, requested string) string {
+	if workspace := core.WorkspaceIDFromContext(ctx); workspace != "" {
+		return workspace
+	}
+	return requested
+}
+
+func mcpCanAccessWorkspace(ctx context.Context, resourceWorkspace string) bool {
+	requestWorkspace := core.WorkspaceIDFromContext(ctx)
+	if requestWorkspace == "" {
+		return true
+	}
+	return sameWorkspace(resourceWorkspace, requestWorkspace)
 }
 
 // Resource handlers

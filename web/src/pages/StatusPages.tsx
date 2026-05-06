@@ -39,6 +39,23 @@ function displayTheme(theme: StatusPage['theme']): string {
   return background === '#ffffff' || background === '#f8fafc' ? 'Light' : 'Custom'
 }
 
+function formThemeFromPage(theme: StatusPage['theme']): 'dark' | 'light' | 'auto' {
+  if (theme === 'light' || theme === 'auto') return theme
+  return 'dark'
+}
+
+function statusPageUrl(page: StatusPage): string {
+  if (page.domain) return `https://${page.domain}`
+  if (page.custom_domain) return `https://${page.custom_domain}`
+  return `${window.location.origin}/status/${page.slug}`
+}
+
+function statusPageHref(page: StatusPage): string {
+  if (page.domain) return `https://${page.domain}`
+  if (page.custom_domain) return `https://${page.custom_domain}`
+  return `/status/${page.slug}`
+}
+
 export function StatusPages() {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
@@ -46,6 +63,7 @@ export function StatusPages() {
   const [refreshing, setRefreshing] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const [editingPage, setEditingPage] = useState<StatusPage | null>(null)
 
   // Create form state
   const [formName, setFormName] = useState('')
@@ -60,6 +78,7 @@ export function StatusPages() {
     error,
     refetch,
     createPage,
+    updatePage,
     deletePage
   } = useStatusPages()
 
@@ -71,6 +90,7 @@ export function StatusPages() {
     setFormDescription('')
     setFormTheme('dark')
     setFormSelectedSouls([])
+    setEditingPage(null)
     setSaving(false)
   }
 
@@ -79,24 +99,42 @@ export function StatusPages() {
     setShowCreateModal(true)
   }
 
-  const handleCreatePage = async () => {
+  const handleOpenEditPage = (page: StatusPage) => {
+    setEditingPage(page)
+    setFormName(page.name)
+    setFormSlug(page.slug)
+    setFormDescription(page.description || '')
+    setFormTheme(formThemeFromPage(page.theme))
+    setFormSelectedSouls(page.souls || [])
+    setSaving(false)
+    setShowCreateModal(true)
+  }
+
+  const handleSavePage = async () => {
     if (!formName.trim() || !formSlug.trim()) return
     setSaving(true)
     try {
-      await createPage({
+      const payload: Omit<StatusPage, 'id'> = {
         name: formName,
         slug: formSlug,
         description: formDescription,
         theme: formTheme,
-        enabled: true,
+        enabled: editingPage?.enabled ?? true,
+        domain: editingPage?.domain,
+        custom_domain: editingPage?.custom_domain,
         souls: formSelectedSouls,
-        subscribers: 0,
+        subscribers: editingPage?.subscribers || 0,
         uptime_days: 90
-      } as Omit<StatusPage, 'id'>)
+      } as Omit<StatusPage, 'id'>
+      if (editingPage) {
+        await updatePage(editingPage.id, payload)
+      } else {
+        await createPage(payload)
+      }
       setShowCreateModal(false)
       resetForm()
     } catch {
-      // Failed to create page
+      // Failed to save page
     } finally {
       setSaving(false)
     }
@@ -114,10 +152,23 @@ export function StatusPages() {
     setTimeout(() => setRefreshing(false), 500)
   }
 
-  const handleCopyUrl = (url: string, id: string) => {
-    navigator.clipboard.writeText(url)
+  const handleCopyUrl = async (url: string, id: string) => {
+    await navigator.clipboard.writeText(url)
     setCopiedId(id)
     setTimeout(() => setCopiedId(null), 2000)
+  }
+
+  const handleShareUrl = async (page: StatusPage) => {
+    const url = statusPageUrl(page)
+    if ('share' in navigator && typeof navigator.share === 'function') {
+      try {
+        await navigator.share({ title: page.name, url })
+        return
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return
+      }
+    }
+    await handleCopyUrl(url, page.id)
   }
 
   const handleDelete = async (id: string) => {
@@ -138,7 +189,7 @@ export function StatusPages() {
     total: pages.length,
     active: pages.filter(p => p.enabled).length,
     subscribers: pages.reduce((acc, p) => acc + (p.subscribers || 0), 0),
-    domains: pages.filter(p => p.domain).length
+    domains: pages.filter(p => p.domain || p.custom_domain).length
   }
 
   // Map souls to service status
@@ -298,7 +349,7 @@ export function StatusPages() {
                   <div>
                     <h3 className="font-semibold text-white text-lg">{page.name}</h3>
                     <p className="text-sm text-gray-500 mt-0.5">
-                      {page.domain || `${window.location.origin}/status/${page.slug}`}
+                      {statusPageUrl(page)}
                     </p>
                     {page.description && (
                       <p className="text-sm text-gray-400 mt-1">{page.description}</p>
@@ -368,14 +419,14 @@ export function StatusPages() {
             <div className="px-5 py-3 bg-gray-800/30 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => handleCopyUrl(page.domain || `${window.location.origin}/status/${page.slug}`, page.id)}
+                  onClick={() => { void handleCopyUrl(statusPageUrl(page), page.id) }}
                   className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
                 >
                   {copiedId === page.id ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
                   {copiedId === page.id ? 'Copied!' : 'Copy URL'}
                 </button>
                 <a
-                  href={page.domain ? `https://${page.domain}` : `/status/${page.slug}`}
+                  href={statusPageHref(page)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
@@ -385,10 +436,10 @@ export function StatusPages() {
                 </a>
               </div>
               <div className="flex items-center gap-1">
-                <button className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" aria-label={`Edit status page ${page.name}`} title="Edit">
+                <button onClick={() => handleOpenEditPage(page)} className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" aria-label={`Edit status page ${page.name}`} title="Edit">
                   <Edit className="w-4 h-4" />
                 </button>
-                <button className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" aria-label={`Share status page ${page.name}`} title="Share">
+                <button onClick={() => { void handleShareUrl(page) }} className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" aria-label={`Share status page ${page.name}`} title="Share">
                   <Share2 className="w-4 h-4" />
                 </button>
                 <button
@@ -436,7 +487,7 @@ export function StatusPages() {
         </>
       )}
 
-      {/* Create Modal */}
+      {/* Create/Edit Modal */}
       {showCreateModal && (
         <div
           className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50"
@@ -448,18 +499,19 @@ export function StatusPages() {
           <div className="bg-gray-900 border border-gray-700/50 rounded-2xl w-full max-w-xl max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between p-6 border-b border-gray-700/50">
               <div>
-                <h2 id="statuspage-modal-title" className="text-xl font-semibold text-white">Create Status Page</h2>
+                <h2 id="statuspage-modal-title" className="text-xl font-semibold text-white">{editingPage ? 'Edit Status Page' : 'Create Status Page'}</h2>
                 <p className="text-sm text-gray-400 mt-1">Public status page for your services</p>
               </div>
-              <button onClick={() => setShowCreateModal(false)} className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800 transition-colors" aria-label="Close dialog">
+              <button onClick={() => { setShowCreateModal(false); resetForm() }} className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-gray-800 transition-colors" aria-label="Close dialog">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-5">
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">Name</label>
+                <label htmlFor="status-page-name" className="block text-sm font-medium text-gray-300 mb-2">Name</label>
                 <input
+                  id="status-page-name"
                   type="text"
                   value={formName}
                   onChange={(e) => { setFormName(e.target.value); if (!formSlug) setFormSlug(e.target.value.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')) }}
@@ -469,10 +521,11 @@ export function StatusPages() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">Slug</label>
+                <label htmlFor="status-page-slug" className="block text-sm font-medium text-gray-300 mb-2">Slug</label>
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-gray-500 font-mono">/status/</span>
                   <input
+                    id="status-page-slug"
                     type="text"
                     value={formSlug}
                     onChange={(e) => setFormSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
@@ -483,8 +536,9 @@ export function StatusPages() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">Description</label>
+                <label htmlFor="status-page-description" className="block text-sm font-medium text-gray-300 mb-2">Description</label>
                 <textarea
+                  id="status-page-description"
                   value={formDescription}
                   onChange={(e) => setFormDescription(e.target.value)}
                   placeholder="Real-time status of all our services..."
@@ -549,17 +603,17 @@ export function StatusPages() {
 
             <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-700/50">
               <button
-                onClick={() => setShowCreateModal(false)}
+                onClick={() => { setShowCreateModal(false); resetForm() }}
                 className="px-5 py-2.5 text-gray-400 hover:text-white transition-colors"
               >
                 Cancel
               </button>
               <button
-                onClick={handleCreatePage}
+                onClick={() => { void handleSavePage() }}
                 disabled={saving || !formName.trim() || !formSlug.trim()}
                 className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl transition-colors font-medium"
               >
-                {saving ? 'Creating...' : 'Create Status Page'}
+                {saving ? 'Saving...' : editingPage ? 'Save Status Page' : 'Create Status Page'}
               </button>
             </div>
           </div>

@@ -148,6 +148,44 @@ func TestDashboardNoCtx(t *testing.T) {
 	}
 }
 
+func TestDashboardNoCtx_NonDefaultWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	db, err := NewEngine(core.StorageConfig{Path: dir}, nil)
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+	defer db.Close()
+
+	dashboard := &core.CustomDashboard{
+		ID:          "tenant-dash",
+		Name:        "Tenant Dashboard",
+		WorkspaceID: "tenant-a",
+		Widgets:     []core.WidgetConfig{},
+		RefreshSec:  30,
+	}
+
+	if err := db.SaveDashboardNoCtx(dashboard); err != nil {
+		t.Fatalf("SaveDashboardNoCtx failed: %v", err)
+	}
+
+	got, err := db.GetDashboardNoCtx("tenant-dash")
+	if err != nil {
+		t.Fatalf("GetDashboardNoCtx failed: %v", err)
+	}
+	if got.WorkspaceID != "tenant-a" {
+		t.Fatalf("expected tenant-a workspace, got %q", got.WorkspaceID)
+	}
+
+	if err := db.DeleteDashboardNoCtx("tenant-dash"); err != nil {
+		t.Fatalf("DeleteDashboardNoCtx failed: %v", err)
+	}
+
+	_, err = db.GetDashboard("tenant-dash")
+	if err == nil {
+		t.Fatal("expected tenant dashboard to be deleted")
+	}
+}
+
 func TestDashboardWidgetTypes(t *testing.T) {
 	dir := t.TempDir()
 	db, err := NewEngine(core.StorageConfig{Path: dir}, nil)

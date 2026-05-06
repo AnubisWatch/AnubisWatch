@@ -1,3 +1,5 @@
+import { dispatchAuthTokenChanged } from './authEvents'
+
 const API_BASE_URL = '/api/v1'
 
 export interface ApiResponse<T> {
@@ -23,28 +25,41 @@ function parseDurationSeconds(value: unknown, fallback = 0): number {
     return fallback
   }
 
-  const match = value.trim().match(/^(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)$/)
-  if (!match) {
+  const input = value.trim()
+  const partPattern = /(\d+(?:\.\d+)?)(ns|us|µs|ms|s|m|h)/g
+  let total = 0
+  let consumed = ''
+  for (const match of input.matchAll(partPattern)) {
+    const amount = Number(match[1])
+    const unit = match[2]
+    consumed += match[0]
+    switch (unit) {
+      case 'ns':
+        total += amount / 1_000_000_000
+        break
+      case 'us':
+      case 'µs':
+        total += amount / 1_000_000
+        break
+      case 'ms':
+        total += amount / 1_000
+        break
+      case 'm':
+        total += amount * 60
+        break
+      case 'h':
+        total += amount * 3600
+        break
+      default:
+        total += amount
+    }
+  }
+
+  if (consumed !== input || consumed === '') {
     return fallback
   }
 
-  const amount = Number(match[1])
-  const unit = match[2]
-  switch (unit) {
-    case 'ns':
-      return amount / 1_000_000_000
-    case 'us':
-    case 'µs':
-      return amount / 1_000_000
-    case 'ms':
-      return amount / 1_000
-    case 'm':
-      return amount * 60
-    case 'h':
-      return amount * 3600
-    default:
-      return amount
-  }
+  return total
 }
 
 function parseDurationMs(value: unknown): number {
@@ -124,6 +139,11 @@ function normalizeApiValue(value: unknown): unknown {
     if (!normalized.dns_config && normalized.dns) {
       normalized.dns_config = normalized.dns
     }
+  }
+
+  if ('id' in normalized && 'steps' in normalized && ('weight' in normalized || 'timeout' in normalized)) {
+    normalized.weight = parseDurationSeconds(normalized.weight, 60)
+    normalized.timeout = parseDurationSeconds(normalized.timeout, 30)
   }
 
   if ('id' in normalized && 'conditions' in normalized && 'channels' in normalized && 'enabled' in normalized) {
@@ -215,6 +235,15 @@ function serializeApiBody(body: unknown): unknown {
     delete serialized.tcp_config
     delete serialized.dns_config
     addDefaultCheckConfig(serialized)
+  }
+
+  if ('steps' in serialized && ('weight' in serialized || 'timeout' in serialized)) {
+    if (typeof serialized.weight === 'number') {
+      serialized.weight = `${serialized.weight}s`
+    }
+    if (typeof serialized.timeout === 'number') {
+      serialized.timeout = `${serialized.timeout}s`
+    }
   }
 
   if ('condition' in serialized && 'threshold' in serialized && !('conditions' in serialized)) {
@@ -338,11 +367,13 @@ class ApiClient {
     // Keep localStorage for WebSocket compatibility
     // The actual session is stored in httpOnly cookie by backend
     localStorage.setItem('auth_token', token)
+    dispatchAuthTokenChanged()
   }
 
   clearToken() {
     this.token = null
     localStorage.removeItem('auth_token')
+    dispatchAuthTokenChanged()
   }
 
   private async request<T>(
@@ -435,12 +466,56 @@ export interface Soul {
     body?: string
   }
   tcp_config?: {
-    tls: boolean
-    tls_verify: boolean
+    banner_match?: string
+    send?: string
+    expect_regex?: string
   }
   dns_config?: {
     record_type: string
-    expected_ips?: string[]
+    expected?: string[]
+  }
+  http?: {
+    method: string
+    valid_status: number[]
+    headers: Record<string, string>
+    body?: string
+  }
+  tcp?: {
+    banner_match?: string
+    send?: string
+    expect_regex?: string
+  }
+  dns?: {
+    record_type: string
+    expected?: string[]
+  }
+  udp?: {
+    send_hex?: string
+    expect_contains?: string
+  }
+  smtp?: {
+    starttls?: boolean
+    banner_contains?: string
+  }
+  icmp?: {
+    count: number
+    interval: string
+    max_loss_percent: number
+  }
+  grpc?: {
+    service?: string
+    method?: string
+    metadata: Record<string, string>
+  }
+  websocket?: {
+    headers: Record<string, string>
+    ping_check: boolean
+    send?: string
+    expect_contains?: string
+  }
+  tls?: {
+    expiry_warn_days: number
+    expiry_critical_days: number
   }
 }
 
@@ -461,7 +536,7 @@ export interface AlertChannel {
   name: string
   type: 'email' | 'slack' | 'discord' | 'webhook' | 'pagerduty'
   enabled: boolean
-  config: Record<string, string>
+  config: Record<string, unknown>
   created_at?: string
   updated_at?: string
 }
@@ -535,6 +610,7 @@ export interface StatusPage {
   theme?: 'dark' | 'light' | 'auto' | 'custom' | Record<string, string>
   souls?: string[]
   subscribers?: number
+  uptime_days?: number
   created_at?: string
   updated_at?: string
 }

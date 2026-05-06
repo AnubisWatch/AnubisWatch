@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import type { Browser, Page } from '@playwright/test'
+import type { Browser, Locator, Page } from '@playwright/test'
 import { startServer, TestServer } from './server'
 
 let server: TestServer
@@ -14,6 +14,22 @@ type CreatedSoul = {
 type CreatedDashboard = {
   id: string
   name: string
+}
+
+type SoulCreatePayload = {
+  name: string
+  type: string
+  target: string
+  enabled: boolean
+  http?: unknown
+  tcp?: { send?: string; expect_regex?: string }
+  udp?: { send_hex?: string; expect_contains?: string }
+  dns?: { record_type?: string; expected?: string[] }
+  icmp?: { count?: number; interval?: string; max_loss_percent?: number }
+  smtp?: { starttls?: boolean; banner_contains?: string }
+  grpc?: { service?: string; metadata?: Record<string, string> }
+  websocket?: { headers?: Record<string, string>; ping_check?: boolean; send?: string; expect_contains?: string }
+  tls?: { expiry_warn_days?: number; expiry_critical_days?: number }
 }
 
 test.beforeAll(async () => {
@@ -148,6 +164,30 @@ async function createSoulViaAPI(page: Page, token: string, runID: number): Promi
   return created
 }
 
+async function createDisabledHTTPSoulViaAPI(
+  page: Page,
+  token: string,
+  name: string,
+  target: string
+): Promise<CreatedSoul> {
+  const createRes = await page.request.post(`${server.baseURL}/api/v1/souls`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: {
+      name,
+      type: 'http',
+      target,
+      enabled: false,
+      weight: '30s',
+      timeout: '5s',
+      http: { method: 'GET', valid_status: [200] },
+    },
+  })
+  expect(createRes.status()).toBe(201)
+  const created = await createRes.json() as CreatedSoul
+  expect(created.id).toBeTruthy()
+  return created
+}
+
 async function createDashboardViaAPI(page: Page, token: string, runID: number): Promise<CreatedDashboard> {
   const createRes = await page.request.post(`${server.baseURL}/api/v1/dashboards`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -179,6 +219,7 @@ async function loginAndOpenSouls(page: Page) {
   await page.goto(`${server.baseURL}/souls`)
   await page.waitForURL('**/souls')
   await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 30000 })
+  await expect(page.locator('div.fixed.bottom-4.right-4').filter({ hasText: 'Live' })).toBeVisible({ timeout: 10000 })
 }
 
 async function createSoulViaUI(page: Page, soul: { name: string; type: string; target: string }): Promise<CreatedSoul> {
@@ -187,8 +228,8 @@ async function createSoulViaUI(page: Page, soul: { name: string; type: string; t
   await expect(dialog.getByRole('heading', { name: 'Add New Soul' })).toBeVisible()
 
   await dialog.getByPlaceholder('e.g., Production API').fill(soul.name)
-  await dialog.locator('select').selectOption(soul.type)
-  await dialog.getByPlaceholder('https://api.example.com/health').fill(soul.target)
+  await dialog.getByLabel('Soul type').selectOption(soul.type)
+  await dialog.locator('[data-testid="soul-target"]').fill(soul.target)
 
   const createPromise = page.waitForResponse(
     (res) => res.url().endsWith('/api/v1/souls') && res.request().method() === 'POST'
@@ -205,6 +246,84 @@ async function createSoulViaUI(page: Page, soul: { name: string; type: string; t
   await expect(page.getByRole('heading', { name: 'Add New Soul' })).not.toBeVisible()
   await expect(page.getByText(soul.name)).toBeVisible({ timeout: 10000 })
   return createdSoul
+}
+
+async function submitDisabledSoulViaModal(
+  page: Page,
+  soul: { name: string; type: string; target: string },
+  fillProtocolFields: (dialog: Locator) => Promise<void>
+): Promise<SoulCreatePayload> {
+  await page.getByRole('button', { name: /Add Soul/i }).click()
+  const dialog = page.getByRole('dialog')
+  await expect(dialog.getByRole('heading', { name: 'Add New Soul' })).toBeVisible()
+
+  await dialog.getByPlaceholder('e.g., Production API').fill(soul.name)
+  await dialog.getByLabel('Soul type').selectOption(soul.type)
+  await dialog.locator('[data-testid="soul-target"]').fill(soul.target)
+  await fillProtocolFields(dialog)
+  await dialog.getByLabel('Enable monitoring immediately').uncheck()
+
+  const createPromise = page.waitForResponse(
+    (res) => res.url().endsWith('/api/v1/souls') && res.request().method() === 'POST'
+  )
+  await page.getByRole('button', { name: /Create Soul/i }).click()
+  const createRes = await createPromise
+  expect(createRes.status()).toBe(201)
+
+  const payload = createRes.request().postDataJSON() as SoulCreatePayload
+  expect(payload.name).toBe(soul.name)
+  expect(payload.type).toBe(soul.type)
+  expect(payload.target).toBe(soul.target)
+  expect(payload.enabled).toBe(false)
+  expect(payload.http).toBeUndefined()
+
+  await expect(page.getByRole('heading', { name: 'Add New Soul' })).not.toBeVisible()
+  await expect(page.getByText(soul.name)).toBeVisible({ timeout: 10000 })
+  return payload
+}
+
+async function submitSoulEditProtocolPayload(
+  page: Page,
+  soulID: string,
+  soul: { name: string; type: string; target: string },
+  fillProtocolFields: (form: Locator) => Promise<void>
+): Promise<SoulCreatePayload> {
+  await page.goto(`${server.baseURL}/souls/${soulID}/edit`)
+  await expect(page.getByRole('heading', { name: 'Edit Soul' })).toBeVisible({ timeout: 30000 })
+
+  const form = page.locator('form').filter({ has: page.getByRole('button', { name: /Save Changes/i }) })
+  await form.getByLabel('Soul type').selectOption(soul.type)
+  await form.getByLabel(soulTargetHintsForType(soul.type).label).fill(soul.target)
+  await fillProtocolFields(form)
+
+  const putPromise = page.waitForResponse(
+    (res) => res.url().endsWith(`/api/v1/souls/${soulID}`) && res.request().method() === 'PUT'
+  )
+  await form.getByRole('button', { name: /Save Changes/i }).click()
+  const putRes = await putPromise
+  expect(putRes.status()).toBe(200)
+
+  const payload = putRes.request().postDataJSON() as SoulCreatePayload
+  expect(payload.name).toBe(soul.name)
+  expect(payload.type).toBe(soul.type)
+  expect(payload.target).toBe(soul.target)
+  expect(payload.http).toBeUndefined()
+  return payload
+}
+
+function soulTargetHintsForType(type: string): { label: string } {
+  const hints: Record<string, { label: string }> = {
+    http: { label: 'HTTP URL' },
+    tcp: { label: 'TCP Host and Port' },
+    udp: { label: 'UDP Host and Port' },
+    dns: { label: 'DNS Name' },
+    icmp: { label: 'ICMP Host or IP' },
+    smtp: { label: 'SMTP Host and Port' },
+    grpc: { label: 'gRPC Host and Port' },
+    websocket: { label: 'WebSocket URL' },
+    tls: { label: 'TLS Host and Port' },
+  }
+  return hints[type] ?? hints.http
 }
 
 const lightModePages = [
@@ -447,6 +566,254 @@ test.describe('AnubisWatch E2E Smoke', () => {
       await expect(page.getByText(/Check passed|Check failed/i)).toBeVisible({ timeout: 10000 })
       await page.goto(`${server.baseURL}/souls`)
       await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 10000 })
+    }
+  })
+
+  test('submits protocol-specific soul modal payloads without leaking HTTP config', async ({ page }) => {
+    await loginAndOpenSouls(page)
+
+    const runID = Date.now()
+    const cases: Array<{
+      type: string
+      target: string
+      fill: (dialog: Locator) => Promise<void>
+      expectPayload: (payload: SoulCreatePayload) => void
+    }> = [
+      {
+        type: 'tcp',
+        target: '127.0.0.1:443',
+        fill: async (dialog) => {
+          await dialog.getByLabel('Send Text').fill('PING')
+          await dialog.getByLabel('Expected Banner Regex').fill('^PONG')
+        },
+        expectPayload: (payload) => {
+          expect(payload.tcp).toEqual({ send: 'PING', expect_regex: '^PONG' })
+        },
+      },
+      {
+        type: 'udp',
+        target: '127.0.0.1:53',
+        fill: async (dialog) => {
+          await dialog.getByLabel('UDP Send Hex').fill('DEADBEEF')
+          await dialog.getByLabel('Expected Response Text').fill('ok')
+        },
+        expectPayload: (payload) => {
+          expect(payload.udp).toEqual({ send_hex: 'DEADBEEF', expect_contains: 'ok' })
+        },
+      },
+      {
+        type: 'dns',
+        target: 'example.com',
+        fill: async (dialog) => {
+          await dialog.getByLabel('DNS Record Type').selectOption('AAAA')
+          await dialog.getByLabel('Expected DNS Values').fill('2001:db8::1, 2001:db8::2')
+        },
+        expectPayload: (payload) => {
+          expect(payload.dns).toEqual({ record_type: 'AAAA', expected: ['2001:db8::1', '2001:db8::2'] })
+        },
+      },
+      {
+        type: 'icmp',
+        target: '127.0.0.1',
+        fill: async (dialog) => {
+          await dialog.getByLabel('ICMP Count').fill('2')
+          await dialog.getByLabel('Interval Seconds').fill('3')
+          await dialog.getByLabel('Max Loss Percent').fill('50')
+        },
+        expectPayload: (payload) => {
+          expect(payload.icmp).toEqual({ count: 2, interval: '3s', max_loss_percent: 50 })
+        },
+      },
+      {
+        type: 'smtp',
+        target: '127.0.0.1:25',
+        fill: async (dialog) => {
+          await dialog.getByLabel('Require STARTTLS').uncheck()
+          await dialog.getByLabel('Expected SMTP Banner').fill('Postfix')
+        },
+        expectPayload: (payload) => {
+          expect(payload.smtp).toEqual({ starttls: false, banner_contains: 'Postfix' })
+        },
+      },
+      {
+        type: 'grpc',
+        target: '127.0.0.1:443',
+        fill: async (dialog) => {
+          await dialog.getByLabel('gRPC Service Name').fill('grpc.health.v1.Health')
+        },
+        expectPayload: (payload) => {
+          expect(payload.grpc).toEqual({ service: 'grpc.health.v1.Health', metadata: {} })
+        },
+      },
+      {
+        type: 'websocket',
+        target: 'ws://127.0.0.1:8080/health',
+        fill: async (dialog) => {
+          await dialog.getByLabel('Send WebSocket ping').uncheck()
+          await dialog.getByLabel('Send Message').fill('ping')
+          await dialog.getByLabel('Expected Message Text').fill('pong')
+        },
+        expectPayload: (payload) => {
+          expect(payload.websocket).toEqual({
+            headers: {},
+            ping_check: false,
+            send: 'ping',
+            expect_contains: 'pong',
+          })
+        },
+      },
+      {
+        type: 'tls',
+        target: 'example.com:443',
+        fill: async (dialog) => {
+          await dialog.getByLabel('Expiry Warning Days').fill('21')
+          await dialog.getByLabel('Expiry Critical Days').fill('5')
+        },
+        expectPayload: (payload) => {
+          expect(payload.tls).toEqual({ expiry_warn_days: 21, expiry_critical_days: 5 })
+        },
+      },
+    ]
+
+    for (const soulCase of cases) {
+      const payload = await submitDisabledSoulViaModal(
+        page,
+        {
+          name: `E2E ${soulCase.type.toUpperCase()} Modal Soul ${runID}`,
+          type: soulCase.type,
+          target: soulCase.target,
+        },
+        soulCase.fill
+      )
+      soulCase.expectPayload(payload)
+    }
+  })
+
+  test('submits protocol-specific soul edit payloads without stale HTTP config', async ({ page }) => {
+    const token = await authenticate(page)
+    await installAuthToken(page, token)
+
+    const runID = Date.now()
+    const cases: Array<{
+      type: string
+      target: string
+      fill: (form: Locator) => Promise<void>
+      expectPayload: (payload: SoulCreatePayload) => void
+    }> = [
+      {
+        type: 'tcp',
+        target: '127.0.0.1:443',
+        fill: async (form) => {
+          await form.getByLabel('Send Text').fill('PING')
+          await form.getByLabel('Expected Banner Regex').fill('^PONG')
+        },
+        expectPayload: (payload) => {
+          expect(payload.tcp).toEqual({ send: 'PING', expect_regex: '^PONG' })
+        },
+      },
+      {
+        type: 'udp',
+        target: '127.0.0.1:53',
+        fill: async (form) => {
+          await form.getByLabel('UDP Send Hex').fill('DEADBEEF')
+          await form.getByLabel('Expected Response Text').fill('ok')
+        },
+        expectPayload: (payload) => {
+          expect(payload.udp).toEqual({ send_hex: 'DEADBEEF', expect_contains: 'ok' })
+        },
+      },
+      {
+        type: 'dns',
+        target: 'example.com',
+        fill: async (form) => {
+          await form.getByLabel('DNS Record Type').selectOption('AAAA')
+          await form.getByLabel('Expected DNS Values').fill('2001:db8::1, 2001:db8::2')
+        },
+        expectPayload: (payload) => {
+          expect(payload.dns).toEqual({ record_type: 'AAAA', expected: ['2001:db8::1', '2001:db8::2'] })
+        },
+      },
+      {
+        type: 'icmp',
+        target: '127.0.0.1',
+        fill: async (form) => {
+          await form.getByLabel('ICMP Count').fill('2')
+          await form.getByLabel('Interval Seconds').fill('3')
+          await form.getByLabel('Max Loss Percent').fill('50')
+        },
+        expectPayload: (payload) => {
+          expect(payload.icmp).toEqual({ count: 2, interval: '3s', max_loss_percent: 50 })
+        },
+      },
+      {
+        type: 'smtp',
+        target: '127.0.0.1:25',
+        fill: async (form) => {
+          await form.getByLabel('Require STARTTLS').uncheck()
+          await form.getByLabel('Expected SMTP Banner').fill('Postfix')
+        },
+        expectPayload: (payload) => {
+          expect(payload.smtp).toEqual({ starttls: false, banner_contains: 'Postfix' })
+        },
+      },
+      {
+        type: 'grpc',
+        target: '127.0.0.1:443',
+        fill: async (form) => {
+          await form.getByLabel('gRPC Service Name').fill('grpc.health.v1.Health')
+        },
+        expectPayload: (payload) => {
+          expect(payload.grpc).toEqual({ service: 'grpc.health.v1.Health', metadata: {} })
+        },
+      },
+      {
+        type: 'websocket',
+        target: 'ws://127.0.0.1:8080/health',
+        fill: async (form) => {
+          await form.getByLabel('Send WebSocket ping').uncheck()
+          await form.getByLabel('Send Message').fill('ping')
+          await form.getByLabel('Expected Message Text').fill('pong')
+        },
+        expectPayload: (payload) => {
+          expect(payload.websocket).toEqual({
+            headers: {},
+            ping_check: false,
+            send: 'ping',
+            expect_contains: 'pong',
+          })
+        },
+      },
+      {
+        type: 'tls',
+        target: 'example.com:443',
+        fill: async (form) => {
+          await form.getByLabel('Expiry Warning Days').fill('21')
+          await form.getByLabel('Expiry Critical Days').fill('5')
+        },
+        expectPayload: (payload) => {
+          expect(payload.tls).toEqual({ expiry_warn_days: 21, expiry_critical_days: 5 })
+        },
+      },
+    ]
+
+    for (const soulCase of cases) {
+      const created = await createDisabledHTTPSoulViaAPI(
+        page,
+        token,
+        `E2E ${soulCase.type.toUpperCase()} Edit Soul ${runID}`,
+        `${server.baseURL}/health`
+      )
+      const payload = await submitSoulEditProtocolPayload(
+        page,
+        created.id,
+        {
+          name: created.name,
+          type: soulCase.type,
+          target: soulCase.target,
+        },
+        soulCase.fill
+      )
+      soulCase.expectPayload(payload)
     }
   })
 

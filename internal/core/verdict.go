@@ -396,6 +396,11 @@ func (c *AlertChannel) Validate() error {
 	return nil
 }
 
+// Validate checks if the alert rule configuration is valid.
+func (r AlertRule) Validate() error {
+	return r.validate(0)
+}
+
 // validate validates the channel configuration
 func (c ChannelConfig) validate(index int) error {
 	if c.Name == "" {
@@ -502,5 +507,5 @@ func (m *MaintenanceWindow) IsActive(now time.Time) bool {
 	if !m.Enabled {
 		return false
 	}
-	return now.After(m.StartTime) && now.Before(m.EndTime)
+	return !now.Before(m.StartTime) && !now.After(m.EndTime)
 }

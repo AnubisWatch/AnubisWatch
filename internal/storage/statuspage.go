@@ -3,7 +3,6 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -156,51 +155,12 @@ func (r *StatusPageRepository) ListStatusPages(workspaceID string) ([]*core.Stat
 
 // GetSoul retrieves a soul by ID
 func (r *StatusPageRepository) GetSoul(id string) (*core.Soul, error) {
-	key := "souls/" + id
-	data, err := r.storage.Get(key)
-	if err != nil {
-		return nil, &core.NotFoundError{Entity: "soul", ID: id}
-	}
-
-	var soul core.Soul
-	if err := json.Unmarshal(data, &soul); err != nil {
-		return nil, err
-	}
-
-	return &soul, nil
+	return r.storage.GetSoulNoCtx(id)
 }
 
 // GetSoulJudgments retrieves recent judgments for a soul
 func (r *StatusPageRepository) GetSoulJudgments(soulID string, limit int) ([]core.Judgment, error) {
-	// Scan for judgments with this soulID
-	prefix := fmt.Sprintf("default/judgments/%s/", soulID)
-	results, err := r.storage.PrefixScan(prefix)
-	if err != nil {
-		return nil, err
-	}
-
-	judgments := make([]core.Judgment, 0, len(results))
-	for _, data := range results {
-		if data == nil {
-			continue
-		}
-		var j core.Judgment
-		if err := json.Unmarshal(data, &j); err != nil {
-			continue
-		}
-		judgments = append(judgments, j)
-	}
-
-	// Sort by timestamp descending and limit
-	sort.Slice(judgments, func(i, j int) bool {
-		return judgments[i].Timestamp.After(judgments[j].Timestamp)
-	})
-
-	if len(judgments) > limit {
-		judgments = judgments[:limit]
-	}
-
-	return judgments, nil
+	return r.storage.GetSoulJudgments(soulID, limit)
 }
 
 // GetIncidentsByPage retrieves incidents for a status page
@@ -216,19 +176,7 @@ func (r *StatusPageRepository) GetIncidentsByPage(pageID string) ([]core.StatusI
 
 // GetUptimeHistory retrieves uptime history for a soul
 func (r *StatusPageRepository) GetUptimeHistory(soulID string, days int) ([]core.UptimeDay, error) {
-	// Generate placeholder data for now
-	history := make([]core.UptimeDay, 0, days)
-
-	for i := 0; i < days; i++ {
-		date := time.Now().AddDate(0, 0, -i).Format("2006-01-02")
-		history = append(history, core.UptimeDay{
-			Date:   date,
-			Status: "operational",
-			Uptime: 100.0,
-		})
-	}
-
-	return history, nil
+	return r.storage.GetUptimeHistory(soulID, days)
 }
 
 // SaveUptimeDay saves a day's uptime record

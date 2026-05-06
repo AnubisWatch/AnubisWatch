@@ -74,6 +74,8 @@ type RESTServer struct {
 	judgmentsTotal   uint64
 	verdictsFired    uint64
 	verdictsResolved uint64
+	uiConfigMu       sync.RWMutex
+	uiConfig         map[string]interface{}
 
 	// Rate limiter cleanup channel
 	rateLimitStopCh chan struct{}
@@ -81,6 +83,7 @@ type RESTServer struct {
 
 // JourneyExecutor interface for journey operations
 type JourneyExecutor interface {
+	RunOnce(ctx context.Context, journey *core.JourneyConfig) (*core.JourneyRun, error)
 	ListRuns(ctx context.Context, workspaceID, journeyID string, limit int) ([]*core.JourneyRun, error)
 	GetRun(ctx context.Context, workspaceID, journeyID, runID string) (*core.JourneyRun, error)
 }
@@ -96,6 +99,11 @@ type Router struct {
 
 // Handler is an HTTP handler function
 type Handler func(ctx *Context) error
+
+type hostAwareStatusPageHandler interface {
+	http.Handler
+	CanServeHost(host string) bool
+}
 
 // Middleware wraps handlers
 type Middleware func(Handler) Handler
@@ -209,6 +217,7 @@ type AlertManager interface {
 	GetRule(id string) (*core.AlertRule, error)
 	RegisterChannel(channel *core.AlertChannel) error
 	RegisterRule(rule *core.AlertRule) error
+	TestChannel(ctx context.Context, id string, workspace string) error
 	DeleteChannel(id string) error
 	DeleteChannelWithWorkspace(id string, workspace string) error
 	DeleteRule(id string) error
@@ -290,6 +299,7 @@ func NewRESTServer(config core.ServerConfig, authConfig core.AuthConfig, store S
 		ws:              wsServer,
 		dashboard:       dashboard,
 		statusPage:      statusPage,
+		uiConfig:        make(map[string]interface{}),
 		rateLimitStopCh: make(chan struct{}),
 	}
 
@@ -977,6 +987,10 @@ func (s *RESTServer) handleCreateSoul(ctx *Context) error {
 	soul.CreatedAt = time.Now()
 	soul.UpdatedAt = time.Now()
 
+	if err := soul.Validate(); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
+
 	if err := s.store.SaveSoul(ctx.Request.Context(), &soul); err != nil {
 		return s.internalError(ctx, err, "internal server error")
 	}
@@ -1022,6 +1036,10 @@ func (s *RESTServer) handleUpdateSoul(ctx *Context) error {
 	// Preserve server-managed fields to prevent mass assignment
 	soul.CreatedAt = existing.CreatedAt
 	soul.UpdatedAt = time.Now()
+
+	if err := soul.Validate(); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
 
 	if err := s.store.SaveSoul(ctx.Request.Context(), &soul); err != nil {
 		s.logger.Error("failed to update soul", "error", err, "soul_id", id)
@@ -1216,7 +1234,7 @@ func (s *RESTServer) handleCreateChannel(ctx *Context) error {
 	channel.UpdatedAt = time.Now()
 
 	if err := s.alert.RegisterChannel(&channel); err != nil {
-		return s.internalError(ctx, err, "internal server error")
+		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 
 	return ctx.JSON(http.StatusCreated, channel)
@@ -1265,7 +1283,7 @@ func (s *RESTServer) handleUpdateChannel(ctx *Context) error {
 	channel.UpdatedAt = time.Now()
 
 	if err := s.alert.RegisterChannel(&channel); err != nil {
-		return s.internalError(ctx, err, "internal server error")
+		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 
 	return ctx.JSON(http.StatusOK, channel)
@@ -1290,7 +1308,15 @@ func (s *RESTServer) handleDeleteChannel(ctx *Context) error {
 
 func (s *RESTServer) handleTestChannel(ctx *Context) error {
 	id := ctx.Params["id"]
-	// Send test notification
+	if err := s.alert.TestChannel(ctx.Request.Context(), id, contextWorkspace(ctx)); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return ctx.Error(http.StatusNotFound, "channel not found")
+		}
+		if strings.Contains(err.Error(), "does not belong to workspace") {
+			return ctx.Error(http.StatusForbidden, "access denied")
+		}
+		return s.internalError(ctx, err, "failed to send test notification")
+	}
 	return ctx.JSON(http.StatusOK, map[string]string{"status": "test sent", "channel_id": id})
 }
 
@@ -1343,6 +1369,10 @@ func (s *RESTServer) handleCreateRule(ctx *Context) error {
 	rule.WorkspaceID = ctx.Workspace
 	rule.CreatedAt = time.Now()
 
+	if err := rule.Validate(); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
+
 	if err := s.alert.RegisterRule(&rule); err != nil {
 		return s.internalError(ctx, err, "internal server error")
 	}
@@ -1390,6 +1420,10 @@ func (s *RESTServer) handleUpdateRule(ctx *Context) error {
 
 	rule.ID = id
 	rule.WorkspaceID = ctx.Workspace
+
+	if err := rule.Validate(); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
 
 	if err := s.alert.RegisterRule(&rule); err != nil {
 		return s.internalError(ctx, err, "internal server error")
@@ -1517,17 +1551,70 @@ func (s *RESTServer) handleStats(ctx *Context) error {
 }
 
 func (s *RESTServer) handleStatsOverview(ctx *Context) error {
+	workspace := contextWorkspace(ctx)
+	start := time.Now().Add(-24 * time.Hour)
+	end := time.Now()
+
+	souls, err := s.store.ListSoulsNoCtx(workspace, 0, 1000)
+	if err != nil {
+		return s.internalError(ctx, err, "failed to list souls for stats")
+	}
+
+	healthy := 0
+	degraded := 0
+	dead := 0
+	today := 0
+	failures := 0
+	var totalLatency time.Duration
+
+	for _, soul := range souls {
+		if soul == nil {
+			continue
+		}
+		judgments, err := s.store.ListJudgmentsNoCtx(soul.ID, start, end, 1000)
+		if err != nil {
+			continue
+		}
+		if len(judgments) == 0 {
+			dead++
+			continue
+		}
+		switch judgments[0].Status {
+		case core.SoulAlive:
+			healthy++
+		case core.SoulDegraded:
+			degraded++
+		default:
+			dead++
+		}
+		for _, judgment := range judgments {
+			if judgment == nil {
+				continue
+			}
+			today++
+			totalLatency += judgment.Duration
+			if judgment.Status != core.SoulAlive {
+				failures++
+			}
+		}
+	}
+
+	avgLatencyMs := 0.0
+	if today > 0 {
+		avgLatencyMs = float64(totalLatency) / float64(today) / float64(time.Millisecond)
+	}
+
 	overview := map[string]interface{}{
 		"souls": map[string]int{
-			"total":    0,
-			"healthy":  0,
-			"degraded": 0,
-			"dead":     0,
+			"total":    len(souls),
+			"healthy":  healthy,
+			"degraded": degraded,
+			"dead":     dead,
 		},
 		"judgments": map[string]interface{}{
-			"today":          0,
-			"failures":       0,
-			"avg_latency_ms": 0,
+			"today":          today,
+			"failures":       failures,
+			"avg_latency_ms": avgLatencyMs,
 		},
 		"alerts": s.alert.GetStats(),
 	}
@@ -1573,7 +1660,16 @@ func (s *RESTServer) handleClusterPeers(ctx *Context) error {
 // Incident handlers
 
 func (s *RESTServer) handleListIncidents(ctx *Context) error {
-	incidents := s.alert.ListActiveIncidents()
+	active := s.alert.ListActiveIncidents()
+	incidents := make([]*core.Incident, 0, len(active))
+	for _, incident := range active {
+		if incident == nil {
+			continue
+		}
+		if incident.WorkspaceID == "" || incident.WorkspaceID == ctx.Workspace {
+			incidents = append(incidents, incident)
+		}
+	}
 	return ctx.JSON(http.StatusOK, incidents)
 }
 
@@ -1602,6 +1698,11 @@ func (s *RESTServer) handleResolveIncident(ctx *Context) error {
 // Config handlers
 
 func (s *RESTServer) handleGetConfig(ctx *Context) error {
+	config := s.currentUIConfig()
+	return ctx.JSON(http.StatusOK, config)
+}
+
+func (s *RESTServer) defaultUIConfig() map[string]interface{} {
 	config := map[string]interface{}{
 		"instance_name":     "AnubisWatch",
 		"timezone":          "UTC",
@@ -1619,7 +1720,17 @@ func (s *RESTServer) handleGetConfig(ctx *Context) error {
 		"auto_cert":         s.config.TLS.AutoCert,
 		"auth_type":         s.authConfig.Type,
 	}
-	return ctx.JSON(http.StatusOK, config)
+	return config
+}
+
+func (s *RESTServer) currentUIConfig() map[string]interface{} {
+	config := s.defaultUIConfig()
+	s.uiConfigMu.RLock()
+	defer s.uiConfigMu.RUnlock()
+	for key, value := range s.uiConfig {
+		config[key] = value
+	}
+	return config
 }
 
 func (s *RESTServer) handleUpdateConfig(ctx *Context) error {
@@ -1630,20 +1741,98 @@ func (s *RESTServer) handleUpdateConfig(ctx *Context) error {
 		return ctx.Error(http.StatusBadRequest, "invalid JSON")
 	}
 
-	// Config is stored in-memory for the current session.
-	// For persistent config changes, a config file rewrite would be needed.
-	// This endpoint acknowledges the request for now.
-	return ctx.JSON(http.StatusOK, map[string]string{"status": "ok"})
+	allowed := s.defaultUIConfig()
+	s.uiConfigMu.Lock()
+	for key, value := range input {
+		if _, ok := allowed[key]; !ok {
+			continue
+		}
+		switch value.(type) {
+		case string, bool, float64, nil:
+			s.uiConfig[key] = value
+		}
+	}
+	s.uiConfigMu.Unlock()
+
+	return ctx.JSON(http.StatusOK, s.currentUIConfig())
 }
 
 // Status Page handlers
+
+func contextWorkspace(ctx *Context) string {
+	if ctx.Workspace == "" {
+		return "default"
+	}
+	return ctx.Workspace
+}
+
+func sameWorkspace(resourceWorkspace, requestWorkspace string) bool {
+	if resourceWorkspace == "" {
+		resourceWorkspace = "default"
+	}
+	if requestWorkspace == "" {
+		requestWorkspace = "default"
+	}
+	return resourceWorkspace == requestWorkspace
+}
+
+func normalizeStatusPageForSave(page *core.StatusPage) error {
+	page.Name = strings.TrimSpace(page.Name)
+	page.Slug = strings.TrimSpace(strings.ToLower(page.Slug))
+	page.Description = strings.TrimSpace(page.Description)
+	page.CustomDomain = strings.TrimSpace(strings.ToLower(page.CustomDomain))
+
+	if page.Name == "" {
+		return fmt.Errorf("status page name is required")
+	}
+	if page.Slug == "" {
+		return fmt.Errorf("status page slug is required")
+	}
+	if len(page.Slug) > 100 || !isValidStatusPageSlug(page.Slug) {
+		return fmt.Errorf("status page slug must contain only lowercase letters, numbers, and hyphens")
+	}
+	if page.Visibility == "" {
+		page.Visibility = core.VisibilityPublic
+	}
+	if page.UptimeDays <= 0 {
+		page.UptimeDays = 90
+	}
+	if page.Theme.PrimaryColor == "" &&
+		page.Theme.BackgroundColor == "" &&
+		page.Theme.TextColor == "" &&
+		page.Theme.AccentColor == "" &&
+		page.Theme.FontFamily == "" {
+		page.Theme = core.GetDefaultTheme()
+	}
+	return nil
+}
+
+func isValidStatusPageSlug(slug string) bool {
+	if strings.HasPrefix(slug, "-") || strings.HasSuffix(slug, "-") {
+		return false
+	}
+	for _, r := range slug {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
 
 func (s *RESTServer) handleListStatusPages(ctx *Context) error {
 	pages, err := s.store.ListStatusPagesNoCtx()
 	if err != nil {
 		return s.internalError(ctx, err, "internal server error")
 	}
-	return ctx.JSON(http.StatusOK, pages)
+	workspace := contextWorkspace(ctx)
+	filtered := make([]*core.StatusPage, 0, len(pages))
+	for _, page := range pages {
+		if sameWorkspace(page.WorkspaceID, workspace) {
+			filtered = append(filtered, page)
+		}
+	}
+	return ctx.JSON(http.StatusOK, filtered)
 }
 
 func (s *RESTServer) handleCreateStatusPage(ctx *Context) error {
@@ -1651,9 +1840,12 @@ func (s *RESTServer) handleCreateStatusPage(ctx *Context) error {
 	if err := ctx.Bind(&page); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid status page data")
 	}
+	if err := normalizeStatusPageForSave(&page); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
 
 	page.ID = core.GenerateID()
-	page.WorkspaceID = ctx.Workspace
+	page.WorkspaceID = contextWorkspace(ctx)
 	page.CreatedAt = time.Now()
 	page.UpdatedAt = time.Now()
 
@@ -1670,6 +1862,9 @@ func (s *RESTServer) handleGetStatusPage(ctx *Context) error {
 	if err != nil {
 		return ctx.Error(http.StatusNotFound, "status page not found")
 	}
+	if !sameWorkspace(page.WorkspaceID, contextWorkspace(ctx)) {
+		return ctx.Error(http.StatusForbidden, "access denied")
+	}
 	return ctx.JSON(http.StatusOK, page)
 }
 
@@ -1680,8 +1875,20 @@ func (s *RESTServer) handleUpdateStatusPage(ctx *Context) error {
 		return ctx.Error(http.StatusBadRequest, "invalid status page data")
 	}
 
+	existing, err := s.store.GetStatusPageNoCtx(id)
+	if err != nil {
+		return ctx.Error(http.StatusNotFound, "status page not found")
+	}
+	if !sameWorkspace(existing.WorkspaceID, contextWorkspace(ctx)) {
+		return ctx.Error(http.StatusForbidden, "access denied")
+	}
+	if err := normalizeStatusPageForSave(&page); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
+
 	page.ID = id
-	page.WorkspaceID = ctx.Workspace
+	page.WorkspaceID = contextWorkspace(ctx)
+	page.CreatedAt = existing.CreatedAt
 	page.UpdatedAt = time.Now()
 
 	if err := s.store.SaveStatusPageNoCtx(&page); err != nil {
@@ -1693,6 +1900,13 @@ func (s *RESTServer) handleUpdateStatusPage(ctx *Context) error {
 
 func (s *RESTServer) handleDeleteStatusPage(ctx *Context) error {
 	id := ctx.Params["id"]
+	page, err := s.store.GetStatusPageNoCtx(id)
+	if err != nil {
+		return ctx.Error(http.StatusNotFound, "status page not found")
+	}
+	if !sameWorkspace(page.WorkspaceID, contextWorkspace(ctx)) {
+		return ctx.Error(http.StatusForbidden, "access denied")
+	}
 	if err := s.store.DeleteStatusPageNoCtx(id); err != nil {
 		return s.internalError(ctx, err, "internal server error")
 	}
@@ -1711,7 +1925,8 @@ func (s *RESTServer) handleMCP(ctx *Context) error {
 		return ctx.Error(http.StatusUnauthorized, "authentication required")
 	}
 
-	s.mcp.ServeHTTP(ctx.Response, ctx.Request)
+	req := ctx.Request.WithContext(core.ContextWithWorkspaceID(ctx.Request.Context(), contextWorkspace(ctx)))
+	s.mcp.ServeHTTP(ctx.Response, req)
 	return nil
 }
 
@@ -2265,6 +2480,11 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	if handler, ok := r.statusPage.(hostAwareStatusPageHandler); ok && handler.CanServeHost(req.Host) {
+		handler.ServeHTTP(w, req)
+		return
+	}
+
 	// No route found - serve dashboard for non-API routes
 	// Exclude API, health, metrics, and status page routes
 	isExcluded := strings.HasPrefix(path, "/api/") ||
@@ -2307,6 +2527,10 @@ func matchRoute(pattern, path string) (map[string]string, bool) {
 // Context helpers
 
 func (c *Context) JSON(status int, data interface{}) error {
+	if status == http.StatusNoContent {
+		c.Response.WriteHeader(status)
+		return nil
+	}
 	c.Response.Header().Set("Content-Type", "application/json")
 	c.Response.WriteHeader(status)
 	return json.NewEncoder(c.Response).Encode(data)
@@ -2337,16 +2561,29 @@ func (s *RESTServer) handleListMaintenanceWindows(ctx *Context) error {
 	if err != nil {
 		return s.internalError(ctx, err, "internal server error")
 	}
-	return ctx.JSON(http.StatusOK, windows)
+	workspace := contextWorkspace(ctx)
+	filtered := make([]*core.MaintenanceWindow, 0, len(windows))
+	for _, window := range windows {
+		if sameWorkspace(window.WorkspaceID, workspace) {
+			filtered = append(filtered, window)
+		}
+	}
+	return ctx.JSON(http.StatusOK, filtered)
 }
 
 func (s *RESTServer) handleCreateMaintenanceWindow(ctx *Context) error {
 	var w core.MaintenanceWindow
-	// Limit request body size to prevent memory exhaustion
-	ctx.Request.Body = http.MaxBytesReader(ctx.Response, ctx.Request.Body, maxRequestBodySize)
-	if err := json.NewDecoder(ctx.Request.Body).Decode(&w); err != nil {
+	if err := ctx.Bind(&w); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid JSON")
 	}
+	if err := normalizeMaintenanceWindowForSave(&w); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
+	w.ID = core.GenerateID()
+	w.WorkspaceID = contextWorkspace(ctx)
+	now := time.Now().UTC()
+	w.CreatedAt = now
+	w.UpdatedAt = now
 	if err := s.store.SaveMaintenanceWindow(&w); err != nil {
 		return s.internalError(ctx, err, "internal server error")
 	}
@@ -2359,6 +2596,9 @@ func (s *RESTServer) handleGetMaintenanceWindow(ctx *Context) error {
 	if err != nil {
 		return ctx.Error(http.StatusNotFound, "maintenance window not found")
 	}
+	if !sameWorkspace(w.WorkspaceID, contextWorkspace(ctx)) {
+		return ctx.Error(http.StatusForbidden, "access denied")
+	}
 	return ctx.JSON(http.StatusOK, w)
 }
 
@@ -2368,72 +2608,157 @@ func (s *RESTServer) handleUpdateMaintenanceWindow(ctx *Context) error {
 	if err != nil {
 		return ctx.Error(http.StatusNotFound, "maintenance window not found")
 	}
-	var input map[string]interface{}
-	// Limit request body size to prevent memory exhaustion
-	ctx.Request.Body = http.MaxBytesReader(ctx.Response, ctx.Request.Body, maxRequestBodySize)
-	if err := json.NewDecoder(ctx.Request.Body).Decode(&input); err != nil {
+	if !sameWorkspace(w.WorkspaceID, contextWorkspace(ctx)) {
+		return ctx.Error(http.StatusForbidden, "access denied")
+	}
+	var input map[string]json.RawMessage
+	if err := ctx.Bind(&input); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid JSON")
 	}
-	// Apply updates with safe type assertions
-	if v, ok := input["name"]; ok {
-		if str, ok := v.(string); ok {
-			w.Name = str
-		}
+	updated := *w
+	updated.SoulIDs = append([]string(nil), w.SoulIDs...)
+	updated.Tags = append([]string(nil), w.Tags...)
+	if err := applyMaintenanceWindowPatch(&updated, input); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
-	if v, ok := input["description"]; ok {
-		if str, ok := v.(string); ok {
-			w.Description = str
-		}
+	if err := normalizeMaintenanceWindowForSave(&updated); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
-	if v, ok := input["soul_ids"]; ok {
-		if ids, ok := v.([]interface{}); ok {
-			w.SoulIDs = make([]string, 0, len(ids))
-			for _, id := range ids {
-				if str, ok := id.(string); ok {
-					w.SoulIDs = append(w.SoulIDs, str)
-				}
-			}
-		}
-	}
-	if v, ok := input["tags"]; ok {
-		if tags, ok := v.([]interface{}); ok {
-			w.Tags = make([]string, 0, len(tags))
-			for _, t := range tags {
-				if str, ok := t.(string); ok {
-					w.Tags = append(w.Tags, str)
-				}
-			}
-		}
-	}
-	if v, ok := input["start_time"]; ok {
-		if str, ok := v.(string); ok {
-			w.StartTime, _ = time.Parse(time.RFC3339, str)
-		}
-	}
-	if v, ok := input["end_time"]; ok {
-		if str, ok := v.(string); ok {
-			w.EndTime, _ = time.Parse(time.RFC3339, str)
-		}
-	}
-	if v, ok := input["recurring"]; ok {
-		if str, ok := v.(string); ok {
-			w.Recurring = str
-		}
-	}
-	if v, ok := input["enabled"]; ok {
-		if b, ok := v.(bool); ok {
-			w.Enabled = b
-		}
-	}
-	w.UpdatedAt = time.Now().UTC()
-	if err := s.store.SaveMaintenanceWindow(w); err != nil {
+	updated.ID = id
+	updated.WorkspaceID = contextWorkspace(ctx)
+	updated.CreatedAt = w.CreatedAt
+	updated.UpdatedAt = time.Now().UTC()
+	if err := s.store.SaveMaintenanceWindow(&updated); err != nil {
 		return s.internalError(ctx, err, "internal server error")
 	}
-	return ctx.JSON(http.StatusOK, w)
+	return ctx.JSON(http.StatusOK, updated)
+}
+
+func normalizeMaintenanceWindowForSave(w *core.MaintenanceWindow) error {
+	w.Name = strings.TrimSpace(w.Name)
+	w.Description = strings.TrimSpace(w.Description)
+	w.Recurring = strings.TrimSpace(strings.ToLower(w.Recurring))
+	if w.Recurring == "none" {
+		w.Recurring = ""
+	}
+	w.SoulIDs = cleanStringList(w.SoulIDs)
+	w.Tags = cleanStringList(w.Tags)
+
+	if w.Name == "" {
+		return fmt.Errorf("maintenance window name is required")
+	}
+	if w.StartTime.IsZero() {
+		return fmt.Errorf("maintenance window start_time is required")
+	}
+	if w.EndTime.IsZero() {
+		return fmt.Errorf("maintenance window end_time is required")
+	}
+	if !w.EndTime.After(w.StartTime) {
+		return fmt.Errorf("maintenance window end_time must be after start_time")
+	}
+	switch w.Recurring {
+	case "", "daily", "weekly", "monthly":
+		return nil
+	default:
+		return fmt.Errorf("maintenance window recurring must be one of daily, weekly, or monthly")
+	}
+}
+
+func applyMaintenanceWindowPatch(w *core.MaintenanceWindow, input map[string]json.RawMessage) error {
+	if err := applyStringPatch(input, "name", &w.Name); err != nil {
+		return err
+	}
+	if err := applyStringPatch(input, "description", &w.Description); err != nil {
+		return err
+	}
+	if err := applyStringSlicePatch(input, "soul_ids", &w.SoulIDs); err != nil {
+		return err
+	}
+	if err := applyStringSlicePatch(input, "tags", &w.Tags); err != nil {
+		return err
+	}
+	if err := applyTimePatch(input, "start_time", &w.StartTime); err != nil {
+		return err
+	}
+	if err := applyTimePatch(input, "end_time", &w.EndTime); err != nil {
+		return err
+	}
+	if err := applyStringPatch(input, "recurring", &w.Recurring); err != nil {
+		return err
+	}
+	if raw, ok := input["enabled"]; ok {
+		var enabled bool
+		if err := json.Unmarshal(raw, &enabled); err != nil {
+			return fmt.Errorf("maintenance window enabled must be a boolean")
+		}
+		w.Enabled = enabled
+	}
+	return nil
+}
+
+func applyStringPatch(input map[string]json.RawMessage, field string, target *string) error {
+	raw, ok := input[field]
+	if !ok {
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return fmt.Errorf("maintenance window %s must be a string", field)
+	}
+	*target = value
+	return nil
+}
+
+func applyStringSlicePatch(input map[string]json.RawMessage, field string, target *[]string) error {
+	raw, ok := input[field]
+	if !ok {
+		return nil
+	}
+	var value []string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return fmt.Errorf("maintenance window %s must be an array of strings", field)
+	}
+	*target = value
+	return nil
+}
+
+func applyTimePatch(input map[string]json.RawMessage, field string, target *time.Time) error {
+	raw, ok := input[field]
+	if !ok {
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return fmt.Errorf("maintenance window %s must be an RFC3339 timestamp string", field)
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return fmt.Errorf("maintenance window %s must be an RFC3339 timestamp string", field)
+	}
+	*target = parsed
+	return nil
+}
+
+func cleanStringList(values []string) []string {
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			cleaned = append(cleaned, trimmed)
+		}
+	}
+	return cleaned
 }
 
 func (s *RESTServer) handleDeleteMaintenanceWindow(ctx *Context) error {
 	id := ctx.Params["id"]
+	w, err := s.store.GetMaintenanceWindow(id)
+	if err != nil {
+		return ctx.Error(http.StatusNotFound, "maintenance window not found")
+	}
+	if !sameWorkspace(w.WorkspaceID, contextWorkspace(ctx)) {
+		return ctx.Error(http.StatusForbidden, "access denied")
+	}
 	if err := s.store.DeleteMaintenanceWindow(id); err != nil {
 		return ctx.Error(http.StatusNotFound, "maintenance window not found")
 	}

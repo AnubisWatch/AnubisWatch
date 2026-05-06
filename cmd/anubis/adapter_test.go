@@ -52,6 +52,9 @@ func TestRestStorageAdapter_CRUD(t *testing.T) {
 	if err := adapter.DeleteSoulNoCtx("soul-1"); err != nil {
 		t.Fatalf("DeleteSoulNoCtx failed: %v", err)
 	}
+	if err := adapter.SaveSoul(ctx, soul); err != nil {
+		t.Fatalf("SaveSoul before DeleteSoul failed: %v", err)
+	}
 	if err := adapter.DeleteSoul(ctx, "soul-1"); err != nil {
 		t.Fatalf("DeleteSoul failed: %v", err)
 	}
@@ -240,6 +243,31 @@ func TestRestStorageAdapter_CRUD(t *testing.T) {
 	}
 }
 
+func TestRestStorageAdapter_DeleteSoulUsesStoredWorkspace(t *testing.T) {
+	db := setupTestStore(t)
+	adapter := &restStorageAdapter{store: db}
+	ctx := context.Background()
+
+	soul := &core.Soul{
+		ID:          "tenant-soul",
+		Name:        "Tenant Soul",
+		Type:        core.CheckHTTP,
+		Target:      "https://example.com",
+		WorkspaceID: "tenant-a",
+	}
+	if err := adapter.SaveSoul(ctx, soul); err != nil {
+		t.Fatalf("SaveSoul failed: %v", err)
+	}
+
+	if err := adapter.DeleteSoul(ctx, "tenant-soul"); err != nil {
+		t.Fatalf("DeleteSoul failed: %v", err)
+	}
+
+	if _, err := db.GetSoul(ctx, "tenant-a", "tenant-soul"); err == nil {
+		t.Fatal("expected tenant soul to be deleted from tenant-a workspace")
+	}
+}
+
 func TestGrpcStorageAdapter_CRUD(t *testing.T) {
 	db := setupTestStore(t)
 	rest := &restStorageAdapter{store: db}
@@ -374,15 +402,97 @@ func TestGrpcStorageAdapter_CRUD(t *testing.T) {
 	_ = events
 
 	// JourneyRuns
-	runs, err := adapter.ListJourneyRunsNoCtx("journey-1", 10)
+	runs, err := adapter.ListJourneyRunsNoCtx("default", "journey-1", 10)
 	if err != nil {
 		t.Fatalf("ListJourneyRunsNoCtx failed: %v", err)
 	}
 	_ = runs
 
-	_, err = adapter.GetJourneyRunNoCtx("journey-1", "run-1")
+	_, err = adapter.GetJourneyRunNoCtx("default", "journey-1", "run-1")
 	if err == nil {
 		t.Error("expected error for missing journey run")
+	}
+}
+
+func TestGrpcStorageAdapter_SaveMapPayloads(t *testing.T) {
+	db := setupTestStore(t)
+	adapter := &grpcStorageAdapter{inner: &restStorageAdapter{store: db}}
+
+	if err := adapter.SaveSoulNoCtx(map[string]interface{}{
+		"id":           "map-soul",
+		"workspace_id": "tenant-a",
+		"name":         "Map Soul",
+		"type":         "http",
+		"target":       "https://example.com",
+		"interval":     "30s",
+		"timeout":      "5s",
+		"enabled":      true,
+		"tags":         []string{"api"},
+	}); err != nil {
+		t.Fatalf("SaveSoulNoCtx map failed: %v", err)
+	}
+	soul, err := db.GetSoul(context.Background(), "tenant-a", "map-soul")
+	if err != nil {
+		t.Fatalf("GetSoul failed: %v", err)
+	}
+	if soul.WorkspaceID != "tenant-a" || soul.Weight.Duration != 30*time.Second {
+		t.Fatalf("unexpected soul conversion: %+v", soul)
+	}
+
+	if err := adapter.SaveChannelNoCtx(map[string]interface{}{
+		"id":           "map-channel",
+		"workspace_id": "tenant-a",
+		"name":         "Slack",
+		"type":         "slack",
+		"enabled":      true,
+		"webhook_url":  "https://hooks.example.test",
+	}); err != nil {
+		t.Fatalf("SaveChannelNoCtx map failed: %v", err)
+	}
+	channel, err := db.GetAlertChannel("map-channel", "tenant-a")
+	if err != nil {
+		t.Fatalf("GetAlertChannel failed: %v", err)
+	}
+	if channel.Config["webhook_url"] != "https://hooks.example.test" {
+		t.Fatalf("channel config was not preserved: %+v", channel.Config)
+	}
+
+	if err := adapter.SaveRuleNoCtx(map[string]interface{}{
+		"id":           "map-rule",
+		"workspace_id": "tenant-a",
+		"name":         "Rule",
+		"enabled":      true,
+		"channels":     []string{"map-channel"},
+		"severity":     "critical",
+		"cooldown":     "2m",
+	}); err != nil {
+		t.Fatalf("SaveRuleNoCtx map failed: %v", err)
+	}
+	rule, err := db.GetAlertRule("map-rule", "tenant-a")
+	if err != nil {
+		t.Fatalf("GetAlertRule failed: %v", err)
+	}
+	if rule.Severity != core.SeverityCritical || rule.Cooldown.Duration != 2*time.Minute {
+		t.Fatalf("unexpected rule conversion: %+v", rule)
+	}
+
+	if err := adapter.SaveJourneyNoCtx(map[string]interface{}{
+		"id":           "map-journey",
+		"workspace_id": "tenant-a",
+		"name":         "Journey",
+		"description":  "Synthetic flow",
+		"interval":     "45s",
+		"timeout":      "20s",
+		"enabled":      true,
+	}); err != nil {
+		t.Fatalf("SaveJourneyNoCtx map failed: %v", err)
+	}
+	journey, err := db.GetJourney(context.Background(), "tenant-a", "map-journey")
+	if err != nil {
+		t.Fatalf("GetJourney failed: %v", err)
+	}
+	if journey.Weight.Duration != 45*time.Second || journey.Timeout.Duration != 20*time.Second {
+		t.Fatalf("unexpected journey conversion: %+v", journey)
 	}
 }
 

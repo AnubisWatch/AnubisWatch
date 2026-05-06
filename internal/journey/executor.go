@@ -122,27 +122,49 @@ func (e *Executor) runJourneyLoop(ctx context.Context, journey *core.JourneyConf
 	}
 }
 
+// RunOnce executes a journey immediately and stores the resulting run.
+func (e *Executor) RunOnce(ctx context.Context, journey *core.JourneyConfig) (*core.JourneyRun, error) {
+	if journey == nil {
+		return nil, fmt.Errorf("journey is nil")
+	}
+	if len(journey.Steps) == 0 {
+		return nil, fmt.Errorf("journey %s has no steps", journey.ID)
+	}
+
+	run := e.executeJourneyRun(ctx, journey, false)
+	if run == nil {
+		return nil, fmt.Errorf("journey %s execution skipped", journey.ID)
+	}
+	return run, nil
+}
+
 // JourneyContext holds shared state across all steps in a journey run
 type JourneyContext struct {
 	Variables map[string]string
 	CookieJar http.CookieJar
 }
 
-// executeJourney executes a single journey run
+// executeJourney executes a single scheduled journey run.
 func (e *Executor) executeJourney(ctx context.Context, journey *core.JourneyConfig) {
+	e.executeJourneyRun(ctx, journey, true)
+}
+
+func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyConfig, allowDedupSkip bool) *core.JourneyRun {
 	startTime := time.Now()
 
 	e.logger.Debug("executing journey", "journey_id", journey.ID, "name", journey.Name)
 
 	// Check JSONPath dedup: if the last HTTP step response produces the same
 	// dedup hash as the previous run, skip execution to avoid duplicate alerts.
-	if hash := e.computeDedupHash(journey); hash != "" {
-		e.mu.RLock()
-		lastHash := e.lastHash[journey.ID]
-		e.mu.RUnlock()
-		if lastHash == hash {
-			e.logger.Debug("skipping journey run — dedup hash unchanged", "journey_id", journey.ID)
-			return
+	if allowDedupSkip {
+		if hash := e.computeDedupHash(journey); hash != "" {
+			e.mu.RLock()
+			lastHash := e.lastHash[journey.ID]
+			e.mu.RUnlock()
+			if lastHash == hash {
+				e.logger.Debug("skipping journey run - dedup hash unchanged", "journey_id", journey.ID)
+				return nil
+			}
 		}
 	}
 
@@ -223,6 +245,8 @@ func (e *Executor) executeJourney(ctx context.Context, journey *core.JourneyConf
 		"journey_id", journey.ID,
 		"status", run.Status,
 		"duration_ms", run.Duration)
+
+	return run
 }
 
 // executeStep executes a single journey step

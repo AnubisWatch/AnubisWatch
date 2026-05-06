@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"testing"
 	"time"
 
@@ -58,13 +59,36 @@ func newMockGRPCStore() *mockGRPCStore {
 	}
 }
 
+func applyMockWindow(items []interface{}, offset, limit int) []interface{} {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(items) {
+		return []interface{}{}
+	}
+	end := len(items)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return items[offset:end]
+}
+
+func sortedMockValues(items map[string]interface{}) []interface{} {
+	keys := make([]string, 0, len(items))
+	for key := range items {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]interface{}, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, items[key])
+	}
+	return result
+}
+
 func (m *mockGRPCStore) GetSoulNoCtx(id string) (interface{}, error) { return m.souls[id], nil }
 func (m *mockGRPCStore) ListSoulsNoCtx(ws string, o, l int) ([]interface{}, error) {
-	result := make([]interface{}, 0, len(m.souls))
-	for _, s := range m.souls {
-		result = append(result, s)
-	}
-	return result, nil
+	return applyMockWindow(sortedMockValues(m.souls), o, l), nil
 }
 func (m *mockGRPCStore) SaveSoulNoCtx(s interface{}) error {
 	m.nextID++
@@ -97,17 +121,26 @@ func (m *mockGRPCStore) DeleteSoulNoCtx(id string) error {
 	return m.deleteSoulErr
 }
 func (m *mockGRPCStore) ListJudgmentsNoCtx(soulID string, start, end time.Time, limit int) ([]interface{}, error) {
-	return m.judgments, nil
+	result := make([]interface{}, 0, len(m.judgments))
+	for _, j := range m.judgments {
+		if soulID != "" {
+			hf, ok := j.(interface{ GetSoulID() string })
+			if !ok || hf.GetSoulID() != soulID {
+				continue
+			}
+		}
+		result = append(result, j)
+		if limit > 0 && len(result) >= limit {
+			break
+		}
+	}
+	return result, nil
 }
 func (m *mockGRPCStore) GetChannelNoCtx(id string, ws string) (interface{}, error) {
 	return m.channels[id], nil
 }
 func (m *mockGRPCStore) ListChannelsNoCtx(ws string) ([]interface{}, error) {
-	result := make([]interface{}, 0, len(m.channels))
-	for _, c := range m.channels {
-		result = append(result, c)
-	}
-	return result, nil
+	return sortedMockValues(m.channels), nil
 }
 func (m *mockGRPCStore) SaveChannelNoCtx(ch interface{}) error {
 	m.nextID++
@@ -136,11 +169,7 @@ func (m *mockGRPCStore) GetRuleNoCtx(id string, ws string) (interface{}, error) 
 	return m.rules[id], nil
 }
 func (m *mockGRPCStore) ListRulesNoCtx(ws string) ([]interface{}, error) {
-	result := make([]interface{}, 0, len(m.rules))
-	for _, r := range m.rules {
-		result = append(result, r)
-	}
-	return result, nil
+	return sortedMockValues(m.rules), nil
 }
 func (m *mockGRPCStore) SaveRuleNoCtx(rule interface{}) error {
 	m.nextID++
@@ -160,11 +189,7 @@ func (m *mockGRPCStore) SaveRuleNoCtx(rule interface{}) error {
 func (m *mockGRPCStore) DeleteRuleNoCtx(id string, ws string) error     { delete(m.rules, id); return nil }
 func (m *mockGRPCStore) GetJourneyNoCtx(id string) (interface{}, error) { return m.journeys[id], nil }
 func (m *mockGRPCStore) ListJourneysNoCtx(ws string, o, l int) ([]interface{}, error) {
-	result := make([]interface{}, 0, len(m.journeys))
-	for _, j := range m.journeys {
-		result = append(result, j)
-	}
-	return result, nil
+	return applyMockWindow(sortedMockValues(m.journeys), o, l), nil
 }
 func (m *mockGRPCStore) SaveJourneyNoCtx(j interface{}) error {
 	m.nextID++
@@ -182,10 +207,31 @@ func (m *mockGRPCStore) SaveJourneyNoCtx(j interface{}) error {
 	return nil
 }
 func (m *mockGRPCStore) DeleteJourneyNoCtx(id string) error { delete(m.journeys, id); return nil }
-func (m *mockGRPCStore) ListJourneyRunsNoCtx(journeyID string, limit int) ([]interface{}, error) {
+func (m *mockGRPCStore) RunJourneyNoCtx(workspace, journeyID string) (interface{}, error) {
+	if _, ok := m.journeys[journeyID]; !ok {
+		return nil, fmt.Errorf("journey not found")
+	}
+	now := time.Now().UnixMilli()
+	run := &mockJourneyRun{
+		id:          fmt.Sprintf("run_%d", len(m.journeyRuns)+1),
+		journeyID:   journeyID,
+		workspaceID: workspace,
+		status:      "alive",
+		startedAt:   now,
+		completedAt: now,
+		duration:    1,
+		variables:   map[string]string{},
+	}
+	m.journeyRuns = append([]interface{}{run}, m.journeyRuns...)
+	return run, nil
+}
+func (m *mockGRPCStore) ListJourneyRunsNoCtx(workspace, journeyID string, limit int) ([]interface{}, error) {
 	var result []interface{}
 	for _, r := range m.journeyRuns {
-		if jr, ok := r.(interface{ GetJourneyID() string }); ok && jr.GetJourneyID() == journeyID {
+		if jr, ok := r.(interface {
+			GetWorkspaceID() string
+			GetJourneyID() string
+		}); ok && jr.GetWorkspaceID() == workspace && jr.GetJourneyID() == journeyID {
 			result = append(result, r)
 			if limit > 0 && len(result) >= limit {
 				break
@@ -194,19 +240,33 @@ func (m *mockGRPCStore) ListJourneyRunsNoCtx(journeyID string, limit int) ([]int
 	}
 	return result, nil
 }
-func (m *mockGRPCStore) GetJourneyRunNoCtx(journeyID, runID string) (interface{}, error) {
+func (m *mockGRPCStore) GetJourneyRunNoCtx(workspace, journeyID, runID string) (interface{}, error) {
 	for _, r := range m.journeyRuns {
 		if jr, ok := r.(interface {
+			GetWorkspaceID() string
 			GetJourneyID() string
 			GetID() string
-		}); ok && jr.GetJourneyID() == journeyID && jr.GetID() == runID {
+		}); ok && jr.GetWorkspaceID() == workspace && jr.GetJourneyID() == journeyID && jr.GetID() == runID {
 			return r, nil
 		}
 	}
 	return nil, fmt.Errorf("not found")
 }
 func (m *mockGRPCStore) ListEvents(soulID string, limit int) ([]interface{}, error) {
-	return m.events, nil
+	result := make([]interface{}, 0, len(m.events))
+	for _, event := range m.events {
+		if soulID != "" {
+			hf, ok := event.(interface{ GetSoulID() string })
+			if !ok || hf.GetSoulID() != soulID {
+				continue
+			}
+		}
+		result = append(result, event)
+		if limit > 0 && len(result) >= limit {
+			break
+		}
+	}
+	return result, nil
 }
 
 type mockGRPCProbe struct{}
@@ -273,13 +333,18 @@ func (m *mockRule) GetCreatedAt() time.Time { return time.Time{} }
 
 // mockJourney implements a minimal journey with getters
 type mockJourney struct {
-	id, name string
+	id, name, workspaceID string
 }
 
-func (m *mockJourney) GetID() string            { return m.id }
-func (m *mockJourney) GetName() string          { return m.name }
-func (m *mockJourney) GetEnabled() bool         { return true }
-func (m *mockJourney) GetWorkspaceID() string   { return "default" }
+func (m *mockJourney) GetID() string    { return m.id }
+func (m *mockJourney) GetName() string  { return m.name }
+func (m *mockJourney) GetEnabled() bool { return true }
+func (m *mockJourney) GetWorkspaceID() string {
+	if m.workspaceID != "" {
+		return m.workspaceID
+	}
+	return "default"
+}
 func (m *mockJourney) GetDescription() string   { return "" }
 func (m *mockJourney) GetWeight() time.Duration { return 0 }
 func (m *mockJourney) GetSteps() []interface{}  { return nil }
@@ -760,6 +825,7 @@ func (m *mockJudgment) GetRegion() string          { return m.region }
 
 func TestServer_ListJudgments(t *testing.T) {
 	store := newMockGRPCStore()
+	store.souls["s1"] = &mockSoul{id: "s1", name: "test"}
 	store.judgments = []interface{}{
 		&mockJudgment{id: "j1", soulID: "s1", status: "alive", duration: 10 * time.Millisecond, message: "ok", timestamp: time.Now()},
 	}
@@ -792,6 +858,7 @@ func TestServer_GetSoulJudgments(t *testing.T) {
 
 func TestServer_JudgeSoul(t *testing.T) {
 	store := newMockGRPCStore()
+	store.souls["s1"] = &mockSoul{id: "s1", name: "test"}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
 	_, err := srv.JudgeSoul(testUserContext(), &v1.JudgeSoulRequest{SoulId: "s1"})
@@ -872,6 +939,17 @@ func TestServer_GetJourney(t *testing.T) {
 	}
 }
 
+func TestServer_GetJourney_DeniesOtherWorkspace(t *testing.T) {
+	store := newMockGRPCStore()
+	store.journeys["j_1"] = &mockJourney{id: "j_1", name: "test", workspaceID: "tenant-b"}
+	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
+
+	_, err := srv.GetJourney(testUserContext(), &v1.GetJourneyRequest{Id: "j_1"})
+	if err == nil {
+		t.Fatal("Expected GetJourney to deny cross-workspace access")
+	}
+}
+
 func TestServer_UpdateJourney(t *testing.T) {
 	store := newMockGRPCStore()
 	store.journeys["j_1"] = map[string]interface{}{"id": "j_1", "name": "old"}
@@ -896,15 +974,19 @@ func TestServer_RunJourney(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunJourney failed: %v", err)
 	}
-	if resp.Status != "executing" {
-		t.Errorf("Expected executing, got %s", resp.Status)
+	if resp.Status != "alive" {
+		t.Errorf("Expected alive, got %s", resp.Status)
+	}
+	if len(store.journeyRuns) != 1 {
+		t.Errorf("Expected 1 stored run, got %d", len(store.journeyRuns))
 	}
 }
 
 func TestServer_ListJourneyRuns(t *testing.T) {
 	store := newMockGRPCStore()
 	store.journeyRuns = []interface{}{
-		&mockJourneyRun{id: "run_1", journeyID: "j_1", status: "success"},
+		&mockJourneyRun{id: "run_1", journeyID: "j_1", workspaceID: "default", status: "success"},
+		&mockJourneyRun{id: "run_2", journeyID: "j_1", workspaceID: "tenant-b", status: "failed"},
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
@@ -920,7 +1002,7 @@ func TestServer_ListJourneyRuns(t *testing.T) {
 func TestServer_GetJourneyRun(t *testing.T) {
 	store := newMockGRPCStore()
 	store.journeyRuns = []interface{}{
-		&mockJourneyRun{id: "run_1", journeyID: "j_1", status: "success"},
+		&mockJourneyRun{id: "run_1", journeyID: "j_1", workspaceID: "default", status: "success"},
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
@@ -940,7 +1022,7 @@ func TestServer_StreamJudgments(t *testing.T) {
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(testUserContext(), 100*time.Millisecond)
 	defer cancel()
 
 	soulID := "s1"
@@ -958,7 +1040,7 @@ func TestServer_StreamVerdicts(t *testing.T) {
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(testUserContext(), 100*time.Millisecond)
 	defer cancel()
 
 	soulID := "s1"

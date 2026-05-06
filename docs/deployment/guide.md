@@ -146,7 +146,7 @@ docker run -d \
   --name anubis \
   -p 8080:8080 \
   -v anubis-data:/data \
-  anubiswatch/anubis:latest \
+  ghcr.io/anubiswatch/anubiswatch:latest \
   serve --single
 ```
 

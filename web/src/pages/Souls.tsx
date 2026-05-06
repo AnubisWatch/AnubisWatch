@@ -22,8 +22,17 @@ import {
 import { Link } from 'react-router-dom'
 import { useSoulStore } from '../stores/soulStore'
 import type { Soul } from '../api/client'
+import { SoulProtocolFields } from '../components/SoulProtocolFields'
+import {
+  buildSoulPayload,
+  defaultSoulFormData,
+  nextSoulFormDataForType,
+  soulTargetHints,
+  soulTypeOptions,
+  type SoulFormData,
+  type SoulType,
+} from '../utils/soulForm'
 
-type SoulType = Soul['type']
 type SoulDisplayStatus = 'healthy' | 'unhealthy' | 'unknown' | 'checking' | 'check_failed'
 
 // Extended Soul type with UI-specific properties
@@ -56,15 +65,7 @@ export function Souls() {
   const [loading, setLoading] = useState(false)
 
   // Form state
-  const [formData, setFormData] = useState({
-    name: '',
-    type: 'http' as SoulType,
-    target: '',
-    enabled: true,
-    weight: 60,
-    timeout: 10,
-    tags: [] as string[]
-  })
+  const [formData, setFormData] = useState<SoulFormData>(defaultSoulFormData)
 
   useEffect(() => {
     fetchSouls()
@@ -81,19 +82,10 @@ export function Souls() {
     setLoading(true)
     try {
       await createSoul({
-        ...formData,
-        workspace_id: 'default'
+        ...buildSoulPayload(formData),
       })
       setShowModal(false)
-      setFormData({
-        name: '',
-        type: 'http',
-        target: '',
-        enabled: true,
-        weight: 60,
-        timeout: 10,
-        tags: []
-      })
+      setFormData(defaultSoulFormData)
     } catch (err) {
       alert('Failed to create soul: ' + (err instanceof Error ? err.message : 'Unknown error'))
     } finally {
@@ -537,7 +529,7 @@ export function Souls() {
           aria-labelledby="soul-modal-title"
           onKeyDown={(e) => { if (e.key === 'Escape') setShowModal(false) }}
         >
-          <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-auto">
+          <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-auto">
             <div className="p-6 border-b border-gray-700/50 flex items-center justify-between">
               <h2 id="soul-modal-title" className="text-xl font-bold text-white">Add New Soul</h2>
               <button
@@ -565,36 +557,39 @@ export function Souls() {
 
               {/* Type */}
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">Type</label>
+                <label htmlFor="soul-type" className="block text-sm font-medium text-gray-300 mb-2">Type</label>
                 <select
+                  id="soul-type"
+                  aria-label="Soul type"
                   value={formData.type}
-                  onChange={(e) => setFormData({ ...formData, type: e.target.value as SoulType })}
+                  onChange={(e) => setFormData(nextSoulFormDataForType(formData, e.target.value as SoulType))}
                   className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
                 >
-                  <option value="http">HTTP</option>
-                  <option value="tcp">TCP</option>
-                  <option value="udp">UDP</option>
-                  <option value="dns">DNS</option>
-                  <option value="icmp">ICMP</option>
-                  <option value="smtp">SMTP</option>
-                  <option value="grpc">gRPC</option>
-                  <option value="websocket">WebSocket</option>
-                  <option value="tls">TLS</option>
+                  {soulTypeOptions.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
                 </select>
               </div>
 
               {/* Target */}
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">Target URL/Host</label>
+                <label htmlFor="soul-target" className="block text-sm font-medium text-gray-300 mb-2">
+                  {soulTargetHints[formData.type].label}
+                </label>
                 <input
+                  id="soul-target"
+                  data-testid="soul-target"
                   type="text"
                   required
                   value={formData.target}
                   onChange={(e) => setFormData({ ...formData, target: e.target.value })}
-                  placeholder="https://api.example.com/health"
+                  placeholder={soulTargetHints[formData.type].placeholder}
                   className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50"
                 />
+                <p className="mt-2 text-xs text-gray-500">{soulTargetHints[formData.type].help}</p>
               </div>
+
+              <SoulProtocolFields formData={formData} setFormData={setFormData} />
 
               {/* Interval & Timeout */}
               <div className="grid grid-cols-2 gap-4">

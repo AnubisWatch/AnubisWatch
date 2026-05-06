@@ -74,6 +74,10 @@ type AlertStorage interface {
 	ListActiveIncidents() ([]*core.Incident, error)
 }
 
+type maintenanceWindowStorage interface {
+	ListMaintenanceWindows() ([]*core.MaintenanceWindow, error)
+}
+
 // NewManager creates a new alert manager
 func NewManager(storage AlertStorage, logger *slog.Logger) *Manager {
 	m := &Manager{
@@ -180,6 +184,9 @@ func (m *Manager) RegisterChannel(channel *core.AlertChannel) error {
 	if err := channel.Validate(); err != nil {
 		return err
 	}
+	if err := m.validateChannelConfig(channel); err != nil {
+		return err
+	}
 
 	m.mu.Lock()
 	m.channels[channel.ID] = channel
@@ -196,6 +203,17 @@ func (m *Manager) RegisterChannel(channel *core.AlertChannel) error {
 		"name", channel.Name,
 		"type", channel.Type)
 
+	return nil
+}
+
+func (m *Manager) validateChannelConfig(channel *core.AlertChannel) error {
+	dispatcher, ok := m.dispatchers[channel.Type]
+	if !ok {
+		return fmt.Errorf("unsupported channel type: %s", channel.Type)
+	}
+	if err := dispatcher.Validate(channel.Config); err != nil {
+		return fmt.Errorf("invalid %s channel config: %w", channel.Type, err)
+	}
 	return nil
 }
 
@@ -300,6 +318,16 @@ func (m *Manager) DeleteRule(id string) error {
 
 // ProcessJudgment evaluates a judgment against alert rules
 func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, judgment *core.Judgment) {
+	if m.isSuppressedByMaintenance(soul, time.Now().UTC()) {
+		m.mu.Lock()
+		m.stats.filteredAlerts++
+		m.mu.Unlock()
+		m.logger.Debug("Alert suppressed by active maintenance window",
+			"soul_id", soul.ID,
+			"workspace", defaultWorkspace(soul.WorkspaceID))
+		return
+	}
+
 	m.mu.RLock()
 	rules := make([]*core.AlertRule, 0, len(m.rules))
 	for _, rule := range m.rules {
@@ -355,6 +383,63 @@ func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, j
 				"soul_id", soul.ID)
 		}
 	}
+}
+
+func (m *Manager) isSuppressedByMaintenance(soul *core.Soul, now time.Time) bool {
+	if m.storage == nil {
+		return false
+	}
+	storage, ok := m.storage.(maintenanceWindowStorage)
+	if !ok {
+		return false
+	}
+	windows, err := storage.ListMaintenanceWindows()
+	if err != nil {
+		m.logger.Warn("Failed to list maintenance windows", "error", err)
+		return false
+	}
+	for _, window := range windows {
+		if window == nil || !window.IsActive(now) {
+			continue
+		}
+		if !sameWorkspace(window.WorkspaceID, soul.WorkspaceID) {
+			continue
+		}
+		if maintenanceAppliesToSoul(window, soul) {
+			return true
+		}
+	}
+	return false
+}
+
+func maintenanceAppliesToSoul(window *core.MaintenanceWindow, soul *core.Soul) bool {
+	if len(window.SoulIDs) == 0 && len(window.Tags) == 0 {
+		return true
+	}
+	for _, id := range window.SoulIDs {
+		if id == soul.ID {
+			return true
+		}
+	}
+	for _, windowTag := range window.Tags {
+		for _, soulTag := range soul.Tags {
+			if windowTag == soulTag {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func defaultWorkspace(workspace string) string {
+	if workspace == "" {
+		return "default"
+	}
+	return workspace
+}
+
+func sameWorkspace(left, right string) bool {
+	return defaultWorkspace(left) == defaultWorkspace(right)
 }
 
 // worker processes alert events
@@ -461,6 +546,45 @@ func (m *Manager) sendToChannel(ctx context.Context, event *core.AlertEvent, cha
 	return err
 }
 
+// TestChannel sends a synthetic notification through a configured channel.
+func (m *Manager) TestChannel(ctx context.Context, id string, workspace string) error {
+	channel, err := m.GetChannel(id)
+	if err != nil {
+		return err
+	}
+	if channel == nil {
+		return fmt.Errorf("channel not found: %s", id)
+	}
+	if workspace == "" {
+		workspace = "default"
+	}
+	channelWorkspace := channel.WorkspaceID
+	if channelWorkspace == "" {
+		channelWorkspace = "default"
+	}
+	if channelWorkspace != workspace {
+		return fmt.Errorf("channel %s does not belong to workspace %s", id, workspace)
+	}
+
+	event := &core.AlertEvent{
+		ID:          core.GenerateID(),
+		ChannelID:   id,
+		SoulID:      "test",
+		SoulName:    "AnubisWatch Test",
+		WorkspaceID: channelWorkspace,
+		Status:      core.SoulDegraded,
+		Severity:    core.SeverityInfo,
+		Message:     "This is a test notification from AnubisWatch.",
+		Details: map[string]string{
+			"channel": channel.Name,
+			"purpose": "configuration test",
+		},
+		Timestamp: time.Now(),
+	}
+
+	return m.sendToChannel(ctx, event, channel)
+}
+
 // registerDispatchers registers all built-in channel dispatchers
 func (m *Manager) registerDispatchers() {
 	m.dispatchers[core.ChannelSlack] = &SlackDispatcher{logger: m.logger}
@@ -505,7 +629,7 @@ func (m *Manager) ruleApplies(rule *core.AlertRule, soul *core.Soul) bool {
 		}
 		return false
 	default:
-		return true
+		return false
 	}
 }
 

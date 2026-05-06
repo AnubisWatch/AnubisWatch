@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -63,8 +64,9 @@ type Store interface {
 	ListJourneysNoCtx(workspace string, offset, limit int) ([]interface{}, error)
 	SaveJourneyNoCtx(j interface{}) error
 	DeleteJourneyNoCtx(id string) error
-	ListJourneyRunsNoCtx(journeyID string, limit int) ([]interface{}, error)
-	GetJourneyRunNoCtx(journeyID, runID string) (interface{}, error)
+	RunJourneyNoCtx(workspace, journeyID string) (interface{}, error)
+	ListJourneyRunsNoCtx(workspace, journeyID string, limit int) ([]interface{}, error)
+	GetJourneyRunNoCtx(workspace, journeyID, runID string) (interface{}, error)
 
 	ListEvents(soulID string, limit int) ([]interface{}, error)
 }
@@ -164,10 +166,119 @@ func ts(t time.Time) *timestamppb.Timestamp {
 	return timestamppb.New(t)
 }
 
+const defaultListLimit = 20
+
+func normalizedListWindow(offset, limit int32) (int, int) {
+	normalizedOffset := int(offset)
+	if normalizedOffset < 0 {
+		normalizedOffset = 0
+	}
+	normalizedLimit := int(limit)
+	if normalizedLimit <= 0 {
+		normalizedLimit = defaultListLimit
+	}
+	return normalizedOffset, normalizedLimit
+}
+
+func listFetchLimit(offset, limit int) int {
+	return offset + limit + 1
+}
+
+func newPagination(total, offset, limit, returned int) *v1.Pagination {
+	hasMore := offset+returned < total
+	var nextOffset *int32
+	if hasMore {
+		next := int32(offset + returned)
+		nextOffset = &next
+	}
+	return &v1.Pagination{
+		Total:      int32(total),
+		Offset:     int32(offset),
+		Limit:      int32(limit),
+		HasMore:    hasMore,
+		NextOffset: nextOffset,
+	}
+}
+
+func paginate(items []interface{}, offset, limit int) ([]interface{}, *v1.Pagination) {
+	total := len(items)
+	start := offset
+	if start > total {
+		start = total
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	page := items[start:end]
+	return page, newPagination(total, offset, limit, len(page))
+}
+
+func statusValue(v interface{}) string {
+	switch typed := v.(type) {
+	case *core.Judgment:
+		return string(typed.Status)
+	case *core.AlertEvent:
+		return string(typed.Status)
+	case map[string]interface{}:
+		return fmt.Sprintf("%v", typed["status"])
+	}
+	if hf, ok := v.(interface{ GetStatus() string }); ok {
+		return hf.GetStatus()
+	}
+	return ""
+}
+
+func severityValue(v interface{}) string {
+	switch typed := v.(type) {
+	case *core.AlertEvent:
+		return string(typed.Severity)
+	case map[string]interface{}:
+		return fmt.Sprintf("%v", typed["severity"])
+	}
+	if hf, ok := v.(interface{ GetSeverity() string }); ok {
+		return hf.GetSeverity()
+	}
+	return ""
+}
+
+func timestampValue(v interface{}) time.Time {
+	switch typed := v.(type) {
+	case *core.Judgment:
+		return typed.Timestamp
+	case *core.AlertEvent:
+		return typed.Timestamp
+	}
+	if hf, ok := v.(interface{ GetTimestamp() time.Time }); ok {
+		return hf.GetTimestamp()
+	}
+	return time.Time{}
+}
+
+func matchesOptionalString(value, expected string) bool {
+	return expected == "" || strings.EqualFold(value, expected)
+}
+
 // --- PB Conversion: core → protobuf ---
 
 // soulToPB converts a core.Soul to protobuf Soul
 func soulToPB(s interface{}) *v1.Soul {
+	if soul, ok := s.(*core.Soul); ok {
+		return &v1.Soul{
+			Id:        soul.ID,
+			Name:      soul.Name,
+			Type:      string(soul.Type),
+			Target:    soul.Target,
+			Interval:  int32(soul.Weight.Duration.Seconds()),
+			Timeout:   int32(soul.Timeout.Duration.Seconds()),
+			Enabled:   soul.Enabled,
+			Tags:      soul.Tags,
+			Workspace: soul.WorkspaceID,
+			CreatedAt: ts(soul.CreatedAt),
+			UpdatedAt: ts(soul.UpdatedAt),
+		}
+	}
+
 	soul, ok := s.(interface {
 		GetID() string
 		GetName() string
@@ -237,6 +348,19 @@ func soulToPB(s interface{}) *v1.Soul {
 
 // judgmentToPB converts a core.Judgment to protobuf Judgment
 func judgmentToPB(j interface{}) *v1.Judgment {
+	if judgment, ok := j.(*core.Judgment); ok {
+		return &v1.Judgment{
+			Id:        judgment.ID,
+			SoulId:    judgment.SoulID,
+			Status:    string(judgment.Status),
+			LatencyMs: judgment.Duration.Milliseconds(),
+			Message:   judgment.Message,
+			Timestamp: ts(judgment.Timestamp),
+			NodeId:    judgment.JackalID,
+			Region:    judgment.Region,
+		}
+	}
+
 	type hasFields interface {
 		GetID() string
 		GetSoulID() string
@@ -267,6 +391,22 @@ func judgmentToPB(j interface{}) *v1.Judgment {
 
 // channelToPB converts a core.AlertChannel to protobuf Channel
 func channelToPB(c interface{}) *v1.Channel {
+	if channel, ok := c.(*core.AlertChannel); ok {
+		strCfg := make(map[string]string, len(channel.Config))
+		for k, v := range channel.Config {
+			strCfg[k] = fmt.Sprintf("%v", v)
+		}
+		return &v1.Channel{
+			Id:        channel.ID,
+			Name:      channel.Name,
+			Type:      string(channel.Type),
+			Enabled:   channel.Enabled,
+			Config:    strCfg,
+			Workspace: channel.WorkspaceID,
+			CreatedAt: ts(channel.CreatedAt),
+		}
+	}
+
 	type hasFields interface {
 		GetID() string
 		GetName() string
@@ -298,6 +438,21 @@ func channelToPB(c interface{}) *v1.Channel {
 
 // ruleToPB converts a core.AlertRule to protobuf Rule
 func ruleToPB(r interface{}) *v1.Rule {
+	if rule, ok := r.(*core.AlertRule); ok {
+		channelID := ""
+		if len(rule.Channels) > 0 {
+			channelID = rule.Channels[0]
+		}
+		return &v1.Rule{
+			Id:        rule.ID,
+			Name:      rule.Name,
+			Enabled:   rule.Enabled,
+			ChannelId: channelID,
+			Workspace: rule.WorkspaceID,
+			CreatedAt: ts(rule.CreatedAt),
+		}
+	}
+
 	type hasFields interface {
 		GetID() string
 		GetName() string
@@ -326,6 +481,40 @@ func ruleToPB(r interface{}) *v1.Rule {
 
 // journeyToPB converts a core.JourneyConfig to protobuf Journey
 func journeyRunToPB(r interface{}) *v1.JourneyRun {
+	if run, ok := r.(*core.JourneyRun); ok {
+		var startedAt, completedAt *timestamppb.Timestamp
+		if run.StartedAt > 0 {
+			startedAt = timestamppb.New(time.UnixMilli(run.StartedAt))
+		}
+		if run.CompletedAt > 0 {
+			completedAt = timestamppb.New(time.UnixMilli(run.CompletedAt))
+		}
+		steps := make([]*v1.JourneyStepResult, 0, len(run.Steps))
+		for _, step := range run.Steps {
+			steps = append(steps, &v1.JourneyStepResult{
+				Name:       step.Name,
+				StepIndex:  int32(step.StepIndex),
+				DurationMs: step.Duration,
+				Status:     string(step.Status),
+				Message:    step.Message,
+				Extracted:  step.Extracted,
+			})
+		}
+		return &v1.JourneyRun{
+			Id:          run.ID,
+			JourneyId:   run.JourneyID,
+			Workspace:   run.WorkspaceID,
+			JackalId:    run.JackalID,
+			Region:      run.Region,
+			StartedAt:   startedAt,
+			CompletedAt: completedAt,
+			DurationMs:  run.Duration,
+			Status:      string(run.Status),
+			Steps:       steps,
+			Variables:   run.Variables,
+		}
+	}
+
 	type hasStepResultFields interface {
 		GetName() string
 		GetStepIndex() int
@@ -392,6 +581,28 @@ func journeyRunToPB(r interface{}) *v1.JourneyRun {
 
 // journeyToPB converts a journey to protobuf
 func journeyToPB(j interface{}) *v1.Journey {
+	if journey, ok := j.(*core.JourneyConfig); ok {
+		steps := make([]*v1.JourneyStep, 0, len(journey.Steps))
+		for _, step := range journey.Steps {
+			steps = append(steps, &v1.JourneyStep{
+				Name:    step.Name,
+				Type:    string(step.Type),
+				Target:  step.Target,
+				Timeout: int32(step.Timeout.Duration.Seconds()),
+			})
+		}
+		return &v1.Journey{
+			Id:          journey.ID,
+			Name:        journey.Name,
+			Description: journey.Description,
+			Interval:    int32(journey.Weight.Duration.Seconds()),
+			Enabled:     journey.Enabled,
+			Workspace:   journey.WorkspaceID,
+			Steps:       steps,
+			CreatedAt:   ts(journey.CreatedAt),
+		}
+	}
+
 	type hasStepFields interface {
 		GetName() string
 		GetType() string
@@ -490,6 +701,258 @@ func pbToJourneyConfig(req *v1.CreateJourneyRequest) map[string]interface{} {
 	return cfg
 }
 
+func workspaceFromContext(ctx context.Context) (string, error) {
+	user, ok := GetUserFromContext(ctx)
+	if !ok {
+		return "", status.Error(codes.Unauthenticated, "unauthenticated")
+	}
+	if user.Workspace == "" {
+		return "default", nil
+	}
+	return user.Workspace, nil
+}
+
+func resourceWorkspace(v interface{}) string {
+	switch resource := v.(type) {
+	case *core.Soul:
+		return resource.WorkspaceID
+	case *core.Judgment:
+		return resource.WorkspaceID
+	case *core.AlertChannel:
+		return resource.WorkspaceID
+	case *core.AlertRule:
+		return resource.WorkspaceID
+	case *core.JourneyConfig:
+		return resource.WorkspaceID
+	case *core.AlertEvent:
+		return resource.WorkspaceID
+	case map[string]interface{}:
+		if ws, ok := resource["workspace_id"].(string); ok {
+			return ws
+		}
+	}
+	if hf, ok := v.(interface{ GetWorkspaceID() string }); ok {
+		return hf.GetWorkspaceID()
+	}
+	return ""
+}
+
+func resourceID(v interface{}) string {
+	switch resource := v.(type) {
+	case *core.Soul:
+		return resource.ID
+	case *core.Judgment:
+		return resource.ID
+	case *core.AlertEvent:
+		return resource.ID
+	case map[string]interface{}:
+		if id, ok := resource["id"].(string); ok {
+			return id
+		}
+	}
+	if hf, ok := v.(interface{ GetID() string }); ok {
+		return hf.GetID()
+	}
+	return ""
+}
+
+func ensureResourceWorkspace(resource interface{}, workspace, name string) error {
+	if ws := resourceWorkspace(resource); ws != "" && ws != workspace {
+		return status.Errorf(codes.PermissionDenied, "access denied: %s belongs to another workspace", name)
+	}
+	return nil
+}
+
+func (s *Server) ensureSoulAccess(soulID, workspace string) error {
+	if soulID == "" {
+		return nil
+	}
+	soul, err := s.store.GetSoulNoCtx(soulID)
+	if err != nil || soul == nil {
+		return nil
+	}
+	return ensureResourceWorkspace(soul, workspace, "soul")
+}
+
+func applyChannelConfig(config map[string]interface{}, updates map[string]string) {
+	if config == nil {
+		return
+	}
+	allowedConfigFields := map[string]bool{
+		"webhook_url":     true,
+		"channel":         true,
+		"bot_token":       true,
+		"chat_id":         true,
+		"api_key":         true,
+		"region":          true,
+		"integration_key": true,
+		"server":          true,
+		"topic":           true,
+		"to":              true,
+		"from":            true,
+		"subject":         true,
+		"smtp_host":       true,
+		"smtp_port":       true,
+		"username":        true,
+		"password":        true,
+		"use_tls":         true,
+		"template":        true,
+		"headers":         true,
+		"secret":          true,
+		"method":          true,
+		"url":             true,
+	}
+	for k, v := range updates {
+		if allowedConfigFields[k] {
+			config[k] = v
+		}
+	}
+}
+
+func applyRuleConfig(m map[string]interface{}, updates map[string]string) {
+	allowedConfigKeys := map[string]bool{
+		"channel_ids":        true,
+		"cooldown":           true,
+		"severity":           true,
+		"notification_delay": true,
+		"recovery_delay":     true,
+		"aggregation_window": true,
+	}
+	for k, v := range updates {
+		if allowedConfigKeys[k] {
+			m[k] = v
+		}
+	}
+}
+
+func applyRuleCoreConfig(rule *core.AlertRule, updates map[string]string) {
+	for k, v := range updates {
+		switch k {
+		case "severity":
+			rule.Severity = core.Severity(v)
+		case "channel_ids":
+			if v != "" {
+				rule.Channels = strings.Split(v, ",")
+			}
+		case "cooldown":
+			if d, err := time.ParseDuration(v); err == nil {
+				rule.Cooldown = core.Duration{Duration: d}
+			}
+		}
+	}
+}
+
+func applyJourneyUpdates(journey *core.JourneyConfig, req *v1.UpdateJourneyRequest) {
+	if req.Name != nil {
+		journey.Name = *req.Name
+	}
+	if req.Description != nil {
+		journey.Description = *req.Description
+	}
+	if req.Interval != nil {
+		journey.Weight = core.Duration{Duration: time.Duration(*req.Interval) * time.Second}
+	}
+	if req.Enabled != nil {
+		journey.Enabled = *req.Enabled
+	}
+	journey.UpdatedAt = time.Now()
+}
+
+func applySoulUpdates(soul *core.Soul, req *v1.UpdateSoulRequest) {
+	if req.Name != nil {
+		soul.Name = *req.Name
+	}
+	if req.Target != nil {
+		soul.Target = *req.Target
+	}
+	if req.Interval != nil {
+		soul.Weight = core.Duration{Duration: time.Duration(*req.Interval) * time.Second}
+	}
+	if req.Timeout != nil {
+		soul.Timeout = core.Duration{Duration: time.Duration(*req.Timeout) * time.Second}
+	}
+	if req.Enabled != nil {
+		soul.Enabled = *req.Enabled
+	}
+	if req.Tags != nil {
+		soul.Tags = req.Tags
+	}
+	soul.UpdatedAt = time.Now()
+}
+
+func applyChannelUpdates(channel *core.AlertChannel, req *v1.UpdateChannelRequest) {
+	if req.Name != nil {
+		channel.Name = *req.Name
+	}
+	if req.Enabled != nil {
+		channel.Enabled = *req.Enabled
+	}
+	if req.Config != nil {
+		if channel.Config == nil {
+			channel.Config = make(map[string]interface{})
+		}
+		applyChannelConfig(channel.Config, req.Config)
+	}
+	channel.UpdatedAt = time.Now()
+}
+
+func applyRuleUpdates(rule *core.AlertRule, req *v1.UpdateRuleRequest) {
+	if req.Name != nil {
+		rule.Name = *req.Name
+	}
+	if req.Enabled != nil {
+		rule.Enabled = *req.Enabled
+	}
+	if req.Config != nil {
+		applyRuleCoreConfig(rule, req.Config)
+	}
+}
+
+func legacyMapUpdates(req *v1.UpdateSoulRequest) map[string]interface{} {
+	updates := make(map[string]interface{})
+	if req.Name != nil {
+		updates["name"] = *req.Name
+	}
+	if req.Target != nil {
+		updates["target"] = *req.Target
+	}
+	if req.Interval != nil {
+		updates["interval"] = fmt.Sprintf("%ds", *req.Interval)
+	}
+	if req.Timeout != nil {
+		updates["timeout"] = fmt.Sprintf("%ds", *req.Timeout)
+	}
+	if req.Enabled != nil {
+		updates["enabled"] = *req.Enabled
+	}
+	if req.Tags != nil {
+		updates["tags"] = req.Tags
+	}
+	if req.Labels != nil {
+		updates["labels"] = req.Labels
+	}
+	return updates
+}
+
+func applyJourneyMapUpdates(m map[string]interface{}, req *v1.UpdateJourneyRequest) {
+	if req.Name != nil {
+		m["name"] = *req.Name
+	}
+	if req.Description != nil {
+		m["description"] = *req.Description
+	}
+	if req.Interval != nil {
+		m["interval"] = fmt.Sprintf("%ds", *req.Interval)
+	}
+	if req.Enabled != nil {
+		m["enabled"] = *req.Enabled
+	}
+}
+
+func ensureJourneyWorkspace(j interface{}, workspace string) error {
+	return ensureResourceWorkspace(j, workspace, "journey")
+}
+
 // --- Soul RPCs ---
 
 func (s *Server) ListSouls(ctx context.Context, req *v1.ListSoulsRequest) (*v1.ListSoulsResponse, error) {
@@ -506,14 +969,15 @@ func (s *Server) ListSouls(ctx context.Context, req *v1.ListSoulsRequest) (*v1.L
 		workspace = "default"
 	}
 
-	limit := int(req.Limit)
-	if limit == 0 {
-		limit = 20
-	}
+	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
-	souls, err := s.store.ListSoulsNoCtx(workspace, int(req.Offset), limit)
+	souls, err := s.store.ListSoulsNoCtx(workspace, offset, limit+1)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list souls: %v", err)
+	}
+	hasMore := len(souls) > limit
+	if len(souls) > limit {
+		souls = souls[:limit]
 	}
 
 	pbSouls := make([]*v1.Soul, 0, len(souls))
@@ -523,22 +987,20 @@ func (s *Server) ListSouls(ctx context.Context, req *v1.ListSoulsRequest) (*v1.L
 		}
 	}
 
-	hasMore := len(pbSouls) >= limit
-	var nextOffset *int32
+	total := offset + len(pbSouls)
 	if hasMore {
-		off := int32(int(req.Offset) + limit)
-		nextOffset = &off
+		total++
+	}
+	pagination := newPagination(total, offset, limit, len(pbSouls))
+	if hasMore {
+		pagination.HasMore = true
+		next := int32(offset + len(pbSouls))
+		pagination.NextOffset = &next
 	}
 
 	return &v1.ListSoulsResponse{
-		Souls: pbSouls,
-		Pagination: &v1.Pagination{
-			Total:      int32(len(souls)),
-			Offset:     req.Offset,
-			Limit:      int32(limit),
-			HasMore:    hasMore,
-			NextOffset: nextOffset,
-		},
+		Souls:      pbSouls,
+		Pagination: pagination,
 	}, nil
 }
 
@@ -618,36 +1080,18 @@ func (s *Server) UpdateSoul(ctx context.Context, req *v1.UpdateSoulRequest) (*v1
 		return nil, status.Error(codes.PermissionDenied, "access denied: soul belongs to another workspace")
 	}
 
-	// Build updated config
-	updates := make(map[string]interface{})
-	if req.Name != nil {
-		updates["name"] = *req.Name
-	}
-	if req.Target != nil {
-		updates["target"] = *req.Target
-	}
-	if req.Interval != nil {
-		updates["interval"] = fmt.Sprintf("%ds", *req.Interval)
-	}
-	if req.Timeout != nil {
-		updates["timeout"] = fmt.Sprintf("%ds", *req.Timeout)
-	}
-	if req.Enabled != nil {
-		updates["enabled"] = *req.Enabled
-	}
-	if req.Tags != nil {
-		updates["tags"] = req.Tags
-	}
-	if req.Labels != nil {
-		updates["labels"] = req.Labels
-	}
-
-	// Merge with existing
-	if m, ok := existing.(map[string]interface{}); ok {
-		for k, v := range updates {
-			m[k] = v
+	switch current := existing.(type) {
+	case *core.Soul:
+		applySoulUpdates(current, req)
+		if err := s.store.SaveSoulNoCtx(current); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to update soul: %v", err)
 		}
-		if err := s.store.SaveSoulNoCtx(m); err != nil {
+	case map[string]interface{}:
+		updates := legacyMapUpdates(req)
+		for k, v := range updates {
+			current[k] = v
+		}
+		if err := s.store.SaveSoulNoCtx(current); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to update soul: %v", err)
 		}
 	}
@@ -692,10 +1136,7 @@ func (s *Server) ListJudgments(ctx context.Context, req *v1.ListJudgmentsRequest
 		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
 	}
 
-	limit := int(req.Limit)
-	if limit == 0 {
-		limit = 20
-	}
+	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
 	var start, end time.Time
 	if req.Since != nil {
@@ -721,26 +1162,56 @@ func (s *Server) ListJudgments(ctx context.Context, req *v1.ListJudgmentsRequest
 		}
 	}
 
-	judgments, err := s.store.ListJudgmentsNoCtx(soulID, start, end, limit)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to list judgments: %v", err)
+	fetchLimit := listFetchLimit(offset, limit)
+	if req.GetStatus() != "" || soulID == "" {
+		fetchLimit = 0
+	}
+	var judgments []interface{}
+	if soulID == "" {
+		souls, err := s.store.ListSoulsNoCtx(user.Workspace, 0, 0)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to list souls for judgments: %v", err)
+		}
+		for _, soul := range souls {
+			id := resourceID(soul)
+			if id == "" {
+				continue
+			}
+			soulJudgments, err := s.store.ListJudgmentsNoCtx(id, start, end, fetchLimit)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to list judgments: %v", err)
+			}
+			judgments = append(judgments, soulJudgments...)
+		}
+	} else {
+		var err error
+		judgments, err = s.store.ListJudgmentsNoCtx(soulID, start, end, fetchLimit)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to list judgments: %v", err)
+		}
 	}
 
-	pbJudgments := make([]*v1.Judgment, 0, len(judgments))
+	filtered := make([]interface{}, 0, len(judgments))
 	for _, j := range judgments {
+		if matchesOptionalString(statusValue(j), req.GetStatus()) {
+			filtered = append(filtered, j)
+		}
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return timestampValue(filtered[i]).After(timestampValue(filtered[j]))
+	})
+	page, pagination := paginate(filtered, offset, limit)
+
+	pbJudgments := make([]*v1.Judgment, 0, len(page))
+	for _, j := range page {
 		if pb := judgmentToPB(j); pb != nil {
 			pbJudgments = append(pbJudgments, pb)
 		}
 	}
 
 	return &v1.ListJudgmentsResponse{
-		Judgments: pbJudgments,
-		Pagination: &v1.Pagination{
-			Total:   int32(len(judgments)),
-			Offset:  req.Offset,
-			Limit:   int32(limit),
-			HasMore: len(judgments) >= limit,
-		},
+		Judgments:  pbJudgments,
+		Pagination: pagination,
 	}, nil
 }
 
@@ -755,6 +1226,18 @@ func (s *Server) GetSoulJudgments(ctx context.Context, req *v1.GetSoulJudgmentsR
 func (s *Server) JudgeSoul(ctx context.Context, req *v1.JudgeSoulRequest) (*v1.Judgment, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	soul, err := s.store.GetSoulNoCtx(req.SoulId)
+	if err != nil || soul == nil {
+		return nil, status.Errorf(codes.NotFound, "soul not found: %s", req.SoulId)
+	}
+	if err := ensureResourceWorkspace(soul, workspace, "soul"); err != nil {
+		return nil, err
+	}
 
 	result, err := s.probe.ForceCheck(req.SoulId)
 	if err != nil {
@@ -772,40 +1255,82 @@ func (s *Server) ListVerdicts(ctx context.Context, req *v1.ListVerdictsRequest) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Verdicts come from alert events. List recent events.
-	limit := int(req.Limit)
-	if limit == 0 {
-		limit = 20
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
 	}
+
+	// Verdicts come from alert events. List recent events.
+	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
 	soulID := ""
 	if req.SoulId != nil {
 		soulID = *req.SoulId
 	}
+	if err := s.ensureSoulAccess(soulID, workspace); err != nil {
+		return nil, err
+	}
 
-	events, err := s.store.ListEvents(soulID, limit)
+	fetchLimit := listFetchLimit(offset, limit)
+	if req.GetStatus() != "" || req.GetSeverity() != "" {
+		fetchLimit = 0
+	}
+	events, err := s.store.ListEvents(soulID, fetchLimit)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list verdicts: %v", err)
 	}
 
-	pbVerdicts := make([]*v1.Verdict, 0, len(events))
+	filtered := make([]interface{}, 0, len(events))
 	for _, e := range events {
+		if ws := resourceWorkspace(e); ws != "" && ws != workspace {
+			continue
+		}
+		if !matchesOptionalString(statusValue(e), req.GetStatus()) {
+			continue
+		}
+		if !matchesOptionalString(severityValue(e), req.GetSeverity()) {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return timestampValue(filtered[i]).After(timestampValue(filtered[j]))
+	})
+	page, pagination := paginate(filtered, offset, limit)
+
+	pbVerdicts := make([]*v1.Verdict, 0, len(page))
+	for _, e := range page {
 		if pb := eventToVerdict(e); pb != nil {
 			pbVerdicts = append(pbVerdicts, pb)
 		}
 	}
 
 	return &v1.ListVerdictsResponse{
-		Verdicts: pbVerdicts,
-		Pagination: &v1.Pagination{
-			Total:   int32(len(events)),
-			Limit:   int32(limit),
-			HasMore: len(events) >= limit,
-		},
+		Verdicts:   pbVerdicts,
+		Pagination: pagination,
 	}, nil
 }
 
 func eventToVerdict(e interface{}) *v1.Verdict {
+	if event, ok := e.(*core.AlertEvent); ok {
+		status := "firing"
+		if event.Resolved {
+			status = "resolved"
+		} else if event.Acknowledged {
+			status = "acknowledged"
+		}
+		return &v1.Verdict{
+			Id:       event.ID,
+			SoulId:   event.SoulID,
+			SoulName: event.SoulName,
+			RuleId:   event.ChannelID,
+			Status:   status,
+			Severity: string(event.Severity),
+			Message:  event.Message,
+			FiredAt:  ts(event.Timestamp),
+		}
+	}
+
 	type hasFields interface {
 		GetID() string
 		GetSoulID() string
@@ -846,19 +1371,20 @@ func (s *Server) ListChannels(ctx context.Context, req *v1.ListChannelsRequest) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
 	}
-	workspace := user.Workspace
+	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
 	channels, err := s.store.ListChannelsNoCtx(workspace)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list channels: %v", err)
 	}
+	page, pagination := paginate(channels, offset, limit)
 
-	pbChannels := make([]*v1.Channel, 0, len(channels))
-	for _, ch := range channels {
+	pbChannels := make([]*v1.Channel, 0, len(page))
+	for _, ch := range page {
 		if pb := channelToPB(ch); pb != nil {
 			pbChannels = append(pbChannels, pb)
 		}
@@ -866,7 +1392,7 @@ func (s *Server) ListChannels(ctx context.Context, req *v1.ListChannelsRequest) 
 
 	return &v1.ListChannelsResponse{
 		Channels:   pbChannels,
-		Pagination: &v1.Pagination{Total: int32(len(channels)), Limit: int32(len(channels))},
+		Pagination: pagination,
 	}, nil
 }
 
@@ -893,12 +1419,18 @@ func (s *Server) CreateChannel(ctx context.Context, req *v1.CreateChannelRequest
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	channelData := pbToChannelConfig(req)
+	channelData["workspace_id"] = workspace
 	if err := s.store.SaveChannelNoCtx(channelData); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create channel: %v", err)
 	}
 
-	channels, _ := s.store.ListChannelsNoCtx("")
+	channels, _ := s.store.ListChannelsNoCtx(workspace)
 	if len(channels) > 0 {
 		if pb := channelToPB(channels[len(channels)-1]); pb != nil {
 			return pb, nil
@@ -911,56 +1443,41 @@ func (s *Server) UpdateChannel(ctx context.Context, req *v1.UpdateChannelRequest
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	existing, err := s.store.GetChannelNoCtx(req.Id, "")
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	existing, err := s.store.GetChannelNoCtx(req.Id, workspace)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "channel not found: %s", req.Id)
 	}
+	if err := ensureResourceWorkspace(existing, workspace, "channel"); err != nil {
+		return nil, err
+	}
 
-	if m, ok := existing.(map[string]interface{}); ok {
+	switch current := existing.(type) {
+	case *core.AlertChannel:
+		applyChannelUpdates(current, req)
+		if err := s.store.SaveChannelNoCtx(current); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to update channel: %v", err)
+		}
+	case map[string]interface{}:
 		if req.Name != nil {
-			m["name"] = *req.Name
+			current["name"] = *req.Name
 		}
 		if req.Enabled != nil {
-			m["enabled"] = *req.Enabled
+			current["enabled"] = *req.Enabled
 		}
 		if req.Config != nil {
-			// Whitelist of allowed config fields to prevent mass assignment
-			allowedConfigFields := map[string]bool{
-				"webhook_url":     true,
-				"channel":         true,
-				"bot_token":       true,
-				"chat_id":         true,
-				"api_key":         true,
-				"region":          true,
-				"integration_key": true,
-				"server":          true,
-				"topic":           true,
-				"to":              true,
-				"from":            true,
-				"subject":         true,
-				"smtp_host":       true,
-				"smtp_port":       true,
-				"username":        true,
-				"password":        true,
-				"use_tls":         true,
-				"template":        true,
-				"headers":         true,
-				"secret":          true,
-				"method":          true,
-				"url":             true,
-			}
-			for k, v := range req.Config {
-				if allowedConfigFields[k] {
-					m[k] = v
-				}
-			}
+			applyChannelConfig(current, req.Config)
 		}
-		if err := s.store.SaveChannelNoCtx(m); err != nil {
+		if err := s.store.SaveChannelNoCtx(current); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to update channel: %v", err)
 		}
 	}
 
-	existing, _ = s.store.GetChannelNoCtx(req.Id, "")
+	existing, _ = s.store.GetChannelNoCtx(req.Id, workspace)
 	if pb := channelToPB(existing); pb != nil {
 		return pb, nil
 	}
@@ -970,7 +1487,14 @@ func (s *Server) UpdateChannel(ctx context.Context, req *v1.UpdateChannelRequest
 func (s *Server) DeleteChannel(ctx context.Context, req *v1.DeleteChannelRequest) (*emptypb.Empty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.store.DeleteChannelNoCtx(req.Id, ""); err != nil {
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.store.GetChannelNoCtx(req.Id, workspace); err != nil {
+		return nil, status.Errorf(codes.NotFound, "channel not found: %s", req.Id)
+	}
+	if err := s.store.DeleteChannelNoCtx(req.Id, workspace); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete channel: %v", err)
 	}
 	return &emptypb.Empty{}, nil
@@ -982,19 +1506,20 @@ func (s *Server) ListRules(ctx context.Context, req *v1.ListRulesRequest) (*v1.L
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
 	}
-	workspace := user.Workspace
+	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
 	rules, err := s.store.ListRulesNoCtx(workspace)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list rules: %v", err)
 	}
+	page, pagination := paginate(rules, offset, limit)
 
-	pbRules := make([]*v1.Rule, 0, len(rules))
-	for _, r := range rules {
+	pbRules := make([]*v1.Rule, 0, len(page))
+	for _, r := range page {
 		if pb := ruleToPB(r); pb != nil {
 			pbRules = append(pbRules, pb)
 		}
@@ -1002,7 +1527,7 @@ func (s *Server) ListRules(ctx context.Context, req *v1.ListRulesRequest) (*v1.L
 
 	return &v1.ListRulesResponse{
 		Rules:      pbRules,
-		Pagination: &v1.Pagination{Total: int32(len(rules)), Limit: int32(len(rules))},
+		Pagination: pagination,
 	}, nil
 }
 
@@ -1036,12 +1561,18 @@ func (s *Server) CreateRule(ctx context.Context, req *v1.CreateRuleRequest) (*v1
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	ruleData := pbToRuleConfig(req)
+	ruleData["workspace_id"] = workspace
 	if err := s.store.SaveRuleNoCtx(ruleData); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create rule: %v", err)
 	}
 
-	rules, _ := s.store.ListRulesNoCtx("")
+	rules, _ := s.store.ListRulesNoCtx(workspace)
 	if len(rules) > 0 {
 		if pb := ruleToPB(rules[len(rules)-1]); pb != nil {
 			return pb, nil
@@ -1064,41 +1595,32 @@ func (s *Server) UpdateRule(ctx context.Context, req *v1.UpdateRuleRequest) (*v1
 		return nil, status.Errorf(codes.NotFound, "rule not found: %s", req.Id)
 	}
 
-	if m, ok := existing.(map[string]interface{}); ok {
-		// Workspace IDOR check
-		if existingWS, ok := m["workspace_id"].(string); ok && existingWS != "" && existingWS != user.Workspace {
-			return nil, status.Error(codes.PermissionDenied, "access denied: rule belongs to another workspace")
-		}
+	if err := ensureResourceWorkspace(existing, user.Workspace, "rule"); err != nil {
+		return nil, err
+	}
 
+	switch current := existing.(type) {
+	case *core.AlertRule:
+		applyRuleUpdates(current, req)
+		if err := s.store.SaveRuleNoCtx(current); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to update rule: %v", err)
+		}
+	case map[string]interface{}:
 		if req.Name != nil {
-			m["name"] = *req.Name
+			current["name"] = *req.Name
 		}
 		if req.Enabled != nil {
-			m["enabled"] = *req.Enabled
+			current["enabled"] = *req.Enabled
 		}
 		if req.Config != nil {
-			// Mass assignment protection: only allow known-safe config keys.
-			// Sensitive keys like api_key, token, webhook_url are not modifiable.
-			allowedConfigKeys := map[string]bool{
-				"channel_ids":        true,
-				"cooldown":           true,
-				"severity":           true,
-				"notification_delay": true,
-				"recovery_delay":     true,
-				"aggregation_window": true,
-			}
-			for k, v := range req.Config {
-				if allowedConfigKeys[k] {
-					m[k] = v
-				}
-			}
+			applyRuleConfig(current, req.Config)
 		}
-		if err := s.store.SaveRuleNoCtx(m); err != nil {
+		if err := s.store.SaveRuleNoCtx(current); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to update rule: %v", err)
 		}
 	}
 
-	existing, _ = s.store.GetRuleNoCtx(req.Id, "")
+	existing, _ = s.store.GetRuleNoCtx(req.Id, user.Workspace)
 	if pb := ruleToPB(existing); pb != nil {
 		return pb, nil
 	}
@@ -1108,7 +1630,14 @@ func (s *Server) UpdateRule(ctx context.Context, req *v1.UpdateRuleRequest) (*v1
 func (s *Server) DeleteRule(ctx context.Context, req *v1.DeleteRuleRequest) (*emptypb.Empty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.store.DeleteRuleNoCtx(req.Id, ""); err != nil {
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.store.GetRuleNoCtx(req.Id, workspace); err != nil {
+		return nil, status.Errorf(codes.NotFound, "rule not found: %s", req.Id)
+	}
+	if err := s.store.DeleteRuleNoCtx(req.Id, workspace); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete rule: %v", err)
 	}
 	return &emptypb.Empty{}, nil
@@ -1120,24 +1649,20 @@ func (s *Server) ListJourneys(ctx context.Context, req *v1.ListJourneysRequest) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
 	}
-	workspace := user.Workspace
+	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
-	limit := int(req.Limit)
-	if limit == 0 {
-		limit = 20
-	}
-
-	journeys, err := s.store.ListJourneysNoCtx(workspace, int(req.Offset), limit)
+	journeys, err := s.store.ListJourneysNoCtx(workspace, 0, 0)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list journeys: %v", err)
 	}
+	page, pagination := paginate(journeys, offset, limit)
 
-	pbJourneys := make([]*v1.Journey, 0, len(journeys))
-	for _, j := range journeys {
+	pbJourneys := make([]*v1.Journey, 0, len(page))
+	for _, j := range page {
 		if pb := journeyToPB(j); pb != nil {
 			pbJourneys = append(pbJourneys, pb)
 		}
@@ -1145,7 +1670,7 @@ func (s *Server) ListJourneys(ctx context.Context, req *v1.ListJourneysRequest) 
 
 	return &v1.ListJourneysResponse{
 		Journeys:   pbJourneys,
-		Pagination: &v1.Pagination{Total: int32(len(journeys)), Limit: int32(limit)},
+		Pagination: pagination,
 	}, nil
 }
 
@@ -1153,9 +1678,17 @@ func (s *Server) GetJourney(ctx context.Context, req *v1.GetJourneyRequest) (*v1
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	j, err := s.store.GetJourneyNoCtx(req.Id)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "journey not found: %s", req.Id)
+	}
+	if err := ensureJourneyWorkspace(j, workspace); err != nil {
+		return nil, err
 	}
 	if pb := journeyToPB(j); pb != nil {
 		return pb, nil
@@ -1167,12 +1700,18 @@ func (s *Server) CreateJourney(ctx context.Context, req *v1.CreateJourneyRequest
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	journeyData := pbToJourneyConfig(req)
+	journeyData["workspace_id"] = workspace
 	if err := s.store.SaveJourneyNoCtx(journeyData); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create journey: %v", err)
 	}
 
-	journeys, _ := s.store.ListJourneysNoCtx("", 0, 1)
+	journeys, _ := s.store.ListJourneysNoCtx(workspace, 0, 1)
 	if len(journeys) > 0 {
 		if pb := journeyToPB(journeys[0]); pb != nil {
 			return pb, nil
@@ -1185,25 +1724,28 @@ func (s *Server) UpdateJourney(ctx context.Context, req *v1.UpdateJourneyRequest
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	existing, err := s.store.GetJourneyNoCtx(req.Id)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "journey not found: %s", req.Id)
 	}
+	if err := ensureJourneyWorkspace(existing, workspace); err != nil {
+		return nil, err
+	}
 
-	if m, ok := existing.(map[string]interface{}); ok {
-		if req.Name != nil {
-			m["name"] = *req.Name
+	switch current := existing.(type) {
+	case *core.JourneyConfig:
+		applyJourneyUpdates(current, req)
+		if err := s.store.SaveJourneyNoCtx(current); err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to update journey: %v", err)
 		}
-		if req.Description != nil {
-			m["description"] = *req.Description
-		}
-		if req.Interval != nil {
-			m["interval"] = fmt.Sprintf("%ds", *req.Interval)
-		}
-		if req.Enabled != nil {
-			m["enabled"] = *req.Enabled
-		}
-		if err := s.store.SaveJourneyNoCtx(m); err != nil {
+	case map[string]interface{}:
+		applyJourneyMapUpdates(current, req)
+		if err := s.store.SaveJourneyNoCtx(current); err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to update journey: %v", err)
 		}
 	}
@@ -1218,6 +1760,17 @@ func (s *Server) UpdateJourney(ctx context.Context, req *v1.UpdateJourneyRequest
 func (s *Server) DeleteJourney(ctx context.Context, req *v1.DeleteJourneyRequest) (*emptypb.Empty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	existing, err := s.store.GetJourneyNoCtx(req.Id)
+	if err != nil {
+		return nil, status.Errorf(codes.NotFound, "journey not found: %s", req.Id)
+	}
+	if err := ensureJourneyWorkspace(existing, workspace); err != nil {
+		return nil, err
+	}
 	if err := s.store.DeleteJourneyNoCtx(req.Id); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete journey: %v", err)
 	}
@@ -1225,28 +1778,47 @@ func (s *Server) DeleteJourney(ctx context.Context, req *v1.DeleteJourneyRequest
 }
 
 func (s *Server) RunJourney(ctx context.Context, req *v1.RunJourneyRequest) (*v1.RunJourneyResponse, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	journey, err := s.store.GetJourneyNoCtx(req.Id)
 	if err != nil || journey == nil {
 		return nil, status.Errorf(codes.NotFound, "journey not found: %s", req.Id)
 	}
+	if err := ensureJourneyWorkspace(journey, workspace); err != nil {
+		return nil, err
+	}
+
+	run, err := s.store.RunJourneyNoCtx(workspace, req.Id)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to run journey: %v", err)
+	}
+	pbRun := journeyRunToPB(run)
+	if pbRun == nil {
+		return nil, status.Errorf(codes.Internal, "failed to convert journey run")
+	}
 
 	return &v1.RunJourneyResponse{
 		JourneyId: req.Id,
-		Status:    "executing",
-		Message:   "Journey execution triggered",
+		Status:    pbRun.Status,
+		Message:   fmt.Sprintf("Journey execution completed with status %s", pbRun.Status),
 	}, nil
 }
 
 func (s *Server) ListJourneyRuns(ctx context.Context, req *v1.ListJourneyRunsRequest) (*v1.ListJourneyRunsResponse, error) {
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	limit := int(req.Limit)
 	if limit <= 0 {
 		limit = 20
 	}
 
-	runsIface, err := s.store.ListJourneyRunsNoCtx(req.JourneyId, limit)
+	runsIface, err := s.store.ListJourneyRunsNoCtx(workspace, req.JourneyId, limit)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list journey runs: %v", err)
 	}
@@ -1265,7 +1837,12 @@ func (s *Server) ListJourneyRuns(ctx context.Context, req *v1.ListJourneyRunsReq
 }
 
 func (s *Server) GetJourneyRun(ctx context.Context, req *v1.GetJourneyRunRequest) (*v1.JourneyRun, error) {
-	run, err := s.store.GetJourneyRunNoCtx(req.JourneyId, req.RunId)
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	run, err := s.store.GetJourneyRunNoCtx(workspace, req.JourneyId, req.RunId)
 	if err != nil || run == nil {
 		return nil, status.Errorf(codes.NotFound, "journey run not found: %s", req.RunId)
 	}
@@ -1290,10 +1867,18 @@ func (s *Server) GetClusterStatus(ctx context.Context, req *emptypb.Empty) (*v1.
 // --- Streaming RPCs ---
 
 func (s *Server) StreamJudgments(req *v1.StreamRequest, stream v1.AnubisWatchService_StreamJudgmentsServer) error {
+	workspace, err := workspaceFromContext(stream.Context())
+	if err != nil {
+		return err
+	}
+
 	// Poll-based streaming: check for new judgments every second
 	soulID := ""
 	if req.SoulId != nil {
 		soulID = *req.SoulId
+	}
+	if err := s.ensureSoulAccess(soulID, workspace); err != nil {
+		return err
 	}
 
 	seen := make(map[string]bool)
@@ -1314,9 +1899,10 @@ func (s *Server) StreamJudgments(req *v1.StreamRequest, stream v1.AnubisWatchSer
 			}
 
 			for _, j := range judgments {
-				type hasID interface{ GetID() string }
-				if hj, ok := j.(hasID); ok {
-					id := hj.GetID()
+				if ws := resourceWorkspace(j); ws != "" && ws != workspace {
+					continue
+				}
+				if id := resourceID(j); id != "" {
 					if !seen[id] {
 						seen[id] = true
 						if pb := judgmentToPB(j); pb != nil {
@@ -1332,10 +1918,18 @@ func (s *Server) StreamJudgments(req *v1.StreamRequest, stream v1.AnubisWatchSer
 }
 
 func (s *Server) StreamVerdicts(req *v1.StreamRequest, stream v1.AnubisWatchService_StreamVerdictsServer) error {
+	workspace, err := workspaceFromContext(stream.Context())
+	if err != nil {
+		return err
+	}
+
 	// Poll-based streaming: check for new alert events every second
 	soulID := ""
 	if req.SoulId != nil {
 		soulID = *req.SoulId
+	}
+	if err := s.ensureSoulAccess(soulID, workspace); err != nil {
+		return err
 	}
 
 	seen := make(map[string]bool)
@@ -1356,9 +1950,10 @@ func (s *Server) StreamVerdicts(req *v1.StreamRequest, stream v1.AnubisWatchServ
 			}
 
 			for _, e := range events {
-				type hasID interface{ GetID() string }
-				if he, ok := e.(hasID); ok {
-					id := he.GetID()
+				if ws := resourceWorkspace(e); ws != "" && ws != workspace {
+					continue
+				}
+				if id := resourceID(e); id != "" {
 					if !seen[id] {
 						seen[id] = true
 						if pb := eventToVerdict(e); pb != nil {

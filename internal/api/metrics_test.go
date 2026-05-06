@@ -12,6 +12,23 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
+type workspaceAwareMetricsStorage struct {
+	*mockStorage
+	soulsByWorkspace map[string][]*core.Soul
+}
+
+func (m *workspaceAwareMetricsStorage) ListSoulsNoCtx(workspace string, offset, limit int) ([]*core.Soul, error) {
+	souls := append([]*core.Soul(nil), m.soulsByWorkspace[workspace]...)
+	if offset >= len(souls) {
+		return []*core.Soul{}, nil
+	}
+	end := offset + limit
+	if limit <= 0 || end > len(souls) {
+		end = len(souls)
+	}
+	return souls[offset:end], nil
+}
+
 // TestHandleMetrics tests the handleMetrics function
 func TestHandleMetrics(t *testing.T) {
 	config := core.ServerConfig{Port: 8080}
@@ -155,6 +172,55 @@ func TestBuildSoulMetrics_WithSouls(t *testing.T) {
 
 	if !strings.Contains(metrics, "1") {
 		t.Error("Expected soul count of 1")
+	}
+}
+
+func TestBuildMetrics_IncludesNonDefaultWorkspaceSouls(t *testing.T) {
+	store := &workspaceAwareMetricsStorage{
+		mockStorage: newMockStorage(),
+		soulsByWorkspace: map[string][]*core.Soul{
+			"default": {
+				{ID: "default-soul", Name: "Default Soul", Type: core.CheckHTTP, WorkspaceID: "default"},
+			},
+			"tenant-a": {
+				{ID: "tenant-soul", Name: "Tenant Soul", Type: core.CheckHTTP, WorkspaceID: "tenant-a"},
+			},
+		},
+	}
+	if err := store.SaveWorkspaceNoCtx(&core.Workspace{ID: "tenant-a", Name: "Tenant A", Slug: "tenant-a"}); err != nil {
+		t.Fatalf("failed to save workspace: %v", err)
+	}
+	now := time.Now()
+	store.SaveJudgment(context.Background(), &core.Judgment{
+		ID:        "default-judgment",
+		SoulID:    "default-soul",
+		Status:    core.SoulAlive,
+		Duration:  100 * time.Millisecond,
+		Timestamp: now,
+	})
+	store.SaveJudgment(context.Background(), &core.Judgment{
+		ID:        "tenant-judgment",
+		SoulID:    "tenant-soul",
+		Status:    core.SoulDead,
+		Duration:  200 * time.Millisecond,
+		Timestamp: now,
+	})
+
+	config := core.ServerConfig{Port: 8080}
+	logger := newTestLogger()
+	server := NewRESTServer(config, core.AuthConfig{Enabled: core.BoolPtr(true)}, store, &mockProbeEngine{}, &mockAlertManager{}, &mockAuthenticator{}, &mockClusterManager{}, nil, nil, nil, nil, logger)
+
+	soulMetrics := server.buildSoulMetrics()
+	if !strings.Contains(soulMetrics, "anubis_souls_total 2") {
+		t.Fatalf("expected metrics to include souls across workspaces, got:\n%s", soulMetrics)
+	}
+	if !strings.Contains(soulMetrics, "Tenant Soul") {
+		t.Fatalf("expected non-default workspace soul in metrics, got:\n%s", soulMetrics)
+	}
+
+	judgmentMetrics := server.buildJudgmentMetrics()
+	if !strings.Contains(judgmentMetrics, "anubis_judgments_in_24h 2") {
+		t.Fatalf("expected judgment metrics across workspaces, got:\n%s", judgmentMetrics)
 	}
 }
 

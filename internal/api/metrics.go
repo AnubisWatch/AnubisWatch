@@ -99,7 +99,7 @@ func (s *RESTServer) buildSystemMetrics() string {
 
 // buildSoulMetrics returns soul-related metrics
 func (s *RESTServer) buildSoulMetrics() string {
-	souls, err := s.store.ListSoulsNoCtx("default", 0, 10000)
+	souls, err := s.metricsSouls()
 	if err != nil {
 		return "# anubis_souls_total 0\n"
 	}
@@ -163,7 +163,7 @@ func (s *RESTServer) buildSoulMetrics() string {
 
 // buildJudgmentMetrics returns judgment/health check metrics
 func (s *RESTServer) buildJudgmentMetrics() string {
-	souls, _ := s.store.ListSoulsNoCtx("default", 0, 10000)
+	souls, _ := s.metricsSouls()
 
 	totalChecks := 0
 	failedChecks := 0
@@ -281,7 +281,7 @@ func (s *RESTServer) buildAlertMetrics() string {
 
 // buildLatencyMetrics returns latency percentile metrics
 func (s *RESTServer) buildLatencyMetrics() string {
-	souls, err := s.store.ListSoulsNoCtx("default", 0, 10000)
+	souls, err := s.metricsSouls()
 	if err != nil || len(souls) == 0 {
 		return ""
 	}
@@ -330,6 +330,52 @@ func (s *RESTServer) buildLatencyMetrics() string {
 	out += fmt.Sprintf("anubis_latency_samples_total %d\n", len(latencies))
 
 	return out
+}
+
+func (s *RESTServer) metricsSouls() ([]*core.Soul, error) {
+	workspaceIDs := []string{"default"}
+	if workspaces, err := s.store.ListWorkspacesNoCtx(); err == nil {
+		for _, workspace := range workspaces {
+			if workspace == nil || workspace.ID == "" || workspace.ID == "default" {
+				continue
+			}
+			workspaceIDs = append(workspaceIDs, workspace.ID)
+		}
+	}
+
+	seen := make(map[string]struct{})
+	souls := make([]*core.Soul, 0)
+	var firstErr error
+	for _, workspaceID := range workspaceIDs {
+		batch, err := s.store.ListSoulsNoCtx(workspaceID, 0, 10000)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		for _, soul := range batch {
+			if soul == nil {
+				continue
+			}
+			seenKey := soul.ID
+			if seenKey == "" {
+				seenKey = workspaceID + "/" + soul.Name + "/" + soul.Target
+			}
+			if _, ok := seen[seenKey]; ok {
+				continue
+			}
+			seen[seenKey] = struct{}{}
+			if soul.WorkspaceID == "" {
+				soul.WorkspaceID = workspaceID
+			}
+			souls = append(souls, soul)
+		}
+	}
+	if len(souls) == 0 && firstErr != nil {
+		return nil, firstErr
+	}
+	return souls, nil
 }
 
 // statusNumeric converts a soul status string to a numeric value

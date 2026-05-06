@@ -6,6 +6,7 @@ import "time"
 type JourneyConfig struct {
 	Name              string            `json:"name" yaml:"name"`
 	ID                string            `json:"id" yaml:"id"`
+	Description       string            `json:"description,omitempty" yaml:"description,omitempty"`
 	WorkspaceID       string            `json:"workspace_id" yaml:"-"`
 	Weight            Duration          `json:"weight" yaml:"weight"`   // check interval
 	Timeout           Duration          `json:"timeout" yaml:"timeout"` // total journey timeout

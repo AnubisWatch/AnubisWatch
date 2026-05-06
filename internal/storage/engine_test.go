@@ -349,6 +349,43 @@ func TestCobaltDB_GetStats(t *testing.T) {
 	}
 }
 
+func TestCobaltDB_GetStats_NonDefaultWorkspaceJudgments(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := core.ContextWithWorkspaceID(context.Background(), "tenant-a")
+	now := time.Now().UTC()
+	soul := &core.Soul{
+		ID:          "tenant-stats-soul",
+		Name:        "Tenant Stats Soul",
+		Type:        core.CheckHTTP,
+		Target:      "https://example.com",
+		WorkspaceID: "tenant-a",
+	}
+	if err := db.SaveSoul(ctx, soul); err != nil {
+		t.Fatalf("SaveSoul failed: %v", err)
+	}
+	if err := db.SaveJudgment(ctx, &core.Judgment{
+		ID:        "tenant-stats-judgment",
+		SoulID:    soul.ID,
+		Timestamp: now,
+		Status:    core.SoulAlive,
+	}); err != nil {
+		t.Fatalf("SaveJudgment failed: %v", err)
+	}
+
+	stats, err := db.GetStatsNoCtx("tenant-a", now.Add(-time.Hour), now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("GetStatsNoCtx failed: %v", err)
+	}
+	if stats.TotalSouls != 1 {
+		t.Fatalf("expected 1 tenant soul, got %d", stats.TotalSouls)
+	}
+	if stats.AliveSouls != 1 {
+		t.Fatalf("expected tenant judgment to count as alive, got alive=%d dead=%d", stats.AliveSouls, stats.DeadSouls)
+	}
+}
+
 func TestCobaltDB_Channel(t *testing.T) {
 	db := newTestDB(t)
 	defer db.Close()
@@ -795,6 +832,35 @@ func TestCobaltDB_GetSoulNoCtx(t *testing.T) {
 	}
 }
 
+func TestCobaltDB_GetSoulNoCtx_FindsNonDefaultWorkspace(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	soul := &core.Soul{
+		ID:          "non-default-soul-noctx",
+		WorkspaceID: "tenant-a",
+		Name:        "Tenant Soul NoCtx",
+		Type:        core.CheckHTTP,
+		Target:      "https://example.com",
+	}
+
+	if err := db.SaveSoul(ctx, soul); err != nil {
+		t.Fatalf("SaveSoul failed: %v", err)
+	}
+
+	retrieved, err := db.GetSoulNoCtx("non-default-soul-noctx")
+	if err != nil {
+		t.Fatalf("GetSoulNoCtx failed: %v", err)
+	}
+	if retrieved.WorkspaceID != "tenant-a" {
+		t.Fatalf("expected workspace tenant-a, got %q", retrieved.WorkspaceID)
+	}
+	if retrieved.Name != "Tenant Soul NoCtx" {
+		t.Errorf("expected name Tenant Soul NoCtx, got %s", retrieved.Name)
+	}
+}
+
 func TestCobaltDB_ListSoulsNoCtx(t *testing.T) {
 	db := newTestDB(t)
 	defer db.Close()
@@ -1122,6 +1188,14 @@ func TestCobaltDB_ListJudgmentsNoCtx(t *testing.T) {
 	if len(judgments) < 1 {
 		t.Errorf("expected at least 1 judgment, got %d", len(judgments))
 	}
+
+	allJudgments, err := db.ListJudgmentsNoCtx("", time.Now().Add(-time.Hour), time.Now().Add(time.Hour), 0)
+	if err != nil {
+		t.Fatalf("ListJudgmentsNoCtx without soul failed: %v", err)
+	}
+	if len(allJudgments) < 1 {
+		t.Errorf("expected at least 1 judgment without soul filter, got %d", len(allJudgments))
+	}
 }
 
 func TestCobaltDB_GetJudgmentNoCtx(t *testing.T) {
@@ -1149,6 +1223,30 @@ func TestCobaltDB_GetJudgmentNoCtx(t *testing.T) {
 	}
 	if !retrieved.Timestamp.Equal(judgment.Timestamp) {
 		t.Fatalf("Expected timestamp %s, got %s", judgment.Timestamp, retrieved.Timestamp)
+	}
+}
+
+func TestCobaltDB_GetJudgmentNoCtx_FindsNonDefaultWorkspace(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := core.ContextWithWorkspaceID(context.Background(), "tenant-a")
+	judgment := &core.Judgment{
+		ID:        "tenant-judgment",
+		SoulID:    "tenant-judgment-soul",
+		Timestamp: time.Now().UTC(),
+		Status:    core.SoulAlive,
+	}
+	if err := db.SaveJudgment(ctx, judgment); err != nil {
+		t.Fatalf("SaveJudgment failed: %v", err)
+	}
+
+	retrieved, err := db.GetJudgmentNoCtx(judgment.ID)
+	if err != nil {
+		t.Fatalf("GetJudgmentNoCtx failed: %v", err)
+	}
+	if retrieved.WorkspaceID != "tenant-a" {
+		t.Fatalf("Expected tenant-a workspace, got %s", retrieved.WorkspaceID)
 	}
 }
 
@@ -1277,6 +1375,47 @@ func TestCobaltDB_SaveStatusPage(t *testing.T) {
 	_, err = db.GetStatusPage("page-1")
 	if err == nil {
 		t.Error("expected error getting deleted status page")
+	}
+}
+
+func TestCobaltDB_StatusPage_WorkspaceAwareStorage(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	defaultPage := &core.StatusPage{ID: "default-page", WorkspaceID: "default", Name: "Default Page", Slug: "default", Enabled: true}
+	tenantPage := &core.StatusPage{ID: "tenant-page", WorkspaceID: "tenant-a", Name: "Tenant Page", Slug: "tenant", Enabled: true}
+
+	if err := db.SaveStatusPage(defaultPage); err != nil {
+		t.Fatalf("SaveStatusPage default failed: %v", err)
+	}
+	if err := db.SaveStatusPage(tenantPage); err != nil {
+		t.Fatalf("SaveStatusPage tenant failed: %v", err)
+	}
+
+	retrieved, err := db.GetStatusPage("tenant-page")
+	if err != nil {
+		t.Fatalf("GetStatusPage tenant failed: %v", err)
+	}
+	if retrieved.WorkspaceID != "tenant-a" {
+		t.Fatalf("expected tenant-a workspace, got %q", retrieved.WorkspaceID)
+	}
+
+	pages, err := db.ListStatusPages()
+	if err != nil {
+		t.Fatalf("ListStatusPages failed: %v", err)
+	}
+	if len(pages) != 2 {
+		t.Fatalf("expected 2 pages across workspaces, got %d", len(pages))
+	}
+
+	if err := db.DeleteStatusPage("tenant-page"); err != nil {
+		t.Fatalf("DeleteStatusPage tenant failed: %v", err)
+	}
+	if _, err := db.GetStatusPage("tenant-page"); err == nil {
+		t.Fatal("expected tenant page to be deleted")
+	}
+	if _, err := db.GetStatusPage("default-page"); err != nil {
+		t.Fatalf("default page should remain after tenant delete: %v", err)
 	}
 }
 
@@ -1919,6 +2058,58 @@ func TestCobaltDB_SaveAlertEvent(t *testing.T) {
 	}
 }
 
+func TestCobaltDB_SaveAlertEvent_NonDefaultWorkspace(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	event := &core.AlertEvent{
+		ID:          "tenant-alert-event",
+		SoulID:      "tenant-alert-soul",
+		WorkspaceID: "tenant-a",
+		Message:     "Tenant alert",
+		Timestamp:   time.Now().UTC(),
+	}
+
+	if err := db.SaveAlertEvent(event); err != nil {
+		t.Fatalf("SaveAlertEvent failed: %v", err)
+	}
+
+	events, err := db.ListAlertEvents("tenant-alert-soul", 10)
+	if err != nil {
+		t.Fatalf("ListAlertEvents failed: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].WorkspaceID != "tenant-a" {
+		t.Fatalf("expected tenant-a workspace, got %q", events[0].WorkspaceID)
+	}
+}
+
+func TestCobaltDB_SaveAlertEvent_DoesNotOverwriteSameTimestamp(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ts := time.Now().UTC()
+	events := []*core.AlertEvent{
+		{ID: "same-ts-1", SoulID: "same-ts-soul", WorkspaceID: "default", Message: "one", Timestamp: ts},
+		{ID: "same-ts-2", SoulID: "same-ts-soul", WorkspaceID: "default", Message: "two", Timestamp: ts},
+	}
+	for _, event := range events {
+		if err := db.SaveAlertEvent(event); err != nil {
+			t.Fatalf("SaveAlertEvent failed: %v", err)
+		}
+	}
+
+	listed, err := db.ListAlertEvents("same-ts-soul", 10)
+	if err != nil {
+		t.Fatalf("ListAlertEvents failed: %v", err)
+	}
+	if len(listed) != 2 {
+		t.Fatalf("expected 2 events with identical timestamps, got %d", len(listed))
+	}
+}
+
 func TestCobaltDB_ListAlertEvents(t *testing.T) {
 	db := newTestDB(t)
 	defer db.Close()
@@ -1976,6 +2167,41 @@ func TestCobaltDB_SaveIncident(t *testing.T) {
 	}
 	if retrieved.ID != incident.ID {
 		t.Errorf("expected ID %s, got %s", incident.ID, retrieved.ID)
+	}
+}
+
+func TestCobaltDB_SaveIncident_NonDefaultWorkspace(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	incident := &core.Incident{
+		ID:          "tenant-incident",
+		RuleID:      "rule-tenant",
+		SoulID:      "tenant-soul",
+		WorkspaceID: "tenant-a",
+		Status:      core.IncidentOpen,
+		Severity:    core.SeverityCritical,
+		StartedAt:   time.Now().UTC(),
+	}
+
+	if err := db.SaveIncident(incident); err != nil {
+		t.Fatalf("SaveIncident failed: %v", err)
+	}
+
+	retrieved, err := db.GetIncident("tenant-incident")
+	if err != nil {
+		t.Fatalf("GetIncident failed: %v", err)
+	}
+	if retrieved.WorkspaceID != "tenant-a" {
+		t.Fatalf("expected tenant-a workspace, got %q", retrieved.WorkspaceID)
+	}
+
+	active, err := db.ListActiveIncidents()
+	if err != nil {
+		t.Fatalf("ListActiveIncidents failed: %v", err)
+	}
+	if len(active) != 1 || active[0].WorkspaceID != "tenant-a" {
+		t.Fatalf("expected tenant incident in active list, got %#v", active)
 	}
 }
 
@@ -2686,6 +2912,45 @@ func TestCobaltDB_ListJudgments(t *testing.T) {
 	}
 }
 
+func TestCobaltDB_ListJudgmentsNoCtx_UsesSoulWorkspace(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := core.ContextWithWorkspaceID(context.Background(), "tenant-a")
+	soul := &core.Soul{
+		ID:          "tenant-list-judgment-soul",
+		WorkspaceID: "tenant-a",
+		Name:        "Tenant List Judgment Soul",
+		Type:        core.CheckHTTP,
+		Target:      "https://example.com",
+	}
+	if err := db.SaveSoul(ctx, soul); err != nil {
+		t.Fatalf("SaveSoul failed: %v", err)
+	}
+
+	now := time.Now().UTC()
+	judgment := &core.Judgment{
+		ID:        "tenant-list-judgment",
+		SoulID:    soul.ID,
+		Timestamp: now,
+		Status:    core.SoulAlive,
+	}
+	if err := db.SaveJudgment(ctx, judgment); err != nil {
+		t.Fatalf("SaveJudgment failed: %v", err)
+	}
+
+	judgments, err := db.ListJudgmentsNoCtx(soul.ID, now.Add(-time.Hour), now.Add(time.Hour), 10)
+	if err != nil {
+		t.Fatalf("ListJudgmentsNoCtx failed: %v", err)
+	}
+	if len(judgments) != 1 {
+		t.Fatalf("Expected 1 tenant judgment, got %d", len(judgments))
+	}
+	if judgments[0].WorkspaceID != "tenant-a" {
+		t.Fatalf("Expected tenant-a workspace, got %s", judgments[0].WorkspaceID)
+	}
+}
+
 func TestCobaltDB_GetLatestJudgmentNoCtx(t *testing.T) {
 	db := newTestDB(t)
 	defer db.Close()
@@ -3331,17 +3596,16 @@ func TestStatusPageRepository_GetSoul_Found(t *testing.T) {
 	db := newTestDB(t)
 	defer db.Close()
 
-	// StatusPageRepository.GetSoul uses key format "souls/{id}"
-	// Save soul directly with the expected key format
 	soul := &core.Soul{
 		ID:          "repo-soul",
-		WorkspaceID: "default",
+		WorkspaceID: "tenant-a",
 		Name:        "Repo Soul",
 		Type:        core.CheckHTTP,
 		Target:      "https://example.com",
 	}
-	data, _ := json.Marshal(soul)
-	db.Put("souls/repo-soul", data)
+	if err := db.SaveSoul(context.Background(), soul); err != nil {
+		t.Fatalf("SaveSoul failed: %v", err)
+	}
 
 	repo := NewStatusPageRepository(db)
 	result, err := repo.GetSoul("repo-soul")
@@ -3350,6 +3614,9 @@ func TestStatusPageRepository_GetSoul_Found(t *testing.T) {
 	}
 	if result.Name != "Repo Soul" {
 		t.Errorf("Expected name 'Repo Soul', got %s", result.Name)
+	}
+	if result.WorkspaceID != "tenant-a" {
+		t.Errorf("Expected workspace tenant-a, got %s", result.WorkspaceID)
 	}
 }
 
@@ -3555,6 +3822,47 @@ func TestCobaltDB_GetUptimeHistory_New(t *testing.T) {
 	}
 }
 
+func TestCobaltDB_GetUptimeHistory_NonDefaultWorkspace(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := core.ContextWithWorkspaceID(context.Background(), "tenant-a")
+	soul := &core.Soul{
+		ID:          "tenant-uptime-soul",
+		WorkspaceID: "tenant-a",
+		Name:        "Tenant Uptime Soul",
+		Type:        core.CheckHTTP,
+		Target:      "https://example.com",
+	}
+	if err := db.SaveSoul(ctx, soul); err != nil {
+		t.Fatalf("SaveSoul failed: %v", err)
+	}
+
+	now := time.Now().UTC()
+	for _, j := range []*core.Judgment{
+		{ID: "alive", SoulID: soul.ID, Timestamp: now.Add(-time.Minute), Status: core.SoulAlive},
+		{ID: "dead", SoulID: soul.ID, Timestamp: now, Status: core.SoulDead},
+	} {
+		if err := db.SaveJudgment(ctx, j); err != nil {
+			t.Fatalf("SaveJudgment failed: %v", err)
+		}
+	}
+
+	history, err := db.GetUptimeHistory(soul.ID, 1)
+	if err != nil {
+		t.Fatalf("GetUptimeHistory failed: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("Expected 1 day of history, got %d", len(history))
+	}
+	if history[0].Uptime != 50 {
+		t.Errorf("Expected 50%% uptime from tenant judgments, got %.2f", history[0].Uptime)
+	}
+	if history[0].Status != "dead" {
+		t.Errorf("Expected dead status for 50%% uptime, got %q", history[0].Status)
+	}
+}
+
 func TestCobaltDB_GetUptimeHistory_NoJudgments(t *testing.T) {
 	db := newTestDB(t)
 	defer db.Close()
@@ -3578,6 +3886,48 @@ func TestCobaltDB_GetUptimeHistory_NoJudgments(t *testing.T) {
 
 	if len(history) != 7 {
 		t.Errorf("Expected 7 days of history, got %d", len(history))
+	}
+	for _, day := range history {
+		if day.Status != "unknown" {
+			t.Fatalf("Expected no-judgment day to be unknown, got %#v", day)
+		}
+	}
+}
+
+func TestStatusPageRepository_GetUptimeHistory_UsesJudgments(t *testing.T) {
+	repo, db := newTestStatusPageRepo(t)
+	defer db.Close()
+
+	ctx := context.Background()
+	soul := &core.Soul{
+		ID:          "repo-uptime-soul",
+		WorkspaceID: "default",
+		Name:        "Repo Uptime Soul",
+		Type:        core.CheckHTTP,
+		Target:      "https://example.com",
+	}
+	if err := db.SaveSoul(ctx, soul); err != nil {
+		t.Fatalf("SaveSoul failed: %v", err)
+	}
+	now := time.Now().UTC()
+	for _, judgment := range []*core.Judgment{
+		{ID: "repo-alive", SoulID: soul.ID, Timestamp: now.Add(-time.Minute), Status: core.SoulAlive},
+		{ID: "repo-dead", SoulID: soul.ID, Timestamp: now, Status: core.SoulDead},
+	} {
+		if err := db.SaveJudgment(ctx, judgment); err != nil {
+			t.Fatalf("SaveJudgment failed: %v", err)
+		}
+	}
+
+	history, err := repo.GetUptimeHistory(soul.ID, 1)
+	if err != nil {
+		t.Fatalf("GetUptimeHistory failed: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("Expected 1 day of history, got %d", len(history))
+	}
+	if history[0].Uptime != 50 || history[0].Status != "dead" {
+		t.Fatalf("Expected real judgment-derived uptime, got %#v", history[0])
 	}
 }
 
@@ -3988,6 +4338,44 @@ func TestCobaltDB_GetSoulJudgments_Sorted(t *testing.T) {
 	// j3 should be first (most recent)
 	if results[0].ID != "j3" {
 		t.Errorf("Expected first judgment j3 (most recent), got %s", results[0].ID)
+	}
+}
+
+func TestCobaltDB_GetSoulJudgments_NonDefaultWorkspace(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := core.ContextWithWorkspaceID(context.Background(), "tenant-a")
+	soul := &core.Soul{
+		ID:          "tenant-judgment-soul",
+		WorkspaceID: "tenant-a",
+		Name:        "Tenant Judgment Soul",
+		Type:        core.CheckHTTP,
+		Target:      "https://example.com",
+	}
+	if err := db.SaveSoul(ctx, soul); err != nil {
+		t.Fatalf("SaveSoul failed: %v", err)
+	}
+
+	now := time.Now().UTC()
+	for _, j := range []*core.Judgment{
+		{ID: "older", SoulID: soul.ID, Timestamp: now.Add(-time.Hour), Status: core.SoulDead},
+		{ID: "newer", SoulID: soul.ID, Timestamp: now, Status: core.SoulAlive},
+	} {
+		if err := db.SaveJudgment(ctx, j); err != nil {
+			t.Fatalf("SaveJudgment failed: %v", err)
+		}
+	}
+
+	results, err := db.GetSoulJudgments(soul.ID, 10)
+	if err != nil {
+		t.Fatalf("GetSoulJudgments failed: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("Expected 2 judgments, got %d", len(results))
+	}
+	if results[0].ID != "newer" {
+		t.Errorf("Expected newest tenant judgment first, got %s", results[0].ID)
 	}
 }
 
@@ -5509,6 +5897,31 @@ func TestNoCtxWrappers_GetJourneyNoCtx(t *testing.T) {
 	}
 }
 
+func TestNoCtxWrappers_GetJourneyNoCtx_FindsNonDefaultWorkspace(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	journey := &core.JourneyConfig{
+		ID:          "tenant-journey",
+		Name:        "Tenant Journey",
+		WorkspaceID: "tenant-a",
+		Steps: []core.JourneyStep{
+			{Name: "Step 1", Type: "http", Target: "http://example.com"},
+		},
+	}
+	if err := db.SaveJourney(context.Background(), journey); err != nil {
+		t.Fatalf("Failed to save journey: %v", err)
+	}
+
+	retrieved, err := db.GetJourneyNoCtx("tenant-journey")
+	if err != nil {
+		t.Fatalf("GetJourneyNoCtx failed: %v", err)
+	}
+	if retrieved.WorkspaceID != "tenant-a" {
+		t.Errorf("Expected tenant-a workspace, got %s", retrieved.WorkspaceID)
+	}
+}
+
 // TestNoCtxWrappers_ListJourneysNoCtx tests ListJourneysNoCtx wrapper
 func TestNoCtxWrappers_ListJourneysNoCtx(t *testing.T) {
 	db := newTestDB(t)
@@ -5579,6 +5992,29 @@ func TestNoCtxWrappers_DeleteJourneyNoCtx(t *testing.T) {
 	_, err = db.GetJourney(context.Background(), "default", "delete-test")
 	if err == nil {
 		t.Error("Journey should have been deleted")
+	}
+}
+
+func TestNoCtxWrappers_DeleteJourneyNoCtx_DeletesStoredWorkspace(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	journey := &core.JourneyConfig{
+		ID:          "tenant-delete-test",
+		Name:        "Tenant Delete Test",
+		WorkspaceID: "tenant-a",
+	}
+	if err := db.SaveJourney(context.Background(), journey); err != nil {
+		t.Fatalf("SaveJourney failed: %v", err)
+	}
+
+	if err := db.DeleteJourneyNoCtx("tenant-delete-test"); err != nil {
+		t.Fatalf("DeleteJourneyNoCtx failed: %v", err)
+	}
+
+	_, err := db.GetJourney(context.Background(), "tenant-a", "tenant-delete-test")
+	if err == nil {
+		t.Error("Journey should have been deleted from tenant-a")
 	}
 }
 
@@ -6235,6 +6671,55 @@ func TestTimeSeriesStore_QuerySummaries_ClosedDB(t *testing.T) {
 	_, err := ts.QuerySummaries(ctx, "default", "test-soul", Resolution1Min, time.Now().Add(-time.Hour), time.Now())
 	if err == nil {
 		t.Error("QuerySummaries should error when DB is closed")
+	}
+}
+
+func TestTimeSeriesStore_CompactionIncludesNonDefaultWorkspace(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ts := NewTimeSeriesStore(db, core.TimeSeriesConfig{}, newTestLogger())
+	ctx := core.ContextWithWorkspaceID(context.Background(), "tenant-a")
+	now := time.Now().UTC().Add(-10 * time.Minute).Truncate(5 * time.Minute)
+
+	judgments := []*core.Judgment{
+		{
+			ID:        "tenant-judge-1",
+			SoulID:    "tenant-soul",
+			Status:    core.SoulAlive,
+			Duration:  100 * time.Millisecond,
+			Timestamp: now,
+		},
+		{
+			ID:        "tenant-judge-2",
+			SoulID:    "tenant-soul",
+			Status:    core.SoulDead,
+			Duration:  300 * time.Millisecond,
+			Timestamp: now.Add(time.Minute),
+		},
+	}
+	for _, judgment := range judgments {
+		if err := ts.SaveJudgment(ctx, judgment); err != nil {
+			t.Fatalf("SaveJudgment failed: %v", err)
+		}
+	}
+
+	if err := ts.compactToResolution(Resolution1Min, Resolution5Min, time.Second); err != nil {
+		t.Fatalf("compactToResolution failed: %v", err)
+	}
+
+	summaries, err := ts.QuerySummaries(ctx, "tenant-a", "tenant-soul", Resolution5Min, now.Add(-time.Minute), now.Add(5*time.Minute))
+	if err != nil {
+		t.Fatalf("QuerySummaries failed: %v", err)
+	}
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 compacted summary, got %d", len(summaries))
+	}
+	if summaries[0].WorkspaceID != "tenant-a" {
+		t.Fatalf("expected tenant-a summary, got %q", summaries[0].WorkspaceID)
+	}
+	if summaries[0].Count != 2 || summaries[0].SuccessCount != 1 || summaries[0].FailureCount != 1 {
+		t.Fatalf("unexpected compacted counts: %+v", summaries[0])
 	}
 }
 
@@ -7770,6 +8255,47 @@ func TestCobaltDB_MaintenanceWindowCRUD(t *testing.T) {
 	}
 }
 
+func TestCobaltDB_MaintenanceWindow_WorkspaceAwareStorage(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	defaultWindow := &core.MaintenanceWindow{ID: "default-window", WorkspaceID: "default", Name: "Default Window"}
+	tenantWindow := &core.MaintenanceWindow{ID: "tenant-window", WorkspaceID: "tenant-a", Name: "Tenant Window"}
+
+	if err := db.SaveMaintenanceWindow(defaultWindow); err != nil {
+		t.Fatalf("SaveMaintenanceWindow default failed: %v", err)
+	}
+	if err := db.SaveMaintenanceWindow(tenantWindow); err != nil {
+		t.Fatalf("SaveMaintenanceWindow tenant failed: %v", err)
+	}
+
+	retrieved, err := db.GetMaintenanceWindow("tenant-window")
+	if err != nil {
+		t.Fatalf("GetMaintenanceWindow tenant failed: %v", err)
+	}
+	if retrieved.WorkspaceID != "tenant-a" {
+		t.Fatalf("expected tenant-a workspace, got %q", retrieved.WorkspaceID)
+	}
+
+	windows, err := db.ListMaintenanceWindows()
+	if err != nil {
+		t.Fatalf("ListMaintenanceWindows failed: %v", err)
+	}
+	if len(windows) != 2 {
+		t.Fatalf("expected 2 windows across workspaces, got %d", len(windows))
+	}
+
+	if err := db.DeleteMaintenanceWindow("tenant-window"); err != nil {
+		t.Fatalf("DeleteMaintenanceWindow tenant failed: %v", err)
+	}
+	if _, err := db.GetMaintenanceWindow("tenant-window"); err == nil {
+		t.Fatal("expected tenant window to be deleted")
+	}
+	if _, err := db.GetMaintenanceWindow("default-window"); err != nil {
+		t.Fatalf("default window should remain after tenant delete: %v", err)
+	}
+}
+
 // TestCobaltDB_MaintenanceWindow_NotFound tests get/delete non-existent
 func TestCobaltDB_MaintenanceWindow_NotFound(t *testing.T) {
 	db := newTestDB(t)
@@ -7780,10 +8306,9 @@ func TestCobaltDB_MaintenanceWindow_NotFound(t *testing.T) {
 		t.Error("Expected error for non-existent maintenance window")
 	}
 
-	// Delete of non-existent key is a no-op (doesn't error)
 	err = db.DeleteMaintenanceWindow("nonexistent")
-	if err != nil {
-		t.Errorf("Delete of non-existent key should not error: %v", err)
+	if err == nil {
+		t.Error("Expected error deleting non-existent maintenance window")
 	}
 }
 

@@ -16,10 +16,10 @@
 ### First Login
 
 1. Open your browser and navigate to `http://localhost:8080`
-2. Login with default credentials:
+2. Login with the admin credentials from your configuration:
    - Email: `admin@anubis.watch`
-   - Password: `SecurePass123!`
-3. **Important:** Change the default password immediately!
+   - Password: the value of `auth.local.admin_password` or `ANUBIS_ADMIN_PASSWORD`
+3. Use a strong unique password before exposing the dashboard.
 
 ### Dashboard Overview
 

@@ -277,8 +277,8 @@ curl -fsSL https://anubis.watch/install.sh | sh
 
 # Docker
 docker run -d --name anubis \
-  -p 8443:8443 \
-  -v anubis-data:/var/lib/anubis \
+  -p 8080:8080 \
+  -v anubis-data:/data \
   ghcr.io/anubiswatch/anubiswatch:latest
 ```
 
@@ -297,14 +297,14 @@ anubis serve
 
 # Or with Docker
 docker run -d --name anubis \
-  -p 8443:8443 \
-  -v anubis-data:/var/lib/anubis \
+  -p 8080:8080 \
+  -v anubis-data:/data \
   ghcr.io/anubiswatch/anubiswatch:latest
 ```
 
 ### Step 4: Open Dashboard
 ```
-https://localhost:8443
+http://localhost:8080
 ```
 
 Default credentials (if auth enabled):

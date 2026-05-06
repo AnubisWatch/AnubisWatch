@@ -23,11 +23,22 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # Final stage - minimal image
 FROM alpine:latest
 
-# Install ca-certificates for HTTPS
-RUN apk --no-cache add ca-certificates
+# Install ca-certificates for HTTPS and create a non-root runtime user.
+RUN apk --no-cache add ca-certificates \
+    && addgroup -g 1000 -S anubis \
+    && adduser -u 1000 -S -G anubis -h /var/lib/anubis anubis \
+    && mkdir -p /data /etc/anubis /var/lib/anubis \
+    && chown -R anubis:anubis /data /etc/anubis /var/lib/anubis
 
 # Copy binary
 COPY --from=builder /build/anubis /bin/anubis
+COPY --chown=anubis:anubis configs/container.anubis.json /etc/anubis/anubis.json
+
+ENV ANUBIS_CONFIG=/etc/anubis/anubis.json \
+    ANUBIS_DATA_DIR=/data
+
+WORKDIR /var/lib/anubis
+USER anubis:anubis
 
 # Expose ports
 EXPOSE 8080 8443 9090 7946

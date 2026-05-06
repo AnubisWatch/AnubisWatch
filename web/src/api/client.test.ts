@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { api } from './client'
+import { AUTH_TOKEN_CHANGED_EVENT } from './authEvents'
 
 describe('ApiClient', () => {
   beforeEach(() => {
@@ -325,6 +326,55 @@ describe('ApiClient', () => {
         })
       )
     })
+
+    it('serializes journey durations as Go duration strings', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 201,
+        json: () => Promise.resolve({ id: 'journey-1' }),
+      })
+
+      await api.post('/journeys', {
+        name: 'Checkout Journey',
+        enabled: true,
+        weight: 60,
+        timeout: 30,
+        steps: [
+          {
+            name: 'Home',
+            type: 'http',
+            target: 'https://example.com',
+            timeout: 10,
+          },
+        ],
+      })
+
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/v1/journeys',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            name: 'Checkout Journey',
+            enabled: true,
+            weight: '60s',
+            timeout: '30s',
+            steps: [
+              {
+                name: 'Home',
+                type: 'http',
+                target: 'https://example.com',
+                timeout: '10s',
+                http: {
+                  method: 'GET',
+                  valid_status: [200],
+                  headers: {},
+                },
+              },
+            ],
+          }),
+        })
+      )
+    })
   })
 
   describe('backend response normalization', () => {
@@ -368,6 +418,32 @@ describe('ApiClient', () => {
         valid_status: [200],
         headers: {},
       })
+    })
+
+    it('parses compound Go duration strings from backend responses', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({
+          data: [
+            {
+              id: 'soul-1',
+              name: 'Example HTTPS',
+              type: 'http',
+              target: 'https://example.com',
+              weight: '2m30s',
+              timeout: '1h0m0s',
+              status: 'alive',
+            },
+          ],
+          pagination: { total: 1, offset: 0, limit: 50, has_more: false },
+        }),
+      })
+
+      const result = await api.get<{ data: Array<{ weight: number; timeout: number }> }>('/souls')
+
+      expect(result.data[0].weight).toBe(150)
+      expect(result.data[0].timeout).toBe(3600)
     })
 
     it('normalizes judgments returned by Go APIs', async () => {
@@ -466,6 +542,27 @@ describe('ApiClient', () => {
       expect(result[0].domain).toBe('status.example.com')
       expect(result[0].theme).toBe('dark')
     })
+
+    it('normalizes backend journey durations for the journey list', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve([
+          {
+            id: 'journey-1',
+            name: 'Checkout Journey',
+            weight: '1m0s',
+            timeout: '30s',
+            steps: [],
+          },
+        ]),
+      })
+
+      const result = await api.get<Array<{ weight: number; timeout: number }>>('/journeys')
+
+      expect(result[0].weight).toBe(60)
+      expect(result[0].timeout).toBe(30)
+    })
   })
 
   describe('PUT', () => {
@@ -506,14 +603,26 @@ describe('ApiClient', () => {
 
   describe('token management', () => {
     it('setToken stores in localStorage', () => {
+      const listener = vi.fn()
+      window.addEventListener(AUTH_TOKEN_CHANGED_EVENT, listener)
+
       api.setToken('abc123')
+
       expect(localStorage.getItem('auth_token')).toBe('abc123')
+      expect(listener).toHaveBeenCalledTimes(1)
+      window.removeEventListener(AUTH_TOKEN_CHANGED_EVENT, listener)
     })
 
     it('clearToken removes from localStorage', () => {
+      const listener = vi.fn()
+      window.addEventListener(AUTH_TOKEN_CHANGED_EVENT, listener)
       localStorage.setItem('auth_token', 'old-token')
+
       api.clearToken()
+
       expect(localStorage.getItem('auth_token')).toBeNull()
+      expect(listener).toHaveBeenCalledTimes(1)
+      window.removeEventListener(AUTH_TOKEN_CHANGED_EVENT, listener)
     })
   })
 })

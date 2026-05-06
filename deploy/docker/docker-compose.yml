@@ -1,8 +1,6 @@
-version: '3.8'
-
 services:
   anubis-1:
-    image: anubiswatch/anubis:latest
+    image: ghcr.io/anubiswatch/anubiswatch:latest
     container_name: anubis-1
     hostname: anubis-1
     command:
@@ -15,6 +13,7 @@ services:
       ANUBIS_CONFIG: /etc/anubis/anubis.yaml
       ANUBIS_NODE_ID: anubis-1
       ANUBIS_DATA_DIR: /data
+      ANUBIS_ADMIN_PASSWORD: ${ANUBIS_ADMIN_PASSWORD}
       ANUBIS_LOG_LEVEL: info
     volumes:
       - anubis-data-1:/data
@@ -30,7 +29,7 @@ services:
     restart: unless-stopped
 
   anubis-2:
-    image: anubiswatch/anubis:latest
+    image: ghcr.io/anubiswatch/anubiswatch:latest
     container_name: anubis-2
     hostname: anubis-2
     command:
@@ -44,6 +43,7 @@ services:
       ANUBIS_CONFIG: /etc/anubis/anubis.yaml
       ANUBIS_NODE_ID: anubis-2
       ANUBIS_DATA_DIR: /data
+      ANUBIS_ADMIN_PASSWORD: ${ANUBIS_ADMIN_PASSWORD}
       ANUBIS_LOG_LEVEL: info
     volumes:
       - anubis-data-2:/data
@@ -62,7 +62,7 @@ services:
     restart: unless-stopped
 
   anubis-3:
-    image: anubiswatch/anubis:latest
+    image: ghcr.io/anubiswatch/anubiswatch:latest
     container_name: anubis-3
     hostname: anubis-3
     command:
@@ -76,6 +76,7 @@ services:
       ANUBIS_CONFIG: /etc/anubis/anubis.yaml
       ANUBIS_NODE_ID: anubis-3
       ANUBIS_DATA_DIR: /data
+      ANUBIS_ADMIN_PASSWORD: ${ANUBIS_ADMIN_PASSWORD}
       ANUBIS_LOG_LEVEL: info
     volumes:
       - anubis-data-3:/data

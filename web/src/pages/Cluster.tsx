@@ -100,12 +100,6 @@ export function Cluster() {
           >
             <RefreshCw className="w-5 h-5" />
           </button>
-          {isClustered && (
-            <button className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-all font-medium shadow-lg shadow-amber-600/20">
-              <Network className="w-4 h-4" />
-              Join Cluster
-            </button>
-          )}
         </div>
       </div>
 
@@ -334,24 +328,24 @@ export function Cluster() {
             Quick Actions
           </h2>
           <div className="grid grid-cols-2 gap-3">
-            <button className="p-3 bg-gray-800/50 hover:bg-gray-800 rounded-xl text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            <div className="p-3 bg-gray-800/50 rounded-xl text-left">
               <p className="text-white font-medium">{isClustered ? 'Add Node' : 'Enable Clustering'}</p>
               <p className="text-sm text-gray-500">
                 {isClustered ? 'Join new node to cluster' : 'Switch to clustered mode'}
               </p>
-            </button>
-            <button className="p-3 bg-gray-800/50 hover:bg-gray-800 rounded-xl text-left transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled={!isClustered}>
+            </div>
+            <div className="p-3 bg-gray-800/50 rounded-xl text-left">
               <p className="text-white font-medium">Remove Node</p>
               <p className="text-sm text-gray-500">Safely remove a node</p>
-            </button>
-            <button className="p-3 bg-gray-800/50 hover:bg-gray-800 rounded-xl text-left transition-colors">
+            </div>
+            <div className="p-3 bg-gray-800/50 rounded-xl text-left">
               <p className="text-white font-medium">Backup Data</p>
               <p className="text-sm text-gray-500">Create cluster snapshot</p>
-            </button>
-            <button className="p-3 bg-gray-800/50 hover:bg-gray-800 rounded-xl text-left transition-colors">
+            </div>
+            <div className="p-3 bg-gray-800/50 rounded-xl text-left">
               <p className="text-white font-medium">View Logs</p>
               <p className="text-sm text-gray-500">Raft operation logs</p>
-            </button>
+            </div>
           </div>
         </div>
       </div>

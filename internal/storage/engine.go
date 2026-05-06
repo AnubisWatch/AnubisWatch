@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -794,6 +795,9 @@ func (db *CobaltDB) DeleteSoul(ctx context.Context, workspaceID, soulID string) 
 
 // GetStats returns statistics for a workspace
 func (db *CobaltDB) GetStats(ctx context.Context, workspaceID string, start, end time.Time) (*core.Stats, error) {
+	workspaceID = defaultWorkspace(workspaceID)
+	ctx = core.ContextWithWorkspaceID(ctx, workspaceID)
+
 	// Count souls
 	souls, err := db.ListSouls(ctx, workspaceID, 0, 1000)
 	if err != nil {
@@ -897,23 +901,22 @@ func (db *CobaltDB) DeleteWorkspace(ctx context.Context, id string) error {
 
 // GetSoulNoCtx retrieves a soul by ID (REST API compatible)
 func (db *CobaltDB) GetSoulNoCtx(id string) (*core.Soul, error) {
-	// Scan all workspaces to find soul by ID
-	prefixes := []string{"default/souls/"}
-	for _, prefix := range prefixes {
-		results, err := db.PrefixScan(prefix)
-		if err != nil {
+	results, err := db.PrefixScan("")
+	if err != nil {
+		return nil, err
+	}
+
+	for key, data := range results {
+		if !strings.HasSuffix(key, "/souls/"+id) && key != "souls/"+id {
 			continue
 		}
-		for key, data := range results {
-			if strings.HasSuffix(key, "/"+id) {
-				var soul core.Soul
-				if err := json.Unmarshal(data, &soul); err != nil {
-					continue
-				}
-				return &soul, nil
-			}
+		var soul core.Soul
+		if err := json.Unmarshal(data, &soul); err != nil {
+			continue
 		}
+		return &soul, nil
 	}
+
 	return nil, &core.NotFoundError{Entity: "soul", ID: id}
 }
 
@@ -924,16 +927,22 @@ func (db *CobaltDB) ListSoulsNoCtx(workspace string, offset, limit int) ([]*core
 
 // GetJudgmentNoCtx retrieves a judgment by ID
 func (db *CobaltDB) GetJudgmentNoCtx(id string) (*core.Judgment, error) {
-	results, err := db.PrefixScan("default/judgments/")
+	results, err := db.PrefixScan("")
 	if err != nil {
 		return nil, err
 	}
 	for key, data := range results {
+		if !strings.Contains(key, "/judgments/") {
+			continue
+		}
 		var j core.Judgment
 		if err := json.Unmarshal(data, &j); err != nil {
 			continue
 		}
 		if j.ID == id || strings.HasSuffix(key, "/"+id) {
+			if j.WorkspaceID == "" {
+				j.WorkspaceID = strings.SplitN(key, "/", 2)[0]
+			}
 			return &j, nil
 		}
 	}
@@ -942,7 +951,12 @@ func (db *CobaltDB) GetJudgmentNoCtx(id string) (*core.Judgment, error) {
 
 // ListJudgmentsNoCtx lists judgments in time range
 func (db *CobaltDB) ListJudgmentsNoCtx(soulID string, start, end time.Time, limit int) ([]*core.Judgment, error) {
-	return db.ListJudgments(context.Background(), soulID, start, end, limit)
+	workspaceID := "default"
+	if soul, err := db.GetSoulNoCtx(soulID); err == nil {
+		workspaceID = defaultWorkspace(soul.WorkspaceID)
+	}
+	ctx := core.ContextWithWorkspaceID(context.Background(), workspaceID)
+	return db.ListJudgments(ctx, soulID, start, end, limit)
 }
 
 // GetChannelNoCtx retrieves a channel by ID
@@ -1012,23 +1026,36 @@ func (db *CobaltDB) GetStatsNoCtx(workspace string, start, end time.Time) (*core
 
 // GetSoulJudgments retrieves recent judgments for a soul (for status page)
 func (db *CobaltDB) GetSoulJudgments(soulID string, limit int) ([]core.Judgment, error) {
-	keyPrefix := fmt.Sprintf("default/judgments/%s/", soulID)
+	workspaceID := "default"
+	if soul, err := db.GetSoulNoCtx(soulID); err == nil {
+		workspaceID = defaultWorkspace(soul.WorkspaceID)
+	}
+
+	keyPrefix := fmt.Sprintf("%s/judgments/%s/", workspaceID, soulID)
 	results, err := db.PrefixScan(keyPrefix)
 	if err != nil {
 		return nil, err
 	}
 
-	judgments := make([]core.Judgment, 0, limit)
+	judgments := make([]core.Judgment, 0, len(results))
 	for _, data := range results {
+		if data == nil {
+			continue
+		}
 		var judgment core.Judgment
 		if err := json.Unmarshal(data, &judgment); err != nil {
 			db.logger.Warn("failed to unmarshal judgment", "err", err)
 			continue
 		}
 		judgments = append(judgments, judgment)
-		if len(judgments) >= limit {
-			break
-		}
+	}
+
+	sort.Slice(judgments, func(i, j int) bool {
+		return judgments[i].Timestamp.After(judgments[j].Timestamp)
+	})
+
+	if limit > 0 && len(judgments) > limit {
+		judgments = judgments[:limit]
 	}
 
 	return judgments, nil
