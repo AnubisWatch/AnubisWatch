@@ -536,7 +536,7 @@ export interface AlertChannel {
   name: string
   type: 'email' | 'slack' | 'discord' | 'webhook' | 'pagerduty'
   enabled: boolean
-  config: Record<string, string>
+  config: Record<string, unknown>
   created_at?: string
   updated_at?: string
 }

@@ -54,6 +54,7 @@ export function Alerts() {
   const [testingChannel, setTestingChannel] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<{ id: string; success: boolean; message: string } | null>(null)
   const [saving, setSaving] = useState(false)
+  const [channelFormError, setChannelFormError] = useState<string | null>(null)
   const [ruleFormError, setRuleFormError] = useState<string | null>(null)
 
   // Channel form state
@@ -62,6 +63,11 @@ export function Alerts() {
   const [chWebhookUrl, setChWebhookUrl] = useState('')
   const [chEmail, setChEmail] = useState('')
   const [chSlackUrl, setChSlackUrl] = useState('')
+  const [chDiscordUrl, setChDiscordUrl] = useState('')
+  const [chPagerDutyKey, setChPagerDutyKey] = useState('')
+  const [chSmtpHost, setChSmtpHost] = useState('')
+  const [chSmtpPort, setChSmtpPort] = useState('587')
+  const [chSmtpFrom, setChSmtpFrom] = useState('')
   const [chEnabled, setChEnabled] = useState(true)
 
   // Rule form state
@@ -79,7 +85,13 @@ export function Alerts() {
     setChWebhookUrl('')
     setChEmail('')
     setChSlackUrl('')
+    setChDiscordUrl('')
+    setChPagerDutyKey('')
+    setChSmtpHost('')
+    setChSmtpPort('587')
+    setChSmtpFrom('')
     setChEnabled(true)
+    setChannelFormError(null)
     setEditingChannel(null)
     setSaving(false)
   }
@@ -102,9 +114,15 @@ export function Alerts() {
     setEditingChannel(channel)
     setChName(channel.name)
     setChType(channel.type as ChannelType)
-    setChWebhookUrl(typeof channel.config?.url === 'string' ? channel.config.url : '')
-    setChEmail(typeof channel.config?.email === 'string' ? channel.config.email : '')
-    setChSlackUrl(typeof channel.config?.webhook_url === 'string' ? channel.config.webhook_url : '')
+    const config = channel.config || {}
+    setChWebhookUrl(typeof config.url === 'string' ? config.url : '')
+    setChEmail(Array.isArray(config.to) ? config.to.filter((value): value is string => typeof value === 'string').join(', ') : typeof config.to === 'string' ? config.to : typeof config.email === 'string' ? config.email : '')
+    setChSlackUrl(typeof config.webhook_url === 'string' && channel.type === 'slack' ? config.webhook_url : '')
+    setChDiscordUrl(typeof config.webhook_url === 'string' && channel.type === 'discord' ? config.webhook_url : '')
+    setChPagerDutyKey(typeof config.integration_key === 'string' ? config.integration_key : '')
+    setChSmtpHost(typeof config.smtp_host === 'string' ? config.smtp_host : '')
+    setChSmtpPort(typeof config.smtp_port === 'number' ? String(config.smtp_port) : typeof config.smtp_port === 'string' ? config.smtp_port : '587')
+    setChSmtpFrom(typeof config.from === 'string' ? config.from : '')
     setChEnabled(channel.enabled)
     setShowChannelModal(true)
   }
@@ -190,13 +208,24 @@ export function Alerts() {
   }
 
   const handleSaveChannel = async () => {
-    if (!chName.trim()) return
+    if (!isChannelFormValid) {
+      setChannelFormError(channelValidationMessage)
+      return
+    }
+    setChannelFormError(null)
     setSaving(true)
     try {
-      const config: Record<string, string> = {}
+      const config: Record<string, unknown> = {}
       if (chType === 'webhook') config.url = chWebhookUrl
-      else if (chType === 'email') config.email = chEmail
+      else if (chType === 'email') {
+        config.smtp_host = chSmtpHost
+        config.smtp_port = Number(chSmtpPort) || 587
+        config.from = chSmtpFrom
+        config.to = chEmail.split(',').map(email => email.trim()).filter(Boolean)
+      }
       else if (chType === 'slack') config.webhook_url = chSlackUrl
+      else if (chType === 'discord') config.webhook_url = chDiscordUrl
+      else if (chType === 'pagerduty') config.integration_key = chPagerDutyKey
 
       const payload = {
         name: chName,
@@ -211,8 +240,8 @@ export function Alerts() {
       }
       setShowChannelModal(false)
       resetChannelForm()
-    } catch {
-      // Failed to create channel
+    } catch (err) {
+      setChannelFormError(err instanceof Error ? err.message : 'Failed to save channel')
     } finally {
       setSaving(false)
     }
@@ -265,6 +294,22 @@ export function Alerts() {
     const matchesSeverity = severityFilter === 'all' || rule.severity === severityFilter
     return matchesSearch && matchesSeverity
   })
+
+  const channelValidationMessage = (() => {
+    if (!chName.trim()) return 'Channel name is required.'
+    if (chType === 'webhook' && !chWebhookUrl.trim()) return 'Webhook URL is required.'
+    if (chType === 'slack' && !chSlackUrl.trim()) return 'Slack webhook URL is required.'
+    if (chType === 'discord' && !chDiscordUrl.trim()) return 'Discord webhook URL is required.'
+    if (chType === 'pagerduty' && !chPagerDutyKey.trim()) return 'PagerDuty integration key is required.'
+    if (chType === 'email') {
+      if (!chSmtpHost.trim()) return 'SMTP host is required.'
+      if (!chSmtpFrom.trim()) return 'Sender email is required.'
+      if (chEmail.split(',').map(email => email.trim()).filter(Boolean).length === 0) return 'At least one recipient is required.'
+    }
+    return ''
+  })()
+
+  const isChannelFormValid = channelValidationMessage === ''
 
   const getSeverityIcon = (severity: Severity) => {
     const Icon = severityConfig[severity].icon
@@ -779,7 +824,7 @@ export function Alerts() {
                   ]).map((t) => (
                     <button
                       key={t.value}
-                      onClick={() => setChType(t.value)}
+                      onClick={() => { setChType(t.value); setChannelFormError(null) }}
                       className={`p-3 rounded-xl text-sm font-medium transition-all ${
                         chType === t.value
                           ? 'bg-amber-500/10 border-2 border-amber-500 text-amber-400'
@@ -819,13 +864,73 @@ export function Alerts() {
               )}
 
               {chType === 'email' && (
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">SMTP Host</label>
+                    <input
+                      type="text"
+                      value={chSmtpHost}
+                      onChange={(e) => setChSmtpHost(e.target.value)}
+                      placeholder="smtp.example.com"
+                      className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">SMTP Port</label>
+                      <input
+                        type="number"
+                        value={chSmtpPort}
+                        onChange={(e) => setChSmtpPort(e.target.value)}
+                        min={1}
+                        className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-300 mb-2">From</label>
+                      <input
+                        type="email"
+                        value={chSmtpFrom}
+                        onChange={(e) => setChSmtpFrom(e.target.value)}
+                        placeholder="alerts@example.com"
+                        className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">Recipients</label>
+                    <input
+                      type="text"
+                      value={chEmail}
+                      onChange={(e) => setChEmail(e.target.value)}
+                      placeholder="ops@example.com, oncall@example.com"
+                      className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {chType === 'discord' && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Email Address</label>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Discord Webhook URL</label>
                   <input
-                    type="email"
-                    value={chEmail}
-                    onChange={(e) => setChEmail(e.target.value)}
-                    placeholder="ops@example.com"
+                    type="url"
+                    value={chDiscordUrl}
+                    onChange={(e) => setChDiscordUrl(e.target.value)}
+                    placeholder="https://discord.com/api/webhooks/..."
+                    className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
+                  />
+                </div>
+              )}
+
+              {chType === 'pagerduty' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Integration Key</label>
+                  <input
+                    type="password"
+                    value={chPagerDutyKey}
+                    onChange={(e) => setChPagerDutyKey(e.target.value)}
+                    placeholder="PagerDuty Events API key"
                     className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
                   />
                 </div>
@@ -840,13 +945,19 @@ export function Alerts() {
                 />
                 <span className="text-sm text-gray-300">Enabled</span>
               </label>
+
+              {channelFormError && (
+                <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+                  {channelFormError}
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-700/50">
               <button onClick={() => { setShowChannelModal(false); resetChannelForm() }} className="px-5 py-2.5 text-gray-400 hover:text-white transition-colors">Cancel</button>
               <button
                 onClick={handleSaveChannel}
-                disabled={saving || !chName.trim()}
+                disabled={saving || !isChannelFormValid}
                 className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl transition-colors font-medium"
               >
                 {saving ? 'Saving...' : editingChannel ? 'Save Channel' : 'Add Channel'}
