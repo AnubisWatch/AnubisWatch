@@ -32,6 +32,7 @@ RUN apk --no-cache add ca-certificates \
 
 # Copy binary
 COPY --from=builder /build/anubis /bin/anubis
+COPY --chown=anubis:anubis config/anubis.json /etc/anubis/anubis.json
 
 ENV ANUBIS_CONFIG=/etc/anubis/anubis.json \
     ANUBIS_DATA_DIR=/data

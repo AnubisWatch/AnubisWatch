@@ -4,7 +4,7 @@ AnubisWatch uses WebSocket connections for real-time updates between the server 
 
 ## Connection
 
-**Endpoint**: `wss://localhost:8443/ws`
+**Endpoint**: `ws://localhost:8080/ws`
 
 **Authentication**: Same as REST API - include Bearer token in the connection handshake:
 ```
@@ -183,7 +183,7 @@ Connection errors return a JSON error message:
 ## JavaScript Example
 
 ```javascript
-const ws = new WebSocket('wss://localhost:8443/ws');
+const ws = new WebSocket('ws://localhost:8080/ws');
 
 ws.onopen = () => {
   // Subscribe to soul updates

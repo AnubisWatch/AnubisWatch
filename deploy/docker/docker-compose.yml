@@ -1,6 +1,6 @@
 services:
   anubis-1:
-    image: anubiswatch/anubis:latest
+    image: ghcr.io/anubiswatch/anubiswatch:latest
     container_name: anubis-1
     hostname: anubis-1
     command:
@@ -28,7 +28,7 @@ services:
     restart: unless-stopped
 
   anubis-2:
-    image: anubiswatch/anubis:latest
+    image: ghcr.io/anubiswatch/anubiswatch:latest
     container_name: anubis-2
     hostname: anubis-2
     command:
@@ -60,7 +60,7 @@ services:
     restart: unless-stopped
 
   anubis-3:
-    image: anubiswatch/anubis:latest
+    image: ghcr.io/anubiswatch/anubiswatch:latest
     container_name: anubis-3
     hostname: anubis-3
     command:

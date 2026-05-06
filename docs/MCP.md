@@ -14,7 +14,7 @@ MCP (Model Context Protocol) is an open protocol for AI agent integration. Anubi
 
 ## Connection
 
-**Endpoint**: `https://localhost:8443/mcp`
+**Endpoint**: `http://localhost:8080/mcp`
 
 **Protocol**: MCP Protocol version 2024-11-05
 
@@ -313,7 +313,7 @@ Configure `.claude/mcp.json`:
 {
   "mcpServers": {
     "anubis": {
-      "url": "https://localhost:8443/mcp",
+      "url": "http://localhost:8080/mcp",
       "auth": {
         "type": "bearer",
         "token": "${ANUBIS_API_TOKEN}"
@@ -336,19 +336,19 @@ Then use natural language:
 
 ```bash
 # List souls
-curl -X POST https://localhost:8443/mcp/tools/anubis_list_souls \
+curl -X POST http://localhost:8080/mcp/tools/anubis_list_souls \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{}'
 
 # Get soul status
-curl -X POST https://localhost:8443/mcp/tools/anubis_get_soul_status \
+curl -X POST http://localhost:8080/mcp/tools/anubis_get_soul_status \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"soul_id": "soul-001"}'
 
 # Trigger judgment
-curl -X POST https://localhost:8443/mcp/tools/anubis_trigger_judgment \
+curl -X POST http://localhost:8080/mcp/tools/anubis_trigger_judgment \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"soul_id": "soul-001"}'

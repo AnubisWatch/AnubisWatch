@@ -42,7 +42,7 @@ anubis serve --config /path/to/anubis.yaml
 ```yaml
 # anubis.yaml - Minimal configuration
 server:
-  port: 8443
+  port: 8080
 
 storage:
   path: /var/lib/anubis/data
@@ -57,7 +57,7 @@ storage:
 | Field | Type | Default | Required | Description |
 |-------|------|---------|----------|-------------|
 | `host` | string | `"0.0.0.0"` | No | Bind address for HTTP server |
-| `port` | integer | `8443` | No | HTTPS port |
+| `port` | integer | `8080` from `anubis init` | No | HTTP server port; use `443` or another HTTPS port when TLS is enabled |
 | `tls` | object | - | No | TLS configuration |
 
 ### `server.tls` Block
@@ -78,7 +78,7 @@ storage:
 ```yaml
 server:
   host: "0.0.0.0"
-  port: 8443
+  port: 8080
   tls:
     enabled: false
 ```
@@ -1127,7 +1127,7 @@ anubis config path --config anubis.yaml
 ```yaml
 # anubis.yaml - Minimal
 server:
-  port: 8443
+  port: 8080
 
 storage:
   path: /var/lib/anubis/data

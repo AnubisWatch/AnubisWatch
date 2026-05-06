@@ -108,7 +108,7 @@ For clustered deployments, backup from the leader:
 #!/bin/bash
 # cluster-backup-anubis.sh
 
-ANUBIS_API="${ANUBIS_API:-http://localhost:8443}"
+ANUBIS_API="${ANUBIS_API:-http://localhost:8080}"
 BACKUP_DIR="/backup/anubis-cluster"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 

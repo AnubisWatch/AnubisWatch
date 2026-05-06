@@ -23,10 +23,10 @@
 ```bash
 # Check if port is already in use
 # Windows
-netstat -ano | findstr :8443
+netstat -ano | findstr :8080
 
 # Linux/macOS
-lsof -i :8443
+lsof -i :8080
 ```
 
 **Solution:**
@@ -413,7 +413,7 @@ storage:
 ```bash
 # Check API latency
 time curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8443/api/v1/souls
+  http://localhost:8080/api/v1/souls
 ```
 
 **Solution:**
@@ -512,7 +512,7 @@ If issues persist:
 1. **Check logs**: `/path/to/data/logs/`
 2. **GitHub Issues**: https://github.com/AnubisWatch/anubiswatch/issues
 3. **Documentation**: `docs/` directory
-4. **Health endpoint**: `curl http://localhost:8443/health`
+4. **Health endpoint**: `curl http://localhost:8080/health`
 
 ---
 
