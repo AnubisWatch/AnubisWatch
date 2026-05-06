@@ -85,8 +85,11 @@ func TestAlertManagerDelete(t *testing.T) {
 		Name:    "Delete Me",
 		Type:    core.ChannelWebHook,
 		Enabled: true,
+		Config:  map[string]interface{}{"url": "https://example.com/webhook"},
 	}
-	manager.RegisterChannel(channel)
+	if err := manager.RegisterChannel(channel); err != nil {
+		t.Fatalf("RegisterChannel failed: %v", err)
+	}
 	manager.DeleteChannel("to-delete")
 
 	if len(manager.ListChannels()) != 0 {
@@ -761,15 +764,38 @@ func TestAlertManager_ListChannels(t *testing.T) {
 	manager := NewManager(storage, newTestLogger())
 
 	channel := &core.AlertChannel{
-		ID:   "list-channel",
-		Name: "List Channel",
-		Type: core.ChannelWebHook,
+		ID:     "list-channel",
+		Name:   "List Channel",
+		Type:   core.ChannelWebHook,
+		Config: map[string]interface{}{"url": "https://example.com/webhook"},
 	}
-	manager.RegisterChannel(channel)
+	if err := manager.RegisterChannel(channel); err != nil {
+		t.Fatalf("RegisterChannel failed: %v", err)
+	}
 
 	channels := manager.ListChannels()
 	if len(channels) != 1 {
 		t.Errorf("Expected 1 channel, got %d", len(channels))
+	}
+}
+
+func TestAlertManager_RegisterChannel_ValidatesDispatcherConfig(t *testing.T) {
+	manager := NewManager(&mockAlertStorage{}, newTestLogger())
+
+	channel := &core.AlertChannel{
+		ID:      "invalid-slack",
+		Name:    "Invalid Slack",
+		Type:    core.ChannelSlack,
+		Enabled: true,
+		Config:  map[string]interface{}{},
+	}
+
+	if err := manager.RegisterChannel(channel); err == nil {
+		t.Fatal("expected invalid dispatcher config to be rejected")
+	}
+
+	if _, err := manager.GetChannel("invalid-slack"); err == nil {
+		t.Fatal("invalid channel should not be registered")
 	}
 }
 
@@ -801,11 +827,14 @@ func TestAlertManager_GetChannel(t *testing.T) {
 	manager := NewManager(storage, newTestLogger())
 
 	channel := &core.AlertChannel{
-		ID:   "get-channel",
-		Name: "Get Channel",
-		Type: core.ChannelWebHook,
+		ID:     "get-channel",
+		Name:   "Get Channel",
+		Type:   core.ChannelWebHook,
+		Config: map[string]interface{}{"url": "https://example.com/webhook"},
 	}
-	manager.RegisterChannel(channel)
+	if err := manager.RegisterChannel(channel); err != nil {
+		t.Fatalf("RegisterChannel failed: %v", err)
+	}
 
 	retrieved, err := manager.GetChannel("get-channel")
 	if err != nil {

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/AnubisWatch/anubiswatch/internal/alert"
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
@@ -1602,6 +1603,44 @@ func TestHandleCreateChannel(t *testing.T) {
 
 	if w.Code != http.StatusCreated {
 		t.Errorf("expected status 201, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleCreateChannel_InvalidDispatcherConfig(t *testing.T) {
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      newMockStorage(),
+		router:     router,
+		auth:       &mockAuthenticator{},
+		alert:      alert.NewManager(nil, newTestLogger()),
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("POST", "/api/v1/channels", server.requireAuth(server.handleCreateChannel))
+
+	channel := core.AlertChannel{
+		Name:    "Broken Slack",
+		Type:    core.ChannelSlack,
+		Enabled: true,
+		Config:  map[string]interface{}{},
+	}
+	body, _ := json.Marshal(channel)
+
+	req := httptest.NewRequest("POST", "/api/v1/channels", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "webhook_url") {
+		t.Fatalf("expected dispatcher validation message, got %s", w.Body.String())
 	}
 }
 

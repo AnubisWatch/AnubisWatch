@@ -1229,7 +1229,7 @@ func (s *RESTServer) handleCreateChannel(ctx *Context) error {
 	channel.UpdatedAt = time.Now()
 
 	if err := s.alert.RegisterChannel(&channel); err != nil {
-		return s.internalError(ctx, err, "internal server error")
+		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 
 	return ctx.JSON(http.StatusCreated, channel)
@@ -1278,7 +1278,7 @@ func (s *RESTServer) handleUpdateChannel(ctx *Context) error {
 	channel.UpdatedAt = time.Now()
 
 	if err := s.alert.RegisterChannel(&channel); err != nil {
-		return s.internalError(ctx, err, "internal server error")
+		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 
 	return ctx.JSON(http.StatusOK, channel)

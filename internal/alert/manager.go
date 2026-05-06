@@ -180,6 +180,9 @@ func (m *Manager) RegisterChannel(channel *core.AlertChannel) error {
 	if err := channel.Validate(); err != nil {
 		return err
 	}
+	if err := m.validateChannelConfig(channel); err != nil {
+		return err
+	}
 
 	m.mu.Lock()
 	m.channels[channel.ID] = channel
@@ -196,6 +199,17 @@ func (m *Manager) RegisterChannel(channel *core.AlertChannel) error {
 		"name", channel.Name,
 		"type", channel.Type)
 
+	return nil
+}
+
+func (m *Manager) validateChannelConfig(channel *core.AlertChannel) error {
+	dispatcher, ok := m.dispatchers[channel.Type]
+	if !ok {
+		return fmt.Errorf("unsupported channel type: %s", channel.Type)
+	}
+	if err := dispatcher.Validate(channel.Config); err != nil {
+		return fmt.Errorf("invalid %s channel config: %w", channel.Type, err)
+	}
 	return nil
 }
 
