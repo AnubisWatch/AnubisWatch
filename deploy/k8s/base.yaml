@@ -101,6 +101,14 @@ spec:
         fsGroup: 1000
       containers:
         - name: anubis
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           image: anubiswatch/anubis:3.0.0
           imagePullPolicy: IfNotPresent
           command:

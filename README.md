@@ -128,16 +128,17 @@ docker pull ghcr.io/anubiswatch/anubiswatch:latest
 # Single node
 docker run -d \
   --name anubis \
-  -p 8443:8443 \
-  -v anubis-data:/var/lib/anubis \
+  -p 8080:8080 \
+  -v anubis-data:/data \
   ghcr.io/anubiswatch/anubiswatch:latest
 
 # With custom config
 docker run -d \
   --name anubis \
-  -p 8443:8443 \
-  -v $(pwd)/anubis.yaml:/etc/anubis/anubis.yaml \
-  -v anubis-data:/var/lib/anubis \
+  -p 8080:8080 \
+  -e ANUBIS_CONFIG=/etc/anubis/anubis.yaml \
+  -v $(pwd)/anubis.yaml:/etc/anubis/anubis.yaml:ro \
+  -v anubis-data:/data \
   ghcr.io/anubiswatch/anubiswatch:latest
 ```
 
@@ -154,7 +155,7 @@ vim anubis.yaml
 anubis serve
 
 # Access dashboard
-open https://localhost:8443
+open http://localhost:8080
 ```
 
 ---

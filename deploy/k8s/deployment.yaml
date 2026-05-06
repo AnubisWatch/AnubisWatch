@@ -17,8 +17,18 @@ spec:
         app.kubernetes.io/name: anubiswatch
         app.kubernetes.io/component: server
     spec:
+      securityContext:
+        fsGroup: 1000
       containers:
         - name: anubiswatch
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           image: ghcr.io/anubiswatch/anubiswatch:latest
           imagePullPolicy: IfNotPresent
           ports:

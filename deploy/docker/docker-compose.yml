@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   anubis-1:
     image: anubiswatch/anubis:latest
