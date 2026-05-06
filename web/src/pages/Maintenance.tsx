@@ -15,9 +15,11 @@ import {
   AlertCircle,
   CheckCircle2,
   X,
-  Loader2
+  Loader2,
+  Check
 } from 'lucide-react'
 import { api } from '../api/client'
+import { useSouls } from '../api/hooks'
 
 interface MaintenanceWindow {
   id: string
@@ -88,8 +90,11 @@ export function Maintenance() {
   const [formRecurring, setFormRecurring] = useState('none')
   const [formEnabled, setFormEnabled] = useState(true)
   const [formTags, setFormTags] = useState('')
+  const [formAllServices, setFormAllServices] = useState(false)
+  const [formSelectedSouls, setFormSelectedSouls] = useState<string[]>([])
 
   const { data, loading, error, refetch, create, update, remove } = useMaintenance()
+  const { souls } = useSouls()
 
   const resetForm = () => {
     setFormName('')
@@ -99,6 +104,8 @@ export function Maintenance() {
     setFormRecurring('none')
     setFormEnabled(true)
     setFormTags('')
+    setFormAllServices(false)
+    setFormSelectedSouls([])
     setEditing(null)
     setFormError(null)
     setSaving(false)
@@ -118,6 +125,8 @@ export function Maintenance() {
     setFormRecurring(w.recurring || 'none')
     setFormEnabled(w.enabled)
     setFormTags((w.tags || []).join(', '))
+    setFormAllServices((w.soul_ids || []).length === 0 && (w.tags || []).length === 0)
+    setFormSelectedSouls(w.soul_ids || [])
     setFormError(null)
     setShowModal(true)
   }
@@ -131,6 +140,11 @@ export function Maintenance() {
       setFormError('End time must be after start time')
       return
     }
+    const tags = formTags.split(',').map(t => t.trim()).filter(Boolean)
+    if (!formAllServices && formSelectedSouls.length === 0 && tags.length === 0) {
+      setFormError('Select at least one service or tag, or choose all services')
+      return
+    }
     setFormError(null)
     setSaving(true)
     try {
@@ -141,8 +155,8 @@ export function Maintenance() {
         end_time: new Date(formEndTime).toISOString(),
         recurring: formRecurring === 'none' ? '' : formRecurring,
         enabled: formEnabled,
-        tags: formTags.split(',').map(t => t.trim()).filter(Boolean),
-        soul_ids: []
+        tags: formAllServices ? [] : tags,
+        soul_ids: formAllServices ? [] : formSelectedSouls
       }
 
       if (editing) {
@@ -157,6 +171,13 @@ export function Maintenance() {
     } finally {
       setSaving(false)
     }
+  }
+
+  const toggleSoul = (soulId: string) => {
+    setFormAllServices(false)
+    setFormSelectedSouls(prev =>
+      prev.includes(soulId) ? prev.filter(id => id !== soulId) : [...prev, soulId]
+    )
   }
 
   const handleToggle = async (w: MaintenanceWindow) => {
@@ -504,10 +525,61 @@ export function Maintenance() {
                 <input
                   type="text"
                   value={formTags}
-                  onChange={(e) => setFormTags(e.target.value)}
+                  onChange={(e) => { setFormTags(e.target.value); if (e.target.value.trim()) setFormAllServices(false) }}
                   placeholder="e.g., database, production"
                   className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-2">Services</label>
+                <label className="mb-3 flex items-center gap-3 cursor-pointer rounded-xl border border-gray-700/50 bg-gray-950 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={formAllServices}
+                    onChange={(e) => {
+                      setFormAllServices(e.target.checked)
+                      if (e.target.checked) {
+                        setFormSelectedSouls([])
+                        setFormTags('')
+                      }
+                    }}
+                    className="w-5 h-5 rounded border-gray-600 bg-gray-800 text-amber-500 focus:ring-amber-500"
+                  />
+                  <span className="text-sm text-gray-300">All services</span>
+                </label>
+                {souls.length === 0 ? (
+                  <p className="text-sm text-gray-500 py-4 text-center border border-dashed border-gray-700/50 rounded-xl">
+                    No souls configured.
+                  </p>
+                ) : (
+                  <div className="space-y-2 max-h-44 overflow-y-auto">
+                    {souls.map((soul) => {
+                      const selected = formSelectedSouls.includes(soul.id)
+                      return (
+                        <button
+                          key={soul.id}
+                          type="button"
+                          onClick={() => toggleSoul(soul.id)}
+                          disabled={formAllServices}
+                          className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-all text-left ${
+                            selected
+                              ? 'bg-amber-500/10 border border-amber-500/30'
+                              : 'bg-gray-950 border border-gray-700/50 hover:border-gray-600'
+                          } disabled:opacity-50 disabled:cursor-not-allowed`}
+                        >
+                          <div className={`w-4 h-4 rounded border flex items-center justify-center ${
+                            selected ? 'bg-amber-500 border-amber-500' : 'border-gray-600'
+                          }`}>
+                            {selected && <Check className="w-3 h-3 text-white" />}
+                          </div>
+                          <span className="text-sm text-white">{soul.name}</span>
+                          <span className="text-xs text-gray-500 ml-auto">{soul.type}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
 
               <label className="flex items-center gap-3 cursor-pointer">
