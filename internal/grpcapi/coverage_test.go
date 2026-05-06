@@ -548,13 +548,14 @@ func TestListJudgments_WithSoulFilter(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListJudgments failed: %v", err)
 	}
-	if len(resp.Judgments) != 2 {
-		t.Errorf("Expected 2 judgments, got %d", len(resp.Judgments))
+	if len(resp.Judgments) != 1 {
+		t.Errorf("Expected 1 judgment, got %d", len(resp.Judgments))
 	}
 }
 
 func TestListJudgments_WithTimeRange(t *testing.T) {
 	store := newMockGRPCStore()
+	store.souls["s1"] = &mockSoul{id: "s1", name: "test"}
 	store.judgments = []interface{}{
 		&mockJudgment{id: "j1", soulID: "s1", status: "alive", duration: 10 * time.Millisecond, message: "ok", timestamp: time.Now()},
 	}
@@ -592,6 +593,7 @@ func TestListJudgments_SoulWorkspacePermissionDenied(t *testing.T) {
 
 func TestListJudgments_DefaultLimit(t *testing.T) {
 	store := newMockGRPCStore()
+	store.souls["s1"] = &mockSoul{id: "s1", name: "test"}
 	store.judgments = []interface{}{
 		&mockJudgment{id: "j1", soulID: "s1", status: "alive", duration: 10 * time.Millisecond, message: "ok", timestamp: time.Now()},
 	}

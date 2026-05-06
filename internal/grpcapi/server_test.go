@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"testing"
 	"time"
 
@@ -58,13 +59,36 @@ func newMockGRPCStore() *mockGRPCStore {
 	}
 }
 
+func applyMockWindow(items []interface{}, offset, limit int) []interface{} {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(items) {
+		return []interface{}{}
+	}
+	end := len(items)
+	if limit > 0 && offset+limit < end {
+		end = offset + limit
+	}
+	return items[offset:end]
+}
+
+func sortedMockValues(items map[string]interface{}) []interface{} {
+	keys := make([]string, 0, len(items))
+	for key := range items {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]interface{}, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, items[key])
+	}
+	return result
+}
+
 func (m *mockGRPCStore) GetSoulNoCtx(id string) (interface{}, error) { return m.souls[id], nil }
 func (m *mockGRPCStore) ListSoulsNoCtx(ws string, o, l int) ([]interface{}, error) {
-	result := make([]interface{}, 0, len(m.souls))
-	for _, s := range m.souls {
-		result = append(result, s)
-	}
-	return result, nil
+	return applyMockWindow(sortedMockValues(m.souls), o, l), nil
 }
 func (m *mockGRPCStore) SaveSoulNoCtx(s interface{}) error {
 	m.nextID++
@@ -97,17 +121,26 @@ func (m *mockGRPCStore) DeleteSoulNoCtx(id string) error {
 	return m.deleteSoulErr
 }
 func (m *mockGRPCStore) ListJudgmentsNoCtx(soulID string, start, end time.Time, limit int) ([]interface{}, error) {
-	return m.judgments, nil
+	result := make([]interface{}, 0, len(m.judgments))
+	for _, j := range m.judgments {
+		if soulID != "" {
+			hf, ok := j.(interface{ GetSoulID() string })
+			if !ok || hf.GetSoulID() != soulID {
+				continue
+			}
+		}
+		result = append(result, j)
+		if limit > 0 && len(result) >= limit {
+			break
+		}
+	}
+	return result, nil
 }
 func (m *mockGRPCStore) GetChannelNoCtx(id string, ws string) (interface{}, error) {
 	return m.channels[id], nil
 }
 func (m *mockGRPCStore) ListChannelsNoCtx(ws string) ([]interface{}, error) {
-	result := make([]interface{}, 0, len(m.channels))
-	for _, c := range m.channels {
-		result = append(result, c)
-	}
-	return result, nil
+	return sortedMockValues(m.channels), nil
 }
 func (m *mockGRPCStore) SaveChannelNoCtx(ch interface{}) error {
 	m.nextID++
@@ -136,11 +169,7 @@ func (m *mockGRPCStore) GetRuleNoCtx(id string, ws string) (interface{}, error) 
 	return m.rules[id], nil
 }
 func (m *mockGRPCStore) ListRulesNoCtx(ws string) ([]interface{}, error) {
-	result := make([]interface{}, 0, len(m.rules))
-	for _, r := range m.rules {
-		result = append(result, r)
-	}
-	return result, nil
+	return sortedMockValues(m.rules), nil
 }
 func (m *mockGRPCStore) SaveRuleNoCtx(rule interface{}) error {
 	m.nextID++
@@ -160,11 +189,7 @@ func (m *mockGRPCStore) SaveRuleNoCtx(rule interface{}) error {
 func (m *mockGRPCStore) DeleteRuleNoCtx(id string, ws string) error     { delete(m.rules, id); return nil }
 func (m *mockGRPCStore) GetJourneyNoCtx(id string) (interface{}, error) { return m.journeys[id], nil }
 func (m *mockGRPCStore) ListJourneysNoCtx(ws string, o, l int) ([]interface{}, error) {
-	result := make([]interface{}, 0, len(m.journeys))
-	for _, j := range m.journeys {
-		result = append(result, j)
-	}
-	return result, nil
+	return applyMockWindow(sortedMockValues(m.journeys), o, l), nil
 }
 func (m *mockGRPCStore) SaveJourneyNoCtx(j interface{}) error {
 	m.nextID++
@@ -228,7 +253,20 @@ func (m *mockGRPCStore) GetJourneyRunNoCtx(workspace, journeyID, runID string) (
 	return nil, fmt.Errorf("not found")
 }
 func (m *mockGRPCStore) ListEvents(soulID string, limit int) ([]interface{}, error) {
-	return m.events, nil
+	result := make([]interface{}, 0, len(m.events))
+	for _, event := range m.events {
+		if soulID != "" {
+			hf, ok := event.(interface{ GetSoulID() string })
+			if !ok || hf.GetSoulID() != soulID {
+				continue
+			}
+		}
+		result = append(result, event)
+		if limit > 0 && len(result) >= limit {
+			break
+		}
+	}
+	return result, nil
 }
 
 type mockGRPCProbe struct{}
@@ -787,6 +825,7 @@ func (m *mockJudgment) GetRegion() string          { return m.region }
 
 func TestServer_ListJudgments(t *testing.T) {
 	store := newMockGRPCStore()
+	store.souls["s1"] = &mockSoul{id: "s1", name: "test"}
 	store.judgments = []interface{}{
 		&mockJudgment{id: "j1", soulID: "s1", status: "alive", duration: 10 * time.Millisecond, message: "ok", timestamp: time.Now()},
 	}

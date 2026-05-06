@@ -192,3 +192,131 @@ func TestServer_ListSouls_PaginationHasMore(t *testing.T) {
 		t.Errorf("Expected NextOffset=3, got %v", resp.Pagination.NextOffset)
 	}
 }
+
+func assertPagination(t *testing.T, got *v1.Pagination, total, offset, limit int32, hasMore bool, nextOffset int32) {
+	t.Helper()
+	if got == nil {
+		t.Fatal("Expected pagination, got nil")
+	}
+	if got.Total != total || got.Offset != offset || got.Limit != limit || got.HasMore != hasMore {
+		t.Fatalf("Unexpected pagination: got total=%d offset=%d limit=%d has_more=%t",
+			got.Total, got.Offset, got.Limit, got.HasMore)
+	}
+	if nextOffset < 0 {
+		if got.NextOffset != nil {
+			t.Fatalf("Expected no next offset, got %d", *got.NextOffset)
+		}
+		return
+	}
+	if got.NextOffset == nil || *got.NextOffset != nextOffset {
+		t.Fatalf("Expected next offset %d, got %v", nextOffset, got.NextOffset)
+	}
+}
+
+func TestServer_ListChannels_AppliesPagination(t *testing.T) {
+	store := newMockGRPCStore()
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("ch_%d", i)
+		store.channels[id] = &mockChannel{id: id, name: id, chType: "webhook"}
+	}
+	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
+
+	resp, err := srv.ListChannels(testUserContext(), &v1.ListChannelsRequest{Offset: 1, Limit: 2})
+	if err != nil {
+		t.Fatalf("ListChannels failed: %v", err)
+	}
+	if len(resp.Channels) != 2 {
+		t.Fatalf("Expected 2 channels, got %d", len(resp.Channels))
+	}
+	assertPagination(t, resp.Pagination, 5, 1, 2, true, 3)
+}
+
+func TestServer_ListRules_AppliesPagination(t *testing.T) {
+	store := newMockGRPCStore()
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("rule_%d", i)
+		store.rules[id] = &mockRule{id: id, name: id}
+	}
+	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
+
+	resp, err := srv.ListRules(testUserContext(), &v1.ListRulesRequest{Offset: 2, Limit: 2})
+	if err != nil {
+		t.Fatalf("ListRules failed: %v", err)
+	}
+	if len(resp.Rules) != 2 {
+		t.Fatalf("Expected 2 rules, got %d", len(resp.Rules))
+	}
+	assertPagination(t, resp.Pagination, 5, 2, 2, true, 4)
+}
+
+func TestServer_ListJourneys_AppliesPagination(t *testing.T) {
+	store := newMockGRPCStore()
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("journey_%d", i)
+		store.journeys[id] = &mockJourney{id: id, name: id}
+	}
+	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
+
+	resp, err := srv.ListJourneys(testUserContext(), &v1.ListJourneysRequest{Offset: 3, Limit: 2})
+	if err != nil {
+		t.Fatalf("ListJourneys failed: %v", err)
+	}
+	if len(resp.Journeys) != 2 {
+		t.Fatalf("Expected 2 journeys, got %d", len(resp.Journeys))
+	}
+	assertPagination(t, resp.Pagination, 5, 3, 2, false, -1)
+}
+
+func TestServer_ListJudgments_FiltersStatusAndOffsets(t *testing.T) {
+	store := newMockGRPCStore()
+	store.souls["s1"] = &mockSoul{id: "s1", name: "test"}
+	now := time.Now()
+	store.judgments = []interface{}{
+		&mockJudgment{id: "j1", soulID: "s1", status: "alive", duration: time.Millisecond, timestamp: now},
+		&mockJudgment{id: "j2", soulID: "s1", status: "dead", duration: time.Millisecond, timestamp: now},
+		&mockJudgment{id: "j3", soulID: "s1", status: "alive", duration: time.Millisecond, timestamp: now},
+	}
+	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
+	statusFilter := "alive"
+
+	resp, err := srv.ListJudgments(testUserContext(), &v1.ListJudgmentsRequest{
+		Status: &statusFilter,
+		Offset: 1,
+		Limit:  1,
+	})
+	if err != nil {
+		t.Fatalf("ListJudgments failed: %v", err)
+	}
+	if len(resp.Judgments) != 1 || resp.Judgments[0].Id != "j3" {
+		t.Fatalf("Expected only j3, got %#v", resp.Judgments)
+	}
+	assertPagination(t, resp.Pagination, 2, 1, 1, false, -1)
+}
+
+func TestServer_ListVerdicts_FiltersStatusSeverityAndOffsets(t *testing.T) {
+	store := newMockGRPCStore()
+	now := time.Now()
+	store.events = []interface{}{
+		&mockAlertEvent{id: "evt_1", soulID: "s1", status: "firing", severity: "critical", timestamp: now},
+		&mockAlertEvent{id: "evt_2", soulID: "s1", status: "resolved", severity: "critical", timestamp: now},
+		&mockAlertEvent{id: "evt_3", soulID: "s1", status: "firing", severity: "warning", timestamp: now},
+		&mockAlertEvent{id: "evt_4", soulID: "s1", status: "firing", severity: "critical", timestamp: now},
+	}
+	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
+	statusFilter := "firing"
+	severityFilter := "critical"
+
+	resp, err := srv.ListVerdicts(testUserContext(), &v1.ListVerdictsRequest{
+		Status:   &statusFilter,
+		Severity: &severityFilter,
+		Offset:   1,
+		Limit:    1,
+	})
+	if err != nil {
+		t.Fatalf("ListVerdicts failed: %v", err)
+	}
+	if len(resp.Verdicts) != 1 || resp.Verdicts[0].Id != "evt_4" {
+		t.Fatalf("Expected only evt_4, got %#v", resp.Verdicts)
+	}
+	assertPagination(t, resp.Pagination, 2, 1, 1, false, -1)
+}

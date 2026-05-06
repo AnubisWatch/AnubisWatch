@@ -399,7 +399,10 @@ func (db *CobaltDB) DeleteChannel(ctx context.Context, id string) error {
 // ListJudgments returns judgments for a soul within a time range
 func (db *CobaltDB) ListJudgments(ctx context.Context, soulID string, start, end time.Time, limit int) ([]*core.Judgment, error) {
 	workspaceID := core.WorkspaceIDFromContext(ctx)
-	prefix := fmt.Sprintf("%s/judgments/%s/", workspaceID, soulID)
+	prefix := fmt.Sprintf("%s/judgments/", workspaceID)
+	if soulID != "" {
+		prefix = fmt.Sprintf("%s/judgments/%s/", workspaceID, soulID)
+	}
 	results, err := db.PrefixScan(prefix)
 	if err != nil {
 		return nil, err
@@ -427,7 +430,7 @@ func (db *CobaltDB) ListJudgments(ctx context.Context, soulID string, start, end
 		return judgments[i].Timestamp.After(judgments[j].Timestamp)
 	})
 
-	if len(judgments) > limit {
+	if limit > 0 && len(judgments) > limit {
 		judgments = judgments[:limit]
 	}
 	return judgments, nil

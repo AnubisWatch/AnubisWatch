@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -163,6 +164,99 @@ func ts(t time.Time) *timestamppb.Timestamp {
 		return nil
 	}
 	return timestamppb.New(t)
+}
+
+const defaultListLimit = 20
+
+func normalizedListWindow(offset, limit int32) (int, int) {
+	normalizedOffset := int(offset)
+	if normalizedOffset < 0 {
+		normalizedOffset = 0
+	}
+	normalizedLimit := int(limit)
+	if normalizedLimit <= 0 {
+		normalizedLimit = defaultListLimit
+	}
+	return normalizedOffset, normalizedLimit
+}
+
+func listFetchLimit(offset, limit int) int {
+	return offset + limit + 1
+}
+
+func newPagination(total, offset, limit, returned int) *v1.Pagination {
+	hasMore := offset+returned < total
+	var nextOffset *int32
+	if hasMore {
+		next := int32(offset + returned)
+		nextOffset = &next
+	}
+	return &v1.Pagination{
+		Total:      int32(total),
+		Offset:     int32(offset),
+		Limit:      int32(limit),
+		HasMore:    hasMore,
+		NextOffset: nextOffset,
+	}
+}
+
+func paginate(items []interface{}, offset, limit int) ([]interface{}, *v1.Pagination) {
+	total := len(items)
+	start := offset
+	if start > total {
+		start = total
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	page := items[start:end]
+	return page, newPagination(total, offset, limit, len(page))
+}
+
+func statusValue(v interface{}) string {
+	switch typed := v.(type) {
+	case *core.Judgment:
+		return string(typed.Status)
+	case *core.AlertEvent:
+		return string(typed.Status)
+	case map[string]interface{}:
+		return fmt.Sprintf("%v", typed["status"])
+	}
+	if hf, ok := v.(interface{ GetStatus() string }); ok {
+		return hf.GetStatus()
+	}
+	return ""
+}
+
+func severityValue(v interface{}) string {
+	switch typed := v.(type) {
+	case *core.AlertEvent:
+		return string(typed.Severity)
+	case map[string]interface{}:
+		return fmt.Sprintf("%v", typed["severity"])
+	}
+	if hf, ok := v.(interface{ GetSeverity() string }); ok {
+		return hf.GetSeverity()
+	}
+	return ""
+}
+
+func timestampValue(v interface{}) time.Time {
+	switch typed := v.(type) {
+	case *core.Judgment:
+		return typed.Timestamp
+	case *core.AlertEvent:
+		return typed.Timestamp
+	}
+	if hf, ok := v.(interface{ GetTimestamp() time.Time }); ok {
+		return hf.GetTimestamp()
+	}
+	return time.Time{}
+}
+
+func matchesOptionalString(value, expected string) bool {
+	return expected == "" || strings.EqualFold(value, expected)
 }
 
 // --- PB Conversion: core → protobuf ---
@@ -645,10 +739,16 @@ func resourceWorkspace(v interface{}) string {
 
 func resourceID(v interface{}) string {
 	switch resource := v.(type) {
+	case *core.Soul:
+		return resource.ID
 	case *core.Judgment:
 		return resource.ID
 	case *core.AlertEvent:
 		return resource.ID
+	case map[string]interface{}:
+		if id, ok := resource["id"].(string); ok {
+			return id
+		}
 	}
 	if hf, ok := v.(interface{ GetID() string }); ok {
 		return hf.GetID()
@@ -869,14 +969,15 @@ func (s *Server) ListSouls(ctx context.Context, req *v1.ListSoulsRequest) (*v1.L
 		workspace = "default"
 	}
 
-	limit := int(req.Limit)
-	if limit == 0 {
-		limit = 20
-	}
+	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
-	souls, err := s.store.ListSoulsNoCtx(workspace, int(req.Offset), limit)
+	souls, err := s.store.ListSoulsNoCtx(workspace, offset, limit+1)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list souls: %v", err)
+	}
+	hasMore := len(souls) > limit
+	if len(souls) > limit {
+		souls = souls[:limit]
 	}
 
 	pbSouls := make([]*v1.Soul, 0, len(souls))
@@ -886,22 +987,20 @@ func (s *Server) ListSouls(ctx context.Context, req *v1.ListSoulsRequest) (*v1.L
 		}
 	}
 
-	hasMore := len(pbSouls) >= limit
-	var nextOffset *int32
+	total := offset + len(pbSouls)
 	if hasMore {
-		off := int32(int(req.Offset) + limit)
-		nextOffset = &off
+		total++
+	}
+	pagination := newPagination(total, offset, limit, len(pbSouls))
+	if hasMore {
+		pagination.HasMore = true
+		next := int32(offset + len(pbSouls))
+		pagination.NextOffset = &next
 	}
 
 	return &v1.ListSoulsResponse{
-		Souls: pbSouls,
-		Pagination: &v1.Pagination{
-			Total:      int32(len(souls)),
-			Offset:     req.Offset,
-			Limit:      int32(limit),
-			HasMore:    hasMore,
-			NextOffset: nextOffset,
-		},
+		Souls:      pbSouls,
+		Pagination: pagination,
 	}, nil
 }
 
@@ -1037,10 +1136,7 @@ func (s *Server) ListJudgments(ctx context.Context, req *v1.ListJudgmentsRequest
 		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
 	}
 
-	limit := int(req.Limit)
-	if limit == 0 {
-		limit = 20
-	}
+	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
 	var start, end time.Time
 	if req.Since != nil {
@@ -1066,26 +1162,56 @@ func (s *Server) ListJudgments(ctx context.Context, req *v1.ListJudgmentsRequest
 		}
 	}
 
-	judgments, err := s.store.ListJudgmentsNoCtx(soulID, start, end, limit)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to list judgments: %v", err)
+	fetchLimit := listFetchLimit(offset, limit)
+	if req.GetStatus() != "" || soulID == "" {
+		fetchLimit = 0
+	}
+	var judgments []interface{}
+	if soulID == "" {
+		souls, err := s.store.ListSoulsNoCtx(user.Workspace, 0, 0)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to list souls for judgments: %v", err)
+		}
+		for _, soul := range souls {
+			id := resourceID(soul)
+			if id == "" {
+				continue
+			}
+			soulJudgments, err := s.store.ListJudgmentsNoCtx(id, start, end, fetchLimit)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "failed to list judgments: %v", err)
+			}
+			judgments = append(judgments, soulJudgments...)
+		}
+	} else {
+		var err error
+		judgments, err = s.store.ListJudgmentsNoCtx(soulID, start, end, fetchLimit)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to list judgments: %v", err)
+		}
 	}
 
-	pbJudgments := make([]*v1.Judgment, 0, len(judgments))
+	filtered := make([]interface{}, 0, len(judgments))
 	for _, j := range judgments {
+		if matchesOptionalString(statusValue(j), req.GetStatus()) {
+			filtered = append(filtered, j)
+		}
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return timestampValue(filtered[i]).After(timestampValue(filtered[j]))
+	})
+	page, pagination := paginate(filtered, offset, limit)
+
+	pbJudgments := make([]*v1.Judgment, 0, len(page))
+	for _, j := range page {
 		if pb := judgmentToPB(j); pb != nil {
 			pbJudgments = append(pbJudgments, pb)
 		}
 	}
 
 	return &v1.ListJudgmentsResponse{
-		Judgments: pbJudgments,
-		Pagination: &v1.Pagination{
-			Total:   int32(len(judgments)),
-			Offset:  req.Offset,
-			Limit:   int32(limit),
-			HasMore: len(judgments) >= limit,
-		},
+		Judgments:  pbJudgments,
+		Pagination: pagination,
 	}, nil
 }
 
@@ -1135,10 +1261,7 @@ func (s *Server) ListVerdicts(ctx context.Context, req *v1.ListVerdictsRequest) 
 	}
 
 	// Verdicts come from alert events. List recent events.
-	limit := int(req.Limit)
-	if limit == 0 {
-		limit = 20
-	}
+	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
 	soulID := ""
 	if req.SoulId != nil {
@@ -1148,28 +1271,43 @@ func (s *Server) ListVerdicts(ctx context.Context, req *v1.ListVerdictsRequest) 
 		return nil, err
 	}
 
-	events, err := s.store.ListEvents(soulID, limit)
+	fetchLimit := listFetchLimit(offset, limit)
+	if req.GetStatus() != "" || req.GetSeverity() != "" {
+		fetchLimit = 0
+	}
+	events, err := s.store.ListEvents(soulID, fetchLimit)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list verdicts: %v", err)
 	}
 
-	pbVerdicts := make([]*v1.Verdict, 0, len(events))
+	filtered := make([]interface{}, 0, len(events))
 	for _, e := range events {
 		if ws := resourceWorkspace(e); ws != "" && ws != workspace {
 			continue
 		}
+		if !matchesOptionalString(statusValue(e), req.GetStatus()) {
+			continue
+		}
+		if !matchesOptionalString(severityValue(e), req.GetSeverity()) {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return timestampValue(filtered[i]).After(timestampValue(filtered[j]))
+	})
+	page, pagination := paginate(filtered, offset, limit)
+
+	pbVerdicts := make([]*v1.Verdict, 0, len(page))
+	for _, e := range page {
 		if pb := eventToVerdict(e); pb != nil {
 			pbVerdicts = append(pbVerdicts, pb)
 		}
 	}
 
 	return &v1.ListVerdictsResponse{
-		Verdicts: pbVerdicts,
-		Pagination: &v1.Pagination{
-			Total:   int32(len(events)),
-			Limit:   int32(limit),
-			HasMore: len(events) >= limit,
-		},
+		Verdicts:   pbVerdicts,
+		Pagination: pagination,
 	}, nil
 }
 
@@ -1233,19 +1371,20 @@ func (s *Server) ListChannels(ctx context.Context, req *v1.ListChannelsRequest) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
 	}
-	workspace := user.Workspace
+	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
 	channels, err := s.store.ListChannelsNoCtx(workspace)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list channels: %v", err)
 	}
+	page, pagination := paginate(channels, offset, limit)
 
-	pbChannels := make([]*v1.Channel, 0, len(channels))
-	for _, ch := range channels {
+	pbChannels := make([]*v1.Channel, 0, len(page))
+	for _, ch := range page {
 		if pb := channelToPB(ch); pb != nil {
 			pbChannels = append(pbChannels, pb)
 		}
@@ -1253,7 +1392,7 @@ func (s *Server) ListChannels(ctx context.Context, req *v1.ListChannelsRequest) 
 
 	return &v1.ListChannelsResponse{
 		Channels:   pbChannels,
-		Pagination: &v1.Pagination{Total: int32(len(channels)), Limit: int32(len(channels))},
+		Pagination: pagination,
 	}, nil
 }
 
@@ -1367,19 +1506,20 @@ func (s *Server) ListRules(ctx context.Context, req *v1.ListRulesRequest) (*v1.L
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
 	}
-	workspace := user.Workspace
+	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
 	rules, err := s.store.ListRulesNoCtx(workspace)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list rules: %v", err)
 	}
+	page, pagination := paginate(rules, offset, limit)
 
-	pbRules := make([]*v1.Rule, 0, len(rules))
-	for _, r := range rules {
+	pbRules := make([]*v1.Rule, 0, len(page))
+	for _, r := range page {
 		if pb := ruleToPB(r); pb != nil {
 			pbRules = append(pbRules, pb)
 		}
@@ -1387,7 +1527,7 @@ func (s *Server) ListRules(ctx context.Context, req *v1.ListRulesRequest) (*v1.L
 
 	return &v1.ListRulesResponse{
 		Rules:      pbRules,
-		Pagination: &v1.Pagination{Total: int32(len(rules)), Limit: int32(len(rules))},
+		Pagination: pagination,
 	}, nil
 }
 
@@ -1509,24 +1649,20 @@ func (s *Server) ListJourneys(ctx context.Context, req *v1.ListJourneysRequest) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	workspace, err := workspaceFromContext(ctx)
+	if err != nil {
+		return nil, err
 	}
-	workspace := user.Workspace
+	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
-	limit := int(req.Limit)
-	if limit == 0 {
-		limit = 20
-	}
-
-	journeys, err := s.store.ListJourneysNoCtx(workspace, int(req.Offset), limit)
+	journeys, err := s.store.ListJourneysNoCtx(workspace, 0, 0)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list journeys: %v", err)
 	}
+	page, pagination := paginate(journeys, offset, limit)
 
-	pbJourneys := make([]*v1.Journey, 0, len(journeys))
-	for _, j := range journeys {
+	pbJourneys := make([]*v1.Journey, 0, len(page))
+	for _, j := range page {
 		if pb := journeyToPB(j); pb != nil {
 			pbJourneys = append(pbJourneys, pb)
 		}
@@ -1534,7 +1670,7 @@ func (s *Server) ListJourneys(ctx context.Context, req *v1.ListJourneysRequest) 
 
 	return &v1.ListJourneysResponse{
 		Journeys:   pbJourneys,
-		Pagination: &v1.Pagination{Total: int32(len(journeys)), Limit: int32(limit)},
+		Pagination: pagination,
 	}, nil
 }
 

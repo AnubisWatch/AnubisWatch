@@ -1188,6 +1188,14 @@ func TestCobaltDB_ListJudgmentsNoCtx(t *testing.T) {
 	if len(judgments) < 1 {
 		t.Errorf("expected at least 1 judgment, got %d", len(judgments))
 	}
+
+	allJudgments, err := db.ListJudgmentsNoCtx("", time.Now().Add(-time.Hour), time.Now().Add(time.Hour), 0)
+	if err != nil {
+		t.Fatalf("ListJudgmentsNoCtx without soul failed: %v", err)
+	}
+	if len(allJudgments) < 1 {
+		t.Errorf("expected at least 1 judgment without soul filter, got %d", len(allJudgments))
+	}
 }
 
 func TestCobaltDB_GetJudgmentNoCtx(t *testing.T) {
