@@ -610,6 +610,7 @@ export interface StatusPage {
   theme?: 'dark' | 'light' | 'auto' | 'custom' | Record<string, string>
   souls?: string[]
   subscribers?: number
+  uptime_days?: number
   created_at?: string
   updated_at?: string
 }

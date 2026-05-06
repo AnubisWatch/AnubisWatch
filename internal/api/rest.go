@@ -1771,6 +1771,50 @@ func sameWorkspace(resourceWorkspace, requestWorkspace string) bool {
 	return resourceWorkspace == requestWorkspace
 }
 
+func normalizeStatusPageForSave(page *core.StatusPage) error {
+	page.Name = strings.TrimSpace(page.Name)
+	page.Slug = strings.TrimSpace(strings.ToLower(page.Slug))
+	page.Description = strings.TrimSpace(page.Description)
+	page.CustomDomain = strings.TrimSpace(strings.ToLower(page.CustomDomain))
+
+	if page.Name == "" {
+		return fmt.Errorf("status page name is required")
+	}
+	if page.Slug == "" {
+		return fmt.Errorf("status page slug is required")
+	}
+	if len(page.Slug) > 100 || !isValidStatusPageSlug(page.Slug) {
+		return fmt.Errorf("status page slug must contain only lowercase letters, numbers, and hyphens")
+	}
+	if page.Visibility == "" {
+		page.Visibility = core.VisibilityPublic
+	}
+	if page.UptimeDays <= 0 {
+		page.UptimeDays = 90
+	}
+	if page.Theme.PrimaryColor == "" &&
+		page.Theme.BackgroundColor == "" &&
+		page.Theme.TextColor == "" &&
+		page.Theme.AccentColor == "" &&
+		page.Theme.FontFamily == "" {
+		page.Theme = core.GetDefaultTheme()
+	}
+	return nil
+}
+
+func isValidStatusPageSlug(slug string) bool {
+	if strings.HasPrefix(slug, "-") || strings.HasSuffix(slug, "-") {
+		return false
+	}
+	for _, r := range slug {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func (s *RESTServer) handleListStatusPages(ctx *Context) error {
 	pages, err := s.store.ListStatusPagesNoCtx()
 	if err != nil {
@@ -1790,6 +1834,9 @@ func (s *RESTServer) handleCreateStatusPage(ctx *Context) error {
 	var page core.StatusPage
 	if err := ctx.Bind(&page); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid status page data")
+	}
+	if err := normalizeStatusPageForSave(&page); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 
 	page.ID = core.GenerateID()
@@ -1829,6 +1876,9 @@ func (s *RESTServer) handleUpdateStatusPage(ctx *Context) error {
 	}
 	if !sameWorkspace(existing.WorkspaceID, contextWorkspace(ctx)) {
 		return ctx.Error(http.StatusForbidden, "access denied")
+	}
+	if err := normalizeStatusPageForSave(&page); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 
 	page.ID = id

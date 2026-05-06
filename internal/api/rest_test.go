@@ -1838,6 +1838,57 @@ func TestHandleCreateStatusPage(t *testing.T) {
 	if w.Code != http.StatusCreated {
 		t.Errorf("expected status 201, got %d: %s", w.Code, w.Body.String())
 	}
+
+	var created core.StatusPage
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatalf("failed to decode created page: %v", err)
+	}
+	if created.Visibility != core.VisibilityPublic {
+		t.Fatalf("expected default public visibility, got %q", created.Visibility)
+	}
+	if created.UptimeDays != 90 {
+		t.Fatalf("expected default uptime days, got %d", created.UptimeDays)
+	}
+	if created.Theme.PrimaryColor == "" {
+		t.Fatal("expected default theme to be applied")
+	}
+}
+
+func TestHandleCreateStatusPageRejectsInvalidPayload(t *testing.T) {
+	storage := newMockStorage()
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		router:     router,
+		auth:       &mockAuthenticator{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("POST", "/api/v1/status-pages", server.requireAuth(server.handleCreateStatusPage))
+
+	page := core.StatusPage{
+		Name:    "Broken Status Page",
+		Slug:    "bad slug!",
+		Enabled: true,
+	}
+	body, _ := json.Marshal(page)
+
+	req := httptest.NewRequest("POST", "/api/v1/status-pages", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(storage.statusPages) != 0 {
+		t.Fatal("invalid status page should not be persisted")
+	}
 }
 
 func TestHandleUpdateStatusPage(t *testing.T) {
@@ -1879,6 +1930,50 @@ func TestHandleUpdateStatusPage(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleUpdateStatusPageRejectsInvalidSlug(t *testing.T) {
+	storage := newMockStorage()
+	storage.SaveStatusPageNoCtx(&core.StatusPage{
+		ID:          "page-1",
+		WorkspaceID: "default",
+		Name:        "Original Status Page",
+		Slug:        "original-status",
+		CreatedAt:   time.Now().Add(-time.Hour),
+	})
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		router:     router,
+		auth:       &mockAuthenticator{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("PUT", "/api/v1/status-pages/:id", server.requireAuth(server.handleUpdateStatusPage))
+
+	page := core.StatusPage{
+		Name:    "Updated Status Page",
+		Slug:    "-invalid",
+		Enabled: true,
+	}
+	body, _ := json.Marshal(page)
+
+	req := httptest.NewRequest("PUT", "/api/v1/status-pages/page-1", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if storage.statusPages["page-1"].Slug != "original-status" {
+		t.Fatalf("invalid update changed stored page: %#v", storage.statusPages["page-1"])
 	}
 }
 

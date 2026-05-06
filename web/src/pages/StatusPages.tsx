@@ -50,6 +50,12 @@ function statusPageUrl(page: StatusPage): string {
   return `${window.location.origin}/status/${page.slug}`
 }
 
+function statusPageHref(page: StatusPage): string {
+  if (page.domain) return `https://${page.domain}`
+  if (page.custom_domain) return `https://${page.custom_domain}`
+  return `/status/${page.slug}`
+}
+
 export function StatusPages() {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
@@ -183,7 +189,7 @@ export function StatusPages() {
     total: pages.length,
     active: pages.filter(p => p.enabled).length,
     subscribers: pages.reduce((acc, p) => acc + (p.subscribers || 0), 0),
-    domains: pages.filter(p => p.domain).length
+    domains: pages.filter(p => p.domain || p.custom_domain).length
   }
 
   // Map souls to service status
@@ -420,7 +426,7 @@ export function StatusPages() {
                   {copiedId === page.id ? 'Copied!' : 'Copy URL'}
                 </button>
                 <a
-                  href={page.domain ? `https://${page.domain}` : `/status/${page.slug}`}
+                  href={statusPageHref(page)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"

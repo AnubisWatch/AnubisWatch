@@ -8,7 +8,7 @@ const mockDeletePage = vi.fn()
 const mockRefetch = vi.fn()
 const mockClipboardWriteText = vi.fn()
 
-const pages = [
+let mockPages = [
   {
     id: 'page-1',
     name: 'Production Status',
@@ -23,7 +23,7 @@ const pages = [
 
 vi.mock('../api/hooks', () => ({
   useStatusPages: () => ({
-    pages,
+    pages: mockPages,
     loading: false,
     error: null,
     refetch: mockRefetch,
@@ -46,6 +46,18 @@ vi.mock('../api/hooks', () => ({
 describe('StatusPages', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockPages = [
+      {
+        id: 'page-1',
+        name: 'Production Status',
+        slug: 'production',
+        description: 'Customer-facing services',
+        enabled: true,
+        theme: 'light' as const,
+        souls: ['soul-1'],
+        subscribers: 7,
+      },
+    ]
     mockCreatePage.mockResolvedValue(undefined)
     mockUpdatePage.mockResolvedValue(undefined)
     mockDeletePage.mockResolvedValue(undefined)
@@ -94,5 +106,26 @@ describe('StatusPages', () => {
     await waitFor(() => {
       expect(mockClipboardWriteText).toHaveBeenCalledWith(expect.stringMatching(/\/status\/production$/))
     })
+  })
+
+  it('uses custom_domain for the domain count and external view link', () => {
+    mockPages = [
+      {
+        id: 'page-custom-domain',
+        name: 'Public Status',
+        slug: 'public',
+        description: 'Custom domain page',
+        enabled: true,
+        theme: 'dark' as const,
+        custom_domain: 'status.example.com',
+        souls: [],
+        subscribers: 0,
+      },
+    ]
+
+    render(<StatusPages />)
+
+    expect(screen.getByText('Custom Domains').nextElementSibling).toHaveTextContent('1')
+    expect(screen.getByRole('link', { name: /view/i })).toHaveAttribute('href', 'https://status.example.com')
   })
 })
