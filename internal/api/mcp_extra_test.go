@@ -420,7 +420,7 @@ func TestMCPServer_handleGetSoul_Valid(t *testing.T) {
 
 	server := NewMCPServer(store, probe, alert, logger)
 
-	result, err := server.handleGetSoul(json.RawMessage(`{"soul_id":"soul-1"}`))
+	result, err := server.handleGetSoul(context.Background(), json.RawMessage(`{"soul_id":"soul-1"}`))
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -438,7 +438,7 @@ func TestMCPServer_handleGetSoul_MissingID(t *testing.T) {
 
 	server := NewMCPServer(store, probe, alert, logger)
 
-	result, err := server.handleGetSoul(json.RawMessage(`{}`))
+	result, err := server.handleGetSoul(context.Background(), json.RawMessage(`{}`))
 	// Should return nil result for empty soul_id - storage will handle it
 	if err != nil {
 		t.Logf("Got error (may be expected): %v", err)
@@ -455,7 +455,7 @@ func TestMCPServer_handleGetSoul_InvalidJSON(t *testing.T) {
 
 	server := NewMCPServer(store, probe, alert, logger)
 
-	_, err := server.handleGetSoul(json.RawMessage(`{not valid json}`))
+	_, err := server.handleGetSoul(context.Background(), json.RawMessage(`{not valid json}`))
 	if err == nil {
 		t.Error("Expected error for invalid JSON")
 	}
@@ -471,7 +471,7 @@ func TestMCPServer_handleForceCheck_Valid(t *testing.T) {
 
 	server := NewMCPServer(store, probe, alert, logger)
 
-	result, err := server.handleForceCheck(json.RawMessage(`{"soul_id":"soul-1"}`))
+	result, err := server.handleForceCheck(context.Background(), json.RawMessage(`{"soul_id":"soul-1"}`))
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -489,7 +489,7 @@ func TestMCPServer_handleForceCheck_InvalidJSON(t *testing.T) {
 
 	server := NewMCPServer(store, probe, alert, logger)
 
-	_, err := server.handleForceCheck(json.RawMessage(`{not valid json}`))
+	_, err := server.handleForceCheck(context.Background(), json.RawMessage(`{not valid json}`))
 	if err == nil {
 		t.Error("Expected error for invalid JSON")
 	}
@@ -504,7 +504,7 @@ func TestMCPServer_handleAcknowledgeIncident_Valid(t *testing.T) {
 
 	server := NewMCPServer(store, probe, alert, logger)
 
-	result, err := server.handleAcknowledgeIncident(json.RawMessage(`{"incident_id":"inc-1"}`))
+	result, err := server.handleAcknowledgeIncident(context.Background(), json.RawMessage(`{"incident_id":"inc-1"}`))
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -521,7 +521,7 @@ func TestMCPServer_handleAcknowledgeIncident_InvalidJSON(t *testing.T) {
 
 	server := NewMCPServer(store, probe, alert, logger)
 
-	_, err := server.handleAcknowledgeIncident(json.RawMessage(`{not valid json}`))
+	_, err := server.handleAcknowledgeIncident(context.Background(), json.RawMessage(`{not valid json}`))
 	if err == nil {
 		t.Error("Expected error for invalid JSON")
 	}
@@ -536,7 +536,7 @@ func TestMCPServer_handleCreateSoul_InvalidJSON(t *testing.T) {
 
 	server := NewMCPServer(store, probe, alert, logger)
 
-	_, err := server.handleCreateSoul(json.RawMessage(`{not valid json}`))
+	_, err := server.handleCreateSoul(context.Background(), json.RawMessage(`{not valid json}`))
 	if err == nil {
 		t.Error("Expected error for invalid JSON")
 	}
@@ -551,7 +551,7 @@ func TestMCPServer_handleGetStats_WithWorkspace(t *testing.T) {
 
 	server := NewMCPServer(store, probe, alert, logger)
 
-	result, err := server.handleGetStats(json.RawMessage(`{"workspace":"default"}`))
+	result, err := server.handleGetStats(context.Background(), json.RawMessage(`{"workspace":"default"}`))
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -569,7 +569,7 @@ func TestMCPServer_handleListIncidents_Empty(t *testing.T) {
 
 	server := NewMCPServer(store, probe, alert, logger)
 
-	result, err := server.handleListIncidents(json.RawMessage(`{}`))
+	result, err := server.handleListIncidents(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Errorf("Unexpected error: %v", err)
 	}
@@ -592,7 +592,7 @@ func TestMCPServer_handleCallTool_UnknownTool(t *testing.T) {
 		Method: "tools/call",
 		Params: json.RawMessage(`{"name":"unknown_tool","arguments":{}}`),
 	}
-	resp := server.handleCallTool(req)
+	resp := server.handleCallTool(context.Background(), req)
 	if resp == nil {
 		t.Fatal("Expected non-nil response")
 	}

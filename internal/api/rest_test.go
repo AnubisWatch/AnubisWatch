@@ -3679,7 +3679,7 @@ func TestMCPServer_handleCreateSoul_NoWorkspace(t *testing.T) {
 	server := NewMCPServer(store, probe, alert, logger)
 
 	args := json.RawMessage(`{"name": "New Soul", "type": "http"}`)
-	_, _ = server.handleCreateSoul(args)
+	_, _ = server.handleCreateSoul(context.Background(), args)
 }
 
 // Test handleCreateSoul with workspace
@@ -3693,7 +3693,7 @@ func TestMCPServer_handleCreateSoul_WithWorkspace(t *testing.T) {
 	server := NewMCPServer(store, probe, alert, logger)
 
 	args := json.RawMessage(`{"name": "New Soul", "type": "http", "workspace": "default"}`)
-	_, _ = server.handleCreateSoul(args)
+	_, _ = server.handleCreateSoul(context.Background(), args)
 }
 
 // Test handleReadResource with unknown URI via HTTP
@@ -3743,7 +3743,7 @@ func TestMCPServer_handleAcknowledgeIncident_NoID(t *testing.T) {
 	server := NewMCPServer(store, probe, alert, logger)
 
 	args := json.RawMessage(`{}`)
-	_, _ = server.handleAcknowledgeIncident(args)
+	_, _ = server.handleAcknowledgeIncident(context.Background(), args)
 }
 
 // Test WebSocket server
@@ -3832,7 +3832,7 @@ func TestMCPServer_handleListSouls_Error(t *testing.T) {
 	server := NewMCPServer(store, probe, alert, logger)
 
 	args := json.RawMessage(`{"workspace": "nonexistent"}`)
-	result, err := server.handleListSouls(args)
+	result, err := server.handleListSouls(context.Background(), args)
 	// May return error or empty list depending on implementation
 	_ = result
 	_ = err
@@ -3848,7 +3848,7 @@ func TestMCPServer_handleGetSoul_Error(t *testing.T) {
 	server := NewMCPServer(store, probe, alert, logger)
 
 	args := json.RawMessage(`{}`)
-	result, err := server.handleGetSoul(args)
+	result, err := server.handleGetSoul(context.Background(), args)
 	if err == nil {
 		t.Log("Expected error for missing soul_id")
 	}
@@ -3865,7 +3865,7 @@ func TestMCPServer_handleForceCheck_Error(t *testing.T) {
 	server := NewMCPServer(store, probe, alert, logger)
 
 	args := json.RawMessage(`{"soul_id": "nonexistent-soul"}`)
-	result, err := server.handleForceCheck(args)
+	result, err := server.handleForceCheck(context.Background(), args)
 	// Should return judgment even for nonexistent soul
 	_ = result
 	_ = err
@@ -4542,6 +4542,39 @@ func TestHandleMCP_Unauthorized(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("Expected status %d, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
+func TestHandleMCP_RejectsOtherWorkspaceSoul(t *testing.T) {
+	store := newMockStorage()
+	store.SaveSoulNoCtx(&core.Soul{ID: "other-soul", Name: "Other Soul", WorkspaceID: "other"})
+	mcpServer := NewMCPServer(store, &mockProbeEngine{}, &mockAlertManager{}, newTestLogger())
+	server := NewRESTServer(core.ServerConfig{Port: 8080}, core.AuthConfig{Enabled: core.BoolPtr(true)}, store, &mockProbeEngine{}, &mockAlertManager{}, &mockAuthenticator{}, &mockClusterManager{}, nil, nil, nil, nil, newTestLogger())
+	server.mcp = mcpServer
+
+	reqBody := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_soul","arguments":{"soul_id":"other-soul"}}}`
+	req := httptest.NewRequest("POST", "/api/v1/mcp", strings.NewReader(reqBody))
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:   req,
+		Response:  rec,
+		User:      &User{ID: "user-1", Email: "test@example.com", Role: "admin", Workspace: "default"},
+		Workspace: "default",
+	}
+
+	if err := server.handleMCP(ctx); err != nil {
+		t.Fatalf("handleMCP failed: %v", err)
+	}
+
+	var resp MCPResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode MCP response: %v", err)
+	}
+	if resp.Error == nil {
+		t.Fatalf("expected MCP error for cross-workspace soul, got response %#v", resp)
+	}
+	if !strings.Contains(resp.Error.Message, "access denied") {
+		t.Fatalf("expected access denied error, got %q", resp.Error.Message)
 	}
 }
 

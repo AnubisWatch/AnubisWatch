@@ -2,12 +2,18 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
+)
+
+var (
+	errAccessDenied          = errors.New("access denied")
+	errQueryResourceNotFound = errors.New("resource not found")
 )
 
 type journeyListItem struct {
@@ -508,6 +514,12 @@ func (s *RESTServer) handleDashboardQuery(ctx *Context) error {
 	}
 
 	if err != nil {
+		if errors.Is(err, errAccessDenied) {
+			return ctx.Error(http.StatusForbidden, "access denied")
+		}
+		if errors.Is(err, errQueryResourceNotFound) {
+			return ctx.Error(http.StatusNotFound, "resource not found")
+		}
 		return s.internalError(ctx, err, "dashboard query failed")
 	}
 
@@ -559,6 +571,13 @@ func (s *RESTServer) queryJudgments(q core.WidgetQuery, workspace string) (inter
 	var err error
 
 	if soulID != "" {
+		soul, err := s.store.GetSoulNoCtx(soulID)
+		if err != nil || soul == nil {
+			return nil, errQueryResourceNotFound
+		}
+		if !sameWorkspace(soul.WorkspaceID, workspace) {
+			return nil, errAccessDenied
+		}
 		judgments, err = s.store.ListJudgmentsNoCtx(soulID, start, end, 1000)
 	} else {
 		// List all souls and get their judgments

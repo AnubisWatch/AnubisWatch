@@ -2611,6 +2611,35 @@ func TestHandleDashboardQuery_Judgments(t *testing.T) {
 	}
 }
 
+func TestHandleDashboardQuery_JudgmentsRejectsOtherWorkspaceSoul(t *testing.T) {
+	store := newMockStorage()
+	store.SaveDashboardNoCtx(&core.CustomDashboard{ID: "dash-1", WorkspaceID: "default"})
+	store.SaveSoul(nil, &core.Soul{ID: "other-soul", Name: "Other Soul", WorkspaceID: "other"})
+	store.SaveJudgment(context.Background(), &core.Judgment{
+		ID:        "other-judgment",
+		SoulID:    "other-soul",
+		Status:    core.SoulAlive,
+		Timestamp: time.Now(),
+	})
+	server := newTestServerWithJourney(store, nil)
+
+	query := core.WidgetQuery{Source: "judgments", Metric: "latency", TimeRange: "24h", Filters: map[string]string{"soul_id": "other-soul"}}
+	body, _ := json.Marshal(query)
+
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:   httptest.NewRequest("POST", "/api/v1/dashboards/dash-1/query", bytes.NewReader(body)),
+		Response:  rec,
+		Params:    map[string]string{"id": "dash-1"},
+		Workspace: "default",
+	}
+
+	err := server.handleDashboardQuery(ctx)
+	if err == nil && rec.Code != http.StatusForbidden {
+		t.Fatalf("expected forbidden, got status %d with body %q", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleDashboardQuery_Stats(t *testing.T) {
 	store := newMockStorage()
 	store.SaveDashboardNoCtx(&core.CustomDashboard{ID: "dash-1", WorkspaceID: "default"})
@@ -2956,6 +2985,7 @@ func TestQueryJudgments_WithSoulID(t *testing.T) {
 	store := newMockStorage()
 	// Use timestamps within the same hour to ensure single bucket
 	now := time.Now().Truncate(time.Hour)
+	store.SaveSoulNoCtx(&core.Soul{ID: "soul-1", Name: "Default Soul", WorkspaceID: "default"})
 	store.SaveJudgment(context.Background(), &core.Judgment{ID: "j1", SoulID: "soul-1", Status: core.SoulAlive, Duration: 100 * time.Millisecond, Timestamp: now.Add(-5 * time.Minute)})
 	store.SaveJudgment(context.Background(), &core.Judgment{ID: "j2", SoulID: "soul-1", Status: core.SoulDead, Duration: 200 * time.Millisecond, Timestamp: now.Add(-3 * time.Minute)})
 	store.SaveJudgment(context.Background(), &core.Judgment{ID: "j3", SoulID: "soul-1", Status: core.SoulAlive, Duration: 300 * time.Millisecond, Timestamp: now.Add(-1 * time.Minute)})

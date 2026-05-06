@@ -1925,7 +1925,8 @@ func (s *RESTServer) handleMCP(ctx *Context) error {
 		return ctx.Error(http.StatusUnauthorized, "authentication required")
 	}
 
-	s.mcp.ServeHTTP(ctx.Response, ctx.Request)
+	req := ctx.Request.WithContext(core.ContextWithWorkspaceID(ctx.Request.Context(), contextWorkspace(ctx)))
+	s.mcp.ServeHTTP(ctx.Response, req)
 	return nil
 }
 
