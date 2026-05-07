@@ -624,6 +624,17 @@ export interface User {
   created_at?: string
 }
 
+export interface Workspace {
+  id: string
+  name: string
+  slug?: string
+  description?: string
+  owner_id?: string
+  status?: 'active' | 'suspended' | 'trial' | 'deleted'
+  created_at?: string
+  updated_at?: string
+}
+
 export interface CustomDashboard {
   id: string
   name: string

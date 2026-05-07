@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../api/hooks'
 import { useThemeStore, applyTheme, getEffectiveTheme } from '../stores/themeStore'
+import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 
 // Ancient Egypt decorative icons
 const ScarabIcon = () => (
@@ -84,6 +85,8 @@ export function Header() {
 
       {/* Right */}
       <div className="flex items-center gap-3">
+        <WorkspaceSwitcher user={user} />
+
         {/* Theme Toggle */}
         <button
           onClick={() => {
