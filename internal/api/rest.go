@@ -1457,7 +1457,18 @@ func (s *RESTServer) handleListWorkspaces(ctx *Context) error {
 		return s.internalError(ctx, err, "internal server error")
 	}
 
-	return ctx.JSON(http.StatusOK, workspaces)
+	workspace := contextWorkspace(ctx)
+	filtered := make([]*core.Workspace, 0, len(workspaces))
+	for _, ws := range workspaces {
+		if ws == nil {
+			continue
+		}
+		if sameWorkspace(ws.ID, workspace) {
+			filtered = append(filtered, ws)
+		}
+	}
+
+	return ctx.JSON(http.StatusOK, filtered)
 }
 
 func (s *RESTServer) handleCreateWorkspace(ctx *Context) error {
@@ -1483,6 +1494,9 @@ func (s *RESTServer) handleGetWorkspace(ctx *Context) error {
 	if err != nil {
 		return ctx.Error(http.StatusNotFound, "workspace not found")
 	}
+	if !sameWorkspace(ws.ID, contextWorkspace(ctx)) {
+		return ctx.Error(http.StatusForbidden, "access denied")
+	}
 
 	return ctx.JSON(http.StatusOK, ws)
 }
@@ -1498,7 +1512,7 @@ func (s *RESTServer) handleUpdateWorkspace(ctx *Context) error {
 	if existing == nil {
 		return ctx.Error(http.StatusNotFound, "workspace not found")
 	}
-	if existing.ID != id {
+	if existing.ID != id || !sameWorkspace(existing.ID, contextWorkspace(ctx)) {
 		return ctx.Error(http.StatusForbidden, "access denied")
 	}
 
@@ -1528,6 +1542,16 @@ func (s *RESTServer) handleUpdateWorkspace(ctx *Context) error {
 
 func (s *RESTServer) handleDeleteWorkspace(ctx *Context) error {
 	id := ctx.Params["id"]
+	existing, err := s.store.GetWorkspaceNoCtx(id)
+	if err != nil {
+		return s.internalError(ctx, err, "failed to fetch workspace")
+	}
+	if existing == nil {
+		return ctx.Error(http.StatusNotFound, "workspace not found")
+	}
+	if !sameWorkspace(existing.ID, contextWorkspace(ctx)) {
+		return ctx.Error(http.StatusForbidden, "access denied")
+	}
 	if err := s.store.DeleteWorkspaceNoCtx(id); err != nil {
 		return s.internalError(ctx, err, "internal server error")
 	}

@@ -1248,7 +1248,8 @@ func TestHandleListRules(t *testing.T) {
 
 func TestHandleListWorkspaces(t *testing.T) {
 	storage := newMockStorage()
-	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "ws-1", Name: "Test Workspace", Slug: "test"})
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "default", Name: "Default Workspace", Slug: "default"})
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "other", Name: "Other Workspace", Slug: "other"})
 
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
@@ -1272,6 +1273,14 @@ func TestHandleListWorkspaces(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	var workspaces []*core.Workspace
+	if err := json.NewDecoder(w.Body).Decode(&workspaces); err != nil {
+		t.Fatalf("failed to decode workspaces: %v", err)
+	}
+	if len(workspaces) != 1 || workspaces[0].ID != "default" {
+		t.Fatalf("expected only current workspace, got %#v", workspaces)
 	}
 }
 
@@ -3166,7 +3175,7 @@ func TestHandleCreateWorkspace(t *testing.T) {
 
 func TestHandleGetWorkspace(t *testing.T) {
 	storage := newMockStorage()
-	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "ws-1", Name: "Test Workspace", Slug: "test"})
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "default", Name: "Default Workspace", Slug: "default"})
 
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
@@ -3181,7 +3190,7 @@ func TestHandleGetWorkspace(t *testing.T) {
 
 	router.Handle("GET", "/api/v1/workspaces/:id", server.requireAuth(server.handleGetWorkspace))
 
-	req := httptest.NewRequest("GET", "/api/v1/workspaces/ws-1", nil)
+	req := httptest.NewRequest("GET", "/api/v1/workspaces/default", nil)
 	req.Header.Set("Authorization", "Bearer valid-token")
 	w := httptest.NewRecorder()
 
@@ -3192,9 +3201,37 @@ func TestHandleGetWorkspace(t *testing.T) {
 	}
 }
 
+func TestHandleGetWorkspaceRejectsOtherWorkspace(t *testing.T) {
+	storage := newMockStorage()
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "other", Name: "Other Workspace", Slug: "other"})
+
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		router:     router,
+		auth:       &mockAuthenticator{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("GET", "/api/v1/workspaces/:id", server.requireAuth(server.handleGetWorkspace))
+
+	req := httptest.NewRequest("GET", "/api/v1/workspaces/other", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected status 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestHandleUpdateWorkspace(t *testing.T) {
 	storage := newMockStorage()
-	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "wsToUpdate", Name: "Original", Slug: "original"})
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "default", Name: "Original", Slug: "default"})
 
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
@@ -3215,7 +3252,7 @@ func TestHandleUpdateWorkspace(t *testing.T) {
 	}
 	body, _ := json.Marshal(updated)
 
-	req := httptest.NewRequest("PUT", "/api/v1/workspaces/wsToUpdate", bytes.NewBuffer(body))
+	req := httptest.NewRequest("PUT", "/api/v1/workspaces/default", bytes.NewBuffer(body))
 	req.Header.Set("Authorization", "Bearer valid-token")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -3227,8 +3264,40 @@ func TestHandleUpdateWorkspace(t *testing.T) {
 	}
 }
 
+func TestHandleUpdateWorkspaceRejectsOtherWorkspace(t *testing.T) {
+	storage := newMockStorage()
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "other", Name: "Other", Slug: "other"})
+
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		router:     router,
+		auth:       &mockAuthenticator{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("PUT", "/api/v1/workspaces/:id", server.requireAuth(server.handleUpdateWorkspace))
+
+	updated := core.Workspace{Name: "Updated Workspace"}
+	body, _ := json.Marshal(updated)
+	req := httptest.NewRequest("PUT", "/api/v1/workspaces/other", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected status 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestHandleDeleteWorkspace(t *testing.T) {
 	storage := newMockStorage()
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "default", Name: "Default Workspace", Slug: "default"})
 
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
@@ -3243,7 +3312,7 @@ func TestHandleDeleteWorkspace(t *testing.T) {
 
 	router.Handle("DELETE", "/api/v1/workspaces/:id", server.requireAuth(server.handleDeleteWorkspace))
 
-	req := httptest.NewRequest("DELETE", "/api/v1/workspaces/ws-to-delete", nil)
+	req := httptest.NewRequest("DELETE", "/api/v1/workspaces/default", nil)
 	req.Header.Set("Authorization", "Bearer valid-token")
 	w := httptest.NewRecorder()
 
@@ -3251,6 +3320,34 @@ func TestHandleDeleteWorkspace(t *testing.T) {
 
 	if w.Code != http.StatusNoContent && w.Code != http.StatusOK {
 		t.Errorf("expected status 204 or 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleDeleteWorkspaceRejectsOtherWorkspace(t *testing.T) {
+	storage := newMockStorage()
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "other", Name: "Other Workspace", Slug: "other"})
+
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		router:     router,
+		auth:       &mockAuthenticator{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("DELETE", "/api/v1/workspaces/:id", server.requireAuth(server.handleDeleteWorkspace))
+
+	req := httptest.NewRequest("DELETE", "/api/v1/workspaces/other", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected status 403, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

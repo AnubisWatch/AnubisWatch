@@ -430,12 +430,17 @@ Authorization: Bearer <token>
 
 Multi-tenant workspace management.
 
+Workspace reads and mutations are scoped to the authenticated user's current
+workspace. Requests for another workspace return `403 Forbidden`.
+
 ### List Workspaces
 
 ```http
 GET /api/v1/workspaces
 Authorization: Bearer <token>
 ```
+
+Returns only workspaces visible to the authenticated user.
 
 ### Create Workspace
 
