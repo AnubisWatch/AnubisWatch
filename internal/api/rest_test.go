@@ -3156,8 +3156,15 @@ func TestHandleCreateWorkspace(t *testing.T) {
 	router.Handle("POST", "/api/v1/workspaces", server.requireAuth(server.handleCreateWorkspace))
 
 	ws := core.Workspace{
-		Name: "New Workspace",
-		Slug: "new-workspace",
+		ID:      "attacker-controlled",
+		Name:    " New Workspace ",
+		Slug:    "new-workspace",
+		OwnerID: "attacker",
+		Quotas: core.QuotaConfig{
+			MaxSouls: 9999,
+		},
+		Features: core.FeatureFlags{SSO: true},
+		Status:   core.WorkspaceSuspended,
 	}
 	body, _ := json.Marshal(ws)
 
@@ -3170,6 +3177,88 @@ func TestHandleCreateWorkspace(t *testing.T) {
 
 	if w.Code != http.StatusCreated {
 		t.Errorf("expected status 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var created core.Workspace
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatalf("failed to decode created workspace: %v", err)
+	}
+	if created.ID != "default" {
+		t.Fatalf("expected workspace ID to be caller workspace default, got %q", created.ID)
+	}
+	if created.OwnerID != "user-1" {
+		t.Fatalf("expected owner user-1, got %q", created.OwnerID)
+	}
+	if created.Name != "New Workspace" {
+		t.Fatalf("expected trimmed name, got %q", created.Name)
+	}
+	if created.Quotas.MaxSouls != 100 {
+		t.Fatalf("expected server default quota, got %#v", created.Quotas)
+	}
+	if created.Features.SSO {
+		t.Fatal("client-controlled SSO feature flag should not be persisted")
+	}
+	if created.Status != core.WorkspaceActive {
+		t.Fatalf("expected active status, got %q", created.Status)
+	}
+}
+
+func TestHandleCreateWorkspaceRejectsExistingCurrentWorkspace(t *testing.T) {
+	storage := newMockStorage()
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "default", Name: "Default Workspace", Slug: "default"})
+
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		router:     router,
+		auth:       &mockAuthenticator{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("POST", "/api/v1/workspaces", server.requireAuth(server.handleCreateWorkspace))
+
+	body, _ := json.Marshal(core.Workspace{Name: "Duplicate", Slug: "duplicate"})
+	req := httptest.NewRequest("POST", "/api/v1/workspaces", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected status 409, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleCreateWorkspaceRejectsReservedSlug(t *testing.T) {
+	storage := newMockStorage()
+
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		router:     router,
+		auth:       &mockAuthenticator{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("POST", "/api/v1/workspaces", server.requireAuth(server.handleCreateWorkspace))
+
+	body, _ := json.Marshal(core.Workspace{Name: "API Workspace", Slug: "api"})
+	req := httptest.NewRequest("POST", "/api/v1/workspaces", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -3295,6 +3384,35 @@ func TestHandleUpdateWorkspaceRejectsOtherWorkspace(t *testing.T) {
 	}
 }
 
+func TestHandleUpdateWorkspaceMissingReturnsNotFound(t *testing.T) {
+	storage := newMockStorage()
+
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		router:     router,
+		auth:       &mockAuthenticator{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("PUT", "/api/v1/workspaces/:id", server.requireAuth(server.handleUpdateWorkspace))
+
+	body, _ := json.Marshal(core.Workspace{Name: "Updated Workspace"})
+	req := httptest.NewRequest("PUT", "/api/v1/workspaces/default", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestHandleDeleteWorkspace(t *testing.T) {
 	storage := newMockStorage()
 	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "default", Name: "Default Workspace", Slug: "default"})
@@ -3348,6 +3466,33 @@ func TestHandleDeleteWorkspaceRejectsOtherWorkspace(t *testing.T) {
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("expected status 403, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleDeleteWorkspaceMissingReturnsNotFound(t *testing.T) {
+	storage := newMockStorage()
+
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		router:     router,
+		auth:       &mockAuthenticator{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("DELETE", "/api/v1/workspaces/:id", server.requireAuth(server.handleDeleteWorkspace))
+
+	req := httptest.NewRequest("DELETE", "/api/v1/workspaces/default", nil)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected status 404, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

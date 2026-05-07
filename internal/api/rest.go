@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1477,9 +1478,44 @@ func (s *RESTServer) handleCreateWorkspace(ctx *Context) error {
 		return ctx.Error(http.StatusBadRequest, "invalid workspace data")
 	}
 
-	ws.ID = core.GenerateID()
-	ws.CreatedAt = time.Now()
-	ws.UpdatedAt = time.Now()
+	workspace := contextWorkspace(ctx)
+	existing, err := s.store.GetWorkspaceNoCtx(workspace)
+	if err == nil && existing != nil {
+		return ctx.Error(http.StatusConflict, "workspace already exists")
+	}
+	if err != nil && !isNotFoundError(err) {
+		return s.internalError(ctx, err, "failed to fetch workspace")
+	}
+
+	ws.Name = strings.TrimSpace(ws.Name)
+	if ws.Name == "" {
+		return ctx.Error(http.StatusBadRequest, "workspace name is required")
+	}
+
+	ws.Slug = strings.TrimSpace(strings.ToLower(ws.Slug))
+	if ws.Slug == "" {
+		ws.Slug = slugFromLabel(ws.Name)
+	}
+	if err := core.ValidateSlug(ws.Slug); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
+	if core.IsReservedSlug(ws.Slug) {
+		return ctx.Error(http.StatusBadRequest, "workspace slug is reserved")
+	}
+
+	now := time.Now()
+	ws.ID = workspace
+	ws.Description = strings.TrimSpace(ws.Description)
+	ws.OwnerID = ""
+	if ctx.User != nil {
+		ws.OwnerID = ctx.User.ID
+	}
+	ws.Quotas = defaultWorkspaceQuotas()
+	ws.Features = defaultWorkspaceFeatures()
+	ws.Status = core.WorkspaceActive
+	ws.CreatedAt = now
+	ws.UpdatedAt = now
+	ws.DeletedAt = nil
 
 	if err := s.store.SaveWorkspaceNoCtx(&ws); err != nil {
 		return s.internalError(ctx, err, "internal server error")
@@ -1492,6 +1528,9 @@ func (s *RESTServer) handleGetWorkspace(ctx *Context) error {
 	id := ctx.Params["id"]
 	ws, err := s.store.GetWorkspaceNoCtx(id)
 	if err != nil {
+		if !isNotFoundError(err) {
+			return s.internalError(ctx, err, "failed to fetch workspace")
+		}
 		return ctx.Error(http.StatusNotFound, "workspace not found")
 	}
 	if !sameWorkspace(ws.ID, contextWorkspace(ctx)) {
@@ -1507,6 +1546,9 @@ func (s *RESTServer) handleUpdateWorkspace(ctx *Context) error {
 	// Fetch existing workspace for IDOR check
 	existing, err := s.store.GetWorkspaceNoCtx(id)
 	if err != nil {
+		if isNotFoundError(err) {
+			return ctx.Error(http.StatusNotFound, "workspace not found")
+		}
 		return s.internalError(ctx, err, "failed to fetch workspace")
 	}
 	if existing == nil {
@@ -1544,6 +1586,9 @@ func (s *RESTServer) handleDeleteWorkspace(ctx *Context) error {
 	id := ctx.Params["id"]
 	existing, err := s.store.GetWorkspaceNoCtx(id)
 	if err != nil {
+		if isNotFoundError(err) {
+			return ctx.Error(http.StatusNotFound, "workspace not found")
+		}
 		return s.internalError(ctx, err, "failed to fetch workspace")
 	}
 	if existing == nil {
@@ -1790,6 +1835,17 @@ func contextWorkspace(ctx *Context) string {
 	return ctx.Workspace
 }
 
+func isNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var notFound *core.NotFoundError
+	if errors.As(err, &notFound) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "not found")
+}
+
 func sameWorkspace(resourceWorkspace, requestWorkspace string) bool {
 	if resourceWorkspace == "" {
 		resourceWorkspace = "default"
@@ -1798,6 +1854,56 @@ func sameWorkspace(resourceWorkspace, requestWorkspace string) bool {
 		requestWorkspace = "default"
 	}
 	return resourceWorkspace == requestWorkspace
+}
+
+func slugFromLabel(label string) string {
+	label = strings.ToLower(strings.TrimSpace(label))
+	var b strings.Builder
+	lastHyphen := false
+	for _, r := range label {
+		valid := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if valid {
+			b.WriteRune(r)
+			lastHyphen = false
+			continue
+		}
+		if !lastHyphen && b.Len() > 0 {
+			b.WriteByte('-')
+			lastHyphen = true
+		}
+	}
+
+	slug := strings.Trim(b.String(), "-")
+	if slug == "" {
+		slug = "workspace"
+	}
+	if len(slug) > 63 {
+		slug = strings.Trim(slug[:63], "-")
+	}
+	if len(slug) < 3 {
+		slug += "-ws"
+	}
+	return slug
+}
+
+func defaultWorkspaceFeatures() core.FeatureFlags {
+	return core.FeatureFlags{
+		StatusPage:     true,
+		ACME:           true,
+		MCP:            true,
+		AdvancedAlerts: true,
+	}
+}
+
+func defaultWorkspaceQuotas() core.QuotaConfig {
+	return core.QuotaConfig{
+		MaxSouls:         100,
+		MaxJourneys:      20,
+		MaxAlertChannels: 10,
+		MaxTeamMembers:   25,
+		RetentionDays:    90,
+		CheckIntervalMin: core.Duration{Duration: 30 * time.Second},
+	}
 }
 
 func normalizeStatusPageForSave(page *core.StatusPage) error {

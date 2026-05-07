@@ -432,6 +432,10 @@ Multi-tenant workspace management.
 
 Workspace reads and mutations are scoped to the authenticated user's current
 workspace. Requests for another workspace return `403 Forbidden`.
+Creating a workspace initializes the authenticated user's current workspace
+record. The server assigns `id`, `owner_id`, quotas, feature flags, status, and
+timestamps; client-supplied protected fields are ignored. If the current
+workspace already exists, the API returns `409 Conflict`.
 
 ### List Workspaces
 
@@ -455,6 +459,9 @@ Content-Type: application/json
   "description": "Acme Corporation workspace"
 }
 ```
+
+`slug` is optional when `name` can be converted into a valid slug. Reserved or
+invalid slugs return `400 Bad Request`.
 
 ### Get Workspace
 
