@@ -342,6 +342,36 @@ func (a *LocalAuthenticator) Logout(token string) error {
 	return nil
 }
 
+// SwitchWorkspace updates the authenticated user's active workspace for this
+// token's user. Authorization for the target workspace is enforced by the API
+// layer before this mutates auth state.
+func (a *LocalAuthenticator) SwitchWorkspace(token, workspace string) (*api.User, error) {
+	if workspace == "" {
+		return nil, errors.New("workspace is required")
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	sess, ok := a.tokens[token]
+	if !ok {
+		return nil, errors.New("invalid token")
+	}
+	if time.Now().After(sess.ExpiresAt) {
+		delete(a.tokens, token)
+		a.saveSessionsLocked()
+		return nil, errors.New("token expired")
+	}
+
+	user := a.users[sess.UserID]
+	if user == nil {
+		return nil, errors.New("user not found")
+	}
+	user.Workspace = workspace
+	a.saveSessionsLocked()
+	return user, nil
+}
+
 func generateToken() string {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {

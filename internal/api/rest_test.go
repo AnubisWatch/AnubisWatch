@@ -642,6 +642,47 @@ func (a *mockAuthenticator) ConfirmPasswordReset(token, newPassword string) erro
 	return errors.New("invalid reset token")
 }
 
+type switchingMockAuthenticator struct {
+	user *User
+}
+
+func newSwitchingMockAuthenticator() *switchingMockAuthenticator {
+	return &switchingMockAuthenticator{
+		user: &User{ID: "user-1", Email: "test@example.com", Role: "admin", Workspace: "default"},
+	}
+}
+
+func (a *switchingMockAuthenticator) Authenticate(token string) (*User, error) {
+	if token == "valid-token" {
+		return a.user, nil
+	}
+	return nil, http.ErrNoCookie
+}
+func (a *switchingMockAuthenticator) Login(email, password string) (*User, string, error) {
+	if email == "test@example.com" && password == "password" {
+		return a.user, "valid-token", nil
+	}
+	return nil, "", http.ErrNoCookie
+}
+func (a *switchingMockAuthenticator) Logout(token string) error { return nil }
+func (a *switchingMockAuthenticator) Shutdown()                 {}
+func (a *switchingMockAuthenticator) ChangePassword(token, currentPassword, newPassword string) error {
+	return nil
+}
+func (a *switchingMockAuthenticator) RequestPasswordReset(email string) (string, error) {
+	return "reset-token-123", nil
+}
+func (a *switchingMockAuthenticator) ConfirmPasswordReset(token, newPassword string) error {
+	return nil
+}
+func (a *switchingMockAuthenticator) SwitchWorkspace(token, workspace string) (*User, error) {
+	if token != "valid-token" {
+		return nil, errors.New("invalid token")
+	}
+	a.user.Workspace = workspace
+	return a.user, nil
+}
+
 // failingMockAuthenticator always returns errors
 type failingMockAuthenticator struct{}
 
@@ -1249,7 +1290,8 @@ func TestHandleListRules(t *testing.T) {
 func TestHandleListWorkspaces(t *testing.T) {
 	storage := newMockStorage()
 	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "default", Name: "Default Workspace", Slug: "default"})
-	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "other", Name: "Other Workspace", Slug: "other"})
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "owned", Name: "Owned Workspace", Slug: "owned", OwnerID: "user-1"})
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "other", Name: "Other Workspace", Slug: "other", OwnerID: "user-2"})
 
 	router := &Router{routes: make(map[string]map[string]Handler)}
 	server := &RESTServer{
@@ -1279,8 +1321,122 @@ func TestHandleListWorkspaces(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&workspaces); err != nil {
 		t.Fatalf("failed to decode workspaces: %v", err)
 	}
-	if len(workspaces) != 1 || workspaces[0].ID != "default" {
-		t.Fatalf("expected only current workspace, got %#v", workspaces)
+	got := map[string]bool{}
+	for _, ws := range workspaces {
+		got[ws.ID] = true
+	}
+	if len(workspaces) != 2 || !got["default"] || !got["owned"] {
+		t.Fatalf("expected current and owned workspaces, got %#v", workspaces)
+	}
+}
+
+func TestHandleSwitchWorkspace(t *testing.T) {
+	storage := newMockStorage()
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "default", Name: "Default Workspace", Slug: "default", OwnerID: "user-1"})
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "owned", Name: "Owned Workspace", Slug: "owned", OwnerID: "user-1"})
+	auth := newSwitchingMockAuthenticator()
+
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		router:     router,
+		auth:       auth,
+		alert:      &mockAlertManager{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("POST", "/api/v1/auth/workspace", server.requireAuth(server.handleSwitchWorkspace))
+
+	body, _ := json.Marshal(map[string]string{"workspace": "owned"})
+	req := httptest.NewRequest("POST", "/api/v1/auth/workspace", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if auth.user.Workspace != "owned" {
+		t.Fatalf("expected auth user workspace owned, got %q", auth.user.Workspace)
+	}
+	var user User
+	if err := json.NewDecoder(w.Body).Decode(&user); err != nil {
+		t.Fatalf("failed to decode switched user: %v", err)
+	}
+	if user.Workspace != "owned" {
+		t.Fatalf("expected response workspace owned, got %q", user.Workspace)
+	}
+}
+
+func TestHandleSwitchWorkspaceRejectsUnownedWorkspace(t *testing.T) {
+	storage := newMockStorage()
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "default", Name: "Default Workspace", Slug: "default", OwnerID: "user-1"})
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "other", Name: "Other Workspace", Slug: "other", OwnerID: "user-2"})
+	auth := newSwitchingMockAuthenticator()
+
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		router:     router,
+		auth:       auth,
+		alert:      &mockAlertManager{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("POST", "/api/v1/auth/workspace", server.requireAuth(server.handleSwitchWorkspace))
+
+	body, _ := json.Marshal(map[string]string{"workspace": "other"})
+	req := httptest.NewRequest("POST", "/api/v1/auth/workspace", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d: %s", w.Code, w.Body.String())
+	}
+	if auth.user.Workspace != "default" {
+		t.Fatalf("forbidden switch mutated workspace to %q", auth.user.Workspace)
+	}
+}
+
+func TestHandleSwitchWorkspaceRequiresSwitcher(t *testing.T) {
+	storage := newMockStorage()
+	storage.SaveWorkspaceNoCtx(&core.Workspace{ID: "default", Name: "Default Workspace", Slug: "default"})
+
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      storage,
+		router:     router,
+		auth:       &mockAuthenticator{},
+		alert:      &mockAlertManager{},
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+
+	router.Handle("POST", "/api/v1/auth/workspace", server.requireAuth(server.handleSwitchWorkspace))
+
+	body, _ := json.Marshal(map[string]string{"workspace": "default"})
+	req := httptest.NewRequest("POST", "/api/v1/auth/workspace", bytes.NewBuffer(body))
+	req.Header.Set("Authorization", "Bearer valid-token")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotImplemented {
+		t.Fatalf("expected status 501, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

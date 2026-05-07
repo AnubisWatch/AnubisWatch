@@ -731,6 +731,35 @@ func (o *OIDCAuthenticator) Logout(token string) error {
 	return o.local.Logout(token)
 }
 
+// SwitchWorkspace updates the active workspace for OIDC-backed sessions and
+// delegates local fallback sessions to the local authenticator.
+func (o *OIDCAuthenticator) SwitchWorkspace(token, workspace string) (*api.User, error) {
+	if workspace == "" {
+		return nil, fmt.Errorf("workspace is required")
+	}
+
+	o.mu.Lock()
+	sess, ok := o.tokens[token]
+	if ok {
+		if time.Now().After(sess.ExpiresAt) {
+			delete(o.tokens, token)
+			o.mu.Unlock()
+			return nil, fmt.Errorf("token expired")
+		}
+		user := o.users[sess.UserID]
+		if user == nil {
+			o.mu.Unlock()
+			return nil, fmt.Errorf("user not found")
+		}
+		user.Workspace = workspace
+		o.mu.Unlock()
+		return user, nil
+	}
+	o.mu.Unlock()
+
+	return o.local.SwitchWorkspace(token, workspace)
+}
+
 // Shutdown gracefully stops the authenticator
 func (o *OIDCAuthenticator) Shutdown() {
 	o.local.Shutdown()

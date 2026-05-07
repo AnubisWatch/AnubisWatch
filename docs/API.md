@@ -42,6 +42,22 @@ POST /api/v1/auth/logout
 Authorization: Bearer <token>
 ```
 
+### Switch Workspace
+
+```http
+POST /api/v1/auth/workspace
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "workspace": "tenant-a"
+}
+```
+
+Switches the current session to a workspace the authenticated user can access.
+The API returns `403 Forbidden` when the workspace exists but is not visible to
+the user.
+
 ### Get Current User
 
 ```http
@@ -432,6 +448,8 @@ Multi-tenant workspace management.
 
 Workspace reads and mutations are scoped to the authenticated user's current
 workspace. Requests for another workspace return `403 Forbidden`.
+Workspace listing returns the current workspace and workspaces owned by the
+authenticated user.
 Creating a workspace initializes the authenticated user's current workspace
 record. The server assigns `id`, `owner_id`, quotas, feature flags, status, and
 timestamps; client-supplied protected fields are ignored. If the current

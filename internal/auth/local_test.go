@@ -1184,6 +1184,35 @@ func TestSaveSessionsLocked_ChmodError(t *testing.T) {
 	// Should handle gracefully
 }
 
+func TestLocalAuthenticator_SwitchWorkspace(t *testing.T) {
+	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
+	defer auth.Shutdown()
+
+	user, token, err := auth.Login("admin@test.com", "TestPass1234!")
+	if err != nil {
+		t.Fatalf("Login failed: %v", err)
+	}
+	if user.Workspace != "default" {
+		t.Fatalf("expected default workspace before switch, got %q", user.Workspace)
+	}
+
+	switched, err := auth.SwitchWorkspace(token, "tenant-a")
+	if err != nil {
+		t.Fatalf("SwitchWorkspace failed: %v", err)
+	}
+	if switched.Workspace != "tenant-a" {
+		t.Fatalf("expected switched workspace tenant-a, got %q", switched.Workspace)
+	}
+
+	authenticated, err := auth.Authenticate(token)
+	if err != nil {
+		t.Fatalf("Authenticate failed: %v", err)
+	}
+	if authenticated.Workspace != "tenant-a" {
+		t.Fatalf("expected authenticated workspace tenant-a, got %q", authenticated.Workspace)
+	}
+}
+
 // TestValidatePassword tests the password validation function directly
 func TestValidatePassword(t *testing.T) {
 	tests := []struct {

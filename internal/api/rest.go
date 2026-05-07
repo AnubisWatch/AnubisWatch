@@ -240,6 +240,10 @@ type Authenticator interface {
 	ConfirmPasswordReset(token, newPassword string) error
 }
 
+type workspaceSwitcher interface {
+	SwitchWorkspace(token, workspace string) (*User, error)
+}
+
 // OIDCAuth extends Authenticator with OIDC methods
 type OIDCAuth interface {
 	Authenticator
@@ -338,6 +342,7 @@ func (s *RESTServer) setupRoutes() {
 	s.router.Handle("POST", "/api/v1/auth/login", s.handleLogin)
 	s.router.Handle("POST", "/api/v1/auth/logout", s.handleLogout)
 	s.router.Handle("GET", "/api/v1/auth/me", s.requireAuth(s.handleMe))
+	s.router.Handle("POST", "/api/v1/auth/workspace", s.requireAuth(s.handleSwitchWorkspace))
 	// Password management (HIGH-04)
 	s.router.Handle("PUT", "/api/v1/auth/change-password", s.requireAuth(s.handleChangePassword))
 	s.router.Handle("POST", "/api/v1/auth/reset-password", s.handleRequestPasswordReset)
@@ -686,15 +691,7 @@ func (s *RESTServer) handleLogin(ctx *Context) error {
 }
 
 func (s *RESTServer) handleLogout(ctx *Context) error {
-	token := ctx.Request.Header.Get("Authorization")
-	token = strings.TrimPrefix(token, "Bearer ")
-
-	// If no Authorization header, check for cookie
-	if token == "" {
-		if cookie, err := ctx.Request.Cookie("auth_token"); err == nil {
-			token = cookie.Value
-		}
-	}
+	token := requestAuthToken(ctx.Request)
 
 	if err := s.auth.Logout(token); err != nil {
 		return ctx.Error(http.StatusInternalServerError, "logout failed")
@@ -718,6 +715,47 @@ func (s *RESTServer) handleLogout(ctx *Context) error {
 
 func (s *RESTServer) handleMe(ctx *Context) error {
 	return ctx.JSON(http.StatusOK, ctx.User)
+}
+
+func (s *RESTServer) handleSwitchWorkspace(ctx *Context) error {
+	var req struct {
+		Workspace string `json:"workspace"`
+	}
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.Error(http.StatusBadRequest, "invalid request body")
+	}
+
+	workspaceID := strings.TrimSpace(req.Workspace)
+	if workspaceID == "" {
+		return ctx.Error(http.StatusBadRequest, "workspace is required")
+	}
+
+	ws, err := s.store.GetWorkspaceNoCtx(workspaceID)
+	if err != nil {
+		if isNotFoundError(err) {
+			return ctx.Error(http.StatusNotFound, "workspace not found")
+		}
+		return s.internalError(ctx, err, "failed to fetch workspace")
+	}
+	if ws == nil {
+		return ctx.Error(http.StatusNotFound, "workspace not found")
+	}
+	if !canAccessWorkspace(ctx, ws) {
+		return ctx.Error(http.StatusForbidden, "access denied")
+	}
+
+	switcher, ok := s.auth.(workspaceSwitcher)
+	if !ok {
+		return ctx.Error(http.StatusNotImplemented, "workspace switching is not supported by this authenticator")
+	}
+
+	user, err := switcher.SwitchWorkspace(requestAuthToken(ctx.Request), ws.ID)
+	if err != nil {
+		return s.internalError(ctx, err, "failed to switch workspace")
+	}
+	ctx.User = user
+	ctx.Workspace = user.Workspace
+	return ctx.JSON(http.StatusOK, user)
 }
 
 // Password management handlers (HIGH-04)
@@ -1464,7 +1502,7 @@ func (s *RESTServer) handleListWorkspaces(ctx *Context) error {
 		if ws == nil {
 			continue
 		}
-		if sameWorkspace(ws.ID, workspace) {
+		if sameWorkspace(ws.ID, workspace) || canAccessWorkspace(ctx, ws) {
 			filtered = append(filtered, ws)
 		}
 	}
@@ -1835,6 +1873,17 @@ func contextWorkspace(ctx *Context) string {
 	return ctx.Workspace
 }
 
+func requestAuthToken(r *http.Request) string {
+	token := r.Header.Get("Authorization")
+	token = strings.TrimPrefix(token, "Bearer ")
+	if token == "" {
+		if cookie, err := r.Cookie("auth_token"); err == nil {
+			token = cookie.Value
+		}
+	}
+	return token
+}
+
 func isNotFoundError(err error) bool {
 	if err == nil {
 		return false
@@ -1844,6 +1893,16 @@ func isNotFoundError(err error) bool {
 		return true
 	}
 	return strings.Contains(strings.ToLower(err.Error()), "not found")
+}
+
+func canAccessWorkspace(ctx *Context, ws *core.Workspace) bool {
+	if ws == nil {
+		return false
+	}
+	if sameWorkspace(ws.ID, contextWorkspace(ctx)) {
+		return true
+	}
+	return ctx.User != nil && ws.OwnerID != "" && ws.OwnerID == ctx.User.ID
 }
 
 func sameWorkspace(resourceWorkspace, requestWorkspace string) bool {

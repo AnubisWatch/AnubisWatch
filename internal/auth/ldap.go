@@ -219,6 +219,35 @@ func (l *LDAPAuthenticator) Logout(token string) error {
 	return l.local.Logout(token)
 }
 
+// SwitchWorkspace updates the active workspace for LDAP-backed sessions and
+// delegates local fallback sessions to the local authenticator.
+func (l *LDAPAuthenticator) SwitchWorkspace(token, workspace string) (*api.User, error) {
+	if workspace == "" {
+		return nil, fmt.Errorf("workspace is required")
+	}
+
+	l.mu.Lock()
+	sess, ok := l.tokens[token]
+	if ok {
+		if time.Now().After(sess.ExpiresAt) {
+			delete(l.tokens, token)
+			l.mu.Unlock()
+			return nil, fmt.Errorf("token expired")
+		}
+		user := l.users[sess.UserID]
+		if user == nil {
+			l.mu.Unlock()
+			return nil, fmt.Errorf("user not found")
+		}
+		user.Workspace = workspace
+		l.mu.Unlock()
+		return user, nil
+	}
+	l.mu.Unlock()
+
+	return l.local.SwitchWorkspace(token, workspace)
+}
+
 // Shutdown gracefully stops the authenticator
 func (l *LDAPAuthenticator) Shutdown() {
 	l.local.Shutdown()
