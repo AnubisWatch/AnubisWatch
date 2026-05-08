@@ -12,7 +12,7 @@ permissions:
   id-token: write
 
 env:
-  GO_VERSION: '1.26.2'
+  GO_VERSION: '1.26.3'
   NODE_VERSION: '22'
   ANUBIS_DATA_DIR: /tmp/anubis
   ANUBIS_CONFIG: /tmp/anubis.json
