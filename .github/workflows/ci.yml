@@ -368,6 +368,16 @@ jobs:
             --set secrets.clusterSecret='ClusterSecret123!' \
             > helm-deployments-cluster.yaml
 
+      - name: Validate rendered Kubernetes manifests
+        run: |
+          docker run --rm -v "$PWD":/work ghcr.io/yannh/kubeconform:v0.6.7 \
+            -strict \
+            -summary \
+            /work/helm-deploy.yaml \
+            /work/helm-deploy-cluster.yaml \
+            /work/helm-deployments.yaml \
+            /work/helm-deployments-cluster.yaml
+
       - name: Verify Helm secret guardrails
         run: |
           for chart in deploy/helm/anubiswatch deployments/charts/anubiswatch; do
