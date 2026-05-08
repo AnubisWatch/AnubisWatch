@@ -35,7 +35,7 @@ AnubisWatch is a **zero-dependency, single-binary uptime monitoring platform** b
 - 🤖 **MCP-Native** — Built-in Model Context Protocol server for AI integration
 - 🔔 **Rich Alerts** — Slack, Discord, Telegram, Email, PagerDuty, OpsGenie, SMS, Ntfy, WebHook
 - 🏷️ **Multi-Tenancy** — Workspace isolation with quotas and RBAC
-- 📋 **Status Pages** — Public status pages with custom domains and ACME
+- 📋 **Status Pages** — Public status pages with custom domains and TLS hooks
 - 🗄️ **Backup/Restore** — Full data export/import with compression
 - 📊 **Profiling** — Built-in performance profiling (CPU, heap, goroutines)
 
@@ -279,8 +279,10 @@ server:
   port: 8443
   tls:
     enabled: true
-    auto_cert: true
-    acme_email: "admin@example.com"
+    # Prefer explicit cert/key or ingress-managed TLS for production.
+    auto_cert: false
+    cert: "/etc/ssl/certs/anubis.crt"
+    key: "/etc/ssl/private/anubis.key"
 
 souls:
   - name: "Production API"
@@ -361,7 +363,7 @@ anubis_trigger_judgment api.example.com
 | `internal/raft` | 86.1% | ✅ |
 | `internal/probe` | 86.1% | ✅ |
 | `internal/storage` | 84.4% | ✅ |
-| `internal/acme` | 81.8% | ✅ |
+| `internal/acme` | Excluded | Experimental build tag |
 | `internal/backup` | 80.5% | ✅ |
 | `cmd/anubis` | 77.3% | ✅ |
 | **Average** | **86.4%** | ✅ |

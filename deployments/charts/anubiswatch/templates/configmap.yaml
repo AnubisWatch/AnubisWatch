@@ -12,6 +12,7 @@ data:
     server:
       host: {{ .Values.config.server.host | quote }}
       port: {{ .Values.config.server.port }}
+      allowed_origins: {{ .Values.config.server.allowedOrigins | toJson }}
       {{- if .Values.config.server.tls.enabled }}
       tls:
         enabled: true
@@ -22,6 +23,7 @@ data:
       {{- end }}
 
     auth:
+      enabled: true
       type: {{ .Values.config.auth.type | quote }}
       local:
         admin_email: {{ .Values.config.auth.local.adminEmail | quote }}
@@ -31,11 +33,6 @@ data:
 
     storage:
       path: {{ .Values.config.storage.path | quote }}
-      {{- if .Values.config.storage.encryptionKey }}
-      encryption:
-        enabled: true
-        key: {{ .Values.config.storage.encryptionKey | quote }}
-      {{- end }}
 
     logging:
       level: {{ .Values.config.logging.level | quote }}

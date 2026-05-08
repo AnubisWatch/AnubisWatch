@@ -67,9 +67,9 @@ storage:
 | `enabled` | boolean | `true` | No | Enable HTTPS |
 | `cert` | string | - | Conditional | Path to TLS certificate (PEM) |
 | `key` | string | - | Conditional | Path to TLS private key (PEM) |
-| `auto_cert` | boolean | `false` | No | Auto-provision Let's Encrypt cert |
-| `acme_email` | string | - | Conditional | Email for ACME registration |
-| `acme_domains` | array | - | Conditional | Domains for certificate |
+| `auto_cert` | boolean | `false` | No | Unsupported until real ACME issuance is implemented; keep `false` |
+| `acme_email` | string | - | No | Reserved for future ACME support |
+| `acme_domains` | array | - | No | Reserved for future ACME support |
 
 ### Examples
 
@@ -95,20 +95,11 @@ server:
     key: "/etc/ssl/private/anubis.key"
 ```
 
-#### Automatic Let's Encrypt
+#### Automatic Certificates
 
-```yaml
-server:
-  host: "0.0.0.0"
-  port: 443
-  tls:
-    enabled: true
-    auto_cert: true
-    acme_email: "admin@example.com"
-    acme_domains:
-      - "anubis.example.com"
-      - "status.example.com"
-```
+Built-in `auto_cert` is not supported in runtime configuration until real ACME
+issuance is implemented. Keep `auto_cert: false` and use explicit `cert`/`key`
+or ingress/cert-manager TLS.
 
 ---
 
@@ -1087,7 +1078,7 @@ storage:
     key: "${ANUBIS_ENCRYPTION_KEY}"  # Required, fails if unset
 
 necropolis:
-  cluster_secret: "${ANUBIS_CLUSTER_SECRET:-default-secret}"
+  cluster_secret: "${ANUBIS_CLUSTER_SECRET}"  # Required when clustering is enabled
 
 server:
   tls:
@@ -1149,10 +1140,10 @@ server:
   port: 8443
   tls:
     enabled: true
-    auto_cert: true
-    acme_email: "admin@example.com"
-    acme_domains:
-      - "anubis.example.com"
+    # Prefer explicit cert/key or ingress-managed TLS for production.
+    auto_cert: false
+    cert: "/etc/ssl/certs/anubis.crt"
+    key: "/etc/ssl/private/anubis.key"
 
 storage:
   path: /var/lib/anubis/data

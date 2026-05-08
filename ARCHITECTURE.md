@@ -63,8 +63,8 @@ The system monitors HTTP/HTTPS endpoints, TCP/UDP ports, DNS servers, SMTP/IMAP 
 │  │  └────────────┘  └────────────┘  └────────────┘  └──────────────────┘   │ │
 │  │                                                                           │ │
 │  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────────────────┐   │ │
-│  │  │  Cluster   │  │  Dashboard │  │   Status   │  │     ACME         │   │ │
-│  │  │  Manager   │  │   Embed    │  │   Page     │  │    Manager       │   │ │
+│  │  │  Cluster   │  │  Dashboard │  │   Status   │  │     MCP          │   │ │
+│  │  │  Manager   │  │   Embed    │  │   Page     │  │    Server        │   │ │
 │  │  └────────────┘  └────────────┘  └────────────┘  └──────────────────┘   │ │
 │  └─────────────────────────────────┬──────────────────────────────────────┘ │
 │                                    │                                         │
@@ -576,7 +576,7 @@ logging:
 │   │  TLS 1.2+ required for all external connections          │   │
 │   │  HTTP/2 with ALPN negotiation                            │   │
 │   │  Strong cipher suites only                              │   │
-│   │  Certificate auto-renewal via ACME (Let's Encrypt)      │   │
+│   │  Explicit cert/key TLS or ingress-managed TLS           │   │
 │   └─────────────────────────────────────────────────────────┘   │
 │                                                                  │
 │   Authentication Security:                                       │
@@ -765,7 +765,7 @@ AnubisWatch/
 │   └── anubis/              # Main application entry
 │       └── server.go         # DI wiring, server setup
 ├── internal/
-│   ├── acme/                 # ACME/Let's Encrypt certificate management
+│   ├── acme/                 # Experimental ACME prototype (build tag only)
 │   ├── alert/                # Alert engine (Ma'at)
 │   │   └── dispatchers/      # Notification dispatchers
 │   ├── api/                  # API layer

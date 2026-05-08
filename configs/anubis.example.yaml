@@ -11,10 +11,9 @@ server:
     # Option 1: Use existing certificates
     # cert: "/etc/anubis/tls/cert.pem"
     # key: "/etc/anubis/tls/key.pem"
-    # Option 2: Auto-generate Let's Encrypt certificates
-    auto_cert: true
-    acme_email: "admin@example.com"
-    acme_domains: ["anubis.example.com"]
+    # Built-in auto_cert is unsupported until real ACME issuance is implemented.
+    # Prefer explicit cert/key or ingress-managed TLS.
+    auto_cert: false
 
 # Storage (CobaltDB)
 storage:

@@ -16,7 +16,8 @@ helm repo update
 ```bash
 helm install anubis anubiswatch/anubiswatch \
   --namespace monitoring \
-  --create-namespace
+  --create-namespace \
+  --set secrets.adminPassword='REPLACE_WITH_A_STRONG_PASSWORD_1!'
 ```
 
 ### With Custom Values
@@ -75,7 +76,10 @@ config:
   necropolis:
     enabled: true
     region: "default"
-    clusterSecret: "your-cluster-secret"
+
+secrets:
+  adminPassword: "REPLACE_WITH_A_STRONG_PASSWORD_1!"
+  clusterSecret: "REPLACE_WITH_A_CLUSTER_SECRET_1!"
 ```
 
 ```bash

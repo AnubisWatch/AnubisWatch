@@ -208,8 +208,8 @@ func TestGenerateDefaultConfig(t *testing.T) {
 		t.Errorf("Expected Server.Port = 8443, got %d", config.Server.Port)
 	}
 
-	if !config.Server.TLS.Enabled {
-		t.Error("Expected Server.TLS.Enabled to be true")
+	if config.Server.TLS.Enabled {
+		t.Error("Expected Server.TLS.Enabled to be false by default")
 	}
 
 	if config.Storage.Path == "" {
@@ -913,7 +913,7 @@ func TestSetDefaults_AllPaths(t *testing.T) {
 	}
 }
 
-func TestSetDefaults_TLSAutoCert(t *testing.T) {
+func TestSetDefaults_DoesNotAutoEnableAutoCert(t *testing.T) {
 	cfg := &Config{
 		Server: ServerConfig{
 			TLS: TLSServerConfig{
@@ -923,8 +923,8 @@ func TestSetDefaults_TLSAutoCert(t *testing.T) {
 	}
 	cfg.setDefaults()
 
-	if !cfg.Server.TLS.AutoCert {
-		t.Error("Expected TLS AutoCert to be true when Enabled and no cert/key provided")
+	if cfg.Server.TLS.AutoCert {
+		t.Error("Expected TLS AutoCert to remain false unless explicitly configured")
 	}
 }
 
@@ -1079,21 +1079,13 @@ func TestServerConfigValidate(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name: "TLS with autocert but no domains",
-			config: ServerConfig{Host: "0.0.0.0", Port: 8443, TLS: TLSServerConfig{
-				Enabled:  true,
-				AutoCert: true,
-			}},
-			wantError: true,
-		},
-		{
-			name: "TLS with autocert and domains",
+			name: "TLS with autocert",
 			config: ServerConfig{Host: "0.0.0.0", Port: 8443, TLS: TLSServerConfig{
 				Enabled:     true,
 				AutoCert:    true,
 				ACMEDomains: []string{"example.com"},
 			}},
-			wantError: false,
+			wantError: true,
 		},
 		{
 			name: "TLS with cert/key",
@@ -1187,6 +1179,11 @@ func TestAuthConfigValidate(t *testing.T) {
 		{
 			name:      "local auth weak password",
 			config:    AuthConfig{Type: "local", Local: LocalAuth{AdminEmail: "admin@anubis.watch", AdminPassword: "weak"}},
+			wantError: true,
+		},
+		{
+			name:      "local auth placeholder password",
+			config:    AuthConfig{Type: "local", Local: LocalAuth{AdminEmail: "admin@anubis.watch", AdminPassword: "CHANGE_ME"}},
 			wantError: true,
 		},
 		{

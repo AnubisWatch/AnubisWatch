@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/AnubisWatch/anubiswatch/internal/acme"
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
@@ -18,7 +17,6 @@ import (
 //go:generate echo "The Judgment Never Sleeps"
 type Handler struct {
 	repository    Repository
-	acmeManager   *acme.Manager
 	templateCache map[string]*Template
 	defaultTheme  core.StatusPageTheme
 }
@@ -45,10 +43,9 @@ type Template struct {
 }
 
 // NewHandler creates a new status page handler
-func NewHandler(repo Repository, acmeMgr *acme.Manager) *Handler {
+func NewHandler(repo Repository) *Handler {
 	return &Handler{
 		repository:    repo,
-		acmeManager:   acmeMgr,
 		templateCache: make(map[string]*Template),
 		defaultTheme:  core.GetDefaultTheme(),
 	}
@@ -1173,11 +1170,6 @@ func (h *Handler) Router() http.Handler {
 
 	// Widget endpoint (embeddable HTML status widget)
 	mux.HandleFunc("/widget", h.WidgetHandler)
-
-	// ACME challenge handler for Let's Encrypt
-	if h.acmeManager != nil {
-		mux.Handle("/.well-known/acme-challenge/", h.acmeManager.ChallengeHandler())
-	}
 
 	return mux
 }

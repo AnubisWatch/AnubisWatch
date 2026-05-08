@@ -441,11 +441,11 @@
 - [x] Implement embeddable badge endpoint
 
 ### 7.3 ACME/Let's Encrypt Auto-TLS
-- [x] Implement ACME client (custom, no golang.org/x/crypto/acme/autocert)
+- [ ] Implement real ACME issuance (current manager is not production-ready)
 - [x] Implement HTTP-01 challenge solver
 - [x] Implement certificate storage in CobaltDB
 - [x] Implement auto-renewal goroutine
-- [x] Wire ACME manager into status page handler
+- [ ] Wire production-ready ACME manager into status page handler
 - [ ] Test with Let's Encrypt staging
 
 ### 7.4 Authentication Providers

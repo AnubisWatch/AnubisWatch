@@ -5122,25 +5122,6 @@ func TestRouter_ServeHTTP_DashboardRootWhenHostIsNotStatusPage(t *testing.T) {
 	}
 }
 
-// TestRouter_ServeHTTP_ACMEFallback tests ServeHTTP with ACME challenge route
-func TestRouter_ServeHTTP_ACMEFallback(t *testing.T) {
-	router := &Router{routes: make(map[string]map[string]Handler)}
-
-	statusHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("acme response"))
-	})
-	router.statusPage = statusHandler
-
-	req := httptest.NewRequest("GET", "/.well-known/acme-challenge/test-token", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status 200 from ACME handler, got %d", w.Code)
-	}
-}
-
 // TestRouter_ServeHTTP_DashboardFallback tests ServeHTTP with dashboard fallback
 func TestRouter_ServeHTTP_DashboardFallback(t *testing.T) {
 	router := &Router{routes: make(map[string]map[string]Handler)}

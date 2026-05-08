@@ -89,7 +89,9 @@ config:
     port: 8080
     tls:
       enabled: false
-    allowedOrigins: ["*"]
+    allowedOrigins:
+      - "http://localhost:8080"
+      - "http://127.0.0.1:8080"
 
   dashboard:
     enabled: true
@@ -112,7 +114,11 @@ config:
     format: json
 
 secrets:
-  adminPassword: "admin"
+  # Required. Set with --set secrets.adminPassword='...' or a values file.
+  # Must be at least 12 characters and contain at least 3 of:
+  # uppercase, lowercase, digits, special characters. Placeholder/default
+  # values such as admin, password, and CHANGE_ME are rejected.
+  adminPassword: ""
   encryptionKey: ""
   clusterSecret: ""
 

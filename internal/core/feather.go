@@ -259,11 +259,11 @@ func (c ServerConfig) validate() error {
 		return &ConfigError{Field: "server.port", Message: "port must be between 1 and 65535"}
 	}
 	if c.TLS.Enabled {
-		if !c.TLS.AutoCert && (c.TLS.Cert == "" || c.TLS.Key == "") {
-			return &ConfigError{Field: "server.tls", Message: "TLS is enabled but neither auto_cert nor cert/key provided"}
+		if c.TLS.AutoCert {
+			return &ConfigError{Field: "server.tls.auto_cert", Message: "built-in auto_cert is not supported; use cert/key or ingress/cert-manager TLS"}
 		}
-		if c.TLS.AutoCert && len(c.TLS.ACMEDomains) == 0 {
-			return &ConfigError{Field: "server.tls.acme_domains", Message: "auto_cert requires at least one domain"}
+		if c.TLS.Cert == "" || c.TLS.Key == "" {
+			return &ConfigError{Field: "server.tls", Message: "TLS is enabled but cert/key were not provided"}
 		}
 	}
 	return nil
@@ -338,6 +338,16 @@ func isBcryptHash(password string) bool {
 }
 
 func validateAdminPassword(password string) error {
+	normalized := strings.ToLower(strings.NewReplacer("_", "", "-", "", " ", "").Replace(password))
+	defaults := map[string]bool{
+		"admin":    true,
+		"password": true,
+		"changeme": true,
+	}
+	if defaults[normalized] {
+		return fmt.Errorf("password must not be a default or placeholder value")
+	}
+
 	if len(password) < 12 {
 		return fmt.Errorf("password must be at least 12 characters")
 	}

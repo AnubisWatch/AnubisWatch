@@ -2663,12 +2663,6 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	// ACME challenge routes for Let's Encrypt
-	if r.statusPage != nil && strings.HasPrefix(path, "/.well-known/acme-challenge/") {
-		r.statusPage.ServeHTTP(w, req)
-		return
-	}
-
 	if handler, ok := r.statusPage.(hostAwareStatusPageHandler); ok && handler.CanServeHost(req.Host) {
 		handler.ServeHTTP(w, req)
 		return

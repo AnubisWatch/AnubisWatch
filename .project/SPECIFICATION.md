@@ -1473,9 +1473,7 @@ server:
     enabled: true
     cert: "/etc/anubis/tls/cert.pem"
     key: "/etc/anubis/tls/key.pem"
-    auto_cert: true                # ACME/Let's Encrypt auto
-    acme_email: "admin@example.com"
-    acme_domains: ["anubis.example.com"]
+    auto_cert: false               # Built-in ACME is not production-ready
 
 # Storage (CobaltDB)
 storage:
@@ -1667,7 +1665,7 @@ services:
     environment:
       - ANUBIS_NODE_NAME=jackal-1
       - ANUBIS_REGION=eu-west
-      - ANUBIS_CLUSTER_SECRET=mysecret
+      - ANUBIS_CLUSTER_SECRET=${ANUBIS_CLUSTER_SECRET}
     ports:
       - "8443:8443"
     volumes:
@@ -1679,7 +1677,7 @@ services:
     environment:
       - ANUBIS_NODE_NAME=jackal-2
       - ANUBIS_REGION=us-east
-      - ANUBIS_CLUSTER_SECRET=mysecret
+      - ANUBIS_CLUSTER_SECRET=${ANUBIS_CLUSTER_SECRET}
     volumes:
       - jackal2-data:/var/lib/anubis
 
@@ -1689,7 +1687,7 @@ services:
     environment:
       - ANUBIS_NODE_NAME=jackal-3
       - ANUBIS_REGION=apac
-      - ANUBIS_CLUSTER_SECRET=mysecret
+      - ANUBIS_CLUSTER_SECRET=${ANUBIS_CLUSTER_SECRET}
     volumes:
       - jackal3-data:/var/lib/anubis
 

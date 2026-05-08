@@ -11,13 +11,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path"
 	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
 
-	"github.com/AnubisWatch/anubiswatch/internal/acme"
 	"github.com/AnubisWatch/anubiswatch/internal/alert"
 	"github.com/AnubisWatch/anubiswatch/internal/api"
 	"github.com/AnubisWatch/anubiswatch/internal/auth"
@@ -49,7 +47,6 @@ type ServerDependencies struct {
 	RESTServer        *api.RESTServer
 	GRPCServer        *grpcapi.Server
 	StatusPageRepo    *statusPageRepository
-	ACMEManager       interface{}
 	DashboardHandler  http.Handler
 	StatusPageHandler http.Handler
 	MCPServer         *api.MCPServer
@@ -656,8 +653,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 
 	// Initialize status page handler
 	statusPageRepo := &statusPageRepository{store: store}
-	acmeMgr := initACMEManager(cfg, store, logger)
-	statusPageHandler := statuspage.NewHandler(statusPageRepo, acmeMgr)
+	statusPageHandler := statuspage.NewHandler(statusPageRepo)
 
 	// Initialize MCP server
 	mcpServer := api.NewMCPServer(restStore, probeEngine, alertMgr, logger)
@@ -706,7 +702,6 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		RESTServer:        restServer,
 		GRPCServer:        grpcServer,
 		StatusPageRepo:    statusPageRepo,
-		ACMEManager:       acmeMgr,
 		DashboardHandler:  dashboardHandler,
 		StatusPageHandler: statusPageHandler,
 		MCPServer:         mcpServer,
@@ -1184,28 +1179,4 @@ func storageGetLatestJudgment(store *storage.CobaltDB, ctx context.Context, work
 	}
 
 	return latest, nil
-}
-
-// initACMEManager initializes the ACME manager for Let's Encrypt
-func initACMEManager(cfg *core.Config, store *storage.CobaltDB, logger *slog.Logger) *acme.Manager {
-	if !cfg.Server.TLS.Enabled || !cfg.Server.TLS.AutoCert {
-		return nil
-	}
-
-	acmeCfg := acme.Config{
-		Enabled:   true,
-		Provider:  acme.ProviderLetsEncrypt,
-		Email:     cfg.Server.TLS.ACMEEmail,
-		AcceptTOS: true,
-		CertPath:  path.Join(cfg.Storage.Path, "acme"),
-	}
-
-	mgr, err := acme.NewManager(store, acmeCfg)
-	if err != nil {
-		logger.Warn("failed to initialize ACME manager", "err", err)
-		return nil
-	}
-
-	logger.Info("ACME manager initialized", "provider", acmeCfg.Provider, "email", acmeCfg.Email)
-	return mgr
 }

@@ -139,10 +139,6 @@ func (c *Config) setDefaults() {
 	if c.Server.Port == 0 {
 		c.Server.Port = 8443
 	}
-	if c.Server.TLS.Enabled && c.Server.TLS.Cert == "" && c.Server.TLS.Key == "" {
-		c.Server.TLS.AutoCert = true
-	}
-
 	// Storage defaults
 	if c.Storage.Path == "" {
 		// Check environment variable first
@@ -353,8 +349,8 @@ func GenerateDefaultConfig() *Config {
 			Port:     8443,
 			GRPCPort: 9090,
 			TLS: TLSServerConfig{
-				Enabled:  true,
-				AutoCert: true,
+				Enabled:  false,
+				AutoCert: false,
 			},
 		},
 		Storage: StorageConfig{
