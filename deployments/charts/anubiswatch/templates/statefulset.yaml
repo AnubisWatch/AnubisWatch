@@ -79,13 +79,30 @@ spec:
               value: {{ .Values.config.logging.level | quote }}
             - name: ANUBIS_LOG_FORMAT
               value: {{ .Values.config.logging.format | quote }}
+            - name: ANUBIS_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "anubiswatch.fullname" . }}-secrets
+                  key: admin-password
+            {{- if .Values.secrets.encryptionKey }}
+            - name: ANUBIS_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "anubiswatch.fullname" . }}-secrets
+                  key: encryption-key
+            {{- end }}
             {{- if .Values.config.necropolis.enabled }}
             - name: ANUBIS_NODE_ID
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            {{- if .Values.secrets.clusterSecret }}
             - name: ANUBIS_CLUSTER_SECRET
-              value: {{ .Values.config.necropolis.clusterSecret | quote }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "anubiswatch.fullname" . }}-secrets
+                  key: cluster-secret
+            {{- end }}
             {{- end }}
             {{- with .Values.extraEnvVars }}
             {{- toYaml . | nindent 12 }}

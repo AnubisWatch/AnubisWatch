@@ -176,7 +176,8 @@ helm repo update
 # Install with default values
 helm install anubiswatch anubiswatch/anubiswatch \
   --namespace anubiswatch \
-  --create-namespace
+  --create-namespace \
+  --set secrets.adminPassword='REPLACE_WITH_A_STRONG_PASSWORD_1!'
 
 # Install with custom values
 helm install anubiswatch anubiswatch/anubiswatch \
@@ -188,6 +189,8 @@ helm install anubiswatch anubiswatch/anubiswatch \
 ### Using Raw Manifests
 
 ```bash
+# First edit deploy/k8s/secret.yaml and replace admin-password: "CHANGE_ME"
+# with a strong password that satisfies the local auth policy.
 kubectl apply -f deploy/k8s/base.yaml
 ```
 
@@ -215,6 +218,8 @@ config:
     level: warn
   storage:
     path: /var/lib/anubis/data
+  necropolis:
+    enabled: true
   channels:
     - name: smtp
       type: email
@@ -228,6 +233,10 @@ monitoring:
   enabled: true
   serviceMonitor:
     enabled: true
+
+secrets:
+  adminPassword: "REPLACE_WITH_A_STRONG_PASSWORD_1!"
+  clusterSecret: "REPLACE_WITH_A_CLUSTER_SECRET_1!"
 
 ingress:
   enabled: true
@@ -245,13 +254,16 @@ ingress:
 ### Scaling
 
 ```bash
-# Scale StatefulSet
+# Scale StatefulSet when config.necropolis.enabled=true
 kubectl scale statefulset anubiswatch --replicas=5 -n anubiswatch
 
 # Or via Helm
 helm upgrade anubiswatch anubiswatch/anubiswatch \
   --namespace anubiswatch \
-  --set statefulSet.replicas=5
+  --set config.necropolis.enabled=true \
+  --set statefulSet.replicas=5 \
+  --set secrets.adminPassword='REPLACE_WITH_A_STRONG_PASSWORD_1!' \
+  --set secrets.clusterSecret='REPLACE_WITH_A_CLUSTER_SECRET_1!'
 ```
 
 ## Production Checklist

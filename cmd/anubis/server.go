@@ -1186,9 +1186,14 @@ func storageGetLatestJudgment(store *storage.CobaltDB, ctx context.Context, work
 	return latest, nil
 }
 
-// initACMEManager initializes the ACME manager for Let's Encrypt
+// initACMEManager initializes the experimental built-in ACME manager.
 func initACMEManager(cfg *core.Config, store *storage.CobaltDB, logger *slog.Logger) *acme.Manager {
 	if !cfg.Server.TLS.Enabled || !cfg.Server.TLS.AutoCert {
+		return nil
+	}
+	if os.Getenv("ANUBIS_EXPERIMENTAL_AUTO_CERT") != "1" {
+		logger.Warn("auto_cert requested but disabled because built-in ACME is experimental",
+			"action", "set ANUBIS_EXPERIMENTAL_AUTO_CERT=1 only for non-production testing, or configure explicit tls.cert/tls.key")
 		return nil
 	}
 

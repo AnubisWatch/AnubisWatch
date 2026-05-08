@@ -52,9 +52,9 @@ func initInteractiveWithPath(configPath string) {
 	acmeEmail := ""
 
 	if enableTLS {
-		tlsAuto = askBool(reader, "Use Let's Encrypt (Auto HTTPS)", true)
+		tlsAuto = askBool(reader, "Use experimental built-in auto certificates", false)
 		if tlsAuto {
-			acmeEmail = askString(reader, "ACME Email (for Let's Encrypt)", "")
+			acmeEmail = askString(reader, "ACME Email", "")
 		} else {
 			tlsCert = askString(reader, "TLS Certificate Path", "")
 			tlsKey = askString(reader, "TLS Private Key Path", "")

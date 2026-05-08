@@ -34,6 +34,9 @@ type Manager struct {
 	directoryURL     string
 	certPath         string
 	challengeHandler *ChallengeHandler
+	// allowSelfSignedFallback is only set by package tests that exercise cache,
+	// renewal, and TLS parsing paths without a live ACME server.
+	allowSelfSignedFallback bool
 }
 
 type certificateStore interface {
@@ -317,18 +320,17 @@ func (m *Manager) ObtainCertificate(domain string) (*CachedCertificate, error) {
 	return cert, nil
 }
 
-// executeACMEProtocol executes the ACME protocol for certificate issuance
-// This is a simplified implementation focusing on HTTP-01 challenge
+// executeACMEProtocol executes the ACME protocol for certificate issuance.
 func (m *Manager) executeACMEProtocol(domain string, csr []byte) ([]byte, error) {
-	// Note: Full ACME implementation is complex and would require
-	// implementing the full RFC 8555 protocol. For production use,
-	// consider using golang.org/x/crypto/acme/autocert
+	_ = csr
 
-	// Generate a self-signed certificate as placeholder
-	// In production, this should be replaced with real ACME protocol
+	if !m.allowSelfSignedFallback {
+		return nil, fmt.Errorf("real ACME issuance is not implemented; configure explicit tls.cert/tls.key or ingress/cert-manager TLS")
+	}
+
 	cert, err := m.generateSelfSignedCert(domain)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate self-signed certificate: %w", err)
+		return nil, fmt.Errorf("failed to generate test self-signed certificate: %w", err)
 	}
 
 	return cert, nil

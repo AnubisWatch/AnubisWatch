@@ -1007,6 +1007,7 @@ func TestInitACMEManager_NoAutoCert(t *testing.T) {
 
 // Test initACMEManager with TLS and AutoCert enabled
 func TestInitACMEManager_WithAutoCert(t *testing.T) {
+	t.Setenv("ANUBIS_EXPERIMENTAL_AUTO_CERT", "1")
 	dataDir := t.TempDir()
 	cfg := &core.Config{
 		Storage: core.StorageConfig{Path: dataDir},
@@ -2829,6 +2830,7 @@ func TestStatusPageRepository_WithRealDB(t *testing.T) {
 
 // TestInitACMEManager_WithStorage tests initACMEManager with actual storage
 func TestInitACMEManager_WithStorage(t *testing.T) {
+	t.Setenv("ANUBIS_EXPERIMENTAL_AUTO_CERT", "1")
 	db := setupTestDB(t)
 	defer db.Close()
 

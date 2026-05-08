@@ -10,9 +10,12 @@ data:
       port: 8080
       tls:
         enabled: false
-      allowed_origins: ["*"]
+      allowed_origins:
+        - "http://localhost:8080"
+        - "http://127.0.0.1:8080"
 
     auth:
+      enabled: true
       type: local
       local:
         admin_email: admin@anubiswatch.local

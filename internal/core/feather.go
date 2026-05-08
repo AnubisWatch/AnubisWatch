@@ -338,6 +338,16 @@ func isBcryptHash(password string) bool {
 }
 
 func validateAdminPassword(password string) error {
+	normalized := strings.ToLower(strings.NewReplacer("_", "", "-", "", " ", "").Replace(password))
+	defaults := map[string]bool{
+		"admin":    true,
+		"password": true,
+		"changeme": true,
+	}
+	if defaults[normalized] {
+		return fmt.Errorf("password must not be a default or placeholder value")
+	}
+
 	if len(password) < 12 {
 		return fmt.Errorf("password must be at least 12 characters")
 	}

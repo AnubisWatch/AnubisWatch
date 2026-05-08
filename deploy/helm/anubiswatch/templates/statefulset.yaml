@@ -1,3 +1,4 @@
+{{- if .Values.config.necropolis.enabled }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -71,6 +72,31 @@ spec:
             - name: data
               mountPath: {{ .Values.config.storage.path }}
           env:
+            - name: ANUBIS_CONFIG
+              value: /etc/anubis/anubis.yaml
+            - name: ANUBIS_DATA_DIR
+              value: {{ .Values.config.storage.path | quote }}
+            - name: ANUBIS_LOG_LEVEL
+              value: {{ .Values.config.logging.level | quote }}
+            - name: ANUBIS_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "anubiswatch.fullname" . }}-secrets
+                  key: admin-password
+            {{- if .Values.secrets.encryptionKey }}
+            - name: ANUBIS_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "anubiswatch.fullname" . }}-secrets
+                  key: encryption-key
+            {{- end }}
+            {{- if .Values.secrets.clusterSecret }}
+            - name: ANUBIS_CLUSTER_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "anubiswatch.fullname" . }}-secrets
+                  key: cluster-secret
+            {{- end }}
             - name: ANUBIS_NODE_ID
               valueFrom:
                 fieldRef:
@@ -107,3 +133,4 @@ spec:
         resources:
           requests:
             storage: {{ .Values.persistence.size }}
+{{- end }}

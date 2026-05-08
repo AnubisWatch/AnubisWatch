@@ -517,6 +517,7 @@ func TestInitACMEManager_Server_Disabled(t *testing.T) {
 }
 
 func TestInitACMEManager_Server_Enabled(t *testing.T) {
+	t.Setenv("ANUBIS_EXPERIMENTAL_AUTO_CERT", "1")
 	tempDir := t.TempDir()
 	cfg := core.GenerateDefaultConfig()
 	cfg.Storage.Path = tempDir

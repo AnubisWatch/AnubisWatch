@@ -31,4 +31,4 @@ Access the application using port-forward:
 
 Default login:
   Email: {{ .Values.config.auth.local.adminEmail }}
-  Password: {{ .Values.secrets.adminPassword }}
+  Password: stored in the {{ include "anubiswatch.fullname" . }}-secrets Secret

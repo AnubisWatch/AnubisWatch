@@ -11,8 +11,9 @@ server:
     # Option 1: Use existing certificates
     # cert: "/etc/anubis/tls/cert.pem"
     # key: "/etc/anubis/tls/key.pem"
-    # Option 2: Auto-generate Let's Encrypt certificates
-    auto_cert: true
+    # Option 2: Experimental built-in certificate manager.
+    # For production, prefer explicit cert/key or ingress-managed TLS.
+    auto_cert: false
     acme_email: "admin@example.com"
     acme_domains: ["anubis.example.com"]
 

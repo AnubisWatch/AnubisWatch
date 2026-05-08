@@ -29,12 +29,15 @@ Access the UI at http://localhost:8080
 
 ```bash
 # Using raw manifests
+# First edit deploy/k8s/secret.yaml and replace admin-password: "CHANGE_ME"
+# with a strong password that satisfies the local auth policy.
 kubectl apply -f deploy/k8s/base.yaml
 
 # Using Helm
 helm install anubiswatch deploy/helm/anubiswatch \
   --namespace anubiswatch \
-  --create-namespace
+  --create-namespace \
+  --set secrets.adminPassword='REPLACE_WITH_A_STRONG_PASSWORD_1!'
 ```
 
 ## Scaling

@@ -15,6 +15,7 @@ data:
       allowed_origins: {{ .Values.config.server.allowedOrigins | toJson }}
 
     auth:
+      enabled: true
       type: {{ .Values.config.auth.type }}
       local:
         admin_email: {{ .Values.config.auth.local.adminEmail | quote }}

@@ -37,6 +37,11 @@ func newTestDB(t *testing.T) *storage.CobaltDB {
 	return db
 }
 
+func enableSelfSignedFallbackForTest(t *testing.T, m *Manager) {
+	t.Helper()
+	m.allowSelfSignedFallback = true
+}
+
 type prefixFailStore struct {
 	values map[string][]byte
 }
@@ -922,6 +927,7 @@ func TestRenewIfNeeded_ExpiredCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
 	}
+	enableSelfSignedFallbackForTest(t, m)
 
 	// Add expired certificate to cache
 	m.certCache["expired.com"] = &CachedCertificate{
@@ -931,7 +937,7 @@ func TestRenewIfNeeded_ExpiredCertificate(t *testing.T) {
 		ExpiresAt:   time.Now().Add(-24 * time.Hour), // Already expired
 	}
 
-	// RenewIfNeeded should attempt renewal and succeed with self-signed cert
+	// RenewIfNeeded should attempt renewal and update cache/storage.
 	renewed, err := m.RenewIfNeeded()
 	if err != nil {
 		t.Fatalf("RenewIfNeeded failed: %v", err)
@@ -957,13 +963,12 @@ func TestObtainCertificate_Failure(t *testing.T) {
 		t.Fatalf("NewManager failed: %v", err)
 	}
 
-	// ObtainCertificate should succeed with a self-signed certificate
-	cert, err := m.ObtainCertificate("test.example.com")
-	if err != nil {
-		t.Fatalf("ObtainCertificate failed: %v", err)
+	_, err = m.ObtainCertificate("test.example.com")
+	if err == nil {
+		t.Fatal("Expected ObtainCertificate to fail until real ACME issuance is implemented")
 	}
-	if cert.Domain != "test.example.com" {
-		t.Errorf("Expected domain test.example.com, got %s", cert.Domain)
+	if !strings.Contains(err.Error(), "real ACME issuance is not implemented") {
+		t.Fatalf("Expected not-implemented ACME error, got %v", err)
 	}
 }
 
@@ -982,6 +987,7 @@ func TestGetCertificate_Expired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
 	}
+	enableSelfSignedFallbackForTest(t, m)
 
 	// Add expired certificate to cache
 	m.certCache["expiring.com"] = &CachedCertificate{
@@ -989,7 +995,7 @@ func TestGetCertificate_Expired(t *testing.T) {
 		ExpiresAt: time.Now().Add(-24 * time.Hour),
 	}
 
-	// GetCertificate should attempt renewal and succeed with self-signed cert
+	// GetCertificate should attempt renewal and update cache/storage.
 	cert, err := m.GetCertificate("expiring.com")
 	if err != nil {
 		t.Fatalf("GetCertificate failed: %v", err)
@@ -1371,6 +1377,7 @@ func TestManager_GetCertificate_NoCerts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
 	}
+	enableSelfSignedFallbackForTest(t, m)
 
 	// GetCertificate should obtain a new certificate for unknown domain
 	cert, err := m.GetCertificate("unknown.example.com")
@@ -1402,13 +1409,13 @@ func TestManager_ObtainCertificate_Error(t *testing.T) {
 		t.Fatalf("NewManager failed: %v", err)
 	}
 
-	// ObtainCertificate without proper ACME client setup will fail
-	// but should not panic
 	_, err = m.ObtainCertificate("test.example.com")
 	if err == nil {
-		t.Log("ObtainCertificate succeeded (unexpected)")
+		t.Fatal("Expected ObtainCertificate to fail until real ACME issuance is implemented")
 	}
-	// We're mainly testing that it doesn't crash
+	if !strings.Contains(err.Error(), "real ACME issuance is not implemented") {
+		t.Fatalf("Expected not-implemented ACME error, got %v", err)
+	}
 }
 
 // Test loadCertificates with empty storage
@@ -1475,6 +1482,7 @@ func TestManager_GetCertificate_Expiring(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
 	}
+	enableSelfSignedFallbackForTest(t, m)
 
 	// Add expiring certificate (less than 7 days)
 	m.certCache["expiring.com"] = &CachedCertificate{
@@ -1553,19 +1561,12 @@ func TestManager_ObtainCertificate_ErrorPath(t *testing.T) {
 		t.Fatalf("NewManager failed: %v", err)
 	}
 
-	// ObtainCertificate should succeed with a self-signed certificate
-	cert, err := m.ObtainCertificate("example.com")
-	if err != nil {
-		t.Fatalf("ObtainCertificate failed: %v", err)
+	_, err = m.ObtainCertificate("example.com")
+	if err == nil {
+		t.Fatal("Expected ObtainCertificate to fail until real ACME issuance is implemented")
 	}
-	if cert.Domain != "example.com" {
-		t.Errorf("Expected domain example.com, got %s", cert.Domain)
-	}
-	if len(cert.Certificate) == 0 {
-		t.Error("Expected certificate data")
-	}
-	if len(cert.PrivateKey) == 0 {
-		t.Error("Expected private key data")
+	if !strings.Contains(err.Error(), "real ACME issuance is not implemented") {
+		t.Fatalf("Expected not-implemented ACME error, got %v", err)
 	}
 }
 
@@ -1585,6 +1586,7 @@ func TestManager_GetCertificate_CacheMiss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
 	}
+	enableSelfSignedFallbackForTest(t, m)
 
 	// GetCertificate for nonexistent domain should trigger obtain attempt
 	cert, err := m.GetCertificate("nonexistent.com")
@@ -1635,6 +1637,7 @@ func TestManager_GetCertificate_Expired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
 	}
+	enableSelfSignedFallbackForTest(t, m)
 
 	// Add expired certificate to cache
 	m.certCache["expired.com"] = &CachedCertificate{
@@ -1762,13 +1765,13 @@ func TestManager_GetCertificate_ObtainError(t *testing.T) {
 		t.Fatalf("NewManager failed: %v", err)
 	}
 
-	// Cache miss triggers ObtainCertificate which should now succeed
-	cert, err := m.GetCertificate("obtain-error.com")
-	if err != nil {
-		t.Fatalf("GetCertificate failed: %v", err)
+	// Cache miss triggers ObtainCertificate, which should fail until real ACME is implemented.
+	_, err = m.GetCertificate("obtain-error.com")
+	if err == nil {
+		t.Fatal("Expected GetCertificate to fail on cache miss without real ACME issuance")
 	}
-	if cert.Domain != "obtain-error.com" {
-		t.Errorf("Expected domain obtain-error.com, got %s", cert.Domain)
+	if !strings.Contains(err.Error(), "real ACME issuance is not implemented") {
+		t.Fatalf("Expected not-implemented ACME error, got %v", err)
 	}
 }
 
@@ -2111,19 +2114,12 @@ func TestObtainCertificate_ErrorPath(t *testing.T) {
 		t.Fatalf("NewManager failed: %v", err)
 	}
 
-	// ObtainCertificate should succeed with a self-signed certificate
-	cert, err := mgr.ObtainCertificate("test.example.com")
-	if err != nil {
-		t.Fatalf("ObtainCertificate failed: %v", err)
+	_, err = mgr.ObtainCertificate("test.example.com")
+	if err == nil {
+		t.Fatal("Expected ObtainCertificate to fail until real ACME issuance is implemented")
 	}
-	if cert.Domain != "test.example.com" {
-		t.Errorf("Expected domain test.example.com, got %s", cert.Domain)
-	}
-	if len(cert.Certificate) == 0 {
-		t.Error("Expected certificate data")
-	}
-	if len(cert.PrivateKey) == 0 {
-		t.Error("Expected private key data")
+	if !strings.Contains(err.Error(), "real ACME issuance is not implemented") {
+		t.Fatalf("Expected not-implemented ACME error, got %v", err)
 	}
 }
 
@@ -2288,6 +2284,7 @@ func TestManager_ObtainCertificate_MultipleDomains(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
 	}
+	enableSelfSignedFallbackForTest(t, mgr)
 
 	domains := []string{"test1.com", "test2.com", "test3.com"}
 
@@ -2432,16 +2429,15 @@ func TestLoadCertificates_InvalidCertData(t *testing.T) {
 		t.Fatalf("loadCertificates failed: %v", err)
 	}
 
-	// Invalid cert should not be in cache, but GetCertificate should obtain a new one
-	cert, err := m.GetCertificate("test.example.com")
-	if err != nil {
-		t.Fatalf("GetCertificate should have obtained a new certificate: %v", err)
+	if _, exists := m.certCache["test.example.com"]; exists {
+		t.Fatal("Invalid certificate data should not be loaded into cache")
 	}
-	if cert == nil {
-		t.Error("Expected certificate after obtaining new one")
+	_, err = m.GetCertificate("test.example.com")
+	if err == nil {
+		t.Fatal("Expected cache miss to fail until real ACME issuance is implemented")
 	}
-	if cert.Domain != "test.example.com" {
-		t.Errorf("Expected domain test.example.com, got %s", cert.Domain)
+	if !strings.Contains(err.Error(), "real ACME issuance is not implemented") {
+		t.Fatalf("Expected not-implemented ACME error, got %v", err)
 	}
 }
 
@@ -2591,13 +2587,12 @@ func TestObtainCertificate_ExecuteACMEError(t *testing.T) {
 		t.Fatalf("NewManager failed: %v", err)
 	}
 
-	// Try to obtain certificate - should succeed with self-signed cert
-	cert, err := m.ObtainCertificate("test.example.com")
-	if err != nil {
-		t.Fatalf("ObtainCertificate failed: %v", err)
+	_, err = m.ObtainCertificate("test.example.com")
+	if err == nil {
+		t.Fatal("Expected ObtainCertificate to fail until real ACME issuance is implemented")
 	}
-	if cert.Domain != "test.example.com" {
-		t.Errorf("Expected domain test.example.com, got %s", cert.Domain)
+	if !strings.Contains(err.Error(), "real ACME issuance is not implemented") {
+		t.Fatalf("Expected not-implemented ACME error, got %v", err)
 	}
 }
 
@@ -2688,13 +2683,12 @@ func TestGetCertificate_WithError(t *testing.T) {
 		t.Fatalf("NewManager failed: %v", err)
 	}
 
-	// Get non-existent certificate - should obtain a new one
-	cert, err := m.GetCertificate("non-existent.example.com")
-	if err != nil {
-		t.Fatalf("GetCertificate failed: %v", err)
+	_, err = m.GetCertificate("non-existent.example.com")
+	if err == nil {
+		t.Fatal("Expected GetCertificate to fail on cache miss without real ACME issuance")
 	}
-	if cert.Domain != "non-existent.example.com" {
-		t.Errorf("Expected domain non-existent.example.com, got %s", cert.Domain)
+	if !strings.Contains(err.Error(), "real ACME issuance is not implemented") {
+		t.Fatalf("Expected not-implemented ACME error, got %v", err)
 	}
 }
 
@@ -2714,8 +2708,9 @@ func TestManager_ObtainCertificate_StorageError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
 	}
+	enableSelfSignedFallbackForTest(t, m)
 
-	// ObtainCertificate should succeed with a self-signed certificate
+	// Test-only fallback lets this exercise cache and storage persistence.
 	cert, err := m.ObtainCertificate("test.example.com")
 	if err != nil {
 		t.Fatalf("ObtainCertificate failed: %v", err)
@@ -2754,7 +2749,6 @@ func TestManager_LoadCertificates_CorruptedData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
 	}
-
 	_ = m // m is created successfully even with corrupted data
 	// The corrupted entry should be skipped during load
 	t.Log("Manager created with corrupted certificate data in storage")
@@ -2776,7 +2770,6 @@ func TestManager_TLSConfig_NoCertificates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
 	}
-
 	// Get TLS config with no certificates
 	tlsConfig := m.TLSConfig()
 	if tlsConfig == nil {
@@ -3237,6 +3230,7 @@ func TestObtainCertificate_UpdatesCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
 	}
+	enableSelfSignedFallbackForTest(t, m)
 
 	// First obtain
 	cert1, err := m.ObtainCertificate("overwrite.example.com")
@@ -3310,6 +3304,7 @@ func TestDeleteCertificate_FromStorage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewManager failed: %v", err)
 	}
+	enableSelfSignedFallbackForTest(t, m)
 
 	// Obtain a certificate
 	_, err = m.ObtainCertificate("delete.example.com")
@@ -3379,13 +3374,12 @@ func TestTLSConfig_GetCertificate_ManagerNotFound(t *testing.T) {
 	tlsConfig := &TLSConfig{manager: m}
 	hello := &ClientHelloInfo{ServerName: "missing.example.com"}
 
-	// This should succeed because ObtainCertificate will generate a self-signed cert
-	cert, err := tlsConfig.GetCertificate(hello)
-	if err != nil {
-		t.Fatalf("Expected ObtainCertificate to generate self-signed cert: %v", err)
+	_, err = tlsConfig.GetCertificate(hello)
+	if err == nil {
+		t.Fatal("Expected TLS certificate lookup to fail until real ACME issuance is implemented")
 	}
-	if cert == nil {
-		t.Fatal("Expected TLS certificate")
+	if !strings.Contains(err.Error(), "real ACME issuance is not implemented") {
+		t.Fatalf("Expected not-implemented ACME error, got %v", err)
 	}
 }
 

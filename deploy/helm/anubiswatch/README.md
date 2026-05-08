@@ -21,7 +21,8 @@ helm repo update
 ```bash
 helm install anubiswatch anubiswatch/anubiswatch \
   --namespace anubiswatch \
-  --create-namespace
+  --create-namespace \
+  --set secrets.adminPassword='REPLACE_WITH_A_STRONG_PASSWORD_1!'
 ```
 
 ### Install with custom values
@@ -72,12 +73,19 @@ persistence:
   storageClass: fast-ssd
 
 config:
+  server:
+    allowedOrigins:
+      - https://anubiswatch.example.com
   logging:
     level: warn
   storage:
     path: /data
   necropolis:
     enabled: true
+
+secrets:
+  adminPassword: "REPLACE_WITH_A_STRONG_PASSWORD_1!"
+  clusterSecret: "REPLACE_WITH_A_CLUSTER_SECRET_1!"
 
 monitoring:
   enabled: true
