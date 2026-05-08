@@ -1,3 +1,5 @@
+//go:build experimental_acme
+
 package acme
 
 import (

@@ -25,7 +25,7 @@ This guide covers backup strategies, recovery procedures, and disaster recovery 
 | File | Location | Priority |
 |------|----------|----------|
 | Main config | `/etc/anubis/anubis.yaml` or `./anubis.yaml` | Critical |
-| TLS certificates | `data/acme/` or `/etc/ssl/anubis/` | Critical |
+| TLS certificates | `/etc/ssl/anubis/` or ingress/cert-manager secrets | Critical |
 | Session data | `data/sessions.json` | High |
 | Cluster state | `data/raft/` | Critical (clustered only) |
 
