@@ -14,7 +14,6 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 	"github.com/AnubisWatch/anubiswatch/internal/grpcapi"
 	"github.com/AnubisWatch/anubiswatch/internal/probe"
-	"github.com/AnubisWatch/anubiswatch/internal/storage"
 )
 
 func TestBuildServerDependencies_DefaultConfig(t *testing.T) {
@@ -504,36 +503,6 @@ func TestBuildServerDependencies_NoGRPC(t *testing.T) {
 	}
 	if deps.Store != nil {
 		deps.Store.Close()
-	}
-}
-
-func TestInitACMEManager_Server_Disabled(t *testing.T) {
-	cfg := core.GenerateDefaultConfig()
-	cfg.Server.TLS.Enabled = false
-	mgr := initACMEManager(cfg, nil, slog.New(slog.NewTextHandler(os.Stdout, nil)))
-	if mgr != nil {
-		t.Error("Expected nil manager when TLS disabled")
-	}
-}
-
-func TestInitACMEManager_Server_Enabled(t *testing.T) {
-	tempDir := t.TempDir()
-	cfg := core.GenerateDefaultConfig()
-	cfg.Storage.Path = tempDir
-	cfg.Server.TLS.Enabled = true
-	cfg.Server.TLS.AutoCert = true
-	cfg.Server.TLS.ACMEEmail = "test@example.com"
-
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	store, err := storage.NewEngine(cfg.Storage, logger)
-	if err != nil {
-		t.Fatalf("failed to create store: %v", err)
-	}
-	defer store.Close()
-
-	mgr := initACMEManager(cfg, store, logger)
-	if mgr != nil {
-		t.Error("Expected nil manager because built-in auto-cert is not implemented")
 	}
 }
 

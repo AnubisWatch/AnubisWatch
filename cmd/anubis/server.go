@@ -16,7 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/AnubisWatch/anubiswatch/internal/acme"
 	"github.com/AnubisWatch/anubiswatch/internal/alert"
 	"github.com/AnubisWatch/anubiswatch/internal/api"
 	"github.com/AnubisWatch/anubiswatch/internal/auth"
@@ -48,7 +47,6 @@ type ServerDependencies struct {
 	RESTServer        *api.RESTServer
 	GRPCServer        *grpcapi.Server
 	StatusPageRepo    *statusPageRepository
-	ACMEManager       interface{}
 	DashboardHandler  http.Handler
 	StatusPageHandler http.Handler
 	MCPServer         *api.MCPServer
@@ -655,8 +653,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 
 	// Initialize status page handler
 	statusPageRepo := &statusPageRepository{store: store}
-	acmeMgr := initACMEManager(cfg, store, logger)
-	statusPageHandler := statuspage.NewHandler(statusPageRepo, acmeMgr)
+	statusPageHandler := statuspage.NewHandler(statusPageRepo)
 
 	// Initialize MCP server
 	mcpServer := api.NewMCPServer(restStore, probeEngine, alertMgr, logger)
@@ -705,7 +702,6 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		RESTServer:        restServer,
 		GRPCServer:        grpcServer,
 		StatusPageRepo:    statusPageRepo,
-		ACMEManager:       acmeMgr,
 		DashboardHandler:  dashboardHandler,
 		StatusPageHandler: statusPageHandler,
 		MCPServer:         mcpServer,
@@ -1183,16 +1179,4 @@ func storageGetLatestJudgment(store *storage.CobaltDB, ctx context.Context, work
 	}
 
 	return latest, nil
-}
-
-// initACMEManager is retained for future ACME support, but built-in auto_cert is disabled.
-func initACMEManager(cfg *core.Config, store *storage.CobaltDB, logger *slog.Logger) *acme.Manager {
-	_ = store
-
-	if !cfg.Server.TLS.Enabled || !cfg.Server.TLS.AutoCert {
-		return nil
-	}
-	logger.Warn("auto_cert requested but disabled because built-in ACME issuance is not implemented",
-		"action", "configure explicit tls.cert/tls.key or use ingress/cert-manager TLS")
-	return nil
 }

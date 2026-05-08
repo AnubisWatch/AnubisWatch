@@ -513,13 +513,6 @@ func TestInitConfig_AlreadyExists_CLI(t *testing.T) {
 	t.Log("Config already exists - init would exit with error")
 }
 
-// Test initACMEManager function signature
-func TestInitACMEManager(t *testing.T) {
-	// This requires storage which is complex to mock
-	// Just verify the function signature compiles
-	t.Log("initACMEManager function exists")
-}
-
 // Test getAPIURL with environment
 func TestGetAPIURL_Environment(t *testing.T) {
 	tests := []struct {
@@ -967,71 +960,6 @@ func TestVerdictAck_NoToken(t *testing.T) {
 	}
 }
 
-// Test initACMEManager with TLS disabled
-func TestInitACMEManager_TLSDisabled(t *testing.T) {
-	cfg := &core.Config{
-		Server: core.ServerConfig{
-			TLS: core.TLSServerConfig{
-				Enabled:  false,
-				AutoCert: false,
-			},
-		},
-	}
-
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	result := initACMEManager(cfg, nil, logger)
-
-	if result != nil {
-		t.Error("Expected nil result when TLS is disabled")
-	}
-}
-
-// Test initACMEManager with TLS enabled but no AutoCert
-func TestInitACMEManager_NoAutoCert(t *testing.T) {
-	cfg := &core.Config{
-		Server: core.ServerConfig{
-			TLS: core.TLSServerConfig{
-				Enabled:  true,
-				AutoCert: false,
-			},
-		},
-	}
-
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	result := initACMEManager(cfg, nil, logger)
-
-	if result != nil {
-		t.Error("Expected nil result when AutoCert is disabled")
-	}
-}
-
-// Test initACMEManager with TLS and AutoCert enabled
-func TestInitACMEManager_WithAutoCert(t *testing.T) {
-	dataDir := t.TempDir()
-	cfg := &core.Config{
-		Storage: core.StorageConfig{Path: dataDir},
-		Server: core.ServerConfig{
-			TLS: core.TLSServerConfig{
-				Enabled:   true,
-				AutoCert:  true,
-				ACMEEmail: "test@example.com",
-			},
-		},
-	}
-
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	store, err := storage.NewEngine(core.StorageConfig{Path: dataDir}, logger)
-	if err != nil {
-		t.Fatalf("NewEngine failed: %v", err)
-	}
-	defer store.Close()
-
-	result := initACMEManager(cfg, store, logger)
-	if result != nil {
-		t.Fatal("Expected nil ACME manager because built-in auto_cert is not implemented")
-	}
-}
-
 // Test getLogLevel with all valid values
 func TestGetLogLevel_AllValues(t *testing.T) {
 	testCases := []struct {
@@ -1425,40 +1353,6 @@ func TestVerdictCommand_UnknownSubcommand(t *testing.T) {
 	// Would call os.Exit(1), so just verify the args setup
 	if len(os.Args) >= 3 && os.Args[2] == "unknown" {
 		t.Log("verdictCommand receives unknown subcommand")
-	}
-}
-
-// TestInitACMEManager_Disabled tests initACMEManager when TLS is disabled
-func TestInitACMEManager_Disabled(t *testing.T) {
-	cfg := &core.Config{
-		Server: core.ServerConfig{
-			TLS: core.TLSServerConfig{
-				Enabled:  false,
-				AutoCert: false,
-			},
-		},
-	}
-
-	mgr := initACMEManager(cfg, nil, slog.Default())
-	if mgr != nil {
-		t.Error("Expected nil manager when TLS is disabled")
-	}
-}
-
-// TestInitACMEManager_AutoCertDisabled tests initACMEManager when AutoCert is disabled
-func TestInitACMEManager_AutoCertDisabled(t *testing.T) {
-	cfg := &core.Config{
-		Server: core.ServerConfig{
-			TLS: core.TLSServerConfig{
-				Enabled:  true,
-				AutoCert: false,
-			},
-		},
-	}
-
-	mgr := initACMEManager(cfg, nil, slog.Default())
-	if mgr != nil {
-		t.Error("Expected nil manager when AutoCert is disabled")
 	}
 }
 
@@ -2824,31 +2718,6 @@ func TestStatusPageRepository_WithRealDB(t *testing.T) {
 
 	if err := repo.DeleteSubscription("repo-test-sub"); err != nil {
 		t.Errorf("DeleteSubscription failed: %v", err)
-	}
-}
-
-// TestInitACMEManager_WithStorage tests initACMEManager with actual storage
-func TestInitACMEManager_WithStorage(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-
-	cfg := &core.Config{
-		Server: core.ServerConfig{
-			TLS: core.TLSServerConfig{
-				Enabled:   true,
-				AutoCert:  true,
-				ACMEEmail: "test@example.com",
-			},
-		},
-		Storage: core.StorageConfig{
-			Path: t.TempDir(),
-		},
-	}
-
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	result := initACMEManager(cfg, db, logger)
-	if result != nil {
-		t.Fatal("Expected nil ACME manager because built-in auto_cert is not implemented")
 	}
 }
 

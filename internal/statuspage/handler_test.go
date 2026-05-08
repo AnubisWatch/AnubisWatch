@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/AnubisWatch/anubiswatch/internal/acme"
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 	"github.com/AnubisWatch/anubiswatch/internal/storage"
 )
@@ -101,7 +100,7 @@ func (m *domainOnlyRepository) GetStatusPageByDomain(domain string) (*core.Statu
 }
 
 func TestHandler_CanServeHost(t *testing.T) {
-	handler := NewHandler(&domainOnlyRepository{domain: "status.example.com"}, nil)
+	handler := NewHandler(&domainOnlyRepository{domain: "status.example.com"})
 
 	if !handler.CanServeHost("STATUS.example.com:443") {
 		t.Fatal("expected custom status page host to be recognized")
@@ -112,7 +111,7 @@ func TestHandler_CanServeHost(t *testing.T) {
 }
 
 func TestHandler_ServeHTTP_CustomDomainRoot(t *testing.T) {
-	handler := NewHandler(&domainOnlyRepository{domain: "status.example.com"}, nil)
+	handler := NewHandler(&domainOnlyRepository{domain: "status.example.com"})
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Host = "status.example.com"
@@ -130,7 +129,7 @@ func TestHandler_ServeHTTP_CustomDomainRoot(t *testing.T) {
 
 func TestHandler_ServeHTTP_PublicPage(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test", nil)
 	req.Host = "test.example.com"
@@ -146,7 +145,7 @@ func TestHandler_ServeHTTP_PublicPage(t *testing.T) {
 
 func TestHandler_ServeHTTP_JSONFormat(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test?format=json", nil)
 	req.Host = "test.example.com"
@@ -167,7 +166,7 @@ func TestHandler_ServeHTTP_JSONFormat(t *testing.T) {
 
 func TestHandler_BadgeHandler_SVG(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/badge/test", nil)
 	w := httptest.NewRecorder()
@@ -192,7 +191,7 @@ func TestHandler_BadgeHandler_SVG(t *testing.T) {
 
 func TestHandler_BadgeHandler_JSON(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/badge/test?format=json", nil)
 	w := httptest.NewRecorder()
@@ -217,7 +216,7 @@ func TestHandler_BadgeHandler_JSON(t *testing.T) {
 
 func TestHandler_RSSFeedHandler(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test/feed.xml", nil)
 	w := httptest.NewRecorder()
@@ -242,7 +241,7 @@ func TestHandler_RSSFeedHandler(t *testing.T) {
 
 func TestHandler_SubscribeHandler_ValidEmail(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	jsonBody := `{"page_id": "test", "type": "email", "email": "user@example.com"}`
 	req := httptest.NewRequest("POST", "/status/subscribe", nil)
@@ -323,7 +322,7 @@ func TestCalculateOverallStatus_Degraded(t *testing.T) {
 
 func TestHandler_NewHandler(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	// Verify handler is created with expected fields
 	_ = handler.repository
@@ -332,7 +331,7 @@ func TestHandler_NewHandler(t *testing.T) {
 
 func TestHandler_ServeHTTP_NotFound(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	// /status without slug should return 404
 	req := httptest.NewRequest("GET", "/status", nil)
@@ -388,7 +387,7 @@ func (m *mockRepositoryPrivate) GetStatusPageByDomain(domain string) (*core.Stat
 
 func TestHandler_ServeHTTP_PrivatePage_Unauthenticated(t *testing.T) {
 	repo := &mockRepositoryPrivate{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test", nil)
 	req.Host = "test.example.com"
@@ -425,7 +424,7 @@ func (m *mockRepositoryProtected) GetStatusPageByDomain(domain string) (*core.St
 
 func TestHandler_ServeHTTP_ProtectedPage_NoPassword(t *testing.T) {
 	repo := &mockRepositoryProtected{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test", nil)
 	req.Host = "test.example.com"
@@ -446,7 +445,7 @@ func TestHandler_ServeHTTP_ProtectedPage_NoPassword(t *testing.T) {
 
 func TestHandler_ServeHTTP_ProtectedPage_WithPassword(t *testing.T) {
 	repo := &mockRepositoryProtected{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	// Password verification always fails in mock, so this will still show form
 	req := httptest.NewRequest("GET", "/status/test?password=testpass", nil)
@@ -463,7 +462,7 @@ func TestHandler_ServeHTTP_ProtectedPage_WithPassword(t *testing.T) {
 
 func TestHandler_ServeHTTP_JSONFormat_AcceptHeader(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test", nil)
 	req.Host = "test.example.com"
@@ -484,7 +483,7 @@ func TestHandler_ServeHTTP_JSONFormat_AcceptHeader(t *testing.T) {
 
 func TestHandler_ServeHTTP_NotFound_EmptySlug(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	// /status without slug should trigger not found logic
 	// But mock repo returns a page anyway
@@ -520,7 +519,7 @@ func TestHandler_extractSlugFromPath_NonStatusPath(t *testing.T) {
 
 func TestHandler_ServeHTTP_WithPort(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test", nil)
 	req.Host = "test.example.com:8080"
@@ -537,7 +536,7 @@ func TestHandler_ServeHTTP_WithPort(t *testing.T) {
 // Test renderStatusPage with different data
 func TestHandler_renderStatusPage_WithIncidents(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:    "test-page",
@@ -609,7 +608,7 @@ func TestHandler_renderStatusPage_WithIncidents(t *testing.T) {
 
 func TestHandler_renderStatusPage_EmptySouls(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:    "test-page",
@@ -648,7 +647,7 @@ func TestHandler_renderStatusPage_EmptySouls(t *testing.T) {
 
 func TestHandler_renderStatusPage_CustomTheme(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:   "test-page",
@@ -683,7 +682,7 @@ func TestHandler_renderStatusPage_CustomTheme(t *testing.T) {
 func TestHandler_buildStatusPageData_ErrorHandling(t *testing.T) {
 	// Mock that returns error for judgments
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:         "test-page",
@@ -704,7 +703,7 @@ func TestHandler_buildStatusPageData_ErrorHandling(t *testing.T) {
 
 func TestHandler_RSSFeedHandler_WithIncidents(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test/feed.xml", nil)
 	w := httptest.NewRecorder()
@@ -737,7 +736,7 @@ func TestHandler_RSSFeedHandler_WithIncidents(t *testing.T) {
 func TestHandler_RSSFeedHandler_NotFound(t *testing.T) {
 	// Mock that returns error
 	repo := &mockRepositoryNotFound{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/nonexistent/feed.xml", nil)
 	w := httptest.NewRecorder()
@@ -789,7 +788,7 @@ func (m *mockRepositoryNotFound) DeleteSubscription(subscriptionID string) error
 
 func TestHandler_buildUptimeData_NoHistory(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:         "test-page",
@@ -809,7 +808,7 @@ func TestHandler_buildUptimeData_NoHistory(t *testing.T) {
 
 func TestHandler_BadgeHandler_EmptyPageID(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/badge/", nil)
 	w := httptest.NewRecorder()
@@ -823,7 +822,7 @@ func TestHandler_BadgeHandler_EmptyPageID(t *testing.T) {
 
 func TestHandler_BadgeHandler_FormatParameter(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	// Test PNG format (defaults to SVG in implementation)
 	req := httptest.NewRequest("GET", "/badge/test?format=png", nil)
@@ -838,7 +837,7 @@ func TestHandler_BadgeHandler_FormatParameter(t *testing.T) {
 
 func TestHandler_SubscribeHandler_DefaultType(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	jsonBody := `{"page_id": "test"}`
 	req := httptest.NewRequest("POST", "/status/subscribe",
@@ -856,7 +855,7 @@ func TestHandler_SubscribeHandler_DefaultType(t *testing.T) {
 
 func TestHandler_checkPasswordProtection_WithCookie(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test", nil)
 	req.AddCookie(&http.Cookie{
@@ -878,7 +877,7 @@ func TestHandler_checkPasswordProtection_WithCookie(t *testing.T) {
 
 func TestHandler_isAuthenticated_EmptyCookie(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test", nil)
 	req.AddCookie(&http.Cookie{
@@ -899,7 +898,7 @@ func TestHandler_isAuthenticated_EmptyCookie(t *testing.T) {
 
 func TestHandler_buildStatusPageData_WithGroupsAndIncidents(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:          "test-page",
@@ -956,7 +955,7 @@ func TestHandler_buildStatusPageData_WithGroupsAndIncidents(t *testing.T) {
 
 func TestHandler_buildStatusPageData_MonitoredStatus(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:    "test-page",
@@ -984,7 +983,7 @@ func TestHandler_buildStatusPageData_MonitoredStatus(t *testing.T) {
 
 func TestHandler_buildStatusPageData_ResolvedIncident(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:    "test-page",
@@ -1012,7 +1011,7 @@ func TestHandler_buildStatusPageData_ResolvedIncident(t *testing.T) {
 
 func TestHandler_buildStatusPageData_SoulError(t *testing.T) {
 	repo := &mockRepositoryNotFound{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:    "test-page",
@@ -1077,7 +1076,7 @@ func TestCalculateOverallStatus_AllDead(t *testing.T) {
 
 func TestHandler_ServeHTTP_IncidentsRoute(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test/incidents", nil)
 	req.Host = "test.example.com"
@@ -1093,7 +1092,7 @@ func TestHandler_ServeHTTP_IncidentsRoute(t *testing.T) {
 
 func TestHandler_ServeHTTP_APIIncidentsRoute(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test/api/incidents", nil)
 	req.Host = "test.example.com"
@@ -1109,7 +1108,7 @@ func TestHandler_ServeHTTP_APIIncidentsRoute(t *testing.T) {
 
 func TestHandler_ServeHTTP_APIJudgmentsRoute(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test/api/judgments/soul-1", nil)
 	req.Host = "test.example.com"
@@ -1125,7 +1124,7 @@ func TestHandler_ServeHTTP_APIJudgmentsRoute(t *testing.T) {
 
 func TestHandler_ServeHTTP_SubscribeRoute(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test/subscribe", nil)
 	req.Host = "test.example.com"
@@ -1141,7 +1140,7 @@ func TestHandler_ServeHTTP_SubscribeRoute(t *testing.T) {
 
 func TestHandler_ServeHTTP_UnsubscribeRoute(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test/unsubscribe/token123", nil)
 	req.Host = "test.example.com"
@@ -1157,7 +1156,7 @@ func TestHandler_ServeHTTP_UnsubscribeRoute(t *testing.T) {
 
 func TestHandler_ServeHTTP_POST_Subscribe(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("POST", "/status/test/subscribe", nil)
 	req.Host = "test.example.com"
@@ -1217,7 +1216,7 @@ func TestCalculateOverallStatus_MinorOutage(t *testing.T) {
 // Tests for authentication and session functions
 func TestHandler_isAuthenticated_NoSession(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test", nil)
 	page := &core.StatusPage{
@@ -1235,7 +1234,7 @@ func TestHandler_isAuthenticated_NoSession(t *testing.T) {
 
 func TestHandler_isAuthenticated_WithSessionCookie(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test", nil)
 	req.AddCookie(&http.Cookie{
@@ -1257,7 +1256,7 @@ func TestHandler_isAuthenticated_WithSessionCookie(t *testing.T) {
 
 func TestHandler_isAuthenticated_WithAPIKey(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test", nil)
 	req.Header.Set("X-API-Key", "test-api-key")
@@ -1276,7 +1275,7 @@ func TestHandler_isAuthenticated_WithAPIKey(t *testing.T) {
 
 func TestHandler_validateSession(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	result := handler.validateSession("test-token", "workspace-1")
 	if result {
@@ -1286,7 +1285,7 @@ func TestHandler_validateSession(t *testing.T) {
 
 func TestHandler_validateAPIKey(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	result := handler.validateAPIKey("test-key", "workspace-1")
 	if result {
@@ -1296,7 +1295,7 @@ func TestHandler_validateAPIKey(t *testing.T) {
 
 func TestHandler_requestAuthentication(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/status/test", nil)
@@ -1315,7 +1314,7 @@ func TestHandler_requestAuthentication(t *testing.T) {
 
 func TestHandler_checkPasswordProtection_NoPassword(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test", nil)
 	page := &core.StatusPage{
@@ -1331,7 +1330,7 @@ func TestHandler_checkPasswordProtection_NoPassword(t *testing.T) {
 
 func TestHandler_checkPasswordProtection_WithQueryPassword(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test?password=testpass", nil)
 	page := &core.StatusPage{
@@ -1348,7 +1347,7 @@ func TestHandler_checkPasswordProtection_WithQueryPassword(t *testing.T) {
 
 func TestHandler_verifyPagePassword(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:          "test-page",
@@ -1363,7 +1362,7 @@ func TestHandler_verifyPagePassword(t *testing.T) {
 
 func TestHandler_showPasswordForm(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:          "test-page",
@@ -1389,7 +1388,7 @@ func TestHandler_showPasswordForm(t *testing.T) {
 
 func TestHandler_SubscribeHandler_MethodNotAllowed(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/subscribe", nil)
 	w := httptest.NewRecorder()
@@ -1403,7 +1402,7 @@ func TestHandler_SubscribeHandler_MethodNotAllowed(t *testing.T) {
 
 func TestHandler_SubscribeHandler_InvalidJSON(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("POST", "/status/subscribe", nil)
 	req.Header.Set("Content-Type", "application/json")
@@ -1418,7 +1417,7 @@ func TestHandler_SubscribeHandler_InvalidJSON(t *testing.T) {
 
 func TestHandler_SubscribeHandler_MissingPageID(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	jsonBody := `{"type": "email", "email": "user@example.com"}`
 	req := httptest.NewRequest("POST", "/status/subscribe",
@@ -1435,7 +1434,7 @@ func TestHandler_SubscribeHandler_MissingPageID(t *testing.T) {
 
 func TestHandler_SubscribeHandler_MissingEmail(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	jsonBody := `{"page_id": "test", "type": "email"}`
 	req := httptest.NewRequest("POST", "/status/subscribe",
@@ -1452,7 +1451,7 @@ func TestHandler_SubscribeHandler_MissingEmail(t *testing.T) {
 
 func TestHandler_SubscribeHandler_MissingWebhookURL(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	jsonBody := `{"page_id": "test", "type": "webhook"}`
 	req := httptest.NewRequest("POST", "/status/subscribe",
@@ -1469,7 +1468,7 @@ func TestHandler_SubscribeHandler_MissingWebhookURL(t *testing.T) {
 
 func TestHandler_SubscribeHandler_ValidWebhook(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	jsonBody := `{"page_id": "test", "type": "webhook", "webhook_url": "https://example.com/hook"}`
 	req := httptest.NewRequest("POST", "/status/subscribe",
@@ -1493,7 +1492,7 @@ func TestHandler_Router(t *testing.T) {
 		defaultTheme: core.GetDefaultTheme(),
 	}
 
-	// Test router creation without calling full Router() which needs acmeManager
+	// Test router creation without calling full Router().
 	// Instead, test individual route handlers
 	req := httptest.NewRequest("GET", "/status/test", nil)
 	w := httptest.NewRecorder()
@@ -1508,7 +1507,7 @@ func TestHandler_Router(t *testing.T) {
 
 func TestHandler_Router_BadgeEndpoint(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/badge/test", nil)
 	w := httptest.NewRecorder()
@@ -1522,7 +1521,7 @@ func TestHandler_Router_BadgeEndpoint(t *testing.T) {
 
 func TestHandler_Router_RSSFeedEndpoint(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test/feed.xml", nil)
 	w := httptest.NewRecorder()
@@ -1541,7 +1540,7 @@ func TestHandler_Router_RSSFeedEndpoint(t *testing.T) {
 
 func TestHandler_buildStatusPageData(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:          "test-page",
@@ -1567,7 +1566,7 @@ func TestHandler_buildStatusPageData(t *testing.T) {
 
 func TestHandler_renderStatusPage(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:          "test-page",
@@ -1603,7 +1602,7 @@ func TestHandler_renderStatusPage(t *testing.T) {
 
 func TestHandler_buildUptimeData(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:         "test-page",
@@ -1625,7 +1624,7 @@ func TestHandler_buildUptimeData(t *testing.T) {
 
 func TestHandler_serveJSON(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	data := &core.StatusPageData{
 		Status: core.OverallStatus{
@@ -1651,7 +1650,7 @@ func TestHandler_serveJSON(t *testing.T) {
 
 func TestHandler_serveHTML(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:    "test-page",
@@ -1686,31 +1685,9 @@ func TestHandler_serveHTML(t *testing.T) {
 	}
 }
 
-func TestHandler_Router_WithAcmeManager(t *testing.T) {
+func TestHandler_Router_NoAcmeChallengeRoute(t *testing.T) {
 	repo := &mockRepository{}
-
-	// Create a minimal acme manager for testing
-	db := newTestDB(t)
-	defer db.Close()
-
-	cfg := acme.Config{
-		Enabled:   true,
-		Provider:  acme.ProviderLetsEncrypt,
-		Email:     "test@example.com",
-		AcceptTOS: true,
-		CertPath:  t.TempDir(),
-	}
-
-	acmeMgr, err := acme.NewManager(db, cfg)
-	if err != nil {
-		t.Fatalf("Failed to create acme manager: %v", err)
-	}
-
-	handler := &Handler{
-		repository:   repo,
-		acmeManager:  acmeMgr,
-		defaultTheme: core.GetDefaultTheme(),
-	}
+	handler := NewHandler(repo)
 
 	router := handler.Router()
 
@@ -1749,15 +1726,14 @@ func TestHandler_Router_WithAcmeManager(t *testing.T) {
 		t.Errorf("Expected status 200 for RSS feed endpoint, got %d", w.Code)
 	}
 
-	// Test ACME challenge endpoint
+	// Built-in ACME is disabled; no ACME challenge route should be registered.
 	req = httptest.NewRequest("GET", "/.well-known/acme-challenge/test-token", nil)
 	w = httptest.NewRecorder()
 
 	router.ServeHTTP(w, req)
 
-	// Should return 404 for unknown challenge token
 	if w.Code != http.StatusNotFound {
-		t.Logf("ACME challenge returned status %d", w.Code)
+		t.Errorf("Expected ACME challenge route to be absent, got status %d", w.Code)
 	}
 }
 
@@ -1767,7 +1743,7 @@ func TestHandler_RSSFeedHandler_SoulLookupError(t *testing.T) {
 	repo := &mockRepositorySoulError{
 		mockRepository: mockRepository{},
 	}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test/feed.xml", nil)
 	w := httptest.NewRecorder()
@@ -1789,7 +1765,7 @@ func TestHandler_RSSFeedHandler_IncidentsError(t *testing.T) {
 	repo := &mockRepositoryIncidentsError{
 		mockRepository: mockRepository{},
 	}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test/feed.xml", nil)
 	w := httptest.NewRecorder()
@@ -1806,7 +1782,7 @@ func TestHandler_BadgeHandler_SoulError(t *testing.T) {
 	repo := &mockRepositorySoulError{
 		mockRepository: mockRepository{},
 	}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/badge/test", nil)
 	w := httptest.NewRecorder()
@@ -1821,7 +1797,7 @@ func TestHandler_BadgeHandler_SoulError(t *testing.T) {
 // TestHandler_BadgeHandler_NotFound tests badge for non-existent page
 func TestHandler_BadgeHandler_NotFound(t *testing.T) {
 	repo := &mockRepositoryNotFound{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/badge/nonexistent", nil)
 	w := httptest.NewRecorder()
@@ -1836,7 +1812,7 @@ func TestHandler_BadgeHandler_NotFound(t *testing.T) {
 // TestHandler_SubscribeHandler_EmptyEmail tests subscribe with missing email
 func TestHandler_SubscribeHandler_EmptyEmail(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("POST", "/status/test/subscribe", nil)
 	w := httptest.NewRecorder()
@@ -1871,7 +1847,7 @@ func (m *mockRepositoryIncidentsError) GetIncidentsByPage(pageID string) ([]core
 
 func TestHandler_WidgetHandler_MissingPageID(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/widget", nil)
 	w := httptest.NewRecorder()
@@ -1885,7 +1861,7 @@ func TestHandler_WidgetHandler_MissingPageID(t *testing.T) {
 
 func TestHandler_WidgetHandler_NotFound(t *testing.T) {
 	repo := &mockRepositoryNotFound{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/widget?page=test", nil)
 	w := httptest.NewRecorder()
@@ -1899,7 +1875,7 @@ func TestHandler_WidgetHandler_NotFound(t *testing.T) {
 
 func TestHandler_WidgetHandler_CompactStyle(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/widget?page=test", nil)
 	w := httptest.NewRecorder()
@@ -1923,7 +1899,7 @@ func TestHandler_WidgetHandler_CompactStyle(t *testing.T) {
 
 func TestHandler_WidgetHandler_DetailedStyle(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/widget?page=test\u0026style=detailed", nil)
 	w := httptest.NewRecorder()
@@ -1945,7 +1921,7 @@ func TestHandler_WidgetHandler_DetailedStyle(t *testing.T) {
 
 func TestHandler_WidgetHandler_SoulError(t *testing.T) {
 	repo := &mockRepositorySoulError{mockRepository: mockRepository{}}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/widget?page=test", nil)
 	w := httptest.NewRecorder()
@@ -1961,7 +1937,7 @@ func TestHandler_WidgetHandler_SoulError(t *testing.T) {
 
 func TestHandler_Router_WidgetRoute(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	router := handler.Router()
 
@@ -1977,7 +1953,7 @@ func TestHandler_Router_WidgetRoute(t *testing.T) {
 
 func TestHandler_Router_SubscribeRoute(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	router := handler.Router()
 
@@ -1996,7 +1972,7 @@ func TestHandler_Router_SubscribeRoute(t *testing.T) {
 
 func TestHandler_showPasswordForm_DefaultThemeFallback(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:          "test-page",
@@ -2024,7 +2000,7 @@ func TestHandler_showPasswordForm_DefaultThemeFallback(t *testing.T) {
 
 func TestHandler_serveHTML_DefaultThemeFallback(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:   "test-page",
@@ -2053,7 +2029,7 @@ func TestHandler_serveHTML_DefaultThemeFallback(t *testing.T) {
 
 func TestHandler_SubscribeHandler_RepositoryError(t *testing.T) {
 	repo := &mockRepositoryNotFound{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	jsonBody := `{"page_id": "test", "type": "webhook", "webhook_url": "https://example.com/hook"}`
 	req := httptest.NewRequest("POST", "/status/subscribe",
@@ -2072,7 +2048,7 @@ func TestHandler_SubscribeHandler_RepositoryError(t *testing.T) {
 
 func TestHandler_Router_MainStatusPageRoute(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	router := handler.Router()
 
@@ -2088,7 +2064,7 @@ func TestHandler_Router_MainStatusPageRoute(t *testing.T) {
 
 func TestHandler_Router_RSSFeedRoute(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	router := handler.Router()
 
@@ -2106,7 +2082,7 @@ func TestHandler_Router_RSSFeedRoute(t *testing.T) {
 
 func TestHandler_RSSFeedHandler_WithSoulLookupError(t *testing.T) {
 	repo := &mockRepositorySoulError{mockRepository: mockRepository{}}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	req := httptest.NewRequest("GET", "/status/test/feed.xml", nil)
 	w := httptest.NewRecorder()
@@ -2127,7 +2103,7 @@ func TestHandler_RSSFeedHandler_WithSoulLookupError(t *testing.T) {
 
 func TestHandler_showPasswordForm_EmptyTheme(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo, nil)
+	handler := NewHandler(repo)
 
 	page := &core.StatusPage{
 		ID:          "test-page",
