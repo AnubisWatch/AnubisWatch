@@ -67,9 +67,9 @@ storage:
 | `enabled` | boolean | `true` | No | Enable HTTPS |
 | `cert` | string | - | Conditional | Path to TLS certificate (PEM) |
 | `key` | string | - | Conditional | Path to TLS private key (PEM) |
-| `auto_cert` | boolean | `false` | No | Experimental built-in auto certificate flow; prefer cert/key or ingress-managed TLS for production |
-| `acme_email` | string | - | Conditional | Email for ACME registration |
-| `acme_domains` | array | - | Conditional | Domains for certificate |
+| `auto_cert` | boolean | `false` | No | Unsupported until real ACME issuance is implemented; keep `false` |
+| `acme_email` | string | - | No | Reserved for future ACME support |
+| `acme_domains` | array | - | No | Reserved for future ACME support |
 
 ### Examples
 
@@ -97,25 +97,9 @@ server:
 
 #### Automatic Certificates
 
-```yaml
-server:
-  host: "0.0.0.0"
-  port: 443
-  tls:
-    enabled: true
-    auto_cert: true
-    acme_email: "admin@example.com"
-    acme_domains:
-      - "anubis.example.com"
-      - "status.example.com"
-```
-
-> Note: `auto_cert` is currently experimental in this codebase. The built-in
-> certificate manager does not complete real ACME issuance yet; certificate
-> requests fail unless that implementation is completed. For production, prefer
-> an ingress/controller certificate manager or provide `cert` and `key`. Runtime
-> startup also requires `ANUBIS_EXPERIMENTAL_AUTO_CERT=1` before the built-in
-> manager is initialized.
+Built-in `auto_cert` is not supported in runtime configuration until real ACME
+issuance is implemented. Keep `auto_cert: false` and use explicit `cert`/`key`
+or ingress/cert-manager TLS.
 
 ---
 
@@ -1158,9 +1142,8 @@ server:
     enabled: true
     # Prefer explicit cert/key or ingress-managed TLS for production.
     auto_cert: false
-    acme_email: "admin@example.com"
-    acme_domains:
-      - "anubis.example.com"
+    cert: "/etc/ssl/certs/anubis.crt"
+    key: "/etc/ssl/private/anubis.key"
 
 storage:
   path: /var/lib/anubis/data

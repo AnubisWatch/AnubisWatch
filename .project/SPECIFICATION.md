@@ -1473,9 +1473,7 @@ server:
     enabled: true
     cert: "/etc/anubis/tls/cert.pem"
     key: "/etc/anubis/tls/key.pem"
-    auto_cert: true                # ACME/Let's Encrypt auto
-    acme_email: "admin@example.com"
-    acme_domains: ["anubis.example.com"]
+    auto_cert: false               # Built-in ACME is not production-ready
 
 # Storage (CobaltDB)
 storage:

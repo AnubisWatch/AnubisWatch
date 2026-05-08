@@ -1007,7 +1007,6 @@ func TestInitACMEManager_NoAutoCert(t *testing.T) {
 
 // Test initACMEManager with TLS and AutoCert enabled
 func TestInitACMEManager_WithAutoCert(t *testing.T) {
-	t.Setenv("ANUBIS_EXPERIMENTAL_AUTO_CERT", "1")
 	dataDir := t.TempDir()
 	cfg := &core.Config{
 		Storage: core.StorageConfig{Path: dataDir},
@@ -1028,8 +1027,8 @@ func TestInitACMEManager_WithAutoCert(t *testing.T) {
 	defer store.Close()
 
 	result := initACMEManager(cfg, store, logger)
-	if result == nil {
-		t.Fatal("Expected ACME manager when TLS AutoCert is enabled")
+	if result != nil {
+		t.Fatal("Expected nil ACME manager because built-in auto_cert is not implemented")
 	}
 }
 
@@ -2830,7 +2829,6 @@ func TestStatusPageRepository_WithRealDB(t *testing.T) {
 
 // TestInitACMEManager_WithStorage tests initACMEManager with actual storage
 func TestInitACMEManager_WithStorage(t *testing.T) {
-	t.Setenv("ANUBIS_EXPERIMENTAL_AUTO_CERT", "1")
 	db := setupTestDB(t)
 	defer db.Close()
 
@@ -2849,9 +2847,9 @@ func TestInitACMEManager_WithStorage(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	result := initACMEManager(cfg, db, logger)
-
-	// May return nil or a manager depending on ACME setup
-	t.Logf("initACMEManager returned: %v", result)
+	if result != nil {
+		t.Fatal("Expected nil ACME manager because built-in auto_cert is not implemented")
+	}
 }
 
 // TestClusterAdapter_WithRealCluster tests clusterAdapter with a real cluster manager
@@ -3338,14 +3336,14 @@ func TestGenerateConfig_Basic(t *testing.T) {
 	}
 }
 
-// TestGenerateConfig_TLSAuto tests generateConfig with TLS auto-cert
-func TestGenerateConfig_TLSAuto(t *testing.T) {
+// TestGenerateConfig_TLSNoAutoCert tests generateConfig does not emit unsupported auto-cert.
+func TestGenerateConfig_TLSNoAutoCert(t *testing.T) {
 	opts := ConfigOptions{
 		Host:            "0.0.0.0",
 		HTTPPort:        443,
 		EnableTLS:       true,
-		TLSAuto:         true,
-		ACMEEmail:       "admin@example.com",
+		TLSCert:         "/etc/ssl/cert.pem",
+		TLSKey:          "/etc/ssl/key.pem",
 		AdminEmail:      "admin@anubis.watch",
 		AdminPassword:   "TestPass1234!",
 		DataDir:         "/tmp/anubis",
@@ -3357,11 +3355,14 @@ func TestGenerateConfig_TLSAuto(t *testing.T) {
 	}
 	config := generateConfig(opts)
 
-	if !strings.Contains(config, `"auto_cert": true`) {
-		t.Error("Expected auto_cert in config")
+	if strings.Contains(config, `"auto_cert"`) {
+		t.Error("Did not expect unsupported auto_cert in generated config")
 	}
-	if !strings.Contains(config, `"acme_email": "admin@example.com"`) {
-		t.Error("Expected acme_email in config")
+	if strings.Contains(config, `"acme_email"`) {
+		t.Error("Did not expect acme_email in generated config")
+	}
+	if !strings.Contains(config, `"cert": "/etc/ssl/cert.pem"`) {
+		t.Error("Expected cert path in config")
 	}
 }
 
@@ -3371,7 +3372,6 @@ func TestGenerateConfig_TLSManual(t *testing.T) {
 		Host:            "0.0.0.0",
 		HTTPPort:        443,
 		EnableTLS:       true,
-		TLSAuto:         false,
 		TLSCert:         "/etc/ssl/cert.pem",
 		TLSKey:          "/etc/ssl/key.pem",
 		AdminEmail:      "admin@anubis.watch",
@@ -3458,8 +3458,8 @@ func TestGenerateConfig_Full(t *testing.T) {
 		Host:             "0.0.0.0",
 		HTTPPort:         443,
 		EnableTLS:        true,
-		TLSAuto:          true,
-		ACMEEmail:        "admin@example.com",
+		TLSCert:          "/etc/ssl/cert.pem",
+		TLSKey:           "/etc/ssl/key.pem",
 		AdminEmail:       "admin@anubis.watch",
 		AdminPassword:    "TestPass1234!",
 		DataDir:          "/tmp/anubis",
@@ -3483,8 +3483,8 @@ func TestGenerateConfig_Full(t *testing.T) {
 	sections := []string{
 		`"host": "0.0.0.0"`,
 		`"port": 443`,
-		`"auto_cert": true`,
-		`"acme_email": "admin@example.com"`,
+		`"cert": "/etc/ssl/cert.pem"`,
+		`"key": "/etc/ssl/key.pem"`,
 		`"encryption"`,
 		`"key": "enc-key"`,
 		`"node_name": "jackal-1"`,

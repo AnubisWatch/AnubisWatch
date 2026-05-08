@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path"
 	"path/filepath"
 	"strconv"
 	"syscall"
@@ -1186,31 +1185,14 @@ func storageGetLatestJudgment(store *storage.CobaltDB, ctx context.Context, work
 	return latest, nil
 }
 
-// initACMEManager initializes the experimental built-in ACME manager.
+// initACMEManager is retained for future ACME support, but built-in auto_cert is disabled.
 func initACMEManager(cfg *core.Config, store *storage.CobaltDB, logger *slog.Logger) *acme.Manager {
+	_ = store
+
 	if !cfg.Server.TLS.Enabled || !cfg.Server.TLS.AutoCert {
 		return nil
 	}
-	if os.Getenv("ANUBIS_EXPERIMENTAL_AUTO_CERT") != "1" {
-		logger.Warn("auto_cert requested but disabled because built-in ACME is experimental",
-			"action", "set ANUBIS_EXPERIMENTAL_AUTO_CERT=1 only for non-production testing, or configure explicit tls.cert/tls.key")
-		return nil
-	}
-
-	acmeCfg := acme.Config{
-		Enabled:   true,
-		Provider:  acme.ProviderLetsEncrypt,
-		Email:     cfg.Server.TLS.ACMEEmail,
-		AcceptTOS: true,
-		CertPath:  path.Join(cfg.Storage.Path, "acme"),
-	}
-
-	mgr, err := acme.NewManager(store, acmeCfg)
-	if err != nil {
-		logger.Warn("failed to initialize ACME manager", "err", err)
-		return nil
-	}
-
-	logger.Info("ACME manager initialized", "provider", acmeCfg.Provider, "email", acmeCfg.Email)
-	return mgr
+	logger.Warn("auto_cert requested but disabled because built-in ACME issuance is not implemented",
+		"action", "configure explicit tls.cert/tls.key or use ingress/cert-manager TLS")
+	return nil
 }

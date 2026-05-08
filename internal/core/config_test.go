@@ -1079,21 +1079,13 @@ func TestServerConfigValidate(t *testing.T) {
 			wantError: true,
 		},
 		{
-			name: "TLS with autocert but no domains",
-			config: ServerConfig{Host: "0.0.0.0", Port: 8443, TLS: TLSServerConfig{
-				Enabled:  true,
-				AutoCert: true,
-			}},
-			wantError: true,
-		},
-		{
-			name: "TLS with autocert and domains",
+			name: "TLS with autocert",
 			config: ServerConfig{Host: "0.0.0.0", Port: 8443, TLS: TLSServerConfig{
 				Enabled:     true,
 				AutoCert:    true,
 				ACMEDomains: []string{"example.com"},
 			}},
-			wantError: false,
+			wantError: true,
 		},
 		{
 			name: "TLS with cert/key",

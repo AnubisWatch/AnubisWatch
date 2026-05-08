@@ -389,7 +389,7 @@ var privateRanges = []string{
 
 ### 🚫 Production Blockers (MUST fix before broad production deployment)
 
-1. Complete real ACME issuance or keep `auto_cert` documented as non-production only.
+1. Complete real ACME issuance before re-enabling built-in `auto_cert`.
 2. Keep deployment charts free of weak default credentials.
 
 ### ⚠️ High Priority (Should fix within first week of production)

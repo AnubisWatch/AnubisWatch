@@ -279,10 +279,10 @@ server:
   port: 8443
   tls:
     enabled: true
-    # Experimental: currently uses the built-in certificate manager fallback.
-    # For production, prefer cert/key from your ingress or certificate manager.
+    # Prefer explicit cert/key or ingress-managed TLS for production.
     auto_cert: false
-    acme_email: "admin@example.com"
+    cert: "/etc/ssl/certs/anubis.crt"
+    key: "/etc/ssl/private/anubis.key"
 
 souls:
   - name: "Production API"

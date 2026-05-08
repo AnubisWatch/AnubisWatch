@@ -517,7 +517,6 @@ func TestInitACMEManager_Server_Disabled(t *testing.T) {
 }
 
 func TestInitACMEManager_Server_Enabled(t *testing.T) {
-	t.Setenv("ANUBIS_EXPERIMENTAL_AUTO_CERT", "1")
 	tempDir := t.TempDir()
 	cfg := core.GenerateDefaultConfig()
 	cfg.Storage.Path = tempDir
@@ -533,8 +532,8 @@ func TestInitACMEManager_Server_Enabled(t *testing.T) {
 	defer store.Close()
 
 	mgr := initACMEManager(cfg, store, logger)
-	if mgr == nil {
-		t.Error("Expected non-nil manager when TLS auto-cert enabled")
+	if mgr != nil {
+		t.Error("Expected nil manager because built-in auto-cert is not implemented")
 	}
 }
 

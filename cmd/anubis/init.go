@@ -46,19 +46,12 @@ func initInteractiveWithPath(configPath string) {
 
 	// TLS
 	enableTLS := askBool(reader, "Enable TLS/HTTPS", false)
-	tlsAuto := false
 	tlsCert := ""
 	tlsKey := ""
-	acmeEmail := ""
 
 	if enableTLS {
-		tlsAuto = askBool(reader, "Use experimental built-in auto certificates", false)
-		if tlsAuto {
-			acmeEmail = askString(reader, "ACME Email", "")
-		} else {
-			tlsCert = askString(reader, "TLS Certificate Path", "")
-			tlsKey = askString(reader, "TLS Private Key Path", "")
-		}
+		tlsCert = askString(reader, "TLS Certificate Path", "")
+		tlsKey = askString(reader, "TLS Private Key Path", "")
 	}
 
 	fmt.Println()
@@ -139,10 +132,8 @@ func initInteractiveWithPath(configPath string) {
 		Host:             host,
 		HTTPPort:         httpPort,
 		EnableTLS:        enableTLS,
-		TLSAuto:          tlsAuto,
 		TLSCert:          tlsCert,
 		TLSKey:           tlsKey,
-		ACMEEmail:        acmeEmail,
 		AdminEmail:       adminEmail,
 		AdminPassword:    adminPass,
 		DataDir:          dataDir,
@@ -206,10 +197,8 @@ type ConfigOptions struct {
 	Host             string
 	HTTPPort         int
 	EnableTLS        bool
-	TLSAuto          bool
 	TLSCert          string
 	TLSKey           string
-	ACMEEmail        string
 	AdminEmail       string
 	AdminPassword    string
 	DataDir          string
@@ -232,19 +221,11 @@ type ConfigOptions struct {
 func generateConfig(opts ConfigOptions) string {
 	tlsConfig := "false"
 	if opts.EnableTLS {
-		if opts.TLSAuto {
-			tlsConfig = fmt.Sprintf(`{
-      "enabled": true,
-      "auto_cert": true,
-      "acme_email": %q
-    }`, opts.ACMEEmail)
-		} else {
-			tlsConfig = fmt.Sprintf(`{
+		tlsConfig = fmt.Sprintf(`{
       "enabled": true,
       "cert": %q,
       "key": %q
     }`, opts.TLSCert, opts.TLSKey)
-		}
 	}
 
 	encryptionConfig := "false"
