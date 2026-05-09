@@ -10,7 +10,7 @@ LDFLAGS   := -s -w \
   -X main.Commit=$(COMMIT) \
   -X main.BuildDate=$(DATE)
 
-.PHONY: all build clean test lint dashboard run docker smoke-production capture-production-evidence help
+.PHONY: all build clean test lint dashboard run docker preflight-production smoke-production capture-production-evidence help
 
 all: dashboard build ## Build dashboard and binary
 
@@ -34,6 +34,9 @@ test: ## Run all tests
 
 test-short: ## Run short tests only
 	go test -short ./...
+
+preflight-production: ## Run production Helm/Kubernetes preflight checks (requires VALUES)
+	./scripts/production-preflight.sh
 
 smoke-production: ## Run production smoke checks (requires ANUBIS_BASE_URL or BASE_URL arg)
 	./scripts/production-smoke.sh $(BASE_URL)

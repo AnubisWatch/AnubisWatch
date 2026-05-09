@@ -185,8 +185,10 @@ jobs:
 
       - name: Verify production script help output
         run: |
+          ./scripts/production-preflight.sh --help >/tmp/anubis-preflight-help.txt
           ./scripts/production-smoke.sh --help >/tmp/anubis-smoke-help.txt
           ./scripts/capture-deployment-evidence.sh --help >/tmp/anubis-evidence-help.txt
+          test -s /tmp/anubis-preflight-help.txt
           test -s /tmp/anubis-smoke-help.txt
           test -s /tmp/anubis-evidence-help.txt
 
