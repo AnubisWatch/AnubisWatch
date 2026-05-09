@@ -53,6 +53,8 @@ go.work
 # Config files (keep examples)
 /anubis.json
 /anubis.yaml
+/values-production.yaml
+/deploy/helm/anubiswatch/values-production.yaml
 !/config/anubis.json
 
 # Dashboard build

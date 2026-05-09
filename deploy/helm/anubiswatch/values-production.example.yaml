@@ -1,0 +1,117 @@
+# Example production values for AnubisWatch.
+#
+# Copy this file to an environment-specific values file outside version
+# control, then fill secrets from the deployment secret store. Do not commit
+# real production values or secret material.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/anubiswatch/anubiswatch
+  # Prefer immutable digests for production promotion. Example:
+  # tag: "sha-ae2a2cf"
+  tag: ""
+  pullPolicy: IfNotPresent
+
+statefulSet:
+  replicas: 3
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 50Gi
+
+config:
+  server:
+    port: 8080
+    tls:
+      enabled: false
+    allowedOrigins:
+      - "https://anubiswatch.example.com"
+
+  dashboard:
+    enabled: true
+
+  auth:
+    type: local
+    local:
+      adminEmail: admin@example.com
+
+  storage:
+    path: /data
+    encryption:
+      enabled: false
+
+  necropolis:
+    enabled: true
+
+  logging:
+    level: warn
+    format: json
+
+service:
+  type: ClusterIP
+  httpPort: 8080
+  grpcPort: 9090
+  clusterPort: 7946
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-production
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: anubiswatch.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - hosts:
+        - anubiswatch.example.com
+      secretName: anubiswatch-tls
+
+monitoring:
+  # Set to true only when the Prometheus Operator ServiceMonitor CRD exists in
+  # the target cluster.
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+
+pdb:
+  enabled: true
+  minAvailable: 2
+
+autoscaling:
+  enabled: false
+  minReplicas: 3
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+secrets:
+  # Required. Fill in the real environment values file or pass with --set /
+  # --set-file from your deployment secret store.
+  adminPassword: ""
+  encryptionKey: ""
+  clusterSecret: ""
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}

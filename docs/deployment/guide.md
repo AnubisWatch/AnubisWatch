@@ -177,7 +177,7 @@ helm repo update
 helm install anubiswatch anubiswatch/anubiswatch \
   --namespace anubiswatch \
   --create-namespace \
-  --set secrets.adminPassword='REPLACE_WITH_A_STRONG_PASSWORD_1!'
+  --set secrets.adminPassword="$ANUBIS_ADMIN_PASSWORD"
 
 # Install with custom values
 helm install anubiswatch anubiswatch/anubiswatch \
@@ -195,6 +195,11 @@ kubectl apply -f deploy/k8s/base.yaml
 ```
 
 ### Production Helm Values
+
+Start from `deploy/helm/anubiswatch/values-production.example.yaml`, copy it
+to `values-production.yaml`, and keep the filled file out of version control.
+Populate `secrets.*` from your deployment secret store before running preflight
+or deploy.
 
 ```yaml
 # values-production.yaml
@@ -220,14 +225,6 @@ config:
     path: /var/lib/anubis/data
   necropolis:
     enabled: true
-  channels:
-    - name: smtp
-      type: email
-      email:
-        smtp_host: smtp.gmail.com
-        smtp_port: 587
-        from: alerts@example.com
-        to: [ops@example.com]
 
 monitoring:
   enabled: true
@@ -235,8 +232,8 @@ monitoring:
     enabled: true
 
 secrets:
-  adminPassword: "REPLACE_WITH_A_STRONG_PASSWORD_1!"
-  clusterSecret: "REPLACE_WITH_A_CLUSTER_SECRET_1!"
+  adminPassword: ""
+  clusterSecret: ""
 
 ingress:
   enabled: true
@@ -262,8 +259,8 @@ helm upgrade anubiswatch anubiswatch/anubiswatch \
   --namespace anubiswatch \
   --set config.necropolis.enabled=true \
   --set statefulSet.replicas=5 \
-  --set secrets.adminPassword='REPLACE_WITH_A_STRONG_PASSWORD_1!' \
-  --set secrets.clusterSecret='REPLACE_WITH_A_CLUSTER_SECRET_1!'
+  --set secrets.adminPassword="$ANUBIS_ADMIN_PASSWORD" \
+  --set secrets.clusterSecret="$ANUBIS_CLUSTER_SECRET"
 ```
 
 ## Production Checklist
