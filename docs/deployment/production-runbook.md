@@ -114,6 +114,27 @@ diff, failing check output, and pod logs.
 - Smoke test command and result.
 - Any skipped checks and why they were skipped.
 
+Use the evidence capture helper after deploy or rollback to create a timestamped
+artifact directory:
+
+```bash
+ANUBIS_EVIDENCE_VALUES="$VALUES" \
+ANUBIS_EVIDENCE_IMAGE="ghcr.io/anubiswatch/anubiswatch@sha256:..." \
+ANUBIS_EVIDENCE_BASE_URL=https://anubiswatch.example.com \
+ANUBIS_EVIDENCE_RUN_SMOKE=true \
+scripts/capture-deployment-evidence.sh
+```
+
+Or through `make`:
+
+```bash
+make capture-production-evidence OUTPUT_DIR=evidence/prod-$(date -u +%Y%m%dT%H%M%SZ)
+```
+
+The helper records command output, rollout status, Helm status/history, workload
+YAML, events, and optional smoke output. It records only the checksum of the
+values file, not the values file content.
+
 ## Known Gaps
 
 - This repository does not contain live cluster credentials, production secret

@@ -10,7 +10,7 @@ LDFLAGS   := -s -w \
   -X main.Commit=$(COMMIT) \
   -X main.BuildDate=$(DATE)
 
-.PHONY: all build clean test lint dashboard run docker smoke-production help
+.PHONY: all build clean test lint dashboard run docker smoke-production capture-production-evidence help
 
 all: dashboard build ## Build dashboard and binary
 
@@ -37,6 +37,9 @@ test-short: ## Run short tests only
 
 smoke-production: ## Run production smoke checks (requires ANUBIS_BASE_URL or BASE_URL arg)
 	./scripts/production-smoke.sh $(BASE_URL)
+
+capture-production-evidence: ## Capture deployment evidence for the current Kubernetes context
+	./scripts/capture-deployment-evidence.sh $(OUTPUT_DIR)
 
 lint: ## Run golangci-lint
 	golangci-lint run ./...
