@@ -277,6 +277,7 @@ For an operator-focused deployment, smoke-test, and rollback flow, use the
 - [ ] Enable audit logging
 - [ ] Rotate secrets regularly
 - [ ] Use RBAC for access control
+- [ ] Configure CORS origins via `ANUBIS_CORS_ORIGINS` env var or `server.allowed_origins` config
 
 ### Reliability
 
@@ -308,12 +309,57 @@ For an operator-focused deployment, smoke-test, and rollback flow, use the
 ### Backup & Recovery
 
 ```bash
-# Create backup
-kubectl exec -it anubiswatch-0 -n anubiswatch -- /bin/anubis backup > backup.db
+# Create encrypted backup
+kubectl exec -it anubiswatch-0 -n anubiswatch -- /bin/anubis backup --encrypt
 
-# Restore backup
-kubectl cp backup.db anubiswatch-0:/data/anubis.db -n anubiswatch
+# Restore backup (key stored at backups/.backup_key)
+kubectl exec -it anubiswatch-0 -n anubiswatch -- /bin/anubis restore --input backup.db
+
+# Set backup encryption key (via env var)
+ANUBIS_BACKUP_ENCRYPTION_KEY=your-32-byte-key
 ```
+
+### CORS Configuration
+
+If the dashboard is served from a different origin than the API, configure allowed origins:
+
+```bash
+# Via environment variable
+ANUBIS_CORS_ORIGINS=https://dashboard.example.com
+
+# Via config file
+server:
+  allowed_origins:
+    - https://dashboard.example.com
+```
+
+If not configured, CORS defaults to deny all (production-safe default).
+
+### Log Rotation
+
+AnubisWatch outputs JSON logs to stdout. For production, configure log rotation:
+
+**Via Docker:**
+```bash
+docker run ... -v /var/lib/anubis/logs:/var/log/anubis \
+  anubis serve --single 2>&1 | rotatelogs -f -p 7D /var/log/anubis/anubis.%Y%m%d.log
+```
+
+**Via logrotate:**
+```bash
+# /etc/logrotate.d/anubis
+/var/log/anubis/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+```
+
+**In Kubernetes:** Use a sidecar or log collector (Fluentd, Fluent Bit, Vector).
 
 ### Troubleshooting
 

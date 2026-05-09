@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 
 	"github.com/AnubisWatch/anubiswatch/internal/api"
 	"github.com/AnubisWatch/anubiswatch/internal/core"
@@ -104,14 +105,15 @@ func NewServer(addr string, store Store, probe ProbeEngine, auth Authenticator, 
 
 	// Build gRPC options
 	opts := []grpc.ServerOption{
-		grpc.UnaryInterceptor(s.authInterceptor),
-		grpc.StreamInterceptor(s.authStreamInterceptor),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		grpc.ChainUnaryInterceptor(s.authInterceptor),
+		grpc.ChainStreamInterceptor(s.authStreamInterceptor),
 	}
 	if tlsConfig != nil {
 		opts = append(opts, grpc.Creds(credentials.NewTLS(tlsConfig)))
 	}
 
-	// Create gRPC server with authentication interceptor
+	// Create gRPC server with OpenTelemetry stats handler and auth interceptor
 	grpcServer := grpc.NewServer(opts...)
 
 	s.grpc = grpcServer

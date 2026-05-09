@@ -5,6 +5,9 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -512,6 +515,32 @@ func (m *Manager) verifyChecksum(backup *Backup) error {
 }
 
 func (m *Manager) writeBackupFile(backup *Backup, path string, opts Options) error {
+	// Get encryption key if needed
+	var encryptionKey []byte
+	var keyFile string
+	var err error
+	if opts.Encrypt {
+		encryptionKey, keyFile, err = m.getEncryptionKey(opts)
+		if err != nil {
+			return fmt.Errorf("failed to get encryption key: %w", err)
+		}
+	}
+
+	// Serialize backup to JSON
+	jsonData, err := json.MarshalIndent(backup, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal backup: %w", err)
+	}
+
+	// Encrypt if requested
+	if opts.Encrypt && encryptionKey != nil {
+		encrypted, err := encryptData(encryptionKey, jsonData)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt backup: %w", err)
+		}
+		jsonData = encrypted
+	}
+
 	// Write to a temp file first for atomic backup creation
 	// This prevents corrupted backups if the process is interrupted
 	tmpPath := path + ".tmp"
@@ -527,22 +556,32 @@ func (m *Manager) writeBackupFile(backup *Backup, path string, opts Options) err
 		writer = gzipWriter
 	}
 
-	encoder := json.NewEncoder(writer)
-	encoder.SetIndent("", "  ")
-	err = encoder.Encode(backup)
+	if _, err := writer.Write(jsonData); err != nil {
+		file.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("failed to write backup data: %w", err)
+	}
 
 	// Close gzip writer first (flush remaining data), then file
 	if gzipWriter != nil {
-		if closeErr := gzipWriter.Close(); closeErr != nil && err == nil {
-			err = closeErr
+		if closeErr := gzipWriter.Close(); closeErr != nil {
+			os.Remove(tmpPath)
+			return closeErr
 		}
 	}
-	if closeErr := file.Close(); closeErr != nil && err == nil {
-		err = closeErr
+	if closeErr := file.Close(); closeErr != nil {
+		os.Remove(tmpPath)
+		return closeErr
 	}
-	if err != nil {
-		os.Remove(tmpPath) // Clean up temp file
-		return err
+
+	// Store key file alongside backup if we generated a new key
+	if keyFile != "" {
+		// Copy key to backup-specific location
+		backupKeyFile := path + backupKeySuffix
+		if err := copyFile(keyFile, backupKeyFile); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("failed to store backup key: %w", err)
+		}
 	}
 
 	// Atomic rename - replaces the file if it already exists
@@ -576,10 +615,37 @@ func (m *Manager) readBackupFile(path string) (*Backup, error) {
 		reader = gzipReader
 	}
 
+	// Read all data
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read backup data: %w", err)
+	}
+
+	// Try to detect if this is an encrypted backup
+	// Encrypted backups start with 32-byte salt, JSON backups start with '{'
+	if len(data) > 32 && data[0] == 0x00 && data[31] != '{' {
+		// Looks encrypted, try to decrypt
+		keyFile := path + backupKeySuffix
+		if _, err := os.Stat(keyFile); os.IsNotExist(err) {
+			// Try default key location
+			keyFile = m.backupsDir + "/.backup_key"
+		}
+
+		key, err := m.GetStoredEncryptionKey(keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("backup is encrypted but no key found: %w", err)
+		}
+
+		decrypted, err := decryptData(key, data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decrypt backup: %w", err)
+		}
+		data = decrypted
+	}
+
 	var backup Backup
-	decoder := json.NewDecoder(reader)
-	if err := decoder.Decode(&backup); err != nil {
-		return nil, err
+	if err := json.Unmarshal(data, &backup); err != nil {
+		return nil, fmt.Errorf("failed to parse backup JSON: %w", err)
 	}
 
 	return &backup, nil
@@ -723,4 +789,186 @@ func (m *Manager) ImportFromTar(storage RestoreStorage, r io.Reader, opts Restor
 	}
 
 	return nil
+}
+
+// Encryption key file suffix (stored alongside backup)
+const backupKeySuffix = ".key"
+
+// deriveKey derives a 32-byte AES key from key material using SHA256.
+// For backup encryption, we use a simpler derivation since the key
+// is already high-entropy (either from env var or generated).
+func deriveKey(keyMaterial []byte) ([]byte, error) {
+	hash := sha256.Sum256(keyMaterial)
+	return hash[:], nil
+}
+
+// getEncryptionKey returns the encryption key for backups.
+// If opts.EncryptionKey is set, use it.
+// Otherwise check ANUBIS_BACKUP_ENCRYPTION_KEY env var.
+// If neither is set, generate a new key and store it.
+func (m *Manager) getEncryptionKey(opts Options) ([]byte, string, error) {
+	if len(opts.EncryptionKey) > 0 {
+		return opts.EncryptionKey, "", nil
+	}
+
+	// Check environment variable
+	if envKey := os.Getenv("ANUBIS_BACKUP_ENCRYPTION_KEY"); envKey != "" {
+		return []byte(envKey), "", nil
+	}
+
+	// Generate new key
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, "", fmt.Errorf("failed to generate encryption key: %w", err)
+	}
+
+	// Store key to file (path derived from backup path later)
+	keyFile := m.backupsDir + "/.backup_key"
+	if err := os.WriteFile(keyFile, key, 0600); err != nil {
+		return nil, "", fmt.Errorf("failed to store encryption key: %w", err)
+	}
+
+	m.logger.Warn("backup encryption key generated and stored",
+		"action", "set ANUBIS_BACKUP_ENCRYPTION_KEY env var to persist across restarts",
+		"key_file", keyFile)
+
+	return key, keyFile, nil
+}
+
+// encryptData encrypts data using AES-256-GCM.
+// Returns: salt(32) + nonce(12) + ciphertext+tag.
+func encryptData(key []byte, plaintext []byte) ([]byte, error) {
+	derivedKey, err := deriveKey(key)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { derivedKey[0] = 0 }()
+
+	block, err := aes.NewCipher(derivedKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	// Generate random nonce
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	// Generate random salt
+	salt := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return nil, fmt.Errorf("failed to generate salt: %w", err)
+	}
+
+	// Re-derive key with salt for this specific encryption
+	saltKey := make([]byte, len(key)+len(salt))
+	copy(saltKey, key)
+	copy(saltKey[len(key):], salt)
+	derivedKey, err = deriveKey(saltKey)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { derivedKey[0] = 0 }()
+
+	block2, err := aes.NewCipher(derivedKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
+	}
+	gcm2, err := cipher.NewGCM(block2)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	// Encrypt with derived key
+	ciphertext := gcm2.Seal(nil, nonce, plaintext, nil)
+
+	// Format: salt(32) + nonce(12) + ciphertext+tag
+	result := make([]byte, len(salt)+len(nonce)+len(ciphertext))
+	copy(result, salt)
+	copy(result[len(salt):], nonce)
+	copy(result[len(salt)+len(nonce):], ciphertext)
+	return result, nil
+}
+
+// decryptData decrypts data encrypted with encryptData.
+// Expects format: salt(32) + nonce(12) + ciphertext+tag.
+func decryptData(key []byte, data []byte) ([]byte, error) {
+	if len(data) < 32+12+16 {
+		return nil, fmt.Errorf("encrypted data too short")
+	}
+
+	salt := data[:32]
+	nonce := data[32:44]
+	ciphertext := data[44:]
+
+	// Re-derive key with salt
+	saltKey := make([]byte, len(key)+len(salt))
+	copy(saltKey, key)
+	copy(saltKey[len(key):], salt)
+	derivedKey, err := deriveKey(saltKey)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { derivedKey[0] = 0 }()
+
+	block, err := aes.NewCipher(derivedKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return nil, fmt.Errorf("decryption failed: %w", err)
+	}
+
+	return plaintext, nil
+}
+
+// GetStoredEncryptionKey returns the encryption key stored in the key file.
+func (m *Manager) GetStoredEncryptionKey(keyFile string) ([]byte, error) {
+	if keyFile == "" {
+		// Try default location
+		keyFile = m.backupsDir + "/.backup_key"
+	}
+
+	data, err := os.ReadFile(keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read encryption key: %w", err)
+	}
+
+	key := make([]byte, len(data))
+	copy(key, data)
+	return key, nil
+}
+
+// copyFile copies a file from src to dst.
+func copyFile(src, dst string) error {
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		return err
+	}
+
+	return dstFile.Sync()
 }

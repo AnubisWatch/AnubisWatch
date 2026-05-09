@@ -32,6 +32,13 @@ type LoggingConfig struct {
 	File   string `json:"file" yaml:"file"`     // log file path (if output=file)
 }
 
+// TelemetryConfig defines OpenTelemetry tracing settings
+type TelemetryConfig struct {
+	Enabled    bool    `json:"enabled" yaml:"enabled"`
+	Endpoint   string  `json:"endpoint" yaml:"endpoint"`     // OTLP collector endpoint
+	SampleRate float64 `json:"sample_rate" yaml:"sample_rate"` // Trace sampling rate (0.0-1.0)
+}
+
 // ServerConfig defines server settings
 type ServerConfig struct {
 	Host           string          `json:"host" yaml:"host"`

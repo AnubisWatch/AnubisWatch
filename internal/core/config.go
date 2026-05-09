@@ -23,6 +23,8 @@ type Config struct {
 	Verdicts   VerdictsConfig   `yaml:"verdicts"`
 	Journeys   []JourneyConfig  `yaml:"journeys"`
 	Logging    LoggingConfig    `yaml:"logging"`
+	Telemetry  TelemetryConfig  `yaml:"telemetry"`
+	Environment string          `yaml:"environment"`
 }
 
 // LoadConfig reads and parses the configuration file (YAML or JSON)

@@ -16,6 +16,10 @@ import (
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -518,10 +522,55 @@ func (s *RESTServer) handleHealth(ctx *Context) error {
 }
 
 func (s *RESTServer) handleReady(ctx *Context) error {
-	// Check dependencies
-	return ctx.JSON(http.StatusOK, map[string]interface{}{
+	checks := make(map[string]string)
+
+	// Check storage - try a simple operation
+	checks["storage"] = "ok"
+	if s.store != nil {
+		if pinger, ok := s.store.(interface{ Ping() error }); ok {
+			if err := pinger.Ping(); err != nil {
+				checks["storage"] = fmt.Sprintf("error: %v", err)
+			}
+		}
+	}
+
+	// Check alert manager
+	checks["alert_manager"] = "ok"
+	if s.alert != nil {
+		_ = s.alert.GetStats() // Just check that it responds
+	}
+
+	// Check cluster if clustered
+	checks["cluster"] = "ok"
+	if s.cluster != nil {
+		status := s.cluster.GetStatus()
+		if status != nil {
+			if !status.IsClustered {
+				checks["cluster"] = "standalone"
+			} else if status.State != "leader" && status.State != "follower" {
+				checks["cluster"] = fmt.Sprintf("unhealthy: %s", status.State)
+			}
+		}
+	}
+
+	// Check if any dependency has an error
+	hasError := false
+	for _, status := range checks {
+		if strings.HasPrefix(status, "error") {
+			hasError = true
+			break
+		}
+	}
+
+	statusCode := http.StatusOK
+	if hasError {
+		statusCode = http.StatusServiceUnavailable
+	}
+
+	return ctx.JSON(statusCode, map[string]interface{}{
 		"status":    "ready",
 		"timestamp": time.Now().UTC(),
+		"checks":    checks,
 	})
 }
 
@@ -2227,18 +2276,54 @@ func (s *RESTServer) requireRole(handler Handler, permission string) Handler {
 
 func (s *RESTServer) loggingMiddleware(handler Handler) Handler {
 	return func(ctx *Context) error {
+		// Extract trace context from incoming headers
+		propagator := otel.GetTextMapPropagator()
+		parentCtx := propagator.Extract(ctx.Request.Context(), propagation.HeaderCarrier(ctx.Request.Header))
+
+		// Start span for this request
+		spanName := fmt.Sprintf("%s %s", ctx.Request.Method, ctx.Request.URL.Path)
+		ctxSpan, span := otel.Tracer("anubiswatch/http").Start(parentCtx, spanName,
+			trace.WithAttributes(
+				attribute.String("http.method", ctx.Request.Method),
+				attribute.String("http.url", ctx.Request.URL.String()),
+				attribute.String("http.route", ctx.Request.URL.Path),
+			),
+		)
+		defer span.End()
+
+		// Replace context with span context
+		ctx.Request = ctx.Request.WithContext(ctxSpan)
+
 		ctx.StartTime = time.Now()
 		err := handler(ctx)
 		duration := time.Since(ctx.StartTime)
+
+		// Record response status
+		if err != nil {
+			span.SetAttributes(attribute.String("error", err.Error()))
+		}
+		span.SetAttributes(
+			attribute.Int("http.status_code", statusCodeFromError(err)),
+			attribute.Int64("http.duration_ms", duration.Milliseconds()),
+		)
 
 		s.logger.Info("HTTP request",
 			"method", ctx.Request.Method,
 			"path", ctx.Request.URL.Path,
 			"duration", duration,
-			"error", err)
+			"error", err,
+			"trace_id", span.SpanContext().TraceID().String())
 
 		return err
 	}
+}
+
+func statusCodeFromError(err error) int {
+	if err == nil {
+		return 200
+	}
+	// Extract status code from context error if available
+	return 500
 }
 
 func (s *RESTServer) corsMiddleware(handler Handler) Handler {

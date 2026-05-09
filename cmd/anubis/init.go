@@ -219,7 +219,7 @@ type ConfigOptions struct {
 
 // generateConfig generates the JSON config content
 func generateConfig(opts ConfigOptions) string {
-	tlsConfig := "false"
+	tlsConfig := `{"enabled": false}`
 	if opts.EnableTLS {
 		tlsConfig = fmt.Sprintf(`{
       "enabled": true,
@@ -228,7 +228,7 @@ func generateConfig(opts ConfigOptions) string {
     }`, opts.TLSCert, opts.TLSKey)
 	}
 
-	encryptionConfig := "false"
+	encryptionConfig := `{"enabled": false}`
 	if opts.EnableEncryption {
 		encryptionConfig = fmt.Sprintf(`{
       "enabled": true,
@@ -236,7 +236,7 @@ func generateConfig(opts ConfigOptions) string {
     }`, opts.EncryptionKey)
 	}
 
-	clusterConfig := "false"
+	clusterConfig := `{"enabled": false}`
 	if opts.EnableCluster {
 		clusterConfig = fmt.Sprintf(`{
       "enabled": true,
@@ -250,7 +250,7 @@ func generateConfig(opts ConfigOptions) string {
     }`, opts.NodeName, opts.Region, opts.ClusterSecret, opts.Bootstrap, opts.RaftPort)
 	}
 
-	dashboardConfig := "false"
+	dashboardConfig := `{"enabled": true}`
 	if opts.EnableDashboard {
 		dashboardConfig = fmt.Sprintf(`{
       "enabled": true,

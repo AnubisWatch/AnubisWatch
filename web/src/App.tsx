@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { Routes, Route, Navigate, Outlet } from 'react-router-dom'
 import { Layout } from './components/Layout'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { Dashboard } from './pages/Dashboard'
 import { Souls } from './pages/Souls'
 import { SoulDetail } from './pages/SoulDetail'
@@ -64,28 +65,30 @@ function App() {
     <WebSocketProvider>
       <ThemeController />
       <a href="#main-content" className="skip-link">Skip to main content</a>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route element={<ProtectedRoute />}>
-          <Route element={<Layout />}>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/souls" element={<Souls />} />
-            <Route path="/souls/:id" element={<SoulDetail />} />
-            <Route path="/souls/:id/edit" element={<SoulEdit />} />
-            <Route path="/judgments" element={<Judgments />} />
-            <Route path="/alerts" element={<Alerts />} />
-            <Route path="/incidents" element={<Incidents />} />
-            <Route path="/maintenance" element={<Maintenance />} />
-            <Route path="/journeys" element={<Journeys />} />
-            <Route path="/cluster" element={<Cluster />} />
-            <Route path="/status-pages" element={<StatusPages />} />
-            <Route path="/dashboards" element={<Dashboards />} />
-            <Route path="/dashboards/:id" element={<DashboardDetail />} />
-            <Route path="/dashboards/new" element={<DashboardDetail />} />
-            <Route path="/settings" element={<Settings />} />
+      <ErrorBoundary>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          <Route element={<ProtectedRoute />}>
+            <Route element={<Layout />}>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/souls" element={<Souls />} />
+              <Route path="/souls/:id" element={<SoulDetail />} />
+              <Route path="/souls/:id/edit" element={<SoulEdit />} />
+              <Route path="/judgments" element={<Judgments />} />
+              <Route path="/alerts" element={<Alerts />} />
+              <Route path="/incidents" element={<Incidents />} />
+              <Route path="/maintenance" element={<Maintenance />} />
+              <Route path="/journeys" element={<Journeys />} />
+              <Route path="/cluster" element={<Cluster />} />
+              <Route path="/status-pages" element={<StatusPages />} />
+              <Route path="/dashboards" element={<Dashboards />} />
+              <Route path="/dashboards/:id" element={<DashboardDetail />} />
+              <Route path="/dashboards/new" element={<DashboardDetail />} />
+              <Route path="/settings" element={<Settings />} />
+            </Route>
           </Route>
-        </Route>
-      </Routes>
+        </Routes>
+      </ErrorBoundary>
     </WebSocketProvider>
   )
 }

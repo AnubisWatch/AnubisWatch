@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/probe"
 	"github.com/AnubisWatch/anubiswatch/internal/statuspage"
 	"github.com/AnubisWatch/anubiswatch/internal/storage"
+	"github.com/AnubisWatch/anubiswatch/internal/telemetry"
 )
 
 const (
@@ -50,6 +52,7 @@ type ServerDependencies struct {
 	DashboardHandler  http.Handler
 	StatusPageHandler http.Handler
 	MCPServer         *api.MCPServer
+	TracerProvider    *telemetry.TracerProvider
 }
 
 // Server represents the AnubisWatch server
@@ -165,6 +168,13 @@ func (s *Server) Stop(ctx context.Context) error {
 	logger := s.logger
 
 	logger.Info("shutting down...")
+
+	// Shutdown telemetry (flush traces)
+	if s.deps.TracerProvider != nil {
+		if err := s.deps.TracerProvider.Shutdown(ctx); err != nil {
+			logger.Warn("failed to shutdown telemetry", "err", err)
+		}
+	}
 
 	// Stop REST server
 	if s.deps.RESTServer != nil {
@@ -566,6 +576,19 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	}
 	applyServerOptionOverrides(cfg, opts)
 
+	// Initialize telemetry
+	telemetryConfig := telemetry.DefaultConfig()
+	telemetryConfig.Enabled = cfg.Telemetry.Enabled
+	telemetryConfig.Endpoint = cfg.Telemetry.Endpoint
+	telemetryConfig.Environment = cfg.Environment
+	telemetryConfig.SampleRate = cfg.Telemetry.SampleRate
+
+	tracerProvider, err := telemetry.InitTracer(context.Background(), telemetryConfig, logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize telemetry: %w", err)
+	}
+	logger.Info("telemetry initialized", "enabled", telemetryConfig.Enabled)
+
 	// Create data directory
 	if err := os.MkdirAll(cfg.Storage.Path, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
@@ -585,17 +608,29 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	}
 
 	// CRITICAL: Never use a hardcoded default password. If no password is configured,
-	// generate a random one and log it so the operator must explicitly set it.
+	// generate a random one and store it to a file so the operator must explicitly set it.
 	adminPassword := cfg.Auth.Local.AdminPassword
 	if adminPassword == "" {
-		b := make([]byte, 24)
-		if _, err := rand.Read(b); err != nil {
-			return nil, fmt.Errorf("failed to generate admin password: %w", err)
+		// Check if password file exists from previous generation
+		passwordFile := filepath.Join(cfg.Storage.Path, ".admin_password")
+		if data, err := os.ReadFile(passwordFile); err == nil {
+			adminPassword = strings.TrimSpace(string(data))
+			logger.Info("using existing admin password from file", "path", passwordFile)
+		} else {
+			// Generate new password
+			b := make([]byte, 24)
+			if _, err := rand.Read(b); err != nil {
+				return nil, fmt.Errorf("failed to generate admin password: %w", err)
+			}
+			adminPassword = "Aa1!" + base64.RawURLEncoding.EncodeToString(b)
+			// Store password to file (chmod 0600 so only owner can read)
+			if err := os.WriteFile(passwordFile, []byte(adminPassword), 0600); err != nil {
+				return nil, fmt.Errorf("failed to store admin password: %w", err)
+			}
+			logger.Warn("no admin password configured — random password generated and stored",
+				"action", "set auth.local.admin_password in config",
+				"password_file", passwordFile)
 		}
-		adminPassword = "Aa1!" + base64.RawURLEncoding.EncodeToString(b)
-		logger.Warn("no admin password configured — random password generated",
-			"action", "set auth.local.admin_password in config",
-			"password", adminPassword)
 	}
 
 	var authenticator api.Authenticator
@@ -705,6 +740,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		DashboardHandler:  dashboardHandler,
 		StatusPageHandler: statusPageHandler,
 		MCPServer:         mcpServer,
+		TracerProvider:    tracerProvider,
 	}, nil
 }
 
