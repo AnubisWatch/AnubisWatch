@@ -8,8 +8,9 @@ to a production or staging Kubernetes environment.
 - Target image digest or tag is known and has passed GitHub CI.
 - Kubernetes context points at the target cluster.
 - `helm`, `kubectl`, and `curl` are installed locally.
-- `secrets.adminPassword`, `secrets.jwtSecret`, `secrets.sessionSecret`, and
-  `secrets.clusterSecret` are set from the deployment secret store.
+- `secrets.adminPassword` is set from the deployment secret store.
+- `secrets.clusterSecret` is set when `config.necropolis.enabled=true`.
+- `secrets.encryptionKey` is set when storage encryption is enabled.
 - TLS is handled by ingress/cert-manager or by explicitly mounted `cert` and
   `key` files. Built-in certificate automation is not provided.
 - A rollback revision is available from `helm history`.
@@ -30,6 +31,11 @@ helm template "$RELEASE" "$CHART" \
   -f "$VALUES" >/tmp/anubiswatch-rendered.yaml
 kubectl apply --dry-run=server -f /tmp/anubiswatch-rendered.yaml
 ```
+
+Start from
+`deploy/helm/anubiswatch/values-production.example.yaml`, keep the filled
+`values-production.yaml` out of version control, and source secret values from
+the deployment secret store.
 
 Review the rendered manifest before applying if the change touches storage,
 ingress, secrets, RBAC, or replica counts.

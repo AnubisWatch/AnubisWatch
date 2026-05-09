@@ -375,6 +375,10 @@ jobs:
         run: |
           helm lint deploy/helm/anubiswatch \
             --set secrets.adminPassword='StrongPass123!'
+          helm lint deploy/helm/anubiswatch \
+            -f deploy/helm/anubiswatch/values-production.example.yaml \
+            --set secrets.adminPassword='StrongPass123!' \
+            --set secrets.clusterSecret='ClusterSecret123!'
           helm lint deployments/charts/anubiswatch \
             --set secrets.adminPassword='StrongPass123!'
 
@@ -388,6 +392,11 @@ jobs:
             --set config.necropolis.enabled=true \
             --set secrets.clusterSecret='ClusterSecret123!' \
             > helm-deploy-cluster.yaml
+          helm template anubiswatch-production-example deploy/helm/anubiswatch \
+            -f deploy/helm/anubiswatch/values-production.example.yaml \
+            --set secrets.adminPassword='StrongPass123!' \
+            --set secrets.clusterSecret='ClusterSecret123!' \
+            > helm-deploy-production-example.yaml
           helm template anubiswatch deployments/charts/anubiswatch \
             --set secrets.adminPassword='StrongPass123!' \
             > helm-deployments.yaml
@@ -404,6 +413,7 @@ jobs:
             -summary \
             /work/helm-deploy.yaml \
             /work/helm-deploy-cluster.yaml \
+            /work/helm-deploy-production-example.yaml \
             /work/helm-deployments.yaml \
             /work/helm-deployments-cluster.yaml
 

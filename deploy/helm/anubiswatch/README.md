@@ -22,7 +22,7 @@ helm repo update
 helm install anubiswatch anubiswatch/anubiswatch \
   --namespace anubiswatch \
   --create-namespace \
-  --set secrets.adminPassword='REPLACE_WITH_A_STRONG_PASSWORD_1!'
+  --set secrets.adminPassword="$ANUBIS_ADMIN_PASSWORD"
 ```
 
 ### Install with custom values
@@ -54,7 +54,10 @@ helm install anubiswatch anubiswatch/anubiswatch \
 
 ## Production Values
 
-Create a `values-production.yaml`:
+Copy `values-production.example.yaml` to an environment-specific
+`values-production.yaml`, keep that filled file out of version control, and
+source secret values from your deployment secret store. A production-shaped
+example is included with the chart:
 
 ```yaml
 statefulSet:
@@ -84,8 +87,9 @@ config:
     enabled: true
 
 secrets:
-  adminPassword: "REPLACE_WITH_A_STRONG_PASSWORD_1!"
-  clusterSecret: "REPLACE_WITH_A_CLUSTER_SECRET_1!"
+  # Fill from your deployment secret store before running preflight or deploy.
+  adminPassword: ""
+  clusterSecret: ""
 
 monitoring:
   enabled: true

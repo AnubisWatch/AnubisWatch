@@ -37,7 +37,7 @@ kubectl apply -f deploy/k8s/base.yaml
 helm install anubiswatch deploy/helm/anubiswatch \
   --namespace anubiswatch \
   --create-namespace \
-  --set secrets.adminPassword='REPLACE_WITH_A_STRONG_PASSWORD_1!'
+  --set secrets.adminPassword="$ANUBIS_ADMIN_PASSWORD"
 ```
 
 For production promotion, rollback, and smoke-test steps, use
