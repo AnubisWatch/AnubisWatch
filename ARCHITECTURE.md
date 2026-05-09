@@ -765,7 +765,6 @@ AnubisWatch/
 │   └── anubis/              # Main application entry
 │       └── server.go         # DI wiring, server setup
 ├── internal/
-│   ├── acme/                 # Experimental ACME prototype (build tag only)
 │   ├── alert/                # Alert engine (Ma'at)
 │   │   └── dispatchers/      # Notification dispatchers
 │   ├── api/                  # API layer

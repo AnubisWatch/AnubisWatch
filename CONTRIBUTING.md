@@ -70,7 +70,6 @@ npm run build
 AnubisWatch/
 ├── cmd/anubis/          # CLI entry point
 ├── internal/
-│   ├── acme/            # Experimental ACME prototype (build tag only)
 │   ├── alert/           # Alert management and dispatchers
 │   ├── api/             # REST API, MCP server, routing
 │   ├── auth/            # Authentication and sessions

@@ -363,10 +363,9 @@ anubis_trigger_judgment api.example.com
 | `internal/raft` | 86.1% | ✅ |
 | `internal/probe` | 86.1% | ✅ |
 | `internal/storage` | 84.4% | ✅ |
-| `internal/acme` | Excluded | Experimental build tag |
 | `internal/backup` | 80.5% | ✅ |
 | `cmd/anubis` | 77.3% | ✅ |
-| **Average** | **86.4%** | ✅ |
+| **Average** | **86.8%** | ✅ |
 
 ---
 
