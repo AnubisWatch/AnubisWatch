@@ -268,6 +268,9 @@ helm upgrade anubiswatch anubiswatch/anubiswatch \
 
 ## Production Checklist
 
+For an operator-focused deployment, smoke-test, and rollback flow, use the
+[Production Deployment Runbook](production-runbook.md).
+
 ### Security
 
 - [ ] Enable TLS for all communications

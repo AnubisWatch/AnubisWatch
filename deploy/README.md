@@ -40,6 +40,9 @@ helm install anubiswatch deploy/helm/anubiswatch \
   --set secrets.adminPassword='REPLACE_WITH_A_STRONG_PASSWORD_1!'
 ```
 
+For production promotion, rollback, and smoke-test steps, use
+[`docs/deployment/production-runbook.md`](../docs/deployment/production-runbook.md).
+
 ## Scaling
 
 ### Docker Compose

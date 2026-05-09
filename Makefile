@@ -10,7 +10,7 @@ LDFLAGS   := -s -w \
   -X main.Commit=$(COMMIT) \
   -X main.BuildDate=$(DATE)
 
-.PHONY: all build clean test lint dashboard run docker help
+.PHONY: all build clean test lint dashboard run docker smoke-production help
 
 all: dashboard build ## Build dashboard and binary
 
@@ -34,6 +34,9 @@ test: ## Run all tests
 
 test-short: ## Run short tests only
 	go test -short ./...
+
+smoke-production: ## Run production smoke checks (requires ANUBIS_BASE_URL or BASE_URL arg)
+	./scripts/production-smoke.sh $(BASE_URL)
 
 lint: ## Run golangci-lint
 	golangci-lint run ./...
