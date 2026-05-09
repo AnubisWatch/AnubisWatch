@@ -322,7 +322,7 @@ e.wg.Wait() // WaitGroup ensures clean exit
 **Features NOT in spec but implemented:**
 - PWA support (manifest, service worker)
 - PDF export for reports
-- ACME certificate automation
+- External TLS automation guidance
 - OIDC authentication
 - LDAP authentication
 - Webhook signature verification

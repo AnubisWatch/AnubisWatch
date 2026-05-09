@@ -5,8 +5,7 @@
     "tls": {
       "enabled": false,
       "cert": "",
-      "key": "",
-      "auto_cert": false
+      "key": ""
     }
   },
   "storage": {

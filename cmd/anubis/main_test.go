@@ -3205,8 +3205,8 @@ func TestGenerateConfig_Basic(t *testing.T) {
 	}
 }
 
-// TestGenerateConfig_TLSNoAutoCert tests generateConfig does not emit unsupported auto-cert.
-func TestGenerateConfig_TLSNoAutoCert(t *testing.T) {
+// TestGenerateConfig_TLSUsesExplicitCertificates tests generateConfig emits only explicit TLS settings.
+func TestGenerateConfig_TLSUsesExplicitCertificates(t *testing.T) {
 	opts := ConfigOptions{
 		Host:            "0.0.0.0",
 		HTTPPort:        443,
@@ -3224,12 +3224,6 @@ func TestGenerateConfig_TLSNoAutoCert(t *testing.T) {
 	}
 	config := generateConfig(opts)
 
-	if strings.Contains(config, `"auto_cert"`) {
-		t.Error("Did not expect unsupported auto_cert in generated config")
-	}
-	if strings.Contains(config, `"acme_email"`) {
-		t.Error("Did not expect acme_email in generated config")
-	}
 	if !strings.Contains(config, `"cert": "/etc/ssl/cert.pem"`) {
 		t.Error("Expected cert path in config")
 	}

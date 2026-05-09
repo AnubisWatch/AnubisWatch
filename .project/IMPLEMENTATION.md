@@ -412,12 +412,9 @@ type ServerConfig struct {
 }
 
 type TLSServerConfig struct {
-    Enabled     bool     `yaml:"enabled"`
-    Cert        string   `yaml:"cert"`
-    Key         string   `yaml:"key"`
-    AutoCert    bool     `yaml:"auto_cert"`
-    ACMEEmail   string   `yaml:"acme_email"`
-    ACMEDomains []string `yaml:"acme_domains"`
+    Enabled bool   `yaml:"enabled"`
+    Cert    string `yaml:"cert"`
+    Key     string `yaml:"key"`
 }
 
 type StorageConfig struct {

@@ -279,8 +279,6 @@ server:
   port: 8443
   tls:
     enabled: true
-    # Prefer explicit cert/key or ingress-managed TLS for production.
-    auto_cert: false
     cert: "/etc/ssl/certs/anubis.crt"
     key: "/etc/ssl/private/anubis.key"
 

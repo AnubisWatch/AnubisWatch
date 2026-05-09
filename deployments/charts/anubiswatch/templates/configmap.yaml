@@ -16,10 +16,8 @@ data:
       {{- if .Values.config.server.tls.enabled }}
       tls:
         enabled: true
-        auto_cert: {{ .Values.config.server.tls.autoCert }}
-        {{- if .Values.config.server.tls.acmeEmail }}
-        acme_email: {{ .Values.config.server.tls.acmeEmail | quote }}
-        {{- end }}
+        cert: {{ .Values.config.server.tls.cert | quote }}
+        key: {{ .Values.config.server.tls.key | quote }}
       {{- end }}
 
     auth:

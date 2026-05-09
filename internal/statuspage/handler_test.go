@@ -1486,7 +1486,7 @@ func TestHandler_SubscribeHandler_ValidWebhook(t *testing.T) {
 
 func TestHandler_Router(t *testing.T) {
 	repo := &mockRepository{}
-	// Create handler without ACME manager to avoid nil pointer
+	// Create handler with a minimal repository-backed configuration.
 	handler := &Handler{
 		repository:   repo,
 		defaultTheme: core.GetDefaultTheme(),
@@ -1685,7 +1685,7 @@ func TestHandler_serveHTML(t *testing.T) {
 	}
 }
 
-func TestHandler_Router_NoAcmeChallengeRoute(t *testing.T) {
+func TestHandler_Router_CoreEndpoints(t *testing.T) {
 	repo := &mockRepository{}
 	handler := NewHandler(repo)
 
@@ -1726,15 +1726,6 @@ func TestHandler_Router_NoAcmeChallengeRoute(t *testing.T) {
 		t.Errorf("Expected status 200 for RSS feed endpoint, got %d", w.Code)
 	}
 
-	// Built-in ACME is disabled; no ACME challenge route should be registered.
-	req = httptest.NewRequest("GET", "/.well-known/acme-challenge/test-token", nil)
-	w = httptest.NewRecorder()
-
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusNotFound {
-		t.Errorf("Expected ACME challenge route to be absent, got status %d", w.Code)
-	}
 }
 
 // TestHandler_RSSFeedHandler_SoulLookupError tests RSS feed when GetSoul fails

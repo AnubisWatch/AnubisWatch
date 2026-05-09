@@ -111,7 +111,6 @@ function apiBody(path: string, method: string) {
       port: 8080,
       grpc_port: 9090,
       tls_enabled: false,
-      auto_cert: false,
       auth_type: 'local',
     }
   }

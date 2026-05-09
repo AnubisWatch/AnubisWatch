@@ -82,8 +82,7 @@ AnubisWatch v0.0.1 is a zero-dependency, single-binary uptime monitoring platfor
 - [x] Public status pages
 - [x] Subscriber management (email, RSS, webhook)
 - [x] Embeddable badges
-- [ ] Production ACME/Let's Encrypt integration
-- [ ] Full ACME testing
+- [x] Explicit TLS / ingress-managed TLS path
 - [ ] OIDC/LDAP authentication
 - [ ] DNSSEC validation
 
@@ -169,7 +168,7 @@ AnubisWatch v0.0.1 is a zero-dependency, single-binary uptime monitoring platfor
 
 ### Limitations
 1. **Test coverage** — Currently ~60%, target is 80%+
-2. **ACME implementation/testing** — Built-in certificate manager does not complete real ACME issuance yet; Let's Encrypt staging integration is not production-ready
+2. **Certificate automation** — Built-in certificate automation is not included; use ingress/cert-manager or explicit cert/key configuration
 3. **Load testing** — 1000+ monitors scenario not benchmarked
 4. **Chaos testing** — Network partition scenarios not tested
 
@@ -269,7 +268,7 @@ See `docs/CONFIGURATION.md` for complete reference.
 - [x] Non-root user in containers (UID 65534)
 - [x] Read-only root filesystem
 - [x] Dropped capabilities
-- [x] TLS support (bring your own cert; built-in auto-cert remains experimental)
+- [x] TLS support (bring your own cert or ingress-managed TLS)
 - [x] Encrypted storage (AES-256)
 - [x] API key authentication
 - [x] RBAC for workspaces
