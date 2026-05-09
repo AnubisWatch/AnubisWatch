@@ -349,8 +349,7 @@ func GenerateDefaultConfig() *Config {
 			Port:     8443,
 			GRPCPort: 9090,
 			TLS: TLSServerConfig{
-				Enabled:  false,
-				AutoCert: false,
+				Enabled: false,
 			},
 		},
 		Storage: StorageConfig{

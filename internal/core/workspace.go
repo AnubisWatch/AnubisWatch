@@ -52,7 +52,6 @@ type NotificationPrefs struct {
 // FeatureFlags controls feature availability
 type FeatureFlags struct {
 	StatusPage     bool `json:"status_page" yaml:"status_page"`
-	ACME           bool `json:"acme" yaml:"acme"`
 	MCP            bool `json:"mcp" yaml:"mcp"`
 	AdvancedAlerts bool `json:"advanced_alerts" yaml:"advanced_alerts"`
 	SSO            bool `json:"sso" yaml:"sso"`

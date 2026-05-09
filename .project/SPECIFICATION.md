@@ -1473,7 +1473,6 @@ server:
     enabled: true
     cert: "/etc/anubis/tls/cert.pem"
     key: "/etc/anubis/tls/key.pem"
-    auto_cert: false               # Built-in ACME is not production-ready
 
 # Storage (CobaltDB)
 storage:

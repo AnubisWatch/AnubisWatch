@@ -67,9 +67,6 @@ storage:
 | `enabled` | boolean | `true` | No | Enable HTTPS |
 | `cert` | string | - | Conditional | Path to TLS certificate (PEM) |
 | `key` | string | - | Conditional | Path to TLS private key (PEM) |
-| `auto_cert` | boolean | `false` | No | Unsupported until real ACME issuance is implemented; keep `false` |
-| `acme_email` | string | - | No | Reserved for future ACME support |
-| `acme_domains` | array | - | No | Reserved for future ACME support |
 
 ### Examples
 
@@ -94,14 +91,6 @@ server:
     cert: "/etc/ssl/certs/anubis.crt"
     key: "/etc/ssl/private/anubis.key"
 ```
-
-#### Automatic Certificates
-
-Built-in `auto_cert` is not supported in runtime configuration until real ACME
-issuance is implemented. Keep `auto_cert: false` and use explicit `cert`/`key`
-or ingress/cert-manager TLS.
-
----
 
 ## Storage Configuration
 
@@ -1140,8 +1129,6 @@ server:
   port: 8443
   tls:
     enabled: true
-    # Prefer explicit cert/key or ingress-managed TLS for production.
-    auto_cert: false
     cert: "/etc/ssl/certs/anubis.crt"
     key: "/etc/ssl/private/anubis.key"
 

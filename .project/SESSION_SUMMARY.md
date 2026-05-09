@@ -17,7 +17,7 @@
 
 ### 2. Status Page Integration
 **Files Modified:**
-- `cmd/anubis/main.go` — ACME manager init, status page wiring
+- `cmd/anubis/main.go` — Status page wiring
 - `internal/api/rest.go` — Router supports status page routes
 - `internal/statuspage/handler.go` — Full integration
 
@@ -26,7 +26,6 @@
 - `GET /status/:slug/feed.xml` — RSS 2.0 feed
 - `POST /status/subscribe` — Subscription endpoint
 - `GET /badge/:slug` — Embeddable badge (SVG/JSON)
-- `GET /.well-known/acme-challenge/:token` — ACME HTTP-01
 
 ### 3. Subscriber Management
 **New Features:**
@@ -251,7 +250,7 @@ gh release create v0.0.1 --notes-file .github/RELEASE_v0.0.1.md
 ## Known Limitations
 
 1. **Test Coverage:** ~60% (target: 80%+)
-2. **ACME Testing:** Let's Encrypt staging not tested
+2. **Certificate Automation:** Use ingress/cert-manager or explicit cert/key configuration
 3. **Load Testing:** 1000+ monitors not benchmarked
 4. **Chaos Testing:** Network partition scenarios pending
 

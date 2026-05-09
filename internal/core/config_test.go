@@ -913,21 +913,6 @@ func TestSetDefaults_AllPaths(t *testing.T) {
 	}
 }
 
-func TestSetDefaults_DoesNotAutoEnableAutoCert(t *testing.T) {
-	cfg := &Config{
-		Server: ServerConfig{
-			TLS: TLSServerConfig{
-				Enabled: true,
-			},
-		},
-	}
-	cfg.setDefaults()
-
-	if cfg.Server.TLS.AutoCert {
-		t.Error("Expected TLS AutoCert to remain false unless explicitly configured")
-	}
-}
-
 func TestSetDefaults_TLSWithCert(t *testing.T) {
 	cfg := &Config{
 		Server: ServerConfig{
@@ -939,11 +924,6 @@ func TestSetDefaults_TLSWithCert(t *testing.T) {
 		},
 	}
 	cfg.setDefaults()
-
-	// AutoCert should not be set when Cert and Key are provided
-	if cfg.Server.TLS.AutoCert {
-		t.Error("Expected TLS AutoCert to remain false when Cert/Key are provided")
-	}
 }
 
 // Test SaveConfig with a type that can't be marshaled to trigger error path
@@ -1076,15 +1056,6 @@ func TestServerConfigValidate(t *testing.T) {
 		{
 			name:      "TLS without cert or autocert",
 			config:    ServerConfig{Host: "0.0.0.0", Port: 8443, TLS: TLSServerConfig{Enabled: true}},
-			wantError: true,
-		},
-		{
-			name: "TLS with autocert",
-			config: ServerConfig{Host: "0.0.0.0", Port: 8443, TLS: TLSServerConfig{
-				Enabled:     true,
-				AutoCert:    true,
-				ACMEDomains: []string{"example.com"},
-			}},
 			wantError: true,
 		},
 		{

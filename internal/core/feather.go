@@ -44,12 +44,9 @@ type ServerConfig struct {
 
 // TLSServerConfig defines TLS settings
 type TLSServerConfig struct {
-	Enabled     bool     `json:"enabled" yaml:"enabled"`
-	Cert        string   `json:"cert" yaml:"cert"`
-	Key         string   `json:"key" yaml:"key"`
-	AutoCert    bool     `json:"auto_cert" yaml:"auto_cert"`
-	ACMEEmail   string   `json:"acme_email" yaml:"acme_email"`
-	ACMEDomains []string `json:"acme_domains" yaml:"acme_domains"`
+	Enabled bool   `json:"enabled" yaml:"enabled"`
+	Cert    string `json:"cert" yaml:"cert"`
+	Key     string `json:"key" yaml:"key"`
 }
 
 // StorageConfig defines CobaltDB settings
@@ -259,9 +256,6 @@ func (c ServerConfig) validate() error {
 		return &ConfigError{Field: "server.port", Message: "port must be between 1 and 65535"}
 	}
 	if c.TLS.Enabled {
-		if c.TLS.AutoCert {
-			return &ConfigError{Field: "server.tls.auto_cert", Message: "built-in auto_cert is not supported; use cert/key or ingress/cert-manager TLS"}
-		}
 		if c.TLS.Cert == "" || c.TLS.Key == "" {
 			return &ConfigError{Field: "server.tls", Message: "TLS is enabled but cert/key were not provided"}
 		}

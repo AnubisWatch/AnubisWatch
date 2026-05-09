@@ -1824,7 +1824,6 @@ func (s *RESTServer) defaultUIConfig() map[string]interface{} {
 		"port":              s.config.Port,
 		"grpc_port":         s.config.GRPCPort,
 		"tls_enabled":       s.config.TLS.Enabled,
-		"auto_cert":         s.config.TLS.AutoCert,
 		"auth_type":         s.authConfig.Type,
 	}
 	return config
@@ -1948,7 +1947,6 @@ func slugFromLabel(label string) string {
 func defaultWorkspaceFeatures() core.FeatureFlags {
 	return core.FeatureFlags{
 		StatusPage:     true,
-		ACME:           true,
 		MCP:            true,
 		AdvancedAlerts: true,
 	}

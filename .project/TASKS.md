@@ -440,13 +440,10 @@
 - [x] Integrate status page handler with REST server
 - [x] Implement embeddable badge endpoint
 
-### 7.3 ACME/Let's Encrypt Auto-TLS
-- [ ] Implement real ACME issuance (current manager is not production-ready)
-- [x] Implement HTTP-01 challenge solver
-- [x] Implement certificate storage in CobaltDB
-- [x] Implement auto-renewal goroutine
-- [ ] Wire production-ready ACME manager into status page handler
-- [ ] Test with Let's Encrypt staging
+### 7.3 TLS Certificate Management
+- [x] Support explicit TLS certificate/key configuration
+- [x] Document ingress/cert-manager as the production automation path
+- [x] Remove unsupported built-in certificate automation
 
 ### 7.4 Authentication Providers
 - [ ] Implement local auth (bcrypt + JWT)
@@ -528,7 +525,7 @@
 | Phase 4 — Alert System | 2 weeks | Alerts fire to Slack/webhook/email on soul death |
 | Phase 5 — API Layer | 3 weeks | Full REST API, WebSocket, MCP server operational |
 | Phase 6 — Dashboard | 4 weeks | React dashboard embedded, all pages functional |
-| Phase 7 — Advanced | 3 weeks | Multi-tenant, status page, ACME, auth providers |
+| Phase 7 — Advanced | 3 weeks | Multi-tenant, status page, external TLS guidance, auth providers |
 | Phase 8 — Polish | 2 weeks | Docs, tests, release artifacts, launch |
 | **Total** | **~22 weeks** | **v1.0.0 release** |
 

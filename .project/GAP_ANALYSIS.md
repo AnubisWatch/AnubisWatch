@@ -28,7 +28,7 @@
 | OIDC Auth | OpenID Connect | Complete | Complete | Zero-dep OIDC with discovery, code flow, JWT verification |
 | LDAP Auth | AD/LDAP bind | Complete | Complete | go-ldap with StartTLS, UPN/DN bind, local fallback |
 | Multi-Tenant | Workspace isolation | Complete | Complete | Quota enforcement with per-workspace tracking |
-| Status Page | Custom domains, ACME | Partial | Gap | Custom domains and badge widget exist; production ACME is not complete |
+| Status Page | Custom domains | Complete | Complete | Custom domains and badge widget exist; TLS should be handled with explicit certificates or ingress/cert-manager |
 | Backup/Restore | Full export/import | Complete | Complete | Compression support |
 | Region Support | Multi-region replication | Complete | Complete | All 5 strategies: round-robin, region-aware, latency-optimal, redundant, weighted |
 | Check Distribution | 5 strategies | Complete | Complete | Round-robin, region-aware, redundant, weighted, latency-optimal |
@@ -82,7 +82,7 @@
 | Cache layer | Not in spec | Complete | LRU cache with TTL |
 | Metrics endpoint | Not in spec | Complete | Prometheus-compatible `/metrics` |
 | Secrets management | Not in spec | Complete | Encrypted secret storage |
-| ACME integration | Not in spec | Partial | Built-in manager does not complete real ACME issuance yet; use explicit cert/key or ingress/cert-manager TLS |
+| Built-in certificate automation | Not in spec | Removed | Use explicit cert/key or ingress/cert-manager TLS |
 | Release tooling | Not in spec | Complete | Version management, changelog |
 | Chaos testing | Not in spec | Complete | Raft chaos tests in CI |
 | Load testing | Not in spec | Complete | Probe load tests |

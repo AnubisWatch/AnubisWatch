@@ -1865,15 +1865,14 @@ func TestManager_ImportFromTar_ChecksumMismatch(t *testing.T) {
 		t.Fatalf("ExportToTar() error = %v", err)
 	}
 
-	// Tamper with the backup data to cause checksum mismatch
-	tarData := buf.Bytes()
-	// Find the JSON content and corrupt it (after the tar header)
-	for i := len(tarData) / 2; i < len(tarData); i++ {
-		if tarData[i] != 0 {
-			tarData[i] ^= 0xFF
-			break
-		}
+	// Tamper with the backup JSON while leaving the original checksum intact.
+	tarData := append([]byte(nil), buf.Bytes()...)
+	original := []byte(`"name": "Soul 1"`)
+	tampered := []byte(`"name": "Soul X"`)
+	if !bytes.Contains(tarData, original) {
+		t.Fatal("expected tar data to contain soul name")
 	}
+	tarData = bytes.Replace(tarData, original, tampered, 1)
 
 	restoreStorage := &mockRestoreStorage{}
 	err = mgr.ImportFromTar(restoreStorage, bytes.NewReader(tarData), DefaultRestoreOptions())

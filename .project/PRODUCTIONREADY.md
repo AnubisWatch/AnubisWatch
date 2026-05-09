@@ -45,7 +45,7 @@
 | MCP Server | ✅ Working | `internal/api/mcp.go` | 8 tools, 3 resources, 3 prompts |
 | React 19 Dashboard | ✅ Working | `web/ + internal/dashboard/` | Embedded via embed.FS, PWA support |
 | Multi-tenant | ✅ Working | `internal/core/workspace.go` | Workspace isolation enforced |
-| Status Pages | ⚠️ Mostly working | `internal/statuspage/` | Custom domains and embeddable widgets; production ACME still needs implementation |
+| Status Pages | ✅ Working | `internal/statuspage/` | Custom domains and embeddable widgets; TLS should be handled with explicit certs or ingress/cert-manager |
 | Backup/Restore | ✅ Working | `internal/backup/` | Compressed, selective restore |
 | OIDC Authentication | ✅ Working | `internal/auth/oidc.go` | JWT signature verification via JWK |
 | LDAP Authentication | ✅ Working | `internal/auth/ldap.go` | StartTLS, bind authentication |
@@ -188,7 +188,7 @@ var privateRanges = []string{
 
 | Control | Status | Implementation |
 |---------|--------|----------------|
-| TLS/HTTPS | ⚠️ Partial | Custom certs supported; built-in auto-cert does not complete real ACME issuance yet |
+| TLS/HTTPS | ✅ Working | Explicit cert/key supported; automated issuance should be handled by ingress/cert-manager |
 | Secure headers | ✅ All present | CSP, HSTS, X-Frame-Options, X-XSS-Protection |
 | CORS | ✅ Configurable | Currently hardcoded (1 TODO) |
 | Sensitive data in URLs | ✅ No | All sensitive data in headers/body |
@@ -389,8 +389,7 @@ var privateRanges = []string{
 
 ### 🚫 Production Blockers (MUST fix before broad production deployment)
 
-1. Complete real ACME issuance before re-enabling built-in `auto_cert`.
-2. Keep deployment charts free of weak default credentials.
+1. Keep deployment charts free of weak default credentials.
 
 ### ⚠️ High Priority (Should fix within first week of production)
 
@@ -407,9 +406,9 @@ var privateRanges = []string{
 
 ### Estimated Time to Production Ready
 
-- **From current state**: **1-2 weeks** — Close production ACME/certificate-management gap and keep chart guardrails enforced
-- **Minimum viable production**: **Possible now only with explicit cert/key or ingress-managed TLS and strong deployment secrets**
-- **Full production readiness**: **2 weeks** — Address blocker and high priority items
+- **From current state**: **Ready for controlled deployments** with explicit cert/key or ingress-managed TLS and strong deployment secrets
+- **Minimum viable production**: **Possible now** for controlled deployments with external TLS automation and non-default secrets
+- **Full production readiness**: **1-2 weeks** — Address high priority observability/testing items
 
 ---
 
@@ -438,7 +437,7 @@ AnubisWatch v0.1.2 is close to production-ready, but should not be described as 
 
 These are not the main production blockers; the blocker list above is the go/no-go boundary.
 
-**Recommended Action:** Proceed only for controlled deployments with explicit TLS and strong secrets. Close production ACME/certificate-management work before broad production messaging.
+**Recommended Action:** Proceed for controlled deployments with explicit TLS or ingress-managed TLS and strong secrets. Keep broad production messaging tied to environment-specific smoke testing.
 
 ---
 
