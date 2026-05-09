@@ -34,6 +34,20 @@ kubectl apply --dry-run=server -f /tmp/anubiswatch-rendered.yaml
 Review the rendered manifest before applying if the change touches storage,
 ingress, secrets, RBAC, or replica counts.
 
+The same checks can be run with the preflight helper:
+
+```bash
+VALUES="$VALUES" \
+NAMESPACE="$NAMESPACE" \
+RELEASE="$RELEASE" \
+CHART="$CHART" \
+scripts/production-preflight.sh
+```
+
+Use `ANUBIS_PREFLIGHT_CREATE_NAMESPACE=true` when the namespace should be
+created by the operator command. Use `ANUBIS_PREFLIGHT_SKIP_CLUSTER=true` only
+for offline Helm rendering checks where cluster access is intentionally absent.
+
 ## Deploy
 
 ```bash
