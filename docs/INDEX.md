@@ -12,8 +12,8 @@
 | **README.md** | Getting started, features, quick start | [Root](../README.md) |
 | **CHANGELOG.md** | Release notes and version history | [Root](../CHANGELOG.md) |
 | **CONTRIBUTING.md** | How to contribute to AnubisWatch | [Root](../CONTRIBUTING.md) |
-| **DEPLOYMENT.md** | Deployment guides (Docker, K8s, systemd) | [Root](../DEPLOYMENT.md) |
-| **GHCR.md** | Container registry and image docs | [Root](../GHCR.md) |
+| **deployment/guide.md** | Deployment guides (Docker, K8s, systemd) | [docs/deployment/](deployment/guide.md) |
+| **deployment/production-runbook.md** | Production deploy, smoke, and rollback runbook | [docs/deployment/](deployment/production-runbook.md) |
 
 ---
 
@@ -25,8 +25,8 @@
 |----------|-------------|----------|
 | **CONFIGURATION.md** | Complete `anubis.yaml` reference | [docs/](CONFIGURATION.md) |
 | **openapi.yaml** | REST API specification (OpenAPI 3.1.0) | [docs/](openapi.yaml) |
-| **DEPLOYMENT.md** | Production deployment guide | [Root](../DEPLOYMENT.md) |
-| **GHCR.md** | Docker image and container docs | [Root](../GHCR.md) |
+| **deployment/guide.md** | Deployment guide | [docs/deployment/](deployment/guide.md) |
+| **deployment/production-runbook.md** | Production deploy, smoke, and rollback runbook | [docs/deployment/](deployment/production-runbook.md) |
 
 ### For Developers
 
@@ -60,9 +60,9 @@
 ### Getting Started
 
 1. **README.md** — Quick start and overview
-2. **DEPLOYMENT.md** — Installation options
+2. **deployment/guide.md** — Installation options
 3. **CONFIGURATION.md** — Configuration guide
-4. **GHCR.md** — Docker images
+4. **deploy/README.md** — Deployment assets and examples
 
 ### Configuration
 
@@ -72,8 +72,8 @@
 
 ### Deployment
 
-1. **DEPLOYMENT.md** — Deployment methods
-2. **GHCR.md** — Container images
+1. **deployment/guide.md** — Deployment methods
+2. **deployment/production-runbook.md** — Production promotion and rollback
 3. **docker-compose.yml** — Docker Compose examples
 4. **deployments/charts/anubiswatch/** — Helm chart
 
@@ -87,8 +87,8 @@
 ### Operations
 
 1. **CONFIGURATION.md** — Configuring AnubisWatch
-2. **DEPLOYMENT.md** — Production deployments
-3. **GHCR.md** — Container management
+2. **deployment/guide.md** — Production deployments
+3. **deployment/production-runbook.md** — Smoke tests and rollback
 4. **CHANGELOG.md** — Version history
 
 ---
