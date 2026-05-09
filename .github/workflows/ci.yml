@@ -172,11 +172,38 @@ jobs:
             exit 1
           fi
 
+  # Script Validation
+  script-validation:
+    name: Script Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check shell script syntax
+        run: bash -n scripts/*.sh
+
+      - name: Verify production script help output
+        run: |
+          ./scripts/production-smoke.sh --help >/tmp/anubis-smoke-help.txt
+          ./scripts/capture-deployment-evidence.sh --help >/tmp/anubis-evidence-help.txt
+          test -s /tmp/anubis-smoke-help.txt
+          test -s /tmp/anubis-evidence-help.txt
+
+      - name: Exercise deployment evidence dry run
+        run: |
+          rm -rf /tmp/anubis-evidence-ci
+          ANUBIS_EVIDENCE_VALUES=deploy/helm/anubiswatch/values.yaml \
+            ./scripts/capture-deployment-evidence.sh /tmp/anubis-evidence-ci
+          test -s /tmp/anubis-evidence-ci/metadata.env
+          test -s /tmp/anubis-evidence-ci/values.sha256
+          test -s /tmp/anubis-evidence-ci/README.md
+
   # Build
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [test-backend, lint]
+    needs: [test-backend, lint, script-validation]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
