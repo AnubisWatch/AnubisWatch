@@ -214,8 +214,8 @@ export function StatusPages() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white tracking-tight">Status Pages</h1>
-          <p className="text-gray-400 mt-1 text-sm">Public status pages for your services</p>
+          <h1 className="text-3xl font-cinzel font-bold gradient-gold-shine tracking-wider">Temple Squares</h1>
+          <p className="text-gray-400 mt-1 font-cormorant italic">Public status shrines for your realm</p>
         </div>
         <div className="flex items-center gap-3">
           <button

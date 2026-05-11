@@ -313,6 +313,18 @@ export function useClusterStatus() {
   return useApi<ClusterStatus>(() => api.get<ClusterStatus>('/cluster/status'))
 }
 
+export interface ClusterPeer {
+  id: string
+  name: string
+  address: string
+  state: string
+  last_contact: string
+}
+
+export function useClusterPeers() {
+  return useApi<ClusterPeer[]>(() => api.get<ClusterPeer[]>('/cluster/peers'))
+}
+
 // Status Pages API hooks
 export function useStatusPages() {
   const [data, setData] = useState<StatusPage[] | null>(null)

@@ -16,7 +16,7 @@ import {
   Terminal,
   AlertCircle
 } from 'lucide-react'
-import { useClusterStatus, useStats } from '../api/hooks'
+import { useClusterStatus, useClusterPeers } from '../api/hooks'
 
 export function Cluster() {
   const [refreshing, setRefreshing] = useState(false)
@@ -29,13 +29,14 @@ export function Cluster() {
   } = useClusterStatus()
 
   const {
-    data: statsData,
-    refetch: refetchStats
-  } = useStats()
+    data: peersData,
+    loading: peersLoading,
+    refetch: refetchPeers
+  } = useClusterPeers()
 
   const handleRefresh = async () => {
     setRefreshing(true)
-    await Promise.all([refetchCluster(), refetchStats()])
+    await Promise.all([refetchCluster(), refetchPeers()])
     setTimeout(() => setRefreshing(false), 500)
   }
 
@@ -47,21 +48,21 @@ export function Cluster() {
   const term = clusterData?.term || 0
   const peerCount = clusterData?.peer_count || 0
 
-  const nodes = [
+  const nodes = peersData && peersData.length > 0 ? peersData : [
     {
       id: nodeId,
-      region: isClustered ? 'cluster' : 'local',
-      status: (state === 'leader' || state === 'follower' || state === 'standalone' || state === 'solo') ? 'healthy' as const : 'unknown' as const,
-      role: state,
+      name: nodeId,
+      address: 'localhost',
+      state: state,
       last_contact: 'now',
     }
   ]
 
   const stats = {
-    total_checks: statsData?.judgments?.today || 0,
+    total_checks: 0,
     checks_per_minute: 0,
-    active_souls: statsData?.souls?.total || 0,
-    replicated_logs: statsData?.judgments?.today || 0,
+    active_souls: 0,
+    replicated_logs: 0,
   }
 
   const getStatusColor = (status: string) => {
@@ -87,9 +88,9 @@ export function Cluster() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white tracking-tight">Cluster</h1>
-          <p className="text-gray-400 mt-1 text-sm">
-            {isClustered ? 'Distributed monitoring nodes and Raft consensus' : 'Standalone node configuration'}
+          <h1 className="text-3xl font-cinzel font-bold gradient-gold-shine tracking-wider">Necropolis</h1>
+          <p className="text-gray-400 mt-1 font-cormorant italic">
+            {isClustered ? 'The realm of distributed jackals and Raft consensus' : 'A solitary jackal guarding the realm'}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -103,7 +104,7 @@ export function Cluster() {
         </div>
       </div>
 
-      {clusterLoading ? (
+      {clusterLoading || peersLoading ? (
         <div className="flex items-center justify-center py-32" role="status" aria-label="Loading cluster status">
           <div className="w-10 h-10 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
         </div>
@@ -255,11 +256,11 @@ export function Cluster() {
               <tr key={node.id} className="hover:bg-gray-800/30 transition-colors">
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-3">
-                    <div className={`w-2 h-2 rounded-full ${getStatusColor(node.status)}`} />
+                    <div className={`w-2 h-2 rounded-full ${getStatusColor(node.state === 'leader' || node.state === 'follower' ? 'healthy' : 'unknown')}`} />
                     <div>
                       <p className="font-semibold text-white flex items-center gap-2">
                         {node.id}
-                        <span className="px-2 py-0.5 bg-amber-500/10 text-amber-400 text-xs rounded font-medium">You</span>
+                        {node.id === nodeId && <span className="px-2 py-0.5 bg-amber-500/10 text-amber-400 text-xs rounded font-medium">You</span>}
                       </p>
                       <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1">
                         <Clock className="w-3 h-3" />
@@ -269,25 +270,25 @@ export function Cluster() {
                   </div>
                 </td>
                 <td className="px-6 py-4">
-                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${getStatusTextColor(node.status)} bg-gray-800`}>
-                    {node.status === 'healthy' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
-                    <span className="capitalize">{node.status}</span>
+                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${getStatusTextColor(node.state === 'leader' || node.state === 'follower' ? 'healthy' : 'unknown')} bg-gray-800`}>
+                    {node.state === 'leader' || node.state === 'follower' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+                    <span className="capitalize">{node.state}</span>
                   </span>
                 </td>
                 <td className="px-6 py-4">
                   <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${
-                    node.role === 'leader'
+                    node.state === 'leader'
                       ? 'bg-amber-500/10 text-amber-400'
                       : 'bg-gray-800 text-gray-400'
                   }`}>
-                    {node.role === 'leader' && <Crown className="w-3.5 h-3.5" />}
-                    <span className="capitalize">{node.role}</span>
+                    {node.state === 'leader' && <Crown className="w-3.5 h-3.5" />}
+                    <span className="capitalize">{node.state}</span>
                   </span>
                 </td>
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-2 text-gray-400">
                     <Globe className="w-4 h-4" />
-                    <span className="text-sm">{node.region}</span>
+                    <span className="text-sm">{node.address || 'localhost'}</span>
                   </div>
                 </td>
                 <td className="px-6 py-4">

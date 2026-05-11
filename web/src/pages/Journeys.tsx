@@ -266,8 +266,8 @@ export function Journeys() {
       }
       setShowCreateModal(false)
       resetForm()
-    } catch {
-      // Failed to save journey
+    } catch (err) {
+      alert('Failed to save journey: ' + (err instanceof Error ? err.message : 'Unknown error'))
     } finally {
       setSaving(false)
     }
@@ -291,8 +291,8 @@ export function Journeys() {
     try {
       await runJourney(id)
       await refetch()
-    } catch {
-      // Journey run failed
+    } catch (err) {
+      alert('Journey run failed: ' + (err instanceof Error ? err.message : 'Unknown error'))
     } finally {
       setRunningId(null)
     }
@@ -342,8 +342,8 @@ export function Journeys() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white tracking-tight">Journeys</h1>
-          <p className="text-gray-400 mt-1 text-sm">Multi-step synthetic monitoring workflows</p>
+          <h1 className="text-3xl font-cinzel font-bold gradient-gold-shine tracking-wider">Voyages</h1>
+          <p className="text-gray-400 mt-1 font-cormorant italic">Multi-step sacred monitoring journeys</p>
         </div>
         <div className="flex items-center gap-3">
           <button
@@ -374,7 +374,7 @@ export function Journeys() {
         <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm font-medium">Total Journeys</p>
+              <p className="text-gray-400 text-sm font-medium">Total Voyages</p>
               <p className="text-2xl font-bold text-white mt-1">{stats.total}</p>
             </div>
             <div className="w-10 h-10 bg-gray-800 rounded-xl flex items-center justify-center">
@@ -398,7 +398,7 @@ export function Journeys() {
         <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm font-medium">Issues</p>
+              <p className="text-gray-400 text-sm font-medium">Pathogens</p>
               <p className="text-2xl font-bold text-rose-400 mt-1">{stats.issues}</p>
             </div>
             <div className="w-10 h-10 bg-rose-500/10 rounded-xl flex items-center justify-center">
@@ -627,26 +627,38 @@ export function Journeys() {
             </div>
           </button>
         </div>
-      ) : !error && (
+      ) : !error && filteredJourneys.length === 0 && journeys.length === 0 ? (
         /* Empty State */
         <div className="text-center py-16">
           <Route className="w-16 h-16 text-gray-600 mx-auto mb-4" />
-          <h3 className="text-xl font-semibold text-white mb-2">No journeys yet</h3>
-          <p className="text-gray-400 mb-6 max-w-md mx-auto">
-            Journeys are multi-step synthetic monitoring workflows. Create your first journey to monitor complex user flows.
+          <h3 className="text-xl font-semibold text-white mb-2">No sacred voyages charted</h3>
+          <p className="text-gray-400 mb-6 max-w-md mx-auto font-cormorant italic">
+            Embark on your first voyage to traverse the digital dunes
           </p>
           <button
             onClick={handleOpenCreateModal}
             className="px-6 py-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-colors"
           >
-            Create Your First Journey
+            Chart First Voyage
           </button>
-          <p className="text-sm text-gray-500 mt-4">
-            Note: Journeys feature requires backend API support
-          </p>
         </div>
-      )}
-        </>
+      ) : !error && filteredJourneys.length === 0 ? (
+        /* Filtered Empty State */
+        <div className="text-center py-16">
+          <Route className="w-16 h-16 text-gray-600 mx-auto mb-4" />
+          <h3 className="text-xl font-semibold text-white mb-2">No voyages match your sacred filters</h3>
+          <p className="text-gray-400 mb-6 max-w-md mx-auto">
+            Adjust your search or ritual to find what you seek
+          </p>
+          <button
+            onClick={() => { setSearch(''); setFilter('all') }}
+            className="px-6 py-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-colors"
+          >
+            Clear Sacred Filters
+          </button>
+        </div>
+      ) : null}
+      </>
       )}
 
       {/* Create/Edit Modal */}

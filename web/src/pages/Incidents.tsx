@@ -100,8 +100,8 @@ export function Incidents() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-cinzel font-bold gradient-gold-shine tracking-wider">Incidents</h1>
-        <p className="text-gray-400 mt-1">Track and manage alert incidents</p>
+        <h1 className="text-3xl font-cinzel font-bold gradient-gold-shine tracking-wider">Cries of Chaos</h1>
+        <p className="text-gray-400 mt-1 font-cormorant italic">Track the disturbances in the realm</p>
       </div>
 
       {/* Stats */}

@@ -4,17 +4,17 @@ import { useMemo } from 'react'
 import { useAuth } from '../api/hooks'
 
 const navItems = [
-  { path: '/', icon: LayoutDashboard, label: 'Dashboard' },
-  { path: '/souls', icon: Ghost, label: 'Souls' },
-  { path: '/judgments', icon: Scale, label: 'Judgments' },
-  { path: '/alerts', icon: Bell, label: 'Alerts' },
-  { path: '/incidents', icon: AlertOctagon, label: 'Incidents' },
-  { path: '/maintenance', icon: Wrench, label: 'Maintenance' },
-  { path: '/journeys', icon: Route, label: 'Journeys' },
-  { path: '/dashboards', icon: LayoutGrid, label: 'Dashboards' },
+  { path: '/', icon: LayoutDashboard, label: 'Hall of Judgment' },
+  { path: '/souls', icon: Ghost, label: 'Essence' },
+  { path: '/judgments', icon: Scale, label: 'Weighings' },
+  { path: '/alerts', icon: Bell, label: 'Divine Warnings' },
+  { path: '/incidents', icon: AlertOctagon, label: 'Cries of Chaos' },
+  { path: '/maintenance', icon: Wrench, label: 'Sacred Rest' },
+  { path: '/journeys', icon: Route, label: 'Voyages' },
+  { path: '/dashboards', icon: LayoutGrid, label: 'Sacred Charts' },
   { path: '/cluster', icon: Network, label: 'Necropolis' },
-  { path: '/status-pages', icon: Globe, label: 'Status Pages' },
-  { path: '/settings', icon: Settings, label: 'Settings' },
+  { path: '/status-pages', icon: Globe, label: 'Temple Squares' },
+  { path: '/settings', icon: Settings, label: 'Pharaoh\'s Chamber' },
 ]
 
 // Ancient Egypt themed decorative component

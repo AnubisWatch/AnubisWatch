@@ -123,8 +123,8 @@ export function Judgments() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white tracking-tight">Judgments</h1>
-          <p className="text-gray-400 mt-1 text-sm">Review all health check executions and results</p>
+          <h1 className="text-3xl font-cinzel font-bold gradient-gold-shine tracking-wider">Weighings</h1>
+          <p className="text-gray-400 mt-1 font-cormorant italic">Review all the weighings of the soul — every judgment rendered</p>
         </div>
         <div className="flex items-center gap-3">
           <button

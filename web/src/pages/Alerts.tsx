@@ -335,8 +335,8 @@ export function Alerts() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white tracking-tight">Alerts</h1>
-          <p className="text-gray-400 mt-1 text-sm">Configure alert rules and notification channels</p>
+          <h1 className="text-3xl font-cinzel font-bold gradient-gold-shine tracking-wider">Divine Warnings</h1>
+          <p className="text-gray-400 mt-1 font-cormorant italic">Configure the sacred rituals that warn of chaos</p>
         </div>
         <div className="flex items-center gap-3">
           <button
@@ -372,7 +372,7 @@ export function Alerts() {
         <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm font-medium">Total Rules</p>
+              <p className="text-gray-400 text-sm font-medium">Sacred Laws</p>
               <p className="text-2xl font-bold text-white mt-1">{stats.totalRules}</p>
             </div>
             <div className="w-10 h-10 bg-gray-800 rounded-xl flex items-center justify-center">
@@ -384,7 +384,7 @@ export function Alerts() {
         <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm font-medium">Active Rules</p>
+              <p className="text-gray-400 text-sm font-medium">Living Laws</p>
               <p className="text-2xl font-bold text-emerald-400 mt-1">{stats.activeRules}</p>
             </div>
             <div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center">
@@ -396,7 +396,7 @@ export function Alerts() {
         <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm font-medium">Channels</p>
+              <p className="text-gray-400 text-sm font-medium">Choirs of Warning</p>
               <p className="text-2xl font-bold text-amber-400 mt-1">{stats.totalChannels}</p>
             </div>
             <div className="w-10 h-10 bg-amber-500/10 rounded-xl flex items-center justify-center">
@@ -408,7 +408,7 @@ export function Alerts() {
         <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm font-medium">Active Alerts</p>
+              <p className="text-gray-400 text-sm font-medium">Cries of Chaos</p>
               <p className="text-2xl font-bold text-rose-400 mt-1">{stats.activeAlerts}</p>
             </div>
             <div className="w-10 h-10 bg-rose-500/10 rounded-xl flex items-center justify-center">
@@ -420,7 +420,7 @@ export function Alerts() {
         <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm font-medium">Critical</p>
+              <p className="text-gray-400 text-sm font-medium">Destruction</p>
               <p className="text-2xl font-bold text-rose-500 mt-1">{stats.criticalAlerts}</p>
             </div>
             <div className="w-10 h-10 bg-rose-500/20 rounded-xl flex items-center justify-center">

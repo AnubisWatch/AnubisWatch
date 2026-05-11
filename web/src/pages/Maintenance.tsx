@@ -222,8 +222,8 @@ export function Maintenance() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white tracking-tight">Maintenance</h1>
-          <p className="text-gray-400 mt-1 text-sm">Scheduled maintenance windows — suppress alerts during planned downtime</p>
+          <h1 className="text-3xl font-cinzel font-bold gradient-gold-shine tracking-wider">Sacred Rest</h1>
+          <p className="text-gray-400 mt-1 font-cormorant italic">Scheduled temple rest periods — silence the warnings during sacred ceremonies</p>
         </div>
         <div className="flex items-center gap-3">
           <button

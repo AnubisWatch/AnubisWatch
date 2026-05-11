@@ -17,6 +17,7 @@ import { Incidents } from './pages/Incidents'
 import { Maintenance } from './pages/Maintenance'
 import { Settings } from './pages/Settings'
 import { Login } from './pages/Login'
+import { NotFound } from './pages/NotFound'
 import { WebSocketProvider } from './hooks/useWebSocket'
 import { useAuth } from './api/hooks'
 import { applyTheme, useThemeStore } from './stores/themeStore'
@@ -85,6 +86,7 @@ function App() {
               <Route path="/dashboards/:id" element={<DashboardDetail />} />
               <Route path="/dashboards/new" element={<DashboardDetail />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="*" element={<NotFound />} />
             </Route>
           </Route>
         </Routes>

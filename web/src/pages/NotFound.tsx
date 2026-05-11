@@ -1,0 +1,41 @@
+import { Link } from 'react-router-dom'
+import { Home, ArrowLeft } from 'lucide-react'
+
+export function NotFound() {
+  return (
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4">
+      <div className="text-center max-w-md">
+        <div className="relative mx-auto mb-8">
+          <div className="w-32 h-32 rounded-2xl bg-gradient-to-br from-amber-500/20 to-amber-600/10 border border-amber-500/20 flex items-center justify-center">
+            <span className="text-6xl font-cinzel font-bold text-amber-400">404</span>
+          </div>
+          <div className="absolute -bottom-2 -right-2 w-10 h-10 bg-gray-800 rounded-xl flex items-center justify-center border border-gray-700">
+            <span className="text-2xl">🏺</span>
+          </div>
+        </div>
+
+        <h1 className="text-3xl font-cinzel font-bold text-white mb-3">Lost in the Duat</h1>
+        <p className="text-gray-400 mb-8 font-cormorant italic">
+          The page you seek has drifted into the realm of shadows. Even Thoth cannot find what is lost.
+        </p>
+
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+          <Link
+            to="/"
+            className="flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-amber-600 to-amber-500 hover:from-amber-500 hover:to-amber-400 text-gray-950 rounded-xl font-semibold transition-all hover:shadow-lg hover:shadow-amber-600/30"
+          >
+            <Home className="w-5 h-5" />
+            Return Home
+          </Link>
+          <button
+            onClick={() => window.history.back()}
+            className="flex items-center gap-2 px-6 py-3 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl font-medium transition-all border border-gray-700 hover:border-gray-600"
+          >
+            <ArrowLeft className="w-5 h-5" />
+            Go Back
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}

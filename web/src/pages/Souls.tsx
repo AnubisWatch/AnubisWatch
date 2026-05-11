@@ -63,6 +63,7 @@ export function Souls() {
   const [refreshing, setRefreshing] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({})
 
   // Form state
   const [formData, setFormData] = useState<SoulFormData>(defaultSoulFormData)
@@ -79,6 +80,26 @@ export function Souls() {
 
   const handleCreateSoul = async (e: React.FormEvent) => {
     e.preventDefault()
+    const errors: Record<string, string> = {}
+
+    if (!formData.name.trim()) {
+      errors.name = 'Name is required'
+    } else if (formData.name.length < 2) {
+      errors.name = 'Name must be at least 2 characters'
+    }
+
+    if (!formData.target.trim()) {
+      errors.target = 'Target is required'
+    } else if (formData.type === 'http' && !formData.target.match(/^https?:\/\/.+/)) {
+      errors.target = 'HTTP target must start with http:// or https://'
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors)
+      return
+    }
+
+    setFormErrors({})
     setLoading(true)
     try {
       await createSoul({
@@ -97,16 +118,16 @@ export function Souls() {
     if (!confirm('Are you sure you want to delete this soul?')) return
     try {
       await deleteSoul(id)
-    } catch {
-      alert('Failed to delete soul')
+    } catch (err) {
+      alert('Failed to delete soul: ' + (err instanceof Error ? err.message : 'Unknown error'))
     }
   }
 
   const handleToggle = async (soul: SoulWithStatus) => {
     try {
       await updateSoul(soul.id, { enabled: !soul.enabled })
-    } catch {
-      alert('Failed to update soul')
+    } catch (err) {
+      alert('Failed to update soul: ' + (err instanceof Error ? err.message : 'Unknown error'))
     }
   }
 
@@ -176,8 +197,8 @@ export function Souls() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white tracking-tight">Souls</h1>
-          <p className="text-gray-400 mt-1 text-sm">Manage your monitored targets and services</p>
+          <h1 className="text-3xl font-cinzel font-bold gradient-gold-shine tracking-wider">Essence</h1>
+          <p className="text-gray-400 mt-1 font-cormorant italic">The souls that dwell in your realm</p>
         </div>
         <div className="flex items-center gap-3">
           <button
@@ -188,7 +209,7 @@ export function Souls() {
             <RefreshCw className="w-5 h-5" />
           </button>
           <button
-            onClick={() => setShowModal(true)}
+            onClick={() => { setShowModal(true); setFormErrors({}) }}
             className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-all font-medium shadow-lg shadow-amber-600/20"
           >
             <Plus className="w-4 h-4" />
@@ -202,7 +223,7 @@ export function Souls() {
         <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm font-medium">Total Souls</p>
+              <p className="text-gray-400 text-sm font-medium">Total Essence</p>
               <p className="text-2xl font-bold text-white mt-1">{stats.total}</p>
             </div>
             <div className="w-10 h-10 bg-gray-800 rounded-xl flex items-center justify-center">
@@ -214,7 +235,7 @@ export function Souls() {
         <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm font-medium">Active</p>
+              <p className="text-gray-400 text-sm font-medium">Breathing</p>
               <p className="text-2xl font-bold text-emerald-400 mt-1">{stats.active}</p>
             </div>
             <div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center">
@@ -226,7 +247,7 @@ export function Souls() {
         <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm font-medium">Issues</p>
+              <p className="text-gray-400 text-sm font-medium">Chaos</p>
               <p className="text-2xl font-bold text-rose-400 mt-1">{stats.issues}</p>
             </div>
             <div className="w-10 h-10 bg-rose-500/10 rounded-xl flex items-center justify-center">
@@ -238,7 +259,7 @@ export function Souls() {
         <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm font-medium">Disabled</p>
+              <p className="text-gray-400 text-sm font-medium">Embalmed</p>
               <p className="text-2xl font-bold text-gray-400 mt-1">{stats.disabled}</p>
             </div>
             <div className="w-10 h-10 bg-gray-700 rounded-xl flex items-center justify-center">
@@ -250,7 +271,7 @@ export function Souls() {
         <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm font-medium">Types</p>
+              <p className="text-gray-400 text-sm font-medium">Rituals</p>
               <p className="text-2xl font-bold text-amber-400 mt-1">{stats.types}</p>
             </div>
             <div className="w-10 h-10 bg-amber-500/10 rounded-xl flex items-center justify-center">
@@ -502,21 +523,34 @@ export function Souls() {
       )}
 
       {/* Empty State */}
-      {filteredSouls.length === 0 && (
+      {filteredSouls.length === 0 && !loading && (
         <div className="text-center py-16">
           <div className="w-16 h-16 bg-gray-800 rounded-2xl flex items-center justify-center mx-auto mb-4">
             <Ghost className="w-8 h-8 text-gray-500" />
           </div>
-          <h3 className="text-lg font-semibold text-white mb-2">No souls found</h3>
-          <p className="text-gray-400 text-sm mb-4">Try adjusting your search or filters</p>
-          {souls.length === 0 && (
-            <button
-              onClick={() => setShowModal(true)}
-              className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition-colors"
-            >
-              Create Your First Soul
-            </button>
-          )}
+          {search || filter !== 'all' ? (
+            <>
+              <h3 className="text-lg font-semibold text-white mb-2">No essence matches your search</h3>
+              <p className="text-gray-400 text-sm mb-4">Try adjusting your search or sacred filters</p>
+              <button
+                onClick={() => { setSearch(''); setFilter('all') }}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition-colors"
+              >
+                Clear Filters
+              </button>
+            </>
+          ) : souls.length === 0 ? (
+            <>
+              <h3 className="text-lg font-semibold text-white mb-2">No essence in the realm</h3>
+              <p className="text-gray-400 text-sm mb-4">Summon your first soul to begin the eternal watch</p>
+              <button
+                onClick={() => { setShowModal(true); setFormErrors({}) }}
+                className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition-colors"
+              >
+                Summon First Soul
+              </button>
+            </>
+          ) : null}
         </div>
       )}
 
@@ -533,7 +567,7 @@ export function Souls() {
             <div className="p-6 border-b border-gray-700/50 flex items-center justify-between">
               <h2 id="soul-modal-title" className="text-xl font-bold text-white">Add New Soul</h2>
               <button
-                onClick={() => setShowModal(false)}
+                onClick={() => { setShowModal(false); setFormErrors({}) }}
                 className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
                 aria-label="Close dialog"
               >
@@ -549,10 +583,16 @@ export function Souls() {
                   type="text"
                   required
                   value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  onChange={(e) => {
+                    setFormData({ ...formData, name: e.target.value })
+                    if (formErrors.name) setFormErrors({ ...formErrors, name: '' })
+                  }}
                   placeholder="e.g., Production API"
-                  className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50"
+                  className={`w-full bg-gray-950 border rounded-xl px-4 py-3 text-white placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50 ${
+                    formErrors.name ? 'border-rose-500' : 'border-gray-700'
+                  }`}
                 />
+                {formErrors.name && <p className="mt-1 text-xs text-rose-400">{formErrors.name}</p>}
               </div>
 
               {/* Type */}
@@ -582,11 +622,20 @@ export function Souls() {
                   type="text"
                   required
                   value={formData.target}
-                  onChange={(e) => setFormData({ ...formData, target: e.target.value })}
+                  onChange={(e) => {
+                    setFormData({ ...formData, target: e.target.value })
+                    if (formErrors.target) setFormErrors({ ...formErrors, target: '' })
+                  }}
                   placeholder={soulTargetHints[formData.type].placeholder}
-                  className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50"
+                  className={`w-full bg-gray-950 border rounded-xl px-4 py-3 text-white placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50 ${
+                    formErrors.target ? 'border-rose-500' : 'border-gray-700'
+                  }`}
                 />
-                <p className="mt-2 text-xs text-gray-500">{soulTargetHints[formData.type].help}</p>
+                {formErrors.target ? (
+                  <p className="mt-2 text-xs text-rose-400">{formErrors.target}</p>
+                ) : (
+                  <p className="mt-2 text-xs text-gray-500">{soulTargetHints[formData.type].help}</p>
+                )}
               </div>
 
               <SoulProtocolFields formData={formData} setFormData={setFormData} />

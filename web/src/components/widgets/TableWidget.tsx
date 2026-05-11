@@ -10,19 +10,21 @@ interface TableWidgetProps {
 export function TableWidget({ widget, dashboardId }: TableWidgetProps) {
   const [data, setData] = useState<Array<Record<string, unknown>>>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
     const fetch = async () => {
       setLoading(true)
+      setError(null)
       try {
         const result = await api.post<Array<Record<string, unknown>>>(
           `/dashboards/${dashboardId}/query`,
           widget.query
         )
         if (!cancelled) setData(result || [])
-      } catch {
-        // silently handle
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load')
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -33,6 +35,13 @@ export function TableWidget({ widget, dashboardId }: TableWidgetProps) {
 
   if (loading) {
     return <div className="flex items-center justify-center h-full"><div className="w-6 h-6 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" /></div>
+  }
+
+  if (error) {
+    return <div className="flex flex-col items-center justify-center h-full text-center px-4">
+      <p className="text-rose-400 text-sm mb-1">Error</p>
+      <p className="text-gray-400 text-xs">{error}</p>
+    </div>
   }
 
   if (data.length === 0) {
