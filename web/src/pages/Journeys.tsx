@@ -58,6 +58,152 @@ interface AssertionForm {
   expected: string
 }
 
+interface JourneyRun {
+  id: string
+  journey_id: string
+  status: 'alive' | 'dead' | 'degraded' | 'unknown' | 'embalmed'
+  started_at: number
+  completed_at: number
+  duration: number
+  steps: JourneyStepResult[]
+}
+
+interface JourneyStepResult {
+  name: string
+  step_index: number
+  status: 'alive' | 'dead' | 'degraded' | 'unknown'
+  duration: number
+  message: string
+}
+
+interface JourneyRunModalProps {
+  journeyId: string
+  journeyName: string
+  onClose: () => void
+}
+
+function JourneyRunModal({ journeyId, journeyName, onClose }: JourneyRunModalProps) {
+  const [runs, setRuns] = useState<JourneyRun[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchRuns = useCallback(async () => {
+    setLoading(true)
+    try {
+      const result = await api.get<JourneyRun[]>(`/journeys/${journeyId}/runs`)
+      setRuns(result || [])
+      setError(null)
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('404')) {
+        setRuns([])
+        setError(null)
+      } else {
+        setError(err instanceof Error ? err.message : 'Failed to load runs')
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [journeyId])
+
+  useEffect(() => {
+    fetchRuns()
+  }, [fetchRuns])
+
+  const formatDate = (timestamp: number) => {
+    return new Date(timestamp).toLocaleString()
+  }
+
+  const formatDuration = (ms: number) => {
+    if (ms < 1000) return `${ms}ms`
+    return `${(ms / 1000).toFixed(2)}s`
+  }
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'alive': return 'bg-emerald-500'
+      case 'dead': return 'bg-rose-500'
+      case 'degraded': return 'bg-amber-500'
+      default: return 'bg-gray-500'
+    }
+  }
+
+  const getStatusTextColor = (status: string) => {
+    switch (status) {
+      case 'alive': return 'text-emerald-400'
+      case 'dead': return 'text-rose-400'
+      case 'degraded': return 'text-amber-400'
+      default: return 'text-gray-400'
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl w-full max-w-3xl max-h-[80vh] overflow-hidden" onClick={e => e.stopPropagation()}>
+        <div className="p-6 border-b border-gray-700 flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-white">Voyage History: {journeyName}</h2>
+            <p className="text-sm text-gray-400 mt-1">Recent executions of this sacred voyage</p>
+          </div>
+          <button onClick={onClose} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="p-6 overflow-y-auto max-h-[calc(80vh-80px)]">
+          {loading ? (
+            <div className="flex justify-center py-12">
+              <div className="w-8 h-8 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
+            </div>
+          ) : error ? (
+            <div className="text-center py-12">
+              <AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
+              <p className="text-rose-400">{error}</p>
+              <button onClick={fetchRuns} className="mt-4 px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg">
+                Try Again
+              </button>
+            </div>
+          ) : runs.length === 0 ? (
+            <div className="text-center py-12">
+              <Clock className="w-12 h-12 text-gray-600 mx-auto mb-4" />
+              <p className="text-gray-400">No voyages have been charted yet</p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {runs.map((run) => (
+                <div key={run.id} className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-3 h-3 rounded-full ${getStatusColor(run.status)}`} />
+                      <span className={`font-medium ${getStatusTextColor(run.status)}`}>
+                        {run.status === 'alive' ? 'Passed' : run.status === 'dead' ? 'Failed' : run.status}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-4 text-sm text-gray-400">
+                      <span>{formatDate(run.started_at)}</span>
+                      <span className="font-mono">{formatDuration(run.duration)}</span>
+                    </div>
+                  </div>
+                  {run.steps && run.steps.length > 0 && (
+                    <div className="pl-6 border-l-2 border-gray-700 space-y-2">
+                      {run.steps.map((step, idx) => (
+                        <div key={idx} className="flex items-center gap-3 text-sm">
+                          <div className={`w-2 h-2 rounded-full ${getStatusColor(step.status)}`} />
+                          <span className="text-gray-300">{step.name || `Step ${step.step_index + 1}`}</span>
+                          <span className="text-gray-500 ml-auto">{formatDuration(step.duration)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 const CHECK_TYPES = ['http', 'tcp', 'dns', 'tls', 'grpc', 'websocket', 'smtp', 'icmp']
 const ASSERTION_TYPES = ['status_code', 'body_contains', 'json_path', 'header', 'response_time']
 const ASSERTION_OPERATORS = ['equals', 'not_equals', 'contains', 'greater_than', 'less_than']
@@ -131,6 +277,7 @@ export function Journeys() {
   const [runningId, setRunningId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [editingJourney, setEditingJourney] = useState<Journey | null>(null)
+  const [selectedJourneyForRuns, setSelectedJourneyForRuns] = useState<Journey | null>(null)
 
   // Create form state
   const [formName, setFormName] = useState('')
@@ -597,8 +744,17 @@ export function Journeys() {
                   >
                     {journey.enabled ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                   </button>
-                  <button onClick={() => handleOpenEditModal(journey)} className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" title="Edit" aria-label={`Edit journey ${journey.name}`}>
+                  <button
+                    onClick={() => handleOpenEditModal(journey)} className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" title="Edit" aria-label={`Edit journey ${journey.name}`}>
                     <Edit className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => setSelectedJourneyForRuns(journey)}
+                    className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
+                    title="View History"
+                    aria-label={`View run history for ${journey.name}`}
+                  >
+                    <Clock className="w-4 h-4" />
                   </button>
                   <button
                     onClick={() => handleDelete(journey.id)}
@@ -867,6 +1023,13 @@ export function Journeys() {
             </div>
           </div>
         </div>
+      )}
+      {selectedJourneyForRuns && (
+        <JourneyRunModal
+          journeyId={selectedJourneyForRuns.id}
+          journeyName={selectedJourneyForRuns.name}
+          onClose={() => setSelectedJourneyForRuns(null)}
+        />
       )}
     </div>
   )
