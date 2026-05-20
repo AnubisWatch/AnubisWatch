@@ -38,7 +38,7 @@ need before they touch this codebase.
 ## Verification checklist
 
 - `go build ./...` — must compile clean
-- `go test ./...` — all tests pass (one pre-existing failure in `TestGenerateConfig_Basic` is unrelated)
+- `go test ./...` — all tests pass
 - `go vet ./...` — no warnings
 - Manual smoke: `go run ./cmd/anubis serve --single` → hit `http://localhost:8080`, login, create a Soul, trigger a judge
 
