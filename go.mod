@@ -3,6 +3,7 @@ module github.com/AnubisWatch/anubiswatch
 go 1.25.0
 
 require (
+	github.com/cenkalti/backoff/v5 v5.0.3
 	github.com/coder/websocket v1.8.14
 	github.com/go-ldap/ldap/v3 v3.4.13
 	go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.68.0
@@ -19,7 +20,6 @@ require (
 
 require (
 	github.com/Azure/go-ntlmssp v0.1.0 // indirect
-	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/go-asn1-ber/asn1-ber v1.5.8-0.20250403174932-29230038a667 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect

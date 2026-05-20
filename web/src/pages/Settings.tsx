@@ -8,7 +8,6 @@ import {
   Save,
   Check,
   Mail,
-  Slack,
   MessageSquare,
   Moon,
   Sun,
@@ -395,7 +394,7 @@ export function Settings() {
                 <div className="space-y-4">
                   {[
                     { id: 'email', name: 'Email Notifications', desc: 'Receive email alerts for critical events', icon: Mail, color: 'blue' as const },
-                    { id: 'slack', name: 'Slack Notifications', desc: 'Send alerts to configured Slack channels', icon: Slack, color: 'purple' as const },
+                    { id: 'slack', name: 'Slack Notifications', desc: 'Send alerts to configured Slack channels', icon: MessageSquare, color: 'purple' as const },
                     { id: 'webhook', name: 'Webhook Notifications', desc: 'POST alerts to custom endpoints', icon: MessageSquare, color: 'emerald' as const },
                     { id: 'digest', name: 'Digest Emails', desc: 'Daily summary of all activities', icon: Clock, color: 'amber' as const },
                   ].map((item) => {
