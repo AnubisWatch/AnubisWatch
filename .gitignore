@@ -1,3 +1,6 @@
+# AI agent context (WrongStack, Cursor, etc.)
+.wrongstack/
+
 # Security scan reports (generated - keep SECURITY-REPORT.md)
 /security-report/*
 !/security-report/SECURITY-REPORT.md
