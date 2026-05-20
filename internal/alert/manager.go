@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
+	"github.com/cenkalti/backoff/v5"
 )
 
 // Manager handles alert routing and delivery
@@ -531,19 +532,66 @@ func (m *Manager) sendToChannel(ctx context.Context, event *core.AlertEvent, cha
 	m.stats.verdictsBySeverity[string(event.Severity)]++
 	m.mu.Unlock()
 
-	// Send the alert
-	err := dispatcher.Send(ctx, event, channel)
+	// Build retry policy from channel config
+	policy := channel.RetryPolicy
+	if policy.MaxRetries <= 0 {
+		policy.MaxRetries = 1
+	}
+	initialWait := policy.InitialWait.Duration
+	if initialWait <= 0 {
+		initialWait = 1 * time.Second
+	}
+	maxWait := policy.MaxWait.Duration
+	if maxWait <= 0 {
+		maxWait = 5 * time.Minute
+	}
+
+	var lastErr error
+	maxAttempts := uint(policy.MaxRetries)
+	if policy.Backoff == "exponential" {
+		ebo := backoff.NewExponentialBackOff()
+		ebo.InitialInterval = initialWait
+		ebo.MaxInterval = maxWait
+		ebo.Reset()
+		_, lastErr = backoff.Retry[error](ctx, func() (error, error) {
+			return nil, dispatcher.Send(ctx, event, channel)
+		}, backoff.WithMaxTries(maxAttempts), backoff.WithBackOff(ebo))
+	} else {
+		// Linear retries: wait InitialWait between each attempt
+		for attempt := uint(0); attempt < maxAttempts; attempt++ {
+			// Check context before sending
+			if ctx.Err() != nil {
+				lastErr = ctx.Err()
+				break
+			}
+			lastErr = dispatcher.Send(ctx, event, channel)
+			if lastErr == nil {
+				break
+			}
+			if attempt+1 < maxAttempts {
+				// Wait before next retry, but stop early if context is cancelled
+				select {
+				case <-ctx.Done():
+					lastErr = ctx.Err()
+					goto done
+				case <-time.After(initialWait):
+					// continue to next attempt
+				}
+			}
+		}
+	}
+done:
 
 	// Track result
 	m.mu.Lock()
-	if err != nil {
+	if lastErr != nil {
 		m.stats.failedAlerts++
 	} else {
 		m.stats.sentAlerts++
 	}
 	m.mu.Unlock()
 
-	return err
+	return lastErr
 }
 
 // TestChannel sends a synthetic notification through a configured channel.

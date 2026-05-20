@@ -3722,3 +3722,180 @@ func TestCheckCompound_DefaultLogic(t *testing.T) {
 		t.Error("Expected default logic (AND) to trigger when all match")
 	}
 }
+
+// mockRetryDispatcher is a dispatcher that fails a configurable number of times then succeeds
+type mockRetryDispatcher struct {
+	failCount   int
+	callCount   int
+	returnError bool
+}
+
+func (m *mockRetryDispatcher) Send(ctx context.Context, event *core.AlertEvent, channel *core.AlertChannel) error {
+	m.callCount++
+	if m.returnError {
+		return fmt.Errorf("permanent error")
+	}
+	if m.failCount > 0 {
+		m.failCount--
+		return fmt.Errorf("transient error (remaining: %d)", m.failCount+1)
+	}
+	return nil
+}
+
+func (m *mockRetryDispatcher) Validate(config map[string]any) error {
+	return nil
+}
+
+func TestSendToChannel_RetriesTransientFailure(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: map[string]*core.AlertChannel{
+			"retry-channel": {
+				ID:      "retry-channel",
+				Name:    "Retry Channel",
+				Type:    core.ChannelWebHook,
+				Enabled: true,
+				RetryPolicy: core.RetryPolicyConfig{
+					MaxRetries:  3,
+					InitialWait:  core.Duration{Duration: 10 * time.Millisecond},
+					MaxWait:     core.Duration{Duration: 50 * time.Millisecond},
+					Backoff:     "linear",
+				},
+			},
+		},
+		rules: make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+	dispatcher := &mockRetryDispatcher{failCount: 2} // fail twice, succeed on 3rd
+	manager.dispatchers[core.ChannelWebHook] = dispatcher
+
+	event := &core.AlertEvent{
+		ID:     "retry-event",
+		SoulID: "test-soul",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := manager.sendToChannel(ctx, event, storage.channels["retry-channel"])
+
+	if err != nil {
+		t.Errorf("expected send to succeed after retry, got error: %v", err)
+	}
+	if dispatcher.callCount != 3 {
+		t.Errorf("expected 3 attempts, got %d", dispatcher.callCount)
+	}
+}
+
+func TestSendToChannel_GivesUpAfterMaxRetries(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: map[string]*core.AlertChannel{
+			"fail-channel": {
+				ID:      "fail-channel",
+				Name:    "Fail Channel",
+				Type:    core.ChannelWebHook,
+				Enabled: true,
+				RetryPolicy: core.RetryPolicyConfig{
+					MaxRetries:  2,
+					InitialWait: core.Duration{Duration: 10 * time.Millisecond},
+					MaxWait:     core.Duration{Duration: 50 * time.Millisecond},
+					Backoff:     "linear",
+				},
+			},
+		},
+		rules: make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+	dispatcher := &mockRetryDispatcher{returnError: true} // always fail
+	manager.dispatchers[core.ChannelWebHook] = dispatcher
+
+	event := &core.AlertEvent{
+		ID:     "fail-event",
+		SoulID: "test-soul",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := manager.sendToChannel(ctx, event, storage.channels["fail-channel"])
+
+	if err == nil {
+		t.Error("expected error after max retries, got nil")
+	}
+	if dispatcher.callCount != 2 {
+		t.Errorf("expected 2 attempts (MaxRetries), got %d", dispatcher.callCount)
+	}
+}
+
+func TestSendToChannel_NoRetryWhenDisabled(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: map[string]*core.AlertChannel{
+			"no-retry": {
+				ID:      "no-retry",
+				Name:    "No Retry",
+				Type:    core.ChannelWebHook,
+				Enabled: true,
+				RetryPolicy: core.RetryPolicyConfig{
+					MaxRetries: 1, // only 1 attempt = no retry
+					Backoff:    "linear",
+				},
+			},
+		},
+		rules: make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+	dispatcher := &mockRetryDispatcher{returnError: true} // always fail
+	manager.dispatchers[core.ChannelWebHook] = dispatcher
+
+	event := &core.AlertEvent{
+		ID:     "no-retry-event",
+		SoulID: "test-soul",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := manager.sendToChannel(ctx, event, storage.channels["no-retry"])
+
+	if err == nil {
+		t.Error("expected error, got nil")
+	}
+	if dispatcher.callCount != 1 {
+		t.Errorf("expected 1 attempt when MaxRetries=1, got %d", dispatcher.callCount)
+	}
+}
+
+func TestSendToChannel_ContextCancellationStopsRetry(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: map[string]*core.AlertChannel{
+			"ctx-cancel": {
+				ID:      "ctx-cancel",
+				Name:    "Ctx Cancel",
+				Type:    core.ChannelWebHook,
+				Enabled: true,
+				RetryPolicy: core.RetryPolicyConfig{
+					MaxRetries:  100, // would retry many times
+					InitialWait: core.Duration{Duration: 1 * time.Hour}, // huge wait
+					Backoff:     "linear",
+				},
+			},
+		},
+		rules: make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+	dispatcher := &mockRetryDispatcher{returnError: true} // always fail
+	manager.dispatchers[core.ChannelWebHook] = dispatcher
+
+	event := &core.AlertEvent{
+		ID:     "ctx-event",
+		SoulID: "test-soul",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond) // short timeout
+	defer cancel()
+
+	err := manager.sendToChannel(ctx, event, storage.channels["ctx-cancel"])
+
+	if err == nil {
+		t.Error("expected context error, got nil")
+	}
+	// Should have cancelled after the first (and possibly second) attempt
+	if dispatcher.callCount > 5 {
+		t.Errorf("expected few attempts before context cancel, got %d", dispatcher.callCount)
+	}
+}
