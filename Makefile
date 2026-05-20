@@ -10,7 +10,7 @@ LDFLAGS   := -s -w \
   -X main.Commit=$(COMMIT) \
   -X main.BuildDate=$(DATE)
 
-.PHONY: all build clean test lint dashboard run docker preflight-production smoke-production capture-production-evidence help
+.PHONY: all build clean test test-short benchmark lint dashboard run docker preflight-production smoke-production capture-production-evidence help
 
 all: dashboard build ## Build dashboard and binary
 
@@ -34,6 +34,11 @@ test: ## Run all tests
 
 test-short: ## Run short tests only
 	go test -short ./...
+
+benchmark: ## Run benchmarks (storage and probe)
+	@echo "⚖️  Running benchmarks..."
+	go test -bench=. -benchmem ./internal/storage/...
+	go test -bench=. -benchmem ./internal/probe/...
 
 preflight-production: ## Run production Helm/Kubernetes preflight checks (requires VALUES)
 	./scripts/production-preflight.sh
