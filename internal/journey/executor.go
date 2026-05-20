@@ -265,7 +265,7 @@ func (e *Executor) executeStep(ctx context.Context, jctx *JourneyContext, step c
 		Name:   step.Name,
 		Type:   step.Type,
 		Target: target,
-		Weight: step.Timeout,
+		Timeout: step.Timeout, // correct: Timeout controls check timeout
 	}
 
 	// Interpolate and set HTTP config fields

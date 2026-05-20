@@ -93,7 +93,19 @@ func (c *TCPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 
 		// Send payload if configured
 		if cfg.Send != "" {
-			conn.Write([]byte(cfg.Send))
+			if _, err := conn.Write([]byte(cfg.Send)); err != nil {
+				conn.Close()
+				return &core.Judgment{
+					ID:         core.GenerateID(),
+					SoulID:     soul.ID,
+					Timestamp:  time.Now().UTC(),
+					Duration:   time.Since(start),
+					Status:     core.SoulDead,
+					StatusCode: 0,
+					Message:    fmt.Sprintf("TCP send failed: %s", err),
+					Details:    &core.JudgmentDetails{},
+				}, nil
+			}
 		}
 
 		// Read response

@@ -3,691 +3,588 @@
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [System Architecture](#system-architecture)
-3. [Egyptian Mythology Naming](#egyptian-mythology-naming)
-4. [Core Components](#core-components)
+2. [Egyptian Mythology Naming](#egyptian-mythology-naming)
+3. [System Architecture](#system-architecture)
+4. [Core Domain Objects](#core-domain-objects)
 5. [Storage Engine (Feather/CobaltDB)](#storage-engine-feathercobaltdb)
 6. [Probe Engine & Checkers](#probe-engine--checkers)
 7. [Alert System (Ma'at)](#alert-system-maat)
-8. [Authentication](#authentication)
-9. [API Layer](#api-layer)
-10. [Cluster & Distribution (Necropolis)](#cluster--distribution-necropolis)
-11. [Journey (Synthetic Monitoring)](#journey-synthetic-monitoring)
+8. [Cluster & Distribution (Necropolis)](#cluster--distribution-necropolis)
+9. [Journey (Synthetic Monitoring)](#journey-synthetic-monitoring)
+10. [Authentication](#authentication)
+11. [API Layer](#api-layer)
 12. [Dashboard (React)](#dashboard-react)
-13. [Configuration](#configuration)
-14. [Security](#security)
-15. [Data Flow](#data-flow)
-16. [Technology Stack](#technology-stack)
+13. [Data Flow](#data-flow)
+14. [Deployment Patterns](#deployment-patterns)
+15. [Technology Stack](#technology-stack)
+16. [Directory Structure](#directory-structure)
 
 ---
 
 ## Overview
 
-AnubisWatch is a **zero-dependency, single-binary uptime and synthetic monitoring platform** written in Go. It uses Egyptian mythology theming throughout the codebase and features an embedded React dashboard built with React 19, Tailwind 4.1, and Zustand 5.
+AnubisWatch is a **zero-dependency, single-binary uptime and synthetic monitoring platform** written in Go. It ships as a single `anubis` binary with:
 
-The system monitors HTTP/HTTPS endpoints, TCP/UDP ports, DNS servers, SMTP/IMAP mail servers, ICMP ping, gRPC services, WebSocket endpoints, and TLS certificates across distributed probe nodes.
+- An embedded B+Tree storage engine (**CobaltDB**) with WAL and optional AES-256-GCM encryption
+- An embedded React 19 dashboard (Tailwind 4.1 + Zustand 5)
+- REST, WebSocket/SSE, gRPC, Prometheus metrics, OpenAPI, and MCP endpoints
+- Raft-backed clustering for distributed probe coordination
+- Multi-step synthetic monitoring (Journeys)
+- Local, OIDC, and LDAP authentication with workspace-aware APIs
 
-**Key Characteristics:**
-- Single binary deployment (no external dependencies)
-- Embedded B+Tree storage engine (CobaltDB) with WAL
-- Distributed monitoring via Raft-based clustering
-- Synthetic monitoring with multi-step journeys
-- Real-time WebSocket updates with SSE fallback
-- Multi-auth backend: Local, OIDC, LDAP
+**Core purpose:** Monitor services (Souls), store results (Judgments), make alert decisions (Verdicts), and serve a real-time dashboard.
+
+---
+
+## Egyptian Mythology Naming
+
+The codebase uses Egyptian mythology terminology as domain language:
+
+| Term | Mythology | Real-World Meaning |
+|------|-----------|-------------------|
+| **Soul** | Ka – the life force | Monitored target (HTTP, TCP, DNS, TLS, etc.) |
+| **Judgment** | Ma'at's feather | Single health check execution result |
+| **Verdict** | Trial outcome | Alert decision based on judgment patterns |
+| **Jackal** | Anubis's companion | Probe node that executes health checks |
+| **Pharaoh** | Ra – the sun god | Raft leader in a cluster |
+| **Necropolis** | City of the dead | Distributed cluster network |
+| **Feather** | Ma'at's feather | CobaltDB B+Tree storage engine |
+| **Ma'at** | Goddess of truth | Alert engine |
+| **Duat** | Egyptian underworld | Real-time WebSocket/SSE event layer |
+| **Journey** | Travel of the soul | Multi-step synthetic monitoring scenario |
+| **Aaru** | Paradise | Passed health check (alive) |
+| **Ammit** | Devourer | Failed health check (dead) |
 
 ---
 
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              AnubisWatch Binary                             │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                              │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌────────────┐ │
-│  │   REST API   │    │  WebSocket  │    │   gRPC API   │    │    MCP     │ │
-│  │   :8443      │    │   :8443     │    │   :9090      │    │   Server   │ │
-│  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘    └─────┬──────┘ │
-│         │                   │                   │                   │        │
-│  ┌──────┴───────────────────┴───────────────────┴───────────────────┴────┐ │
-│  │                           Middleware Layer                              │ │
-│  │  Logging → Security Headers → CORS → Recovery → Rate Limiting            │ │
-│  └─────────────────────────────────┬──────────────────────────────────────┘ │
-│                                    │                                         │
-│  ┌─────────────────────────────────┴──────────────────────────────────────┐ │
-│  │                        Service Layer (DI Wired)                          │ │
-│  │                                                                           │ │
-│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────────────────┐   │ │
-│  │  │   Auth     │  │   Alert    │  │   Probe    │  │  Journey         │   │ │
-│  │  │  Manager   │  │   Ma'at    │  │  Engine    │  │  Executor        │   │ │
-│  │  └────────────┘  └────────────┘  └────────────┘  └──────────────────┘   │ │
-│  │                                                                           │ │
-│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌──────────────────┐   │ │
-│  │  │  Cluster   │  │  Dashboard │  │   Status   │  │     MCP          │   │ │
-│  │  │  Manager   │  │   Embed    │  │   Page     │  │    Server        │   │ │
-│  │  └────────────┘  └────────────┘  └────────────┘  └──────────────────┘   │ │
-│  └─────────────────────────────────┬──────────────────────────────────────┘ │
-│                                    │                                         │
-│  ┌─────────────────────────────────┴──────────────────────────────────────┐ │
-│  │                        Storage Layer (CobaltDB)                          │ │
-│  │                                                                           │ │
-│  │         ┌─────────────────────────────────────────────┐                  │ │
-│  │         │              B+Tree Index                   │                  │ │
-│  │         │         (Configurable Order 4-256)           │                  │ │
-│  │         └─────────────────────────────────────────────┘                  │ │
-│  │                        WAL (Write-Ahead Log)                            │ │
-│  │                     AES-256-GCM Encryption                               │ │
-│  └─────────────────────────────────────────────────────────────────────────┘ │
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────────┐│
-│  │                     Cluster Layer (Necropolis)                           ││
-│  │                                                                           ││
-│  │  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────────────┐    ││
-│  │  │   Raft   │    │   Gossip │    │  Probe   │    │  Raft Consensus  │    ││
-│  │  │   Log    │    │ Protocol │    │  Coord.  │    │  (Pharaoh Node)  │    ││
-│  │  └──────────┘    └──────────┘    └──────────┘    └──────────────────┘    ││
-│  └─────────────────────────────────────────────────────────────────────────┘│
-│                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────────┐ │
-│  │  ┌─────────────────────────────────────────────────────────────────┐   │ │
-│  │  │              React Dashboard (Embedded HTML/CSS/JS)            │   │ │
-│  │  │                    React 19 + Tailwind 4.1                       │   │ │
-│  │  └─────────────────────────────────────────────────────────────────┘   │ │
-│  └─────────────────────────────────────────────────────────────────────────┘ │
-│                                                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────┐
+│                              AnubisWatch Binary                                 │
+├────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                 │
+│  ┌─────────────────────────────────────────────────────────────────────────┐  │
+│  │                         Web Layer (Embedded)                             │  │
+│  │            React 19 + Tailwind 4.1 + Zustand 5 + Vite 6                  │  │
+│  └─────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                 │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌───────────────────┐  │
+│  │   REST API   │  │  WebSocket   │  │   gRPC API   │  │      MCP          │  │
+│  │   :8443      │  │   (Duat)     │  │   :9090      │  │   Server          │  │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └─────────┬─────────┘  │
+│         │                 │                  │                   │             │
+│  ┌──────┴─────────────────┴──────────────────┴───────────────────┴──────────┐  │
+│  │                         Middleware Layer                                  │  │
+│  │  Logging → Security Headers → CORS → Recovery → JSON Validation → Rate   │  │
+│  └────────────────────────────────┬──────────────────────────────────────────┘  │
+│                                   │                                            │
+│  ┌────────────────────────────────┴──────────────────────────────────────────┐  │
+│  │                        Service Layer (Dependency Injection)                │  │
+│  │                                                                          │  │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────────────┐   │  │
+│  │  │   Auth     │  │   Alert    │  │   Probe    │  │     Journey       │   │  │
+│  │  │  Manager   │  │   Ma'at    │  │  Engine    │  │     Executor      │   │  │
+│  │  └────────────┘  └────────────┘  └────────────┘  └────────────────────┘   │  │
+│  │                                                                          │  │
+│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────────────┐   │  │
+│  │  │  Cluster   │  │  Dashboard │  │   Status  │  │      MCP          │   │  │
+│  │  │  Manager   │  │   Embed    │  │   Page    │  │     Server        │   │  │
+│  │  └────────────┘  └────────────┘  └────────────┘  └────────────────────┘   │  │
+│  └────────────────────────────────┬──────────────────────────────────────────┘  │
+│                                   │                                            │
+│  ┌────────────────────────────────┴──────────────────────────────────────────┐  │
+│  │                    Storage Layer (Feather/CobaltDB)                        │  │
+│  │                                                                          │  │
+│  │   ┌─────────────────────────────────────────────────────────────────┐    │  │
+│  │   │              B+Tree Index (configurable order 4–256)            │    │  │
+│  │   │                    Leaf node chaining                            │    │  │
+│  │   └─────────────────────────────────────────────────────────────────┘    │  │
+│  │   ┌─────────────────────────────────────────────────────────────────┐    │  │
+│  │   │              WAL (Write-Ahead Log) + AES-256-GCM                │    │  │
+│  │   └─────────────────────────────────────────────────────────────────┘    │  │
+│  └───────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                 │
+│  ┌───────────────────────────────────────────────────────────────────────────┐  │
+│  │                    Cluster Layer (Necropolis/Raft)                        │  │
+│  │                                                                          │  │
+│  │  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌────────────────────┐   │  │
+│  │  │   Raft   │    │   Gossip │    │  Probe   │    │   Raft Consensus   │   │  │
+│  │  │   Log    │    │ Protocol │    │  Coord.   │    │   (Pharaoh Node)   │   │  │
+│  │  └──────────┘    └──────────┘    └──────────┘    └────────────────────┘   │  │
+│  └───────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                 │
+└────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Egyptian Mythology Naming
+## Core Domain Objects
 
-The codebase uses Egyptian mythology terminology to describe system components:
+### Soul (`internal/core/soul.go`)
 
-| Term | Mythology | Real-World Meaning |
-|------|-----------|-------------------|
-| **Soul** | Ka - the life force | Monitored target (HTTP, TCP, DNS, etc.) |
-| **Judgment** | Ma'at's feather | Single health check execution result |
-| **Verdict** | Trial outcome | Alert decision based on judgment patterns |
-| **Jackal** | Anubis's companion | Probe node that executes health checks |
-| **Pharaoh** | Ra - the sun god | Raft leader in a cluster |
-| **Necropolis** | City of the dead | Distributed cluster network |
-| **Feather** | Ma'at's feather | Embedded B+Tree storage engine |
-| **Ma'at** | Goddess of truth | Alert engine |
-| **Duat** | Egyptian underworld | WebSocket real-time layer |
-| **Journey** | Travel of the soul | Multi-step synthetic monitoring |
-| **Djed** | Stability pillar | Configuration persistence |
-| **Eye of Horus** | Protection symbol | Health check status indicator |
+A **Soul** is a monitored target — the entity whose heart is weighed on Ma'at's scale.
+
+```go
+type Soul struct {
+    ID          string           // unique identifier
+    WorkspaceID string           // multi-tenant workspace
+    Name        string           // human-readable name
+    Type        CheckType        // http, tcp, dns, icmp, smtp, imap, grpc, websocket, tls
+    Target      string           // host:port or URL
+    Weight      Duration         // check interval (e.g. "30s")
+    Timeout     Duration         // check timeout
+    Enabled     bool             // active or paused
+    Tags        []string         // optional labels
+    Regions     []string         // restrict to specific regions
+    Region      string           // assigned region
+    // Type-specific config
+    HTTP        *HTTPConfig      `json:"http,omitempty"`
+    TCP         *TCPConfig       `json:"tcp,omitempty"`
+    TLS         *TLSConfig       `json:"tls,omitempty"`
+    // ... SMTP, IMAP, DNS, ICMP, gRPC, WebSocket
+}
+```
+
+**CheckType values:** `http`, `tcp`, `udp`, `dns`, `icmp`, `smtp`, `imap`, `grpc`, `websocket`, `tls`
+
+**SoulStatus values:** `alive` (passed to Aaru), `dead` (devoured by Ammit), `degraded` (heart is heavy), `unknown` (not yet judged), `embalmed` (maintenance window)
+
+### Judgment (`internal/core/judgment.go`)
+
+A **Judgment** is the result of a single check execution — the weighed heart of a soul.
+
+```go
+type Judgment struct {
+    ID          string           // unique identifier
+    SoulID      string           // which soul
+    WorkspaceID string           // for WebSocket routing
+    JackalID    string           // which probe node executed it
+    Region      string
+    Timestamp   time.Time
+    Duration    time.Duration    // check latency
+    Status      SoulStatus       // alive, dead, degraded
+    StatusCode  int              // protocol-specific status code
+    Message     string           // human-readable result
+    Details     *JudgmentDetails  // protocol-specific data (headers, body, etc.)
+    TLSInfo     *TLSInfo         // TLS certificate info
+}
+```
+
+### Verdict (`internal/core/verdict.go`)
+
+A **Verdict** is the alerting decision made by Ma'at when a Soul's status changes or a rule condition is met.
 
 ---
 
-## Core Components
+## Storage Engine (Feather/CobaltDB)
 
-### 1. Storage Engine (Feather/CobaltDB)
+Located at `internal/storage/engine.go` — a custom embedded B+Tree storage engine with zero external dependencies.
 
-Located at `internal/storage/engine.go`, CobaltDB is a custom B+Tree storage engine:
+**Key characteristics:**
+- Configurable B+Tree order (default: 32, range: 4–256)
+- Write-Ahead Log (WAL) for crash recovery
+- Optional AES-256-GCM encryption at rest
+- Leaf node chaining for efficient range scans
+- MVCC support for concurrent readers
+- Snapshot and time-series optimized judgment queries
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       CobaltDB                              │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│   WAL (Write-Ahead Log)          B+Tree Index                │
-│   ┌─────────────────┐           ┌─────────────────┐         │
-│   │  wal.log        │           │  Root Node      │         │
-│   │  - PUT key val  │  ───────▶ │  ├─ keys[]      │         │
-│   │  - DELETE key   │   replay  │  ├─ values[]    │         │
-│   │  - length prefix│           │  └─ children[]  │         │
-│   └─────────────────┘           └────────┬────────┘         │
-│                                           │                  │
-│                      ┌────────────────────┼────────────┐    │
-│                      │                    │            │    │
-│                ┌─────┴─────┐        ┌────┴────┐  ┌────┴──┐│
-│                │ Leaf Node │ ────▶  │ Internal│  │ Leaf  ││
-│                │ (chain)  │        │  Node   │  │(chain)││
-│                └───────────┘        └─────────┘ └───────┘│
-│                                                             │
-│   Key Format: {workspaceID}/souls/{soulID}                │
-│   Key Format: {workspaceID}/judgments/{soulID}/{ts}        │
-│                                                             │
-│   Features:                                                 │
-│   ✓ Configurable B+Tree order (default 32, range 4-256)   │
-│   ✓ WAL for crash recovery                                  │
-│   ✓ Optional AES-256-GCM encryption                         │
-│   ✓ Leaf node chaining for efficient range scans          │
-│   ✓ MVCC support                                            │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
+**Key format:** `{workspaceID}/souls/{soulID}`, `{workspaceID}/judgments/{soulID}/{timestamp}`
 
-### 2. Probe Engine & Checkers
+**WAL recovery:** On startup, the WAL is replayed to restore the B+Tree to the last consistent state. Typical recovery takes under 1 second.
 
-Located at `internal/probe/`, the probe engine executes health checks:
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│                     Probe Engine                                 │
-├────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────────┐    ┌──────────────────┐    ┌──────────────┐ │
-│  │ Scheduler   │───▶│ CheckerRegistry  │───▶│   Checker    │ │
-│  │ (cron-like) │    │ (10 protocols)   │    │ (per-soul)   │ │
-│  └──────────────┘    └──────────────────┘    └──────────────┘ │
-│                                                        │       │
-│                                                        ▼       │
-│                     ┌─────────────────────────────────────┐  │
-│                     │         Checker Implementations       │  │
-│                     ├─────────────────────────────────────┤  │
-│                     │  HTTP     │  TCP    │  UDP          │  │
-│                     │  DNS      │  SMTP   │  IMAP         │  │
-│                     │  ICMP     │  gRPC   │  WebSocket    │  │
-│                     │  TLS      │                     │  │
-│                     └─────────────────────────────────────┘  │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────────┐ │
-│  │              SSRF Protection Layer                        │ │
-│  │  Blocks: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,      │ │
-│  │          127.0.0.0/8, 169.254.0.0/16, 0.0.0.0/8,        │ │
-│  │          192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24,  │ │
-│  │          192.0.0.0/24, 240.0.0.0/4, fc00::/7, fe80::/10, │ │
-│  │          ::1/128                                         │ │
-│  │  Supports: hex/octal IP notation, CIDR parsing           │ │
-│  └──────────────────────────────────────────────────────────┘ │
-│                                                              │
-│  Output: Judgment {SoulID, Status, Latency, Response, ...}  │
-│                                                              │
-└────────────────────────────────────────────────────────────┘
-```
-
-### 3. Alert System (Ma'at)
-
-Located at `internal/alert/`, Ma'at is the alert engine:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Ma'at - Alert Engine                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│   Verdict        Rule Engine         Dispatchers                 │
-│   ┌───────┐      ┌───────────┐       ┌───────────┐             │
-│   │Failed │────▶│ condition │──────▶│  Slack    │             │
-│   │Degraded│     │ evaluator │       │  Discord  │             │
-│   │Alive   │     └───────────┘       │  Email    │             │
-│   └───────┘                         │  PagerDuty│             │
-│                                    │  Webhook   │             │
-│                                    └───────────┘             │
-│                                                                  │
-│   Alert Rule Structure:                                          │
-│   ┌─────────────────────────────────────────────────────────┐  │
-│   │  name: "High Latency Alert"                               │  │
-│   │  condition: "response_time > 500ms"                      │  │
-│   │  severity: "warning"                                     │  │
-│   │  channels: ["slack", "email"]                            │  │
-│   │  cooldown: 5m                                            │  │
-│   └─────────────────────────────────────────────────────────┘  │
-│                                                                  │
-│   Severity Levels:                                              │
-│   ┌─────────┐  ┌────────────┐  ┌──────────┐  ┌──────────────┐  │
-│   │ critical│  │   warning  │  │   info   │  │   ok        │  │
-│   │ 🔴-red  │  │ 🟡-yellow  │  │ 🔵-blue  │  │ 🟢-green    │  │
-│   └─────────┘  └────────────┘  └──────────┘  └──────────────┘  │
-│                                                                  │
-└──────────────────────────────────────────────────────────────────┘
-```
+**Storage sub-packages:**
+| File | Purpose |
+|------|---------|
+| `engine.go` | CobaltDB core (B+Tree + WAL) |
+| `encryption.go` | AES-256-GCM encryptor |
+| `retention.go` | Time-based data expiration |
+| `timeseries.go` | Time-series optimized queries |
+| `raft_log.go` | Raft log store adapter |
 
 ---
 
-## Authentication
+## Probe Engine & Checkers
 
-Located at `internal/auth/`, three authenticator implementations:
+Located at `internal/probe/engine.go` and `internal/probe/*.go`.
+
+The **Jackal** probe engine schedules and executes health checks across all protocol types.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                   Authentication Backends                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│   ┌──────────────────┐  ┌──────────────────┐  ┌──────────────┐ │
-│   │      LOCAL        │  │      OIDC        │  │     LDAP     │ │
-│   │   (local.go)      │  │    (oidc.go)     │  │   (ldap.go)  │ │
-│   ├──────────────────┤  ├──────────────────┤  ├──────────────┤ │
-│   │  bcrypt cost 12   │  │ OpenID Connect   │  │ StartTLS     │ │
-│   │  brute-force prot │  │ JWK caching 24h  │  │ DN escaping  │ │
-│   │  password policy  │  │ RSA/EC support   │  │ Inj. prevent │ │
-│   │  timing attack   │  │ JWT validation   │  │ Fallback     │ │
-│   │  password reset  │  │ HMAC state       │  │              │ │
-│   └──────────────────┘  └──────────────────┘  └──────────────┘ │
-│                                                                  │
-│   Security Features:                                             │
-│   ✓ Constant-time comparison for secrets                         │
-│   ✓ Secure random token generation (CSPRNG)                    │
-│   ✓ Session persistence to disk (0600 permissions)              │
-│   ✓ Brute-force protection (5 attempts / 15-min lockout)       │
-│   ✓ Password policy (12+ chars, 3 of 4 classes)                 │
-│                                                                  │
-└──────────────────────────────────────────────────────────────────┘
+Scheduler (cron-like) ──▶ CheckerRegistry ──▶ Checker (per soul type)
+                                     │
+          ┌──────────────────────────┼──────────────────────────┐
+          ▼                          ▼                          ▼
+    ┌─────────┐               ┌─────────┐               ┌──────────┐
+    │  HTTP   │               │   TCP   │               │   DNS    │
+    └─────────┘               └─────────┘               └──────────┘
+          │                          │                          │
+          ▼                          ▼                          ▼
+    ┌─────────┐               ┌─────────┐               ┌──────────┐
+    │   TLS   │               │  SMTP   │               │   ICMP   │
+    └─────────┘               └─────────┘               └──────────┘
+          │                          │                          │
+          ▼                          ▼                          ▼
+    ┌─────────┐               ┌─────────┐               ┌──────────┐
+    │  gRPC   │               │  IMAP   │               │WebSocket │
+    └─────────┘               └─────────┘               └──────────┘
 ```
+
+**Engine features:**
+- Worker pool with semaphore limiting (default: 100 concurrent checks)
+- Circuit breaker pattern for failing targets
+- SSRF protection: blocks private IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, etc.)
+- Connection pooling for HTTP/HTTPS checks
+- Exponential backoff for retries
+- Region-aware probe distribution
+
+**Checker implementations (`internal/probe/`):**
+| File | Protocol | Key Features |
+|------|---------|-------------|
+| `http.go` | HTTP/HTTPS | Method, headers, body, JSON path, redirects, SSRF block |
+| `tcp.go` | TCP | Banner matching, send/expect regex |
+| `dns.go` | DNS | A/AAAA/CNAME/MX/TXT/NS/SOA/PTR/SRV, DNSSEC, propagation |
+| `icmp.go` | ICMP | Packet count, interval, loss%, latency thresholds |
+| `smtp.go` | SMTP | EHLO, STARTTLS, auth, banner match |
+| `imap.go` | IMAP | TLS, auth, mailbox check |
+| `grpc.go` | gRPC | TLS, metadata, service name |
+| `websocket.go` | WebSocket | Headers, subprotocols, ping/pong |
+| `tls.go` | TLS | Expiry, issuer, OCSP, cipher strength, key bits |
+| `ssrf.go` | — | SSRF protection layer |
 
 ---
 
-## API Layer
+## Alert System (Ma'at)
 
-Located at `internal/api/rest.go` with 80+ routes:
+Located at `internal/alert/manager.go` and `internal/alert/dispatchers.go`.
 
+**Ma'at** — the goddess of truth — evaluates judgment results and dispatches notifications.
+
+```go
+type AlertRule struct {
+    Name      string
+    SoulIDs   []string          // target souls
+    Condition string            // e.g. "status == dead", "response_time > 500ms"
+    Severity  string            // critical, warning, info
+    Channels  []string          // channel IDs
+    Cooldown  Duration          // minimum time between alerts
+}
+
+type AlertChannel struct {
+    ID     string
+    Type   AlertChannelType     // email, slack, discord, webhook, pagerduty, opsgenie, twilio, ntfy
+    Config map[string]any       // channel-specific settings
+}
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      API Architecture                            │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│   Middleware Chain:                                              │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │  Logging → Security Headers → CORS → Recovery →         │   │
-│   │  JSON Validation → Path Param → Rate Limiting           │   │
-│   └─────────────────────────────────────────────────────────┘   │
-│                            │                                     │
-│   Route Pattern: /api/v1/{resource}/:id/:action                │
-│                                                                  │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │                    API Endpoints                         │   │
-│   │                                                         │   │
-│   │  Souls:       GET/POST   /api/v1/souls                  │   │
-│   │               GET        /api/v1/souls/:id              │   │
-│   │               PUT        /api/v1/souls/:id              │   │
-│   │               DELETE     /api/v1/souls/:id              │   │
-│   │                                                         │   │
-│   │  Judgments:   GET        /api/v1/souls/:id/judgments    │   │
-│   │                                                         │   │
-│   │  Vericts:    GET        /api/v1/souls/:id/verdicts     │   │
-│   │                                                         │   │
-│   │  Alerts:     GET/POST   /api/v1/rules                  │   │
-│   │               GET       /api/v1/rules/:id              │   │
-│   │               PUT       /api/v1/rules/:id              │   │
-│   │               DELETE    /api/v1/rules/:id              │   │
-│   │                                                         │   │
-│   │  Channels:   GET/POST   /api/v1/channels               │   │
-│   │               GET       /api/v1/channels/:id           │   │
-│   │                                                         │   │
-│   │  Journey:    GET/POST   /api/v1/journeys               │   │
-│   │               POST      /api/v1/journeys/:id/run       │   │
-│   │                                                         │   │
-│   │  Config:     GET/PUT    /api/v1/config                 │   │
-│   │                                                         │   │
-│   │  SSE:        GET        /api/v1/events                  │   │
-│   │                                                         │   │
-│   └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│   Auth Middleware:                                               │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │  requireAuth()     - Validates token                     │   │
-│   │  requireRole(admin) - RBAC role check                    │   │
-│   │  Cookie: httpOnly, secure, sameSite=strict               │   │
-│   └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│   OpenAPI 3.0.3 specification at .project/openapi.yaml          │
-│                                                                  │
-└──────────────────────────────────────────────────────────────────┘
-```
+
+**Dispatcher implementations:**
+| Dispatcher | Description |
+|------------|-------------|
+| `email` | SMTP with TLS |
+| `slack` | Slack incoming webhooks |
+| `discord` | Discord webhooks |
+| `webhook` | Generic HTTP POST |
+| `pagerduty` | PagerDuty Events API v2 |
+| `opsgenie` | OpsGenie API |
+| `twilio` | Twilio SMS |
+| `ntfy` | ntfy.sh push notifications |
+
+**Features:**
+- Rule-based alert triggers with cooldown periods
+- Incident management (acknowledge, resolve)
+- Alert deduplication and rate limiting
+- Per-channel retry with exponential backoff
 
 ---
 
 ## Cluster & Distribution (Necropolis)
 
-Located at `internal/cluster/` and `internal/raft/`:
+Located at `internal/cluster/manager.go` and `internal/raft/node.go`.
 
+**Necropolis** is the distributed cluster layer built on Raft consensus.
+
+### Raft Node (`internal/raft/node.go`)
+
+```go
+type Node struct {
+    config        core.RaftConfig
+    nodeID        string
+    state         core.RaftState   // follower, candidate, leader
+    currentTerm   uint64
+    votedFor      string
+    log           []core.RaftLogEntry
+    commitIndex   uint64
+    lastApplied   uint64
+    nextIndex     map[string]uint64   // for leaders
+    matchIndex    map[string]uint64    // for leaders
+    peers         map[string]*Peer
+    membership                   // joint consensus tracking
+    storage       LogStore
+    snapshot      SnapshotStore
+    fsm           FSM
+    transport     Transport
+}
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                  Necropolis - Cluster Architecture                  │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│   ┌─────────────────┐         ┌─────────────────┐                │
-│   │  Pharaoh Node    │◀───────▶│   Jackal Node    │                │
-│   │  (Raft Leader)   │         │  (Follower)      │                │
-│   │  port: 7946     │         │  port: 7946      │                │
-│   └────────┬────────┘         └────────┬────────┘                │
-│            │                           │                          │
-│            │    Gossip Protocol         │                          │
-│            │◀──────────────────────────▶│                          │
-│            │                           │                          │
-│   ┌────────┴────────────────────────────┴────────┐                │
-│   │                  Raft Consensus                     │                │
-│   │  - Leader election (Pharaoh)                       │                │
-│   │  - Log replication                                 │                │
-│   │  - Membership changes                              │                │
-│   │  - Snapshotting                                    │                │
-│   └───────────────────────────────────────────────────┘                │
-│                                                                      │
-│   Commands:                                                         │
-│   ┌──────────────────────────────────────────────────────────────┐  │
-│   │  anubis necropolis          # Show cluster status            │  │
-│   │  anubis summon 10.0.0.2     # Add node to cluster            │  │
-│   │  anubis banish jackal-02    # Remove node from cluster      │  │
-│   └──────────────────────────────────────────────────────────────┘  │
-│                                                                      │
-│   Probe Coordination:                                               │
-│   ┌──────────────────────────────────────────────────────────────┐  │
-│   │  - Pharaoh assigns souls to Jackals                         │  │
-│   │  - Jackals report judgments back to Pharaoh                 │  │
-│   │  - Load balancing across probe nodes                        │  │
-│   │  - Heartbeat monitoring                                      │  │
-│   └──────────────────────────────────────────────────────────────┘  │
-│                                                                      │
-└──────────────────────────────────────────────────────────────────────┘
+
+**Key Raft features:**
+- Leader election with pre-vote optimization
+- Log replication with majority acknowledgment
+- Snapshotting for log compaction
+- Joint consensus for safe membership changes (add/remove/replace peers)
+- TCP transport with optional TLS/mTLS
+
+### Cluster Manager (`internal/cluster/manager.go`)
+
+```go
+type Manager struct {
+    necroConfig   core.NecropolisConfig
+    node          *raft.Node
+    db            *storage.CobaltDB
+    logStore      *storage.CobaltDBLogStore
+    snapshotStore *storage.CobaltDBSnapshotStore
+    fsm           *raft.StorageFSM
+    isClustered   bool
+}
+```
+
+**Discovery modes:** `manual`, `gossip`, `mdns`
+
+**Distribution strategies:**
+| Strategy | Behavior |
+|----------|---------|
+| `round_robin` | Evenly distribute souls across nodes |
+| `region_aware` | Prefer same-region probes |
+| `redundant` | Assign soul to multiple nodes |
+| `weighted` | By node capacity |
+| `latency_optimal` | By probe latency |
+
+**Cluster commands:**
+```bash
+anubis necropolis              # show cluster status
+anubis summon 10.0.0.2:7946   # add node
+anubis banish jackal-02       # remove node
+```
+
+**State transitions:**
+```
+Follower ──(election timeout)──▶ Candidate
+Candidate ──(votes majority)────▶ Leader
+Leader ────(higher term)────────▶ Follower
 ```
 
 ---
 
 ## Journey (Synthetic Monitoring)
 
-Located at `internal/journey/`:
+Located at `internal/journey/executor.go`.
+
+A **Journey** is a multi-step synthetic monitoring scenario — a sequence of checks with assertions that mimic real user flows.
+
+```go
+type Journey struct {
+    ID       string
+    Name     string
+    Steps    []JourneyStep
+    Interval Duration
+    Enabled  bool
+}
+
+type JourneyStep struct {
+    Name       string
+    Type       CheckType   // http, tcp, dns, grpc, websocket
+    Target     string
+    Config     interface{} // type-specific config
+    Assertions []Assertion // pass/fail conditions
+}
+```
+
+**Step types:** HTTP, TCP, DNS, gRPC, WebSocket
+
+**Assertion types:** `status` (HTTP status code), `body` (contains/matches), `header` (response header), `latency` (response time threshold), `json` (JSON path)
+
+**Execution flow:**
+1. Journey scheduled at configured interval
+2. Each step executed in sequence
+3. Assertions evaluated after each step
+4. Results stored as Judgments with step context
+5. Failure aborts the journey (unless configured to continue)
+
+---
+
+## Authentication
+
+Located at `internal/auth/`.
+
+Three authentication backends with a common interface:
+
+```go
+type Authenticator interface {
+    Authenticate(ctx context.Context, email, password string) (*User, error)
+    UserInfo(ctx context.Context, userID string) (*User, error)
+}
+```
+
+### Local (`internal/auth/local.go`)
+
+- bcrypt cost 12 password hashing
+- Brute-force protection: 5 attempts → 15-minute lockout
+- Password policy: 12+ characters, 3 of 4 character classes
+- Session tokens stored to disk with `0600` permissions
+- Timing-attack resistant user enumeration
+
+### OIDC (`internal/auth/oidc.go`)
+
+- OpenID Connect protocol
+- JWK key caching (24h TTL)
+- RSA and EC algorithm support
+- HMAC state parameter for CSRF protection
+- Automatic user creation on first login
+
+### LDAP (`internal/auth/ldap.go`)
+
+- StartTLS for encrypted binds
+- DN escaping to prevent injection
+- User search with configurable base DN
+- Fallback to direct bind if search fails
+
+**Security features across all backends:**
+- Constant-time comparison for secrets
+- CSPRNG for all random generation (tokens, IDs)
+- `httpOnly, secure, sameSite=strict` session cookies
+- Security headers on all responses
+
+---
+
+## API Layer
+
+Located at `internal/api/rest.go` — 80+ routes.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│               Journey - Synthetic Monitoring                     │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│   Journey Definition:                                            │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │  name: "Checkout Flow"                                    │   │
-│   │  steps:                                                   │   │
-│   │    - step: 1                                              │   │
-│   │      name: "Homepage"                                     │   │
-│   │      type: "http"                                         │   │
-│   │      url: "https://example.com"                           │   │
-│   │      assertions:                                          │   │
-│   │        - type: "status"                                   │   │
-│   │          operator: "=="                                   │   │
-│   │          value: 200                                        │   │
-│   │        - type: "body"                                     │   │
-│   │          operator: "contains"                             │   │
-│   │          value: "Login"                                   │   │
-│   │    - step: 2                                              │   │
-│   │      name: "API Health"                                   │   │
-│   │      type: "http"                                         │   │
-│   │      url: "https://api.example.com/health"               │   │
-│   │    - step: 3                                              │   │
-│   │      name: "WebSocket Connect"                            │   │
-│   │      type: "websocket"                                   │   │
-│   │      url: "wss://example.com/realtime"                   │   │
-│   └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│   Step Types: HTTP, HTTPS, TCP, DNS, WebSocket, gRPC            │
-│                                                                  │
-│   Assertion Types:                                               │
-│   - status (HTTP status code)                                   │
-│   - body (response body contains/matches)                      │
-│   - header (response header check)                              │
-│   - latency (response time threshold)                          │
-│   - json (JSON path assertion)                                  │
-│                                                                  │
-└──────────────────────────────────────────────────────────────────┘
+Middleware chain:
+Logging → Security Headers → CORS → Recovery →
+JSON Validation → Depth Limit (max 32) → Rate Limiting
+
+Route prefix: /api/v1/{resource}/:id/:action
 ```
+
+**Core REST endpoints:**
+| Resource | Methods | Description |
+|----------|---------|-------------|
+| `/api/v1/souls` | GET, POST | List/create souls |
+| `/api/v1/souls/:id` | GET, PUT, DELETE | Single soul CRUD |
+| `/api/v1/souls/:id/judgments` | GET | Soul's judgment history |
+| `/api/v1/souls/:id/verdicts` | GET | Soul's verdict history |
+| `/api/v1/journeys` | GET, POST | List/create journeys |
+| `/api/v1/journeys/:id/run` | POST | Trigger journey execution |
+| `/api/v1/rules` | GET, POST | Alert rules |
+| `/api/v1/channels` | GET, POST | Alert channels |
+| `/api/v1/config` | GET, PUT | Server config |
+| `/api/v1/status-pages` | GET | Status page data |
+| `/api/v1/audit` | GET | Audit log |
+| `/api/v1/metrics` | GET | Prometheus metrics |
+
+**Real-time endpoints:**
+| Path | Protocol | Purpose |
+|------|----------|---------|
+| `/ws` | WebSocket | Duat real-time event stream |
+| `/api/v1/events` | SSE | Server-sent events |
+
+**Public endpoints:**
+| Path | Purpose |
+|------|---------|
+| `/` | Embedded React dashboard |
+| `/login` | Dashboard login |
+| `/health` | Liveness check |
+| `/ready` | Readiness check |
+| `/metrics` | Prometheus metrics |
+| `/api/docs` | OpenAPI documentation UI |
+| `/api/openapi.json` | OpenAPI JSON spec |
+| `/api/v1/mcp` | MCP JSON-RPC endpoint |
+| `/api/v1/mcp/tools` | MCP tool listing |
+| `/status`, `/status.html`, `/public/status` | Public status pages |
 
 ---
 
 ## Dashboard (React)
 
-Located at `web/`:
+Located at `web/`.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    React Dashboard Architecture                  │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│   Tech Stack:                                                    │
-│   - React 19 (concurrent features)                              │
-│   - React Router DOM 7                                          │
-│   - Tailwind CSS 4.1                                             │
-│   - Zustand 5 (state management)                               │
-│   - Recharts (visualizations)                                   │
-│   - Lucide React (icons)                                        │
-│   - Vitest 4 (testing)                                          │
-│   - Playwright (e2e testing)                                    │
-│                                                                  │
-│   Theme System:                                                  │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │  Dark Mode          │  Light Mode                       │   │
-│   │  ──────────────     │  ─────────────                    │   │
-│   │  bg: #0a0a15        │  bg: #f9fafb                      │   │
-│   │  bg-card: #1a1a2e   │  bg-card: #ffffff                 │   │
-│   │  text: #ffffff      │  text: #111827                    │   │
-│   │  accent: #D4AF37    │  accent: #b8860b (darkened gold) │   │
-│   │  border: #D4AF37/20 │  border: #e5e7eb                  │   │
-│   └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│   State Management (Zustand stores):                            │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │  useAuthStore     - Authentication state, logout      │   │
-│   │  useThemeStore    - Theme (dark/light/system)         │   │
-│   │  useSoulStore     - Souls list, CRUD operations       │   │
-│   │  useAlertStore    - Alert rules, channels              │   │
-│   │  useJourneyStore  - Journey definitions                │   │
-│   └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│   Pages:                                                         │
-│   - Dashboard     (/)          - Overview, stats              │
-│   - Souls         (/souls)     - Monitor list                   │
-│   - Soul Detail   (/souls/:id) - Individual monitor            │
-│   - Journeys      (/journeys)  - Synthetic checks               │
-│   - Alerts        (/alerts)    - Alert rules & channels         │
-│   - Status Page   (/status)    - Public status page             │
-│   - Settings      (/settings)  - Configuration                  │
-│                                                                  │
-│   API Integration:                                              │
-│   Base URL: /api/v1 (proxied via Vite dev server)              │
-│   Auth: Bearer token in Authorization header                   │
-│   Real-time: WebSocket at /api/v1/events                        │
-│                                                                  │
-└──────────────────────────────────────────────────────────────────┘
-```
+**Tech stack:**
+- React 19 (concurrent features)
+- React Router DOM 7
+- Tailwind CSS 4.1
+- Zustand 5 (state management)
+- Recharts (visualizations)
+- Lucide React (icons)
+- Vitest 4 + Playwright (testing)
 
----
+**Theme:** Egyptian mythology, dark mode default with gold accents.
 
-## Configuration
+**Zustand stores:**
+| Store | Purpose |
+|-------|---------|
+| `useAuthStore` | Authentication, logout |
+| `useThemeStore` | Theme (dark/light/system) |
+| `useSoulStore` | Soul list, CRUD |
+| `useAlertStore` | Alert rules, channels |
+| `useJourneyStore` | Journey definitions |
 
-Configuration files support JSON or YAML:
+**Pages:** Dashboard (/) · Souls (/souls) · Soul Detail (/souls/:id) · Journeys (/journeys) · Alerts (/alerts) · Incidents (/incidents) · Maintenance (/maintenance) · Cluster (/cluster) · Status Pages (/status-pages) · Settings (/settings)
 
-```
-Default locations checked in order:
-1. ./anubis.json
-2. ./anubis.yaml
-3. ~/.config/anubis/anubis.json
-4. /etc/anubis/anubis.json
-```
-
-### Environment Variable Expansion
-
-```yaml
-database:
-  host: "${DB_HOST:-localhost}"
-  port: "${DB_PORT:-5432}"
-  credentials:
-    username: "${DB_USER}"
-    password: "${DB_PASSWORD}"
-```
-
-### Key Configuration Sections
-
-```yaml
-server:
-  host: "0.0.0.0"
-  port: 8443
-  # TLS configuration
-
-auth:
-  enabled: true
-  type: "local"  # local, oidc, ldap
-  local:
-    admin_email: "admin@example.com"
-    admin_password: "${ANUBIS_ADMIN_PASSWORD}"
-  oidc:
-    issuer: "https://auth.example.com"
-    client_id: "${OIDC_CLIENT_ID}"
-    client_secret: "${OIDC_CLIENT_SECRET}"
-  ldap:
-    url: "ldap://ldap.example.com:389"
-    base_dn: "dc=example,dc=com"
-    bind_dn: "${LDAP_BIND_DN}"
-    bind_password: "${LDAP_BIND_PASSWORD}"
-
-cluster:
-  enabled: false
-  bind_addr: "0.0.0.0:7946"
-  gossip_addr: "0.0.0.0:7946"
-
-probe:
-  interval: 60s  # Default check interval
-  timeout: 10s   # Check timeout
-  workers: 10     # Concurrent checkers
-
-storage:
-  path: "/var/lib/anubis"
-  encryption:
-    enabled: false
-    key: "${ANUBIS_ENCRYPTION_KEY}"
-  btree_order: 32
-
-logging:
-  level: "info"  # debug, info, warn, error
-  format: "json"  # json, text
-```
-
-### Key Environment Variables
-
-| Variable | Description | Default |
-|---------|-------------|---------|
-| `ANUBIS_CONFIG` | Config file path | - |
-| `ANUBIS_DATA_DIR` | Data directory | `/var/lib/anubis` |
-| `ANUBIS_LOG_LEVEL` | Log level | `info` |
-| `ANUBIS_PORT` | Server port | `8443` |
-| `ANUBIS_ENCRYPTION_KEY` | Storage encryption key | - |
-| `ANUBIS_CLUSTER_SECRET` | Cluster HMAC secret | - |
-| `ANUBIS_ADMIN_PASSWORD` | Initial admin password | - |
-
----
-
-## Security
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Security Architecture                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│   Transport Security:                                             │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │  TLS 1.2+ required for all external connections          │   │
-│   │  HTTP/2 with ALPN negotiation                            │   │
-│   │  Strong cipher suites only                              │   │
-│   │  Explicit cert/key TLS or ingress-managed TLS           │   │
-│   └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│   Authentication Security:                                       │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │  bcrypt cost 12 (password hashing)                       │   │
-│   │  Constant-time comparison (prevent timing attacks)       │   │
-│   │  CSPRNG for all random generation (tokens, IDs)         │   │
-│   │  Brute-force protection (5 attempts / 15-min lockout)   │   │
-│   │  Password policy (12+ chars, 3 of 4 character classes)  │   │
-│   │  httpOnly, secure, sameSite=strict cookies              │   │
-│   │  Timing-attack resistant user enumeration                │   │
-│   └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│   Network Security:                                              │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │  SSRF Protection (HTTP checker blocks private ranges)    │   │
-│   │  - 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16             │   │
-│   │  - 127.0.0.0/8, 169.254.0.0/16, 0.0.0.0/8               │   │
-│   │  - 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24        │   │
-│   │  - 192.0.0.0/24, 240.0.0.0/4, fc00::/7, fe80::/10       │   │
-│   │  CIDR parsing support, hex/octal IP notation            │   │
-│   └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│   API Security:                                                  │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │  Rate limiting (configurable per-endpoint)               │   │
-│   │  Input validation (JSON, path parameters)               │   │
-│   │  Security headers (HSTS, CSP, X-Frame-Options, etc.)   │   │
-│   │  CORS with configurable origin whitelist                 │   │
-│   │  HMAC validation for cluster messages                     │   │
-│   └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│   Storage Security:                                              │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │  Optional AES-256-GCM encryption at rest                │   │
-│   │  WAL written with restrictive permissions (0600)       │   │
-│   │  Atomic file operations (temp file + rename)            │   │
-│   └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-│   Data at Rest Encryption:                                        │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │  Algorithm: AES-256-GCM                                 │   │
-│   │  Key: 32 bytes (hex-encoded or env var)                 │   │
-│   │  Nonce: 12 bytes (unique per encryption)                │   │
-│   │  Auth tag: 16 bytes                                     │   │
-│   │  Encrypted keys: {workspaceID}/souls/{soulID}          │   │
-│   │  Encrypted values: JSON-encoded data                    │   │
-│   └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-└──────────────────────────────────────────────────────────────────┘
-```
+**Build:** `npm run build:embed` writes the built dashboard into `internal/dashboard/dist` so the Go binary embeds and serves it.
 
 ---
 
 ## Data Flow
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           Data Flow Diagram                               │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│   1. Soul Registration                                                   │
-│   ┌─────────┐     POST /api/v1/souls      ┌─────────┐                   │
-│   │ Client  │ ──────────────────────────▶ │   REST  │                   │
-│   │ (Web)   │                             │   API   │                   │
-│   └─────────┘                             └────┬────┘                   │
-│                                                │                        │
-│                                                ▼                        │
-│                                        ┌─────────────┐                 │
-│                                        │  CobaltDB  │                 │
-│                                        │   (Put)    │                 │
-│                                        └─────────────┘                 │
-│                                                                          │
-│   2. Health Check Execution                                              │
-│   ┌─────────────┐     ┌─────────────┐     ┌─────────────┐             │
-│   │  Scheduler │ ──▶ │   Probe     │ ──▶ │  Checker   │             │
-│   │  (cron)    │     │   Engine    │     │ (HTTP/TCP) │             │
-│   └─────────────┘     └─────────────┘     └──────┬──────┘             │
-│                                                    │                   │
-│                     ┌──────────────────────────────┼───────┐            │
-│                     ▼                              ▼       ▼            │
-│              ┌───────────┐                   ┌────────┐ ┌────────┐     │
-│              │ Judgment  │                   │ Soul   │ │ Alert  │     │
-│              │  (core)   │                   │ Status │ │ Engine │     │
-│              └─────┬─────┘                   └────────┘ └────┬──┘     │
-│                    │                         ▲                │         │
-│                    ▼                         │                ▼         │
-│              ┌───────────┐                   │         ┌───────────┐  │
-│              │ CobaltDB  │                   │         │ Notifiers  │  │
-│              │ (Put)     │                   │         │(Slack/Email)│ │
-│              └───────────┘                   │         └───────────┘  │
-│                                               │                        │
-│   3. Real-time Updates                                                │
-│              ┌───────────┐     ┌──────────────┐     ┌───────────┐  │
-│              │ WebSocket │ ◀── │  Dashboard   │ ◀── │ Judgment  │  │
-│              │  Server   │     │   Store      │     │  Created  │  │
-│              └─────┬─────┘     │  (Zustand)   │     └───────────┘  │
-│                    │           └──────────────┘                     │
-│                    ▼                                                 │
-│              ┌───────────┐                                           │
-│              │  Browser  │                                           │
-│              │ (React)   │                                           │
-│              └───────────┘                                           │
-│                                                                          │
-│   4. Cluster Replication                                              │
-│   ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌──────────┐     │
-│   │Pharaoh  │───▶│ Raft Log │───▶│ Jackal 1 │───▶│ Jackal 2 │     │
-│   │(Leader) │    │          │    │          │    │          │     │
-│   └──────────┘    └──────────┘    └──────────┘    └──────────┘     │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
+1. Soul Registration
+   Client → POST /api/v1/souls → REST API → CobaltDB (Put)
+
+2. Health Check Execution
+   Scheduler → Probe Engine → Checker (HTTP/TCP/DNS/...)
+       │
+       ├──▶ Judgment (core) ──▶ CobaltDB (Put)
+       ├──▶ Soul Status Update
+       └──▶ Alert Engine ──▶ Dispatchers (Slack/Email/...)
+
+3. Real-time Updates
+   Judgment Created → WebSocket Server → Dashboard Store (Zustand) → React UI
+
+4. Cluster Replication
+   Pharaoh (Leader) ──▶ Raft Log ──▶ Jackal 1 ──▶ Jackal 2
+```
+
+---
+
+## Deployment Patterns
+
+### Single Node (default)
+
+```
+┌─────────────────────────────────────┐
+│           Single Node                │
+│  ┌─────────┐ ┌─────────┐ ┌───────┐│
+│  │   API   │ │  Probe  │ │Storage││
+│  └─────────┘ └─────────┘ └───────┘│
+└─────────────────────────────────────┘
+```
+
+### Multi-Node Cluster (Necropolis)
+
+```
+┌─────────────┐       ┌─────────────┐       ┌─────────────┐
+│   Node 1    │◀─────▶│   Node 2    │◀─────▶│   Node 3    │
+│  (Pharaoh)  │       │  (Jackal)   │       │  (Jackal)   │
+│   :7946     │       │   :7946     │       │   :7946     │
+└──────┬──────┘       └─────────────┘       └─────────────┘
+       │
+       │              Load Balancer
+       └──────────────┼────────────────┘
+                      │
+                 ┌────┴────┐
+                 │ Clients │
+                 └─────────┘
 ```
 
 ---
@@ -696,64 +593,29 @@ logging:
 
 ### Backend (Go)
 
-| Package | Version | Purpose |
-|---------|---------|---------|
-| `github.com/coder/websocket` | v1.8.14 | WebSocket support |
-| `github.com/go-ldap/ldap/v3` | v3.4.13 | LDAP authentication |
-| `golang.org/x/crypto` | v0.49.0 | bcrypt, Argon2 |
-| `golang.org/x/net` | v0.52.0 | Extended networking |
-| `google.golang.org/grpc` | v1.80.0 | gRPC server |
-| `google.golang.org/protobuf` | v1.36.11 | Protocol buffers |
-| `gopkg.in/yaml.v3` | v3.0.1 | YAML config parsing |
+| Package | Purpose |
+|---------|---------|
+| Go 1.25+ | Language |
+| `github.com/coder/websocket` v1.8.14 | WebSocket |
+| `github.com/go-ldap/ldap/v3` v3.4.13 | LDAP auth |
+| `golang.org/x/crypto` | bcrypt, Argon2 |
+| `golang.org/x/net` | Networking |
+| `google.golang.org/grpc` v1.80.0 | gRPC |
+| `google.golang.org/protobuf` v1.36.11 | Protobuf |
+| `gopkg.in/yaml.v3` | YAML config |
+| `go.opentelemetry.io/otel` | Distributed tracing |
 
 ### Frontend (React)
 
-| Package | Version | Purpose |
-|---------|---------|---------|
-| React | 19 | UI framework |
-| react-router-dom | 7 | Routing |
-| tailwindcss | 4.1 | CSS framework |
-| zustand | 5 | State management |
-| recharts | latest | Charts |
-| lucide-react | latest | Icons |
-| vitest | 4 | Testing |
-
-### Infrastructure
-
-| Component | Technology |
-|-----------|------------|
-| Language | Go 1.26+ |
-| Dashboard | React 19 + Vite 6 |
-| Package Manager | pnpm |
-| Cluster | Raft consensus |
-| Serialization | Protocol Buffers |
-
----
-
-## Soul Status Values
-
-| Status | Meaning | Icon |
-|--------|---------|------|
-| `alive` | Service healthy | 🟢 |
-| `dead` | Service failing | 🔴 |
-| `degraded` | Performance issues | 🟡 |
-| `unknown` | Not yet checked | ⚪ |
-| `embalmed` | Maintenance mode | 🔵 |
-
-## Check Types
-
-| Type | Protocol | Description |
-|------|----------|-------------|
-| `http` | HTTP/HTTPS | HTTP health check with SSRF protection |
-| `tcp` | TCP | TCP connection check |
-| `udp` | UDP | UDP endpoint check |
-| `dns` | DNS | DNS server resolution |
-| `smtp` | SMTP | SMTP mail server |
-| `imap` | IMAP | IMAP mail server |
-| `icmp` | ICMP | Ping/echo check |
-| `grpc` | gRPC | gRPC service health |
-| `websocket` | WebSocket | WebSocket connection |
-| `tls` | TLS | TLS certificate expiration |
+| Package | Purpose |
+|---------|---------|
+| React 19 | UI framework |
+| react-router-dom 7 | Routing |
+| Tailwind CSS 4.1 | Styling |
+| Zustand 5 | State management |
+| Recharts | Charts |
+| Lucide React | Icons |
+| Vitest 4 + Playwright | Testing |
 
 ---
 
@@ -761,92 +623,121 @@ logging:
 
 ```
 AnubisWatch/
-├── cmd/
-│   └── anubis/              # Main application entry
-│       └── server.go         # DI wiring, server setup
+├── cmd/anubis/              # CLI entry point + DI wiring
+│   ├── main.go              # main(), flag parsing
+│   ├── server.go             # Server struct, Start(), Stop()
+│   ├── init.go              # init command (config scaffold)
+│   ├── soul.go              # soul CRUD commands
+│   ├── judge.go             # judge command (manual check trigger)
+│   ├── cluster.go           # necropolis/summon/banish commands
+│   ├── backup.go            # backup/restore commands
+│   └── config.go            # config validation/show/set
+│
 ├── internal/
-│   ├── alert/                # Alert engine (Ma'at)
-│   │   └── dispatchers/      # Notification dispatchers
-│   ├── api/                  # API layer
-│   │   ├── rest/             # REST API handlers
-│   │   ├── grpc/             # gRPC handlers
-│   │   ├── ws/               # WebSocket handlers
-│   │   └── mcp/              # Model Context Protocol server
-│   ├── auth/                 # Authentication backends
-│   │   ├── local.go          # Local (bcrypt) auth
-│   │   ├── oidc.go           # OpenID Connect
-│   │   └── ldap.go           # LDAP/Active Directory
-│   ├── backup/               # Backup & restore
-│   ├── cluster/              # Cluster management (Necropolis)
-│   ├── core/                 # Core domain types
-│   ├── dashboard/            # Dashboard embedding
-│   ├── grpcapi/              # gRPC API server
+│   ├── core/                # Domain models
+│   │   ├── soul.go          # Soul, CheckType, SoulStatus
+│   │   ├── judgment.go      # Judgment, JudgmentDetails, TLSInfo
+│   │   ├── verdict.go       # Verdict, AlertRule, AlertChannel
+│   │   ├── config.go        # Config, ServerConfig, StorageConfig
+│   │   └── errors.go        # ConfigError, RaftError
+│   │
+│   ├── storage/             # CobaltDB engine
+│   │   ├── engine.go        # B+Tree + WAL core
+│   │   ├── encryption.go    # AES-256-GCM
+│   │   ├── retention.go     # Time-based expiration
+│   │   ├── timeseries.go    # Time-series queries
+│   │   └── raft_log.go      # Raft log store adapter
+│   │
+│   ├── probe/                # Probe engine + checkers
+│   │   ├── engine.go        # Scheduler, worker pool, circuit breaker
+│   │   ├── checker.go       # CheckerRegistry
+│   │   ├── http.go          # HTTP/HTTPS checker
+│   │   ├── tcp.go           # TCP checker
+│   │   ├── dns.go           # DNS checker
+│   │   ├── icmp.go          # ICMP ping checker
+│   │   ├── smtp.go          # SMTP checker
+│   │   ├── imap.go          # IMAP checker
+│   │   ├── grpc.go          # gRPC health checker
+│   │   ├── tls.go           # TLS certificate checker
+│   │   ├── websocket.go     # WebSocket checker
+│   │   └── ssrf.go          # SSRF protection layer
+│   │
+│   ├── alert/                # Ma'at alert engine
+│   │   ├── manager.go        # Alert routing, incident management
+│   │   └── dispatchers.go   # Email, Slack, Discord, Webhook, PagerDuty, etc.
+│   │
 │   ├── journey/              # Synthetic monitoring
-│   ├── probe/                # Probe engine & checkers
-│   ├── raft/                 # Raft consensus implementation
-│   ├── statuspage/           # Status page generator
-│   ├── storage/              # CobaltDB storage engine
-│   └── tenant/               # Multi-tenancy
-├── web/                      # React dashboard
+│   │   └── executor.go      # Multi-step journey runner
+│   │
+│   ├── raft/                 # Raft consensus
+│   │   ├── node.go          # Raft state machine (Pharaoh/Jackal)
+│   │   ├── fsm.go           # Finite state machine application
+│   │   ├── transport.go     # TCP transport with TLS
+│   │   ├── discovery.go     # Node discovery (gossip/mdns/manual)
+│   │   └── distributor.go  # Probe work distribution
+│   │
+│   ├── cluster/              # Cluster management
+│   │   └── manager.go       # Necropolis controller
+│   │
+│   ├── api/                  # HTTP API layer
+│   │   ├── rest.go          # RESTServer (80+ routes)
+│   │   ├── websocket.go     # Duat real-time layer
+│   │   ├── metrics.go       # Prometheus metrics
+│   │   ├── audit.go         # Audit log
+│   │   ├── mcp.go           # MCP server (AI integration)
+│   │   └── statuspage.go    # Status page API
+│   │
+│   ├── auth/                 # Authentication
+│   │   ├── local.go         # bcrypt + sessions
+│   │   ├── oidc.go          # OpenID Connect
+│   │   └── ldap.go          # LDAP/Active Directory
+│   │
+│   ├── backup/               # Backup & restore
+│   │   └── manager.go
+│   │
+│   ├── statuspage/           # Public status page
+│   │   └── handler.go
+│   │
+│   ├── dashboard/            # Embedded dashboard assets
+│   │   └── embed.go
+│   │
+│   ├── grpcapi/              # gRPC API server
+│   │   └── server.go
+│   │
+│   └── telemetry/            # Observability
+│       └── tracer.go          # OpenTelemetry setup
+│
+├── web/                      # React dashboard source
 │   ├── src/
-│   │   ├── components/        # React components
-│   │   ├── pages/             # Page components
-│   │   ├── stores/            # Zustand stores
-│   │   ├── styles/            # CSS files
-│   │   ├── api/               # API client
-│   │   ├── hooks/             # React hooks
-│   │   └── App.tsx            # Main app
-│   └── vite.config.ts        # Vite configuration
-├── configs/                   # Configuration files
-├── .project/                  # OpenAPI specs
-├── .github/workflows/         # CI/CD pipelines
-└── Makefile                   # Build automation
-```
-
----
-
-## CI Pipeline
-
-Located at `.github/workflows/ci.yml`:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    CI Pipeline Jobs                             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  1. test-backend          Go tests, 80% coverage minimum         │
-│  2. test-frontend        Vitest + Playwright                    │
-│  3. lint                 golangci-lint                          │
-│  4. build                Binary build verification              │
-│  5. chaos-tests          Raft fault injection (main only)       │
-│  6. load-tests           Performance benchmarks (main only)     │
-│  7. integration-tests    Full stack integration (main only)    │
-│  8. helm-tests           Kubernetes chart validation           │
-│  9. security             gosec + Nancy dependency scanning     │
-│ 10. docker-security      Trivy container scanning              │
-│                                                                  │
-│  Additional:                                                       │
-│  - docker-build.yml      Multi-arch Docker images                │
-│  - release.yml           Automated releases + Homebrew          │
-│                                                                  │
-└──────────────────────────────────────────────────────────────────┘
+│   │   ├── components/       # Shared UI components
+│   │   ├── pages/           # Route pages
+│   │   ├── stores/          # Zustand stores
+│   │   ├── api/             # API client
+│   │   └── hooks/           # React hooks
+│   └── package.json
+│
+├── configs/                  # Config examples (JSON/YAML)
+├── deploy/                   # Kubernetes, Helm, Docker
+│   ├── k8s/                  # K8s manifests
+│   └── helm/anubiswatch/     # Helm chart
+├── docs/                     # Documentation
+│   └── adr/                  # Architecture Decision Records
+├── scripts/                  # Helper scripts
+├── proto/v1/                 # Protocol Buffer definitions
+├── Makefile
+└── Dockerfile
 ```
 
 ---
 
 ## Performance Characteristics
 
-| Metric | Value | Notes |
-|--------|-------|-------|
-| Binary Size | ~18MB | With embedded dashboard |
-| Memory (idle) | ~50MB | Single node, no checks |
-| Memory (active) | ~150MB | 100 souls, 60s interval |
-| Check Latency | <10ms | Local network targets |
-| WAL Recovery | <1s | Typical WAL size |
-| B+Tree Operations | O(log n) | Configurable order |
-| Concurrent Checks | 100+ | Worker pool configurable |
-
----
-
-*Document generated: 2026-04-24*
-*AnubisWatch v1.0.0*
+| Metric | Value |
+|--------|-------|
+| Binary size | ~18 MB (with embedded dashboard) |
+| Memory (idle) | ~50 MB |
+| Memory (active) | ~150 MB (100 souls, 60s interval) |
+| Check latency | <10ms for local network targets |
+| WAL recovery | <1s typical |
+| B+Tree operations | O(log n) with configurable order |
+| Concurrent checks | 100+ (configurable worker pool) |
