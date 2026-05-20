@@ -44,6 +44,6 @@ describe('TableWidget', () => {
   it('handles API error gracefully', async () => {
     mocks.post.mockRejectedValue(new Error('API error'))
     render(<TableWidget widget={makeWidget()} dashboardId="d1" />)
-    await waitFor(() => expect(screen.getByText('No data')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Error')).toBeInTheDocument())
   })
 })

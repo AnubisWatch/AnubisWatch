@@ -48,7 +48,7 @@ describe('StatWidget', () => {
   it('handles API error gracefully', async () => {
     mocks.post.mockRejectedValue(new Error('API error'))
     render(<StatWidget widget={makeWidget()} dashboardId="d1" />)
-    await waitFor(() => expect(screen.getByText('—')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Error')).toBeInTheDocument())
   })
 
   it('shows dash for empty response', async () => {

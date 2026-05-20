@@ -30,7 +30,7 @@ describe('Sidebar', () => {
       </MemoryRouter>
     )
 
-    const navItems = ['Dashboard', 'Souls', 'Judgments', 'Alerts', 'Incidents', 'Journeys', 'Maintenance', 'Dashboards', 'Necropolis', 'Status Pages', 'Settings']
+    const navItems = ['Hall of Judgment', 'Essence', 'Weighings', 'Divine Warnings', 'Cries of Chaos', 'Sacred Rest', 'Voyages', 'Sacred Charts', 'Necropolis', 'Temple Squares', 'Pharaoh\'s Chamber']
     navItems.forEach(item => {
       expect(screen.getByText(item)).toBeInTheDocument()
     })

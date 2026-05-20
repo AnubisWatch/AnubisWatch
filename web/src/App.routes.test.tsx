@@ -145,20 +145,20 @@ describe('App route smoke coverage', () => {
 
   const routes = [
     { path: '/', heading: 'Hall of Judgment' },
-    { path: '/souls', heading: 'Souls' },
+    { path: '/souls', heading: 'Essence' },
     { path: `/souls/${soul.id}`, heading: soul.name },
     { path: `/souls/${soul.id}/edit`, heading: 'Edit Soul' },
-    { path: '/judgments', heading: 'Judgments' },
-    { path: '/alerts', heading: 'Alerts' },
-    { path: '/incidents', heading: 'Incidents' },
-    { path: '/maintenance', heading: 'Maintenance' },
-    { path: '/journeys', heading: 'Journeys' },
-    { path: '/cluster', heading: 'Cluster' },
-    { path: '/status-pages', heading: 'Status Pages' },
+    { path: '/judgments', heading: 'Weighings' },
+    { path: '/alerts', heading: 'Divine Warnings' },
+    { path: '/incidents', heading: 'Cries of Chaos' },
+    { path: '/maintenance', heading: 'Sacred Rest' },
+    { path: '/journeys', heading: 'Voyages' },
+    { path: '/cluster', heading: 'Necropolis' },
+    { path: '/status-pages', heading: 'Temple Squares' },
     { path: '/dashboards', heading: 'Custom Dashboards' },
     { path: '/dashboards/new', heading: 'New Dashboard' },
     { path: `/dashboards/${dashboard.id}`, heading: dashboard.name },
-    { path: '/settings', heading: 'Settings' },
+    { path: '/settings', heading: "Pharaoh's Chamber" },
   ]
 
   it.each(routes)('renders $path', async ({ path, heading }) => {

@@ -43,7 +43,7 @@ describe('LineChartWidget', () => {
   it('shows no data on API error', async () => {
     mocks.post.mockRejectedValue(new Error('API error'))
     render(<LineChartWidget widget={makeWidget()} dashboardId="d1" />)
-    await waitFor(() => expect(screen.getByText('No data')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('Error')).toBeInTheDocument())
   })
 
   it('uses avg_latency key for avg aggregation', async () => {
