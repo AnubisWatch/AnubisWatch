@@ -8,6 +8,7 @@ import (
 	"time"
 
 	v1 "github.com/AnubisWatch/anubiswatch/internal/grpcapi/v1"
+	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
 // testUserContext is imported from server_test.go - but since it's in the same package, we can use it directly.
@@ -319,4 +320,492 @@ func TestServer_ListVerdicts_FiltersStatusSeverityAndOffsets(t *testing.T) {
 		t.Fatalf("Expected only evt_4, got %#v", resp.Verdicts)
 	}
 	assertPagination(t, resp.Pagination, 2, 1, 1, false, -1)
+}
+
+// applyChannelConfig tests
+
+func TestApplyChannelConfig_NilConfig(t *testing.T) {
+	applyChannelConfig(nil, map[string]string{"webhook_url": "http://example.com"})
+}
+
+func TestApplyChannelConfig_AllowedFields(t *testing.T) {
+	config := make(map[string]interface{})
+	updates := map[string]string{
+		"webhook_url": "http://example.com",
+		"secret":      "my-secret",
+		"method":      "POST",
+		"url":         "http://test.com",
+	}
+	applyChannelConfig(config, updates)
+
+	if config["webhook_url"] != "http://example.com" {
+		t.Errorf("Expected webhook_url to be set")
+	}
+	if config["secret"] != "my-secret" {
+		t.Errorf("Expected secret to be set")
+	}
+	if config["method"] != "POST" {
+		t.Errorf("Expected method to be set")
+	}
+	if config["url"] != "http://test.com" {
+		t.Errorf("Expected url to be set")
+	}
+}
+
+func TestApplyChannelConfig_DisallowedFields(t *testing.T) {
+	config := make(map[string]interface{})
+	updates := map[string]string{
+		"invalid_field": "should be ignored",
+		"name":          "should be ignored",
+	}
+	applyChannelConfig(config, updates)
+
+	if _, exists := config["invalid_field"]; exists {
+		t.Errorf("invalid_field should not be set")
+	}
+	if _, exists := config["name"]; exists {
+		t.Errorf("name should not be set")
+	}
+}
+
+// applyRuleConfig tests
+
+func TestApplyRuleConfig(t *testing.T) {
+	m := make(map[string]interface{})
+	updates := map[string]string{
+		"channel_ids":        "ch1,ch2",
+		"cooldown":           "5m",
+		"severity":           "critical",
+		"notification_delay": "30s",
+	}
+	applyRuleConfig(m, updates)
+
+	if m["channel_ids"] != "ch1,ch2" {
+		t.Errorf("Expected channel_ids to be set")
+	}
+	if m["cooldown"] != "5m" {
+		t.Errorf("Expected cooldown to be set")
+	}
+	if m["severity"] != "critical" {
+		t.Errorf("Expected severity to be set")
+	}
+	if m["notification_delay"] != "30s" {
+		t.Errorf("Expected notification_delay to be set")
+	}
+}
+
+func TestApplyRuleConfig_DisallowedFields(t *testing.T) {
+	m := make(map[string]interface{})
+	updates := map[string]string{
+		"invalid_field": "should be ignored",
+		"name":          "should be ignored",
+	}
+	applyRuleConfig(m, updates)
+
+	if _, exists := m["invalid_field"]; exists {
+		t.Errorf("invalid_field should not be set")
+	}
+	if _, exists := m["name"]; exists {
+		t.Errorf("name should not be set")
+	}
+}
+
+// applyRuleCoreConfig tests
+
+func TestApplyRuleCoreConfig_Severity(t *testing.T) {
+	rule := &core.AlertRule{Severity: core.SeverityWarning}
+	updates := map[string]string{"severity": "critical"}
+	applyRuleCoreConfig(rule, updates)
+
+	if rule.Severity != core.SeverityCritical {
+		t.Errorf("Expected severity to be critical, got %s", rule.Severity)
+	}
+}
+
+func TestApplyRuleCoreConfig_ChannelIDs(t *testing.T) {
+	rule := &core.AlertRule{Channels: []string{}}
+	updates := map[string]string{"channel_ids": "ch1,ch2,ch3"}
+	applyRuleCoreConfig(rule, updates)
+
+	if len(rule.Channels) != 3 {
+		t.Errorf("Expected 3 channels, got %d", len(rule.Channels))
+	}
+	if rule.Channels[0] != "ch1" || rule.Channels[1] != "ch2" || rule.Channels[2] != "ch3" {
+		t.Errorf("Unexpected channel values: %v", rule.Channels)
+	}
+}
+
+func TestApplyRuleCoreConfig_ChannelIDsEmpty(t *testing.T) {
+	rule := &core.AlertRule{Channels: []string{"old"}}
+	updates := map[string]string{"channel_ids": ""}
+	applyRuleCoreConfig(rule, updates)
+
+	// Empty string doesn't clear channels - original remains
+	if len(rule.Channels) != 1 || rule.Channels[0] != "old" {
+		t.Errorf("Expected channels to remain unchanged with empty string, got %v", rule.Channels)
+	}
+}
+
+func TestApplyRuleCoreConfig_Cooldown(t *testing.T) {
+	rule := &core.AlertRule{}
+	updates := map[string]string{"cooldown": "10m30s"}
+	applyRuleCoreConfig(rule, updates)
+
+	expected := 10*time.Minute + 30*time.Second
+	if rule.Cooldown.Duration != expected {
+		t.Errorf("Expected cooldown %v, got %v", expected, rule.Cooldown.Duration)
+	}
+}
+
+func TestApplyRuleCoreConfig_InvalidCooldown(t *testing.T) {
+	rule := &core.AlertRule{}
+	updates := map[string]string{"cooldown": "invalid"}
+	applyRuleCoreConfig(rule, updates)
+
+	if rule.Cooldown.Duration != 0 {
+		t.Errorf("Expected cooldown to remain 0 for invalid duration")
+	}
+}
+
+func TestApplyRuleCoreConfig_UnknownKey(t *testing.T) {
+	rule := &core.AlertRule{Severity: core.SeverityCritical}
+	updates := map[string]string{"unknown_key": "value"}
+	applyRuleCoreConfig(rule, updates)
+
+	if rule.Severity != core.SeverityCritical {
+		t.Errorf("Severity should not change for unknown key")
+	}
+}
+
+// applyJourneyUpdates tests
+
+func TestApplyJourneyUpdates_Name(t *testing.T) {
+	journey := &core.JourneyConfig{Name: "old-name"}
+	name := "new-name"
+	req := &v1.UpdateJourneyRequest{Name: &name}
+	applyJourneyUpdates(journey, req)
+
+	if journey.Name != "new-name" {
+		t.Errorf("Expected name to be 'new-name', got '%s'", journey.Name)
+	}
+}
+
+func TestApplyJourneyUpdates_Description(t *testing.T) {
+	journey := &core.JourneyConfig{}
+	desc := "new description"
+	req := &v1.UpdateJourneyRequest{Description: &desc}
+	applyJourneyUpdates(journey, req)
+
+	if journey.Description != "new description" {
+		t.Errorf("Expected description to be set")
+	}
+}
+
+func TestApplyJourneyUpdates_Interval(t *testing.T) {
+	journey := &core.JourneyConfig{}
+	interval := int32(60)
+	req := &v1.UpdateJourneyRequest{Interval: &interval}
+	applyJourneyUpdates(journey, req)
+
+	expected := 60 * time.Second
+	if journey.Weight.Duration != expected {
+		t.Errorf("Expected interval %v, got %v", expected, journey.Weight.Duration)
+	}
+}
+
+func TestApplyJourneyUpdates_Enabled(t *testing.T) {
+	journey := &core.JourneyConfig{Enabled: false}
+	enabled := true
+	req := &v1.UpdateJourneyRequest{Enabled: &enabled}
+	applyJourneyUpdates(journey, req)
+
+	if !journey.Enabled {
+		t.Errorf("Expected Enabled to be true")
+	}
+}
+
+func TestApplyJourneyUpdates_UpdatedAt(t *testing.T) {
+	before := time.Now().Add(-time.Hour)
+	journey := &core.JourneyConfig{UpdatedAt: before}
+	enabled := true
+	req := &v1.UpdateJourneyRequest{Enabled: &enabled}
+	applyJourneyUpdates(journey, req)
+
+	if journey.UpdatedAt.Before(before) {
+		t.Errorf("UpdatedAt should be updated")
+	}
+}
+
+func TestApplyJourneyUpdates_AllFields(t *testing.T) {
+	journey := &core.JourneyConfig{}
+	name := "journey-name"
+	desc := "journey-desc"
+	interval := int32(120)
+	enabled := true
+	req := &v1.UpdateJourneyRequest{
+		Name:        &name,
+		Description: &desc,
+		Interval:    &interval,
+		Enabled:     &enabled,
+	}
+	applyJourneyUpdates(journey, req)
+
+	if journey.Name != "journey-name" {
+		t.Errorf("Expected name to be set")
+	}
+	if journey.Description != "journey-desc" {
+		t.Errorf("Expected description to be set")
+	}
+	if journey.Weight.Duration != 120*time.Second {
+		t.Errorf("Expected interval to be set")
+	}
+	if !journey.Enabled {
+		t.Errorf("Expected enabled to be set")
+	}
+}
+
+// applySoulUpdates tests
+
+func TestApplySoulUpdates_Name(t *testing.T) {
+	soul := &core.Soul{Name: "old-name"}
+	name := "new-name"
+	req := &v1.UpdateSoulRequest{Name: &name}
+	applySoulUpdates(soul, req)
+
+	if soul.Name != "new-name" {
+		t.Errorf("Expected name to be 'new-name', got '%s'", soul.Name)
+	}
+}
+
+func TestApplySoulUpdates_Target(t *testing.T) {
+	soul := &core.Soul{Target: "old-target"}
+	target := "http://new-target.com"
+	req := &v1.UpdateSoulRequest{Target: &target}
+	applySoulUpdates(soul, req)
+
+	if soul.Target != "http://new-target.com" {
+		t.Errorf("Expected target to be updated")
+	}
+}
+
+func TestApplySoulUpdates_Interval(t *testing.T) {
+	soul := &core.Soul{}
+	interval := int32(30)
+	req := &v1.UpdateSoulRequest{Interval: &interval}
+	applySoulUpdates(soul, req)
+
+	expected := 30 * time.Second
+	if soul.Weight.Duration != expected {
+		t.Errorf("Expected interval %v, got %v", expected, soul.Weight.Duration)
+	}
+}
+
+func TestApplySoulUpdates_Timeout(t *testing.T) {
+	soul := &core.Soul{}
+	timeout := int32(10)
+	req := &v1.UpdateSoulRequest{Timeout: &timeout}
+	applySoulUpdates(soul, req)
+
+	expected := 10 * time.Second
+	if soul.Timeout.Duration != expected {
+		t.Errorf("Expected timeout %v, got %v", expected, soul.Timeout.Duration)
+	}
+}
+
+func TestApplySoulUpdates_Enabled(t *testing.T) {
+	soul := &core.Soul{Enabled: false}
+	enabled := true
+	req := &v1.UpdateSoulRequest{Enabled: &enabled}
+	applySoulUpdates(soul, req)
+
+	if !soul.Enabled {
+		t.Errorf("Expected Enabled to be true")
+	}
+}
+
+func TestApplySoulUpdates_Tags(t *testing.T) {
+	soul := &core.Soul{}
+	tags := []string{"tag1", "tag2", "tag3"}
+	req := &v1.UpdateSoulRequest{Tags: tags}
+	applySoulUpdates(soul, req)
+
+	if len(soul.Tags) != 3 {
+		t.Errorf("Expected 3 tags, got %d", len(soul.Tags))
+	}
+	if soul.Tags[0] != "tag1" || soul.Tags[1] != "tag2" || soul.Tags[2] != "tag3" {
+		t.Errorf("Unexpected tags: %v", soul.Tags)
+	}
+}
+
+func TestApplySoulUpdates_UpdatedAt(t *testing.T) {
+	before := time.Now().Add(-time.Hour)
+	soul := &core.Soul{UpdatedAt: before}
+	name := "new-name"
+	req := &v1.UpdateSoulRequest{Name: &name}
+	applySoulUpdates(soul, req)
+
+	if soul.UpdatedAt.Before(before) {
+		t.Errorf("UpdatedAt should be updated")
+	}
+}
+
+// applyChannelUpdates tests
+
+func TestApplyChannelUpdates_Name(t *testing.T) {
+	channel := &core.AlertChannel{Name: "old-name"}
+	name := "new-name"
+	req := &v1.UpdateChannelRequest{Name: &name}
+	applyChannelUpdates(channel, req)
+
+	if channel.Name != "new-name" {
+		t.Errorf("Expected name to be 'new-name', got '%s'", channel.Name)
+	}
+}
+
+func TestApplyChannelUpdates_Enabled(t *testing.T) {
+	channel := &core.AlertChannel{Enabled: false}
+	enabled := true
+	req := &v1.UpdateChannelRequest{Enabled: &enabled}
+	applyChannelUpdates(channel, req)
+
+	if !channel.Enabled {
+		t.Errorf("Expected Enabled to be true")
+	}
+}
+
+func TestApplyChannelUpdates_Config(t *testing.T) {
+	channel := &core.AlertChannel{}
+	config := map[string]string{
+		"webhook_url": "http://example.com",
+		"secret":      "my-secret",
+	}
+	req := &v1.UpdateChannelRequest{Config: config}
+	applyChannelUpdates(channel, req)
+
+	if channel.Config == nil {
+		t.Fatal("Expected Config to be initialized")
+	}
+	if channel.Config["webhook_url"] != "http://example.com" {
+		t.Errorf("Expected webhook_url to be set")
+	}
+	if channel.Config["secret"] != "my-secret" {
+		t.Errorf("Expected secret to be set")
+	}
+}
+
+func TestApplyChannelUpdates_ConfigMerge(t *testing.T) {
+	channel := &core.AlertChannel{
+		Config: map[string]interface{}{"existing": "value"},
+	}
+	config := map[string]string{
+		"webhook_url": "http://example.com",
+	}
+	req := &v1.UpdateChannelRequest{Config: config}
+	applyChannelUpdates(channel, req)
+
+	if channel.Config["existing"] != "value" {
+		t.Errorf("Expected existing config to be preserved")
+	}
+	if channel.Config["webhook_url"] != "http://example.com" {
+		t.Errorf("Expected new config to be added")
+	}
+}
+
+func TestApplyChannelUpdates_UpdatedAt(t *testing.T) {
+	before := time.Now().Add(-time.Hour)
+	channel := &core.AlertChannel{UpdatedAt: before}
+	enabled := true
+	req := &v1.UpdateChannelRequest{Enabled: &enabled}
+	applyChannelUpdates(channel, req)
+
+	if channel.UpdatedAt.Before(before) {
+		t.Errorf("UpdatedAt should be updated")
+	}
+}
+
+// applyRuleUpdates tests
+
+func TestApplyRuleUpdates_Name(t *testing.T) {
+	rule := &core.AlertRule{Name: "old-name"}
+	name := "new-name"
+	req := &v1.UpdateRuleRequest{Name: &name}
+	applyRuleUpdates(rule, req)
+
+	if rule.Name != "new-name" {
+		t.Errorf("Expected name to be 'new-name', got '%s'", rule.Name)
+	}
+}
+
+func TestApplyRuleUpdates_Enabled(t *testing.T) {
+	rule := &core.AlertRule{Enabled: false}
+	enabled := true
+	req := &v1.UpdateRuleRequest{Enabled: &enabled}
+	applyRuleUpdates(rule, req)
+
+	if !rule.Enabled {
+		t.Errorf("Expected Enabled to be true")
+	}
+}
+
+func TestApplyRuleUpdates_ConfigSeverity(t *testing.T) {
+	rule := &core.AlertRule{Severity: core.SeverityWarning}
+	config := map[string]string{"severity": "critical"}
+	req := &v1.UpdateRuleRequest{Config: config}
+	applyRuleUpdates(rule, req)
+
+	if rule.Severity != core.SeverityCritical {
+		t.Errorf("Expected severity to be critical, got %s", rule.Severity)
+	}
+}
+
+func TestApplyRuleUpdates_ConfigCooldown(t *testing.T) {
+	rule := &core.AlertRule{}
+	config := map[string]string{"cooldown": "5m"}
+	req := &v1.UpdateRuleRequest{Config: config}
+	applyRuleUpdates(rule, req)
+
+	expected := 5 * time.Minute
+	if rule.Cooldown.Duration != expected {
+		t.Errorf("Expected cooldown %v, got %v", expected, rule.Cooldown.Duration)
+	}
+}
+
+func TestApplyRuleUpdates_ConfigChannelIDs(t *testing.T) {
+	rule := &core.AlertRule{}
+	config := map[string]string{"channel_ids": "ch1,ch2"}
+	req := &v1.UpdateRuleRequest{Config: config}
+	applyRuleUpdates(rule, req)
+
+	if len(rule.Channels) != 2 {
+		t.Errorf("Expected 2 channels, got %d", len(rule.Channels))
+	}
+}
+
+func TestApplyRuleUpdates_AllFields(t *testing.T) {
+	rule := &core.AlertRule{}
+	name := "rule-name"
+	enabled := true
+	config := map[string]string{
+		"severity":     "critical",
+		"channel_ids":  "ch1,ch2",
+		"cooldown":     "10m",
+	}
+	req := &v1.UpdateRuleRequest{Name: &name, Enabled: &enabled, Config: config}
+	applyRuleUpdates(rule, req)
+
+	if rule.Name != "rule-name" {
+		t.Errorf("Expected name to be set")
+	}
+	if !rule.Enabled {
+		t.Errorf("Expected enabled to be set")
+	}
+	if rule.Severity != core.SeverityCritical {
+		t.Errorf("Expected severity to be critical")
+	}
+	if len(rule.Channels) != 2 {
+		t.Errorf("Expected channels to be set")
+	}
+	if rule.Cooldown.Duration != 10*time.Minute {
+		t.Errorf("Expected cooldown to be set")
+	}
 }

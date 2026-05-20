@@ -1907,3 +1907,477 @@ func TestManager_ImportFromTar_TruncatedEntry(t *testing.T) {
 		t.Error("Expected error for truncated tar entry")
 	}
 }
+
+// ============================================================================
+// Encryption Tests (0% coverage functions)
+// ============================================================================
+
+func TestDeriveKey(t *testing.T) {
+	tests := []struct {
+		name       string
+		keyMaterial []byte
+		wantLen    int
+	}{
+		{"32 bytes input", []byte("test-key-material-12345678901234"), 32},
+		{"16 bytes input", []byte("short-key"), 32},
+		{"64 bytes input", bytes.Repeat([]byte("a"), 64), 32},
+		{"empty input", []byte{}, 32},
+		{"nil input", nil, 32},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key, err := deriveKey(tt.keyMaterial)
+			if err != nil {
+				t.Fatalf("deriveKey() error = %v", err)
+			}
+			if len(key) != tt.wantLen {
+				t.Errorf("deriveKey() returned %d bytes, want %d", len(key), tt.wantLen)
+			}
+		})
+	}
+}
+
+func TestDeriveKey_Deterministic(t *testing.T) {
+	input := []byte("consistent-test-input")
+	key1, _ := deriveKey(input)
+	key2, _ := deriveKey(input)
+
+	if !bytes.Equal(key1, key2) {
+		t.Error("deriveKey should be deterministic")
+	}
+}
+
+func TestDeriveKey_DifferentInputs(t *testing.T) {
+	key1, _ := deriveKey([]byte("input-1"))
+	key2, _ := deriveKey([]byte("input-2"))
+
+	if bytes.Equal(key1, key2) {
+		t.Error("deriveKey should produce different keys for different inputs")
+	}
+}
+
+func TestEncryptDecryptData(t *testing.T) {
+	tests := []struct {
+		name      string
+		plaintext []byte
+	}{
+		{"simple text", []byte("Hello, World!")},
+		{"empty data", []byte{}},
+		{"binary data", []byte{0x00, 0xFF, 0x42, 0x13, 0x37}},
+		{"large data", bytes.Repeat([]byte("x"), 1024*1024)},
+		{"json-like", []byte(`{"key": "value", "number": 42}`)},
+		{"unicode", []byte("こんにちは世界")},
+	}
+
+	key := []byte("test-encryption-key-32-bytes!!")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encrypted, err := encryptData(key, tt.plaintext)
+			if err != nil {
+				t.Fatalf("encryptData() error = %v", err)
+			}
+
+			if len(encrypted) <= 44 { // salt(32) + nonce(12)
+				t.Error("encrypted data too short")
+			}
+
+			decrypted, err := decryptData(key, encrypted)
+			if err != nil {
+				t.Fatalf("decryptData() error = %v", err)
+			}
+
+			if !bytes.Equal(decrypted, tt.plaintext) {
+				t.Error("decrypted data does not match original")
+			}
+		})
+	}
+}
+
+func TestEncryptDecryptData_DifferentKeys(t *testing.T) {
+	key1 := []byte("key-one-12345678901234567890123")
+	key2 := []byte("key-two-12345678901234567890123")
+	plaintext := []byte("secret message")
+
+	encrypted, _ := encryptData(key1, plaintext)
+
+	// Decrypting with wrong key should fail
+	_, err := decryptData(key2, encrypted)
+	if err == nil {
+		t.Error("decryptData should fail with wrong key")
+	}
+}
+
+func TestEncryptData_Format(t *testing.T) {
+	key := []byte("test-key-32-bytes-long!!!!!!!!")
+	plaintext := []byte("test data")
+
+	encrypted, err := encryptData(key, plaintext)
+	if err != nil {
+		t.Fatalf("encryptData() error = %v", err)
+	}
+
+	// Format: salt(32) + nonce(12) + ciphertext+tag
+	if len(encrypted) < 32+12+16 { // minimum: salt + nonce + tag
+		t.Error("encrypted data too short for format")
+	}
+
+	salt := encrypted[:32]
+	nonce := encrypted[32:44]
+	ciphertext := encrypted[44:]
+
+	if len(salt) != 32 {
+		t.Errorf("salt should be 32 bytes, got %d", len(salt))
+	}
+	if len(nonce) != 12 {
+		t.Errorf("nonce should be 12 bytes, got %d", len(nonce))
+	}
+	if len(ciphertext) < 16 { // GCM tag is 16 bytes
+		t.Error("ciphertext+tag should include at least 16 bytes for tag")
+	}
+}
+
+func TestDecryptData_TooShort(t *testing.T) {
+	key := []byte("test-key-32-bytes-long!!!!!!!!")
+
+	// Test with data that's too short
+	_, err := decryptData(key, []byte("short"))
+	if err == nil {
+		t.Error("decryptData should fail with too short data")
+	}
+}
+
+func TestDecryptData_Tampered(t *testing.T) {
+	key := []byte("test-key-32-bytes-long!!!!!!!!")
+	plaintext := []byte("important data")
+
+	encrypted, _ := encryptData(key, plaintext)
+
+	// Tamper with the ciphertext
+	tampered := make([]byte, len(encrypted))
+	copy(tampered, encrypted)
+	tampered[50] ^= 0xFF // Flip bits in the middle of ciphertext
+
+	_, err := decryptData(key, tampered)
+	if err == nil {
+		t.Error("decryptData should fail with tampered data")
+	}
+}
+
+func TestGetEncryptionKey_WithOption(t *testing.T) {
+	tempDir := t.TempDir()
+	mgr := NewManager(nil, tempDir, newTestLogger())
+
+	expectedKey := []byte("provided-key-32-bytes-long!!!!!!")
+	opts := Options{EncryptionKey: expectedKey}
+
+	key, keyFile, err := mgr.getEncryptionKey(opts)
+	if err != nil {
+		t.Fatalf("getEncryptionKey() error = %v", err)
+	}
+
+	if !bytes.Equal(key, expectedKey) {
+		t.Error("getEncryptionKey should return the provided key")
+	}
+	if keyFile != "" {
+		t.Error("keyFile should be empty when key is provided via opts")
+	}
+}
+
+func TestGetEncryptionKey_WithEnvVar(t *testing.T) {
+	tempDir := t.TempDir()
+	mgr := NewManager(nil, tempDir, newTestLogger())
+
+	envKey := "env-var-key-32-bytes-long!!!!!"
+	os.Setenv("ANUBIS_BACKUP_ENCRYPTION_KEY", envKey)
+	defer os.Unsetenv("ANUBIS_BACKUP_ENCRYPTION_KEY")
+
+	opts := Options{}
+	key, keyFile, err := mgr.getEncryptionKey(opts)
+	if err != nil {
+		t.Fatalf("getEncryptionKey() error = %v", err)
+	}
+
+	if !bytes.Equal(key, []byte(envKey)) {
+		t.Error("getEncryptionKey should return the env var key")
+	}
+	if keyFile != "" {
+		t.Error("keyFile should be empty when key is from env var")
+	}
+}
+
+func TestGetEncryptionKey_GenerateAndStore(t *testing.T) {
+	tempDir := t.TempDir()
+	mgr := NewManager(nil, tempDir, newTestLogger())
+
+	// Initialize to create backups directory
+	if err := mgr.Init(); err != nil {
+		t.Fatalf("mgr.Init() error = %v", err)
+	}
+
+	// Clear any env var
+	os.Unsetenv("ANUBIS_BACKUP_ENCRYPTION_KEY")
+	opts := Options{}
+
+	key, keyFile, err := mgr.getEncryptionKey(opts)
+	if err != nil {
+		t.Fatalf("getEncryptionKey() error = %v", err)
+	}
+
+	if len(key) != 32 {
+		t.Errorf("generated key should be 32 bytes, got %d", len(key))
+	}
+
+	if keyFile == "" {
+		t.Error("keyFile should be returned when key is generated")
+	}
+
+	// Verify key was stored
+	storedKey, err := os.ReadFile(keyFile)
+	if err != nil {
+		t.Fatalf("failed to read stored key: %v", err)
+	}
+	if !bytes.Equal(storedKey, key) {
+		t.Error("stored key does not match returned key")
+	}
+}
+
+func TestGetStoredEncryptionKey(t *testing.T) {
+	tempDir := t.TempDir()
+	mgr := NewManager(nil, tempDir, newTestLogger())
+
+	// Create a key file
+	keyData := []byte("stored-key-32-bytes-long!!!!!!!!!")
+	keyFile := filepath.Join(tempDir, "backups", ".test_key")
+	os.MkdirAll(filepath.Dir(keyFile), 0700)
+	os.WriteFile(keyFile, keyData, 0600)
+
+	key, err := mgr.GetStoredEncryptionKey(keyFile)
+	if err != nil {
+		t.Fatalf("GetStoredEncryptionKey() error = %v", err)
+	}
+
+	if !bytes.Equal(key, keyData) {
+		t.Error("GetStoredEncryptionKey returned wrong key")
+	}
+}
+
+func TestGetStoredEncryptionKey_DefaultLocation(t *testing.T) {
+	tempDir := t.TempDir()
+	mgr := NewManager(nil, tempDir, newTestLogger())
+	mgr.Init()
+
+	// Create key at default location
+	keyData := []byte("default-key-data-32-bytes!!!!!")
+	keyFile := filepath.Join(tempDir, "backups", ".backup_key")
+	os.WriteFile(keyFile, keyData, 0600)
+
+	key, err := mgr.GetStoredEncryptionKey("") // Empty string triggers default
+	if err != nil {
+		t.Fatalf("GetStoredEncryptionKey() error = %v", err)
+	}
+
+	if !bytes.Equal(key, keyData) {
+		t.Error("GetStoredEncryptionKey returned wrong key for default location")
+	}
+}
+
+func TestGetStoredEncryptionKey_FileNotFound(t *testing.T) {
+	tempDir := t.TempDir()
+	mgr := NewManager(nil, tempDir, newTestLogger())
+
+	_, err := mgr.GetStoredEncryptionKey("/nonexistent/path/key")
+	if err == nil {
+		t.Error("GetStoredEncryptionKey should fail for non-existent file")
+	}
+}
+
+func TestCopyFile(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create source file
+	src := filepath.Join(tempDir, "source.txt")
+	srcContent := []byte("Hello, World! This is test content.")
+	if err := os.WriteFile(src, srcContent, 0644); err != nil {
+		t.Fatalf("failed to create source file: %v", err)
+	}
+
+	// Copy file
+	dst := filepath.Join(tempDir, "dest.txt")
+	if err := copyFile(src, dst); err != nil {
+		t.Fatalf("copyFile() error = %v", err)
+	}
+
+	// Verify destination exists
+	if _, err := os.Stat(dst); os.IsNotExist(err) {
+		t.Error("destination file was not created")
+	}
+
+	// Verify content matches
+	dstContent, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("failed to read destination file: %v", err)
+	}
+
+	if !bytes.Equal(dstContent, srcContent) {
+		t.Error("destination content does not match source")
+	}
+}
+
+func TestCopyFile_LargeFile(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create source file with larger content
+	src := filepath.Join(tempDir, "large_source.bin")
+	largeContent := bytes.Repeat([]byte("x"), 1024*1024) // 1MB
+	if err := os.WriteFile(src, largeContent, 0644); err != nil {
+		t.Fatalf("failed to create source file: %v", err)
+	}
+
+	// Copy file
+	dst := filepath.Join(tempDir, "large_dest.bin")
+	if err := copyFile(src, dst); err != nil {
+		t.Fatalf("copyFile() error = %v", err)
+	}
+
+	// Verify content matches
+	dstContent, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("failed to read destination file: %v", err)
+	}
+
+	if !bytes.Equal(dstContent, largeContent) {
+		t.Error("large file content does not match source")
+	}
+}
+
+func TestCopyFile_SourceNotFound(t *testing.T) {
+	tempDir := t.TempDir()
+
+	err := copyFile(filepath.Join(tempDir, "nonexistent.txt"), filepath.Join(tempDir, "dest.txt"))
+	if err == nil {
+		t.Error("copyFile should fail when source does not exist")
+	}
+}
+
+func TestCopyFile_DestinationDirNotWritable(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create source file
+	src := filepath.Join(tempDir, "source.txt")
+	if err := os.WriteFile(src, []byte("test"), 0644); err != nil {
+		t.Fatalf("failed to create source file: %v", err)
+	}
+
+	// Try to copy to a non-existent directory
+	dst := filepath.Join(tempDir, "nonexistent", "subdir", "dest.txt")
+	err := copyFile(src, dst)
+	if err == nil {
+		t.Error("copyFile should fail when destination directory doesn't exist")
+	}
+}
+
+// TestWriteBackupFile_Compression tests writeBackupFile with compression
+func TestWriteBackupFile_Compression(t *testing.T) {
+	tempDir := t.TempDir()
+	logger := newTestLogger()
+
+	mgr := NewManager(nil, tempDir, logger)
+	if err := mgr.Init(); err != nil {
+		t.Fatalf("mgr.Init() error = %v", err)
+	}
+
+	backup := &Backup{
+		Version:    "1.0",
+		CreatedAt: time.Now(),
+		BackupType: "full",
+		Checksum:   "test-checksum",
+		Metadata: BackupMetadata{
+			NodeID:  "test-node",
+			Version: "1.0.0",
+		},
+		Data: BackupData{
+			Workspaces: []*core.Workspace{},
+		},
+	}
+
+	path := filepath.Join(tempDir, "backups", "test-backup.gz")
+	opts := Options{Compress: true, Encrypt: false}
+
+	err := mgr.writeBackupFile(backup, path, opts)
+	if err != nil {
+		t.Fatalf("writeBackupFile() error = %v", err)
+	}
+
+	// Verify file was created with .gz extension
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		t.Error("backup file was not created")
+	}
+
+	// Read back and verify it's gzipped
+	readBackup, err := mgr.readBackupFile(path)
+	if err != nil {
+		t.Fatalf("readBackupFile() error = %v", err)
+	}
+
+	if readBackup.Version != backup.Version {
+		t.Errorf("Version = %q, want %q", readBackup.Version, backup.Version)
+	}
+}
+
+// TestReadBackupFile_NonExistent tests readBackupFile with non-existent file
+func TestReadBackupFile_NonExistent(t *testing.T) {
+	tempDir := t.TempDir()
+	logger := newTestLogger()
+
+	mgr := NewManager(nil, tempDir, logger)
+
+	_, err := mgr.readBackupFile(filepath.Join(tempDir, "nonexistent.gz"))
+	if err == nil {
+		t.Error("readBackupFile should fail for non-existent file")
+	}
+}
+
+// TestWriteBackupFile_Uncompressed tests writeBackupFile without compression
+func TestWriteBackupFile_Uncompressed(t *testing.T) {
+	tempDir := t.TempDir()
+	logger := newTestLogger()
+
+	mgr := NewManager(nil, tempDir, logger)
+	if err := mgr.Init(); err != nil {
+		t.Fatalf("mgr.Init() error = %v", err)
+	}
+
+	backup := &Backup{
+		Version:    "1.0",
+		CreatedAt:  time.Now(),
+		BackupType: "full",
+		Checksum:   "test-checksum",
+		Metadata: BackupMetadata{
+			NodeID:  "test-node",
+			Version: "1.0.0",
+		},
+		Data: BackupData{
+			Workspaces: []*core.Workspace{},
+		},
+	}
+
+	path := filepath.Join(tempDir, "backups", "test-uncompressed.json")
+	opts := Options{Compress: false, Encrypt: false}
+
+	err := mgr.writeBackupFile(backup, path, opts)
+	if err != nil {
+		t.Fatalf("writeBackupFile() error = %v", err)
+	}
+
+	// Read back and verify
+	readBackup, err := mgr.readBackupFile(path)
+	if err != nil {
+		t.Fatalf("readBackupFile() error = %v", err)
+	}
+
+	if readBackup.Version != backup.Version {
+		t.Errorf("Version = %q, want %q", readBackup.Version, backup.Version)
+	}
+}

@@ -2106,3 +2106,89 @@ func TestVerifyJWTSignature_SignatureDecodeError(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 }
+
+// TestOIDCAuthenticator_SwitchWorkspace tests the SwitchWorkspace method
+func TestOIDCAuthenticator_SwitchWorkspace(t *testing.T) {
+	cfg := core.OIDCAuth{
+		Issuer:       "https://example.com",
+		ClientID:     "test-client-id",
+		ClientSecret: "test-client-secret",
+		RedirectURL:  "http://localhost:8080/callback",
+	}
+
+	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
+	defer auth.Shutdown()
+
+	// Login to get a valid token (local fallback)
+	_, token, err := auth.Login("admin@test.com", "TestPass1234!")
+	if err != nil {
+		t.Fatalf("Login failed: %v", err)
+	}
+
+	// Switch workspace
+	user, err := auth.SwitchWorkspace(token, "test-workspace")
+	if err != nil {
+		t.Errorf("SwitchWorkspace failed: %v", err)
+	}
+	if user.Workspace != "test-workspace" {
+		t.Errorf("Expected workspace test-workspace, got %s", user.Workspace)
+	}
+
+	// Switch with empty workspace should error
+	_, err = auth.SwitchWorkspace(token, "")
+	if err == nil {
+		t.Error("Expected error for empty workspace")
+	}
+
+	// Switch with invalid token should delegate to local (which should error)
+	_, err = auth.SwitchWorkspace("invalid-token", "test-workspace")
+	if err == nil {
+		t.Error("Expected error for invalid token")
+	}
+
+	// Switch with expired token
+	auth.mu.Lock()
+	auth.tokens[token] = &session{
+		UserID:    user.ID,
+		ExpiresAt: time.Now().Add(-1 * time.Hour),
+	}
+	auth.mu.Unlock()
+
+	_, err = auth.SwitchWorkspace(token, "test-workspace")
+	if err == nil {
+		t.Error("Expected error for expired token")
+	}
+	if !strings.Contains(err.Error(), "token expired") {
+		t.Errorf("Expected token expired error, got: %v", err)
+	}
+}
+
+// TestOIDCAuthenticator_SwitchWorkspace_UserNotFound tests SwitchWorkspace with missing user
+func TestOIDCAuthenticator_SwitchWorkspace_UserNotFound(t *testing.T) {
+	cfg := core.OIDCAuth{
+		Issuer:       "https://example.com",
+		ClientID:     "test-client-id",
+		ClientSecret: "test-client-secret",
+		RedirectURL:  "http://localhost:8080/callback",
+	}
+
+	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
+	defer auth.Shutdown()
+
+	// Create a session with a non-existent user
+	token := "orphan-token"
+	auth.mu.Lock()
+	auth.tokens[token] = &session{
+		UserID:    "nonexistent-user",
+		ExpiresAt: time.Now().Add(1 * time.Hour),
+	}
+	auth.mu.Unlock()
+
+	_, err := auth.SwitchWorkspace(token, "test-workspace")
+	if err == nil {
+		t.Error("Expected error for missing user")
+	}
+	if !strings.Contains(err.Error(), "user not found") {
+		t.Errorf("Expected user not found error, got: %v", err)
+	}
+}

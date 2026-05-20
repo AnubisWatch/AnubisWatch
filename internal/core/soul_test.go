@@ -496,3 +496,108 @@ func TestLogEntryType_String_MembershipChange(t *testing.T) {
 			LogMembershipChange.String(), "membership_change")
 	}
 }
+
+// TestSoul_Validate tests the Soul.Validate method
+func TestSoul_Validate(t *testing.T) {
+	tests := []struct {
+		name      string
+		soul      Soul
+		wantError bool
+	}{
+		{
+			name: "valid soul",
+			soul: Soul{
+				Name:   "Test Soul",
+				Type:   CheckHTTP,
+				Target: "https://example.com",
+				HTTP:   &HTTPConfig{Method: "GET", ValidStatus: []int{200}},
+			},
+			wantError: false,
+		},
+		{
+			name: "missing name",
+			soul: Soul{
+				Type:   CheckHTTP,
+				Target: "https://example.com",
+				HTTP:   &HTTPConfig{Method: "GET", ValidStatus: []int{200}},
+			},
+			wantError: true,
+		},
+		{
+			name: "missing target",
+			soul: Soul{
+				Name: "Test Soul",
+				Type: CheckHTTP,
+			},
+			wantError: true,
+		},
+		{
+			name: "missing type",
+			soul: Soul{
+				Name:   "Test Soul",
+				Target: "https://example.com",
+			},
+			wantError: true,
+		},
+		{
+			name: "invalid type",
+			soul: Soul{
+				Name:   "Test Soul",
+				Type:   CheckType("invalid"),
+				Target: "https://example.com",
+			},
+			wantError: true,
+		},
+		{
+			name: "negative interval",
+			soul: Soul{
+				Name:   "Test Soul",
+				Type:   CheckHTTP,
+				Target: "https://example.com",
+				Weight: Duration{-1 * time.Second},
+				HTTP:   &HTTPConfig{Method: "GET", ValidStatus: []int{200}},
+			},
+			wantError: true,
+		},
+		{
+			name: "negative timeout",
+			soul: Soul{
+				Name:    "Test Soul",
+				Type:    CheckHTTP,
+				Target:  "https://example.com",
+				Timeout: Duration{-1 * time.Second},
+				HTTP:    &HTTPConfig{Method: "GET", ValidStatus: []int{200}},
+			},
+			wantError: true,
+		},
+		{
+			name: "valid TCP soul",
+			soul: Soul{
+				Name:   "Test Soul",
+				Type:   CheckTCP,
+				Target: "localhost:80",
+				TCP:    &TCPConfig{},
+			},
+			wantError: false,
+		},
+		{
+			name: "valid DNS soul",
+			soul: Soul{
+				Name:   "Test Soul",
+				Type:   CheckDNS,
+				Target: "example.com",
+				DNS:    &DNSConfig{RecordType: "A"},
+			},
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.soul.Validate()
+			if (err != nil) != tt.wantError {
+				t.Errorf("Soul.Validate() error = %v, wantError = %v", err, tt.wantError)
+			}
+		})
+	}
+}

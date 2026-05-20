@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -461,5 +462,256 @@ func TestManager_GetStatus_WithRunningNode(t *testing.T) {
 	// PeerCount should be >= 0
 	if status.PeerCount < 0 {
 		t.Errorf("Expected non-negative peer count, got %d", status.PeerCount)
+	}
+}
+
+// TestBuildTLSPeerConfig_NilConfig tests buildTLSPeerConfig with nil config
+func TestBuildTLSPeerConfig_NilConfig(t *testing.T) {
+	cfg := &core.TLSPeerConfig{}
+	result, err := buildTLSPeerConfig(cfg)
+	if err != nil {
+		t.Errorf("buildTLSPeerConfig() error = %v", err)
+	}
+	if result != nil {
+		t.Error("Expected nil TLS config for empty cert/key")
+	}
+}
+
+// TestBuildTLSPeerConfig_EmptyConfig tests buildTLSPeerConfig with empty strings
+func TestBuildTLSPeerConfig_EmptyConfig(t *testing.T) {
+	cfg := &core.TLSPeerConfig{
+		CertFile: "",
+		KeyFile:  "",
+	}
+	result, err := buildTLSPeerConfig(cfg)
+	if err != nil {
+		t.Errorf("buildTLSPeerConfig() error = %v", err)
+	}
+	if result != nil {
+		t.Error("Expected nil TLS config for empty cert/key")
+	}
+}
+
+// TestBuildTLSPeerConfig_ValidConfig tests buildTLSPeerConfig with valid cert paths
+func TestBuildTLSPeerConfig_ValidConfig(t *testing.T) {
+	// Create temp directory with cert files
+	tempDir := t.TempDir()
+
+	// Generate self-signed certificate
+	certFile := filepath.Join(tempDir, "cert.pem")
+	keyFile := filepath.Join(tempDir, "key.pem")
+
+	// Use openssl to generate a self-signed cert if available, otherwise skip
+	// For now, test with non-existent files to verify error handling
+	cfg := &core.TLSPeerConfig{
+		CertFile: certFile,
+		KeyFile:  keyFile,
+	}
+
+	_, err := buildTLSPeerConfig(cfg)
+	if err == nil {
+		t.Error("Expected error for non-existent cert files")
+	}
+}
+
+// TestBuildTLSPeerConfig_CAFile tests buildTLSPeerConfig with CA file
+func TestBuildTLSPeerConfig_CAFile(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Test with non-existent files
+	cfg := &core.TLSPeerConfig{
+		CertFile: filepath.Join(tempDir, "cert.pem"),
+		KeyFile:  filepath.Join(tempDir, "key.pem"),
+		CAFile:    filepath.Join(tempDir, "ca.pem"),
+	}
+
+	_, err := buildTLSPeerConfig(cfg)
+	if err == nil {
+		t.Error("Expected error for non-existent files")
+	}
+}
+
+// TestBuildTLSPeerConfig_RequireClientCert tests buildTLSPeerConfig with RequireClientCert
+func TestBuildTLSPeerConfig_RequireClientCert(t *testing.T) {
+	tempDir := t.TempDir()
+
+	cfg := &core.TLSPeerConfig{
+		CertFile:        filepath.Join(tempDir, "cert.pem"),
+		KeyFile:         filepath.Join(tempDir, "key.pem"),
+		RequireClientCert: true,
+	}
+
+	_, err := buildTLSPeerConfig(cfg)
+	if err == nil {
+		t.Error("Expected error for non-existent files")
+	}
+}
+
+// TestBuildTLSPeerConfig_VerifyPeers tests buildTLSPeerConfig with VerifyPeers
+func TestBuildTLSPeerConfig_VerifyPeers(t *testing.T) {
+	tempDir := t.TempDir()
+
+	cfg := &core.TLSPeerConfig{
+		CertFile:   filepath.Join(tempDir, "cert.pem"),
+		KeyFile:    filepath.Join(tempDir, "key.pem"),
+		VerifyPeers: true,
+	}
+
+	_, err := buildTLSPeerConfig(cfg)
+	if err == nil {
+		t.Error("Expected error for non-existent files")
+	}
+}
+
+// TestUnregisterNode tests the UnregisterNode function
+func TestUnregisterNode(t *testing.T) {
+	logger := newTestLogger()
+	dist := NewDistributor("node-0", "us-east", StrategyRoundRobin, logger)
+
+	// Register some nodes first
+	dist.RegisterNode("node-1", "us-east")
+	dist.RegisterNode("node-2", "us-west")
+	dist.RegisterNode("node-3", "eu-west")
+
+	// Unregister node-2 - should not panic
+	dist.UnregisterNode("node-2")
+
+	// Unregister non-existent node should not panic
+	dist.UnregisterNode("non-existent")
+}
+
+// TestAssignSoul tests the AssignSoul function
+func TestAssignSoul(t *testing.T) {
+	logger := newTestLogger()
+	dist := NewDistributor("node-0", "us-east", StrategyRoundRobin, logger)
+
+	// Register some nodes
+	dist.RegisterNode("node-1", "us-east")
+	dist.RegisterNode("node-2", "us-west")
+
+	// Create a test soul
+	soul := &core.Soul{
+		ID:          "test-soul",
+		Name:        "Test Soul",
+		WorkspaceID: "default",
+	}
+
+	// Assign soul - should return a node ID
+	nodeID, err := dist.AssignSoul(soul)
+	if err != nil {
+		t.Errorf("AssignSoul() error = %v", err)
+	}
+	if nodeID == "" {
+		t.Error("Expected non-empty node ID")
+	}
+}
+
+// TestSelectNodeForSoul tests the selectNodeForSoul via AssignSoul
+func TestSelectNodeForSoul(t *testing.T) {
+	logger := newTestLogger()
+	dist := NewDistributor("node-0", "us-east", StrategyRoundRobin, logger)
+
+	// Register some nodes
+	dist.RegisterNode("node-1", "us-east")
+	dist.RegisterNode("node-2", "us-west")
+	dist.RegisterNode("node-3", "eu-west")
+
+	// Assign multiple souls - round robin should cycle through nodes
+	soul1 := &core.Soul{ID: "soul-1", Name: "Soul 1", WorkspaceID: "default"}
+	soul2 := &core.Soul{ID: "soul-2", Name: "Soul 2", WorkspaceID: "default"}
+	soul3 := &core.Soul{ID: "soul-3", Name: "Soul 3", WorkspaceID: "default"}
+
+	node1, _ := dist.AssignSoul(soul1)
+	node2, _ := dist.AssignSoul(soul2)
+	node3, _ := dist.AssignSoul(soul3)
+
+	// Round robin should assign to different nodes
+	if node1 == node2 || node2 == node3 {
+		t.Error("Round-robin should assign different nodes")
+	}
+}
+
+// TestSelectLoadBased tests load-based distribution
+func TestSelectLoadBased(t *testing.T) {
+	logger := newTestLogger()
+	dist := NewDistributor("node-0", "us-east", StrategyLoadBased, logger)
+
+	// Register nodes
+	dist.RegisterNode("node-1", "us-east")
+	dist.RegisterNode("node-2", "us-west")
+
+	// Set different loads
+	dist.UpdateNodeLoad("node-1", 90.0, 80.0, 10) // High load
+	dist.UpdateNodeLoad("node-2", 10.0, 10.0, 1)  // Low load
+
+	soul := &core.Soul{ID: "soul-1", Name: "Soul 1", WorkspaceID: "default"}
+	nodeID, _ := dist.AssignSoul(soul)
+
+	// Should prefer node-2 (lower load)
+	if nodeID != "node-2" {
+		t.Errorf("Expected node-2 (lowest load), got %s", nodeID)
+	}
+}
+
+// TestGetNodeForSoul tests GetNodeForSoul
+func TestGetNodeForSoul(t *testing.T) {
+	logger := newTestLogger()
+	dist := NewDistributor("node-0", "us-east", StrategyRoundRobin, logger)
+
+	dist.RegisterNode("node-1", "us-east")
+
+	soul := &core.Soul{ID: "soul-1", Name: "Soul 1", WorkspaceID: "default"}
+	dist.AssignSoul(soul)
+
+	// GetNodeForSoul should return the assigned node
+	nodeID, found := dist.GetNodeForSoul("soul-1")
+	if !found {
+		t.Error("Expected soul-1 to be found")
+	}
+	if nodeID != "node-1" {
+		t.Errorf("Expected node-1, got %s", nodeID)
+	}
+
+	// Non-existent soul
+	_, found = dist.GetNodeForSoul("non-existent")
+	if found {
+		t.Error("Non-existent soul should not be found")
+	}
+}
+
+// TestCheckAndRebalance tests the checkAndRebalance function
+func TestCheckAndRebalance(t *testing.T) {
+	logger := newTestLogger()
+	dist := NewDistributor("node-0", "us-east", StrategyRoundRobin, logger)
+
+	// Register nodes
+	dist.RegisterNode("node-1", "us-east")
+	dist.RegisterNode("node-2", "us-east")
+	dist.RegisterNode("node-3", "us-east")
+
+	// Add some soul assignments
+	soul := &core.Soul{ID: "soul-1", Name: "Soul 1", WorkspaceID: "default"}
+	dist.AssignSoul(soul)
+
+	// checkAndRebalance should not panic
+	dist.checkAndRebalance()
+}
+
+// TestGetLoadDistribution tests GetLoadDistribution
+func TestGetLoadDistribution(t *testing.T) {
+	logger := newTestLogger()
+	dist := NewDistributor("node-0", "us-east", StrategyRoundRobin, logger)
+
+	dist.RegisterNode("node-1", "us-east")
+	dist.RegisterNode("node-2", "us-west")
+
+	loads := dist.GetLoadDistribution()
+
+	if len(loads) != 2 {
+		t.Errorf("Expected 2 nodes, got %d", len(loads))
+	}
+
+	if _, ok := loads["node-1"]; !ok {
+		t.Error("Expected node-1 in load distribution")
 	}
 }

@@ -26,7 +26,7 @@
 AnubisWatch is a **zero-dependency, single-binary uptime and synthetic monitoring platform** written in Go. It ships as a single `anubis` binary with:
 
 - An embedded B+Tree storage engine (**CobaltDB**) with WAL and optional AES-256-GCM encryption
-- An embedded React 19 dashboard (Tailwind 4.1 + Zustand 5)
+- An embedded React 19 dashboard (Tailwind 4 + Zustand 5)
 - REST, WebSocket/SSE, gRPC, Prometheus metrics, OpenAPI, and MCP endpoints
 - Raft-backed clustering for distributed probe coordination
 - Multi-step synthetic monitoring (Journeys)
@@ -66,7 +66,7 @@ The codebase uses Egyptian mythology terminology as domain language:
 │                                                                                 │
 │  ┌─────────────────────────────────────────────────────────────────────────┐  │
 │  │                         Web Layer (Embedded)                             │  │
-│  │            React 19 + Tailwind 4.1 + Zustand 5 + Vite 6                  │  │
+│  │            React 19 + Tailwind 4 + Zustand 5 + Vite 6                   │  │
 │  └─────────────────────────────────────────────────────────────────────────┘  │
 │                                                                                 │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌───────────────────┐  │
@@ -88,8 +88,8 @@ The codebase uses Egyptian mythology terminology as domain language:
 │  │  └────────────┘  └────────────┘  └────────────┘  └────────────────────┘   │  │
 │  │                                                                          │  │
 │  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────────────┐   │  │
-│  │  │  Cluster   │  │  Dashboard │  │   Status  │  │      MCP          │   │  │
-│  │  │  Manager   │  │   Embed    │  │   Page    │  │     Server        │   │  │
+│  │  │  Cluster   │  │  Dashboard │  │   Status  │  │       gRPC         │   │  │
+│  │  │  Manager   │  │   Embed    │  │   Page    │  │      Server       │   │  │
 │  │  └────────────┘  └────────────┘  └────────────┘  └────────────────────┘   │  │
 │  └────────────────────────────────┬──────────────────────────────────────────┘  │
 │                                   │                                            │
@@ -194,12 +194,16 @@ Located at `internal/storage/engine.go` — a custom embedded B+Tree storage eng
 **WAL recovery:** On startup, the WAL is replayed to restore the B+Tree to the last consistent state. Typical recovery takes under 1 second.
 
 **Storage sub-packages:**
+
 | File | Purpose |
 |------|---------|
 | `engine.go` | CobaltDB core (B+Tree + WAL) |
+| `storage.go` | High-level storage API (souls, journeys, dashboards, etc.) |
 | `encryption.go` | AES-256-GCM encryptor |
 | `retention.go` | Time-based data expiration |
 | `timeseries.go` | Time-series optimized queries |
+| `judgments.go` | Judgment CRUD operations |
+| `engine_journey.go` | Journey persistence |
 | `raft_log.go` | Raft log store adapter |
 
 ---
@@ -239,6 +243,7 @@ Scheduler (cron-like) ──▶ CheckerRegistry ──▶ Checker (per soul type
 - Region-aware probe distribution
 
 **Checker implementations (`internal/probe/`):**
+
 | File | Protocol | Key Features |
 |------|---------|-------------|
 | `http.go` | HTTP/HTTPS | Method, headers, body, JSON path, redirects, SSRF block |
@@ -278,6 +283,7 @@ type AlertChannel struct {
 ```
 
 **Dispatcher implementations:**
+
 | Dispatcher | Description |
 |------------|-------------|
 | `email` | SMTP with TLS |
@@ -299,7 +305,7 @@ type AlertChannel struct {
 
 ## Cluster & Distribution (Necropolis)
 
-Located at `internal/cluster/manager.go` and `internal/raft/node.go`.
+Located at `internal/cluster/manager.go`, `internal/cluster/distribution.go`, and `internal/raft/node.go`.
 
 **Necropolis** is the distributed cluster layer built on Raft consensus.
 
@@ -333,6 +339,22 @@ type Node struct {
 - Joint consensus for safe membership changes (add/remove/replace peers)
 - TCP transport with optional TLS/mTLS
 
+### StorageFSM (`internal/raft/fsm.go`)
+
+```go
+type StorageFSM struct {
+    mu    sync.RWMutex
+    store Storage
+    index uint64
+}
+```
+
+Applies Raft log entries to CobaltDB. All cluster state changes (souls, journeys, rules, channels) go through the FSM.
+
+### Distributor (`internal/raft/distributor.go`)
+
+Assigns souls to probe nodes based on configurable strategies.
+
 ### Cluster Manager (`internal/cluster/manager.go`)
 
 ```go
@@ -350,6 +372,7 @@ type Manager struct {
 **Discovery modes:** `manual`, `gossip`, `mdns`
 
 **Distribution strategies:**
+
 | Strategy | Behavior |
 |----------|---------|
 | `round_robin` | Evenly distribute souls across nodes |
@@ -359,6 +382,7 @@ type Manager struct {
 | `latency_optimal` | By probe latency |
 
 **Cluster commands:**
+
 ```bash
 anubis necropolis              # show cluster status
 anubis summon 10.0.0.2:7946   # add node
@@ -366,6 +390,7 @@ anubis banish jackal-02       # remove node
 ```
 
 **State transitions:**
+
 ```
 Follower ──(election timeout)──▶ Candidate
 Candidate ──(votes majority)────▶ Leader
@@ -457,7 +482,7 @@ type Authenticator interface {
 
 ## API Layer
 
-Located at `internal/api/rest.go` — 80+ routes.
+Located at `internal/api/rest.go` — 80+ routes served by the `RESTServer` struct.
 
 ```
 Middleware chain:
@@ -468,6 +493,7 @@ Route prefix: /api/v1/{resource}/:id/:action
 ```
 
 **Core REST endpoints:**
+
 | Resource | Methods | Description |
 |----------|---------|-------------|
 | `/api/v1/souls` | GET, POST | List/create souls |
@@ -484,12 +510,14 @@ Route prefix: /api/v1/{resource}/:id/:action
 | `/api/v1/metrics` | GET | Prometheus metrics |
 
 **Real-time endpoints:**
+
 | Path | Protocol | Purpose |
 |------|----------|---------|
 | `/ws` | WebSocket | Duat real-time event stream |
 | `/api/v1/events` | SSE | Server-sent events |
 
 **Public endpoints:**
+
 | Path | Purpose |
 |------|---------|
 | `/` | Embedded React dashboard |
@@ -507,12 +535,12 @@ Route prefix: /api/v1/{resource}/:id/:action
 
 ## Dashboard (React)
 
-Located at `web/`.
+Located at `web/` and built into `internal/dashboard/src/` for embedding.
 
 **Tech stack:**
 - React 19 (concurrent features)
 - React Router DOM 7
-- Tailwind CSS 4.1
+- Tailwind CSS 4
 - Zustand 5 (state management)
 - Recharts (visualizations)
 - Lucide React (icons)
@@ -521,17 +549,25 @@ Located at `web/`.
 **Theme:** Egyptian mythology, dark mode default with gold accents.
 
 **Zustand stores:**
+
 | Store | Purpose |
 |-------|---------|
-| `useAuthStore` | Authentication, logout |
-| `useThemeStore` | Theme (dark/light/system) |
 | `useSoulStore` | Soul list, CRUD |
-| `useAlertStore` | Alert rules, channels |
-| `useJourneyStore` | Journey definitions |
+| `useThemeStore` | Theme (dark/light/system) |
 
 **Pages:** Dashboard (/) · Souls (/souls) · Soul Detail (/souls/:id) · Journeys (/journeys) · Alerts (/alerts) · Incidents (/incidents) · Maintenance (/maintenance) · Cluster (/cluster) · Status Pages (/status-pages) · Settings (/settings)
 
-**Build:** `npm run build:embed` writes the built dashboard into `internal/dashboard/dist` so the Go binary embeds and serves it.
+**Dashboard widgets (`web/src/components/widgets/`):**
+
+| Widget | Purpose |
+|--------|---------|
+| `StatWidget` | Single KPI value display |
+| `LineChartWidget` | Time-series line chart |
+| `BarChartWidget` | Bar chart visualization |
+| `GaugeWidget` | Radial gauge for percentage metrics |
+| `TableWidget` | Tabular data display |
+
+**Build:** `npm run build:embed` writes the built dashboard into `internal/dashboard/src/` so the Go binary embeds and serves it.
 
 ---
 
@@ -552,7 +588,7 @@ Located at `web/`.
    Judgment Created → WebSocket Server → Dashboard Store (Zustand) → React UI
 
 4. Cluster Replication
-   Pharaoh (Leader) ──▶ Raft Log ──▶ Jackal 1 ──▶ Jackal 2
+   Pharaoh (Leader) ──▶ Raft Log ──▶ StorageFSM ──▶ CobaltDB
 ```
 
 ---
@@ -611,7 +647,7 @@ Located at `web/`.
 |---------|---------|
 | React 19 | UI framework |
 | react-router-dom 7 | Routing |
-| Tailwind CSS 4.1 | Styling |
+| Tailwind CSS 4 | Styling |
 | Zustand 5 | State management |
 | Recharts | Charts |
 | Lucide React | Icons |
@@ -639,13 +675,25 @@ AnubisWatch/
 │   │   ├── judgment.go      # Judgment, JudgmentDetails, TLSInfo
 │   │   ├── verdict.go       # Verdict, AlertRule, AlertChannel
 │   │   ├── config.go        # Config, ServerConfig, StorageConfig
-│   │   └── errors.go        # ConfigError, RaftError
+│   │   ├── errors.go        # ConfigError, RaftError
+│   │   ├── journey.go       # Journey, JourneyStep, Assertion
+│   │   ├── workspace.go     # Workspace model
+│   │   ├── feather.go       # Feather metrics definitions
+│   │   ├── dashboard.go     # Dashboard and widget models
+│   │   ├── statuspage.go    # StatusPage model
+│   │   ├── id.go            # ID generation utilities
+│   │   ├── context.go       # Context helpers
+│   │   └── raft_rpc.go      # Raft RPC types
 │   │
 │   ├── storage/             # CobaltDB engine
-│   │   ├── engine.go        # B+Tree + WAL core
+│   │   ├── engine.go        # B+Tree + WAL core (CobaltDB)
+│   │   ├── storage.go       # High-level storage API wrapper
 │   │   ├── encryption.go    # AES-256-GCM
 │   │   ├── retention.go     # Time-based expiration
 │   │   ├── timeseries.go    # Time-series queries
+│   │   ├── judgments.go     # Judgment CRUD
+│   │   ├── engine_journey.go # Journey persistence
+│   │   ├── statuspage.go    # Status page storage
 │   │   └── raft_log.go      # Raft log store adapter
 │   │
 │   ├── probe/                # Probe engine + checkers
@@ -671,13 +719,14 @@ AnubisWatch/
 │   │
 │   ├── raft/                 # Raft consensus
 │   │   ├── node.go          # Raft state machine (Pharaoh/Jackal)
-│   │   ├── fsm.go           # Finite state machine application
+│   │   ├── fsm.go           # StorageFSM — applies log entries to CobaltDB
 │   │   ├── transport.go     # TCP transport with TLS
 │   │   ├── discovery.go     # Node discovery (gossip/mdns/manual)
-│   │   └── distributor.go  # Probe work distribution
+│   │   └── distributor.go   # Probe work distribution (soul → node assignment)
 │   │
 │   ├── cluster/              # Cluster management
-│   │   └── manager.go       # Necropolis controller
+│   │   ├── manager.go       # Necropolis controller
+│   │   └── distribution.go   # Distribution strategies
 │   │
 │   ├── api/                  # HTTP API layer
 │   │   ├── rest.go          # RESTServer (80+ routes)
@@ -685,7 +734,8 @@ AnubisWatch/
 │   │   ├── metrics.go       # Prometheus metrics
 │   │   ├── audit.go         # Audit log
 │   │   ├── mcp.go           # MCP server (AI integration)
-│   │   └── statuspage.go    # Status page API
+│   │   ├── statuspage.go    # Status page API
+│   │   └── handlers_extra.go # Extended handler utilities
 │   │
 │   ├── auth/                 # Authentication
 │   │   ├── local.go         # bcrypt + sessions
@@ -709,9 +759,11 @@ AnubisWatch/
 │
 ├── web/                      # React dashboard source
 │   ├── src/
-│   │   ├── components/       # Shared UI components
+│   │   ├── components/
+│   │   │   └── widgets/     # StatWidget, LineChartWidget, BarChartWidget,
+│   │   │                    # GaugeWidget, TableWidget
 │   │   ├── pages/           # Route pages
-│   │   ├── stores/          # Zustand stores
+│   │   ├── stores/          # Zustand stores (soulStore, themeStore)
 │   │   ├── api/             # API client
 │   │   └── hooks/           # React hooks
 │   └── package.json
@@ -719,9 +771,11 @@ AnubisWatch/
 ├── configs/                  # Config examples (JSON/YAML)
 ├── deploy/                   # Kubernetes, Helm, Docker
 │   ├── k8s/                  # K8s manifests
-│   └── helm/anubiswatch/     # Helm chart
+│   ├── helm/anubiswatch/     # Helm chart
+│   └── docker/               # Docker compose
 ├── docs/                     # Documentation
-│   └── adr/                  # Architecture Decision Records
+│   ├── adr/                  # Architecture Decision Records
+│   └── api/                  # OpenAPI spec
 ├── scripts/                  # Helper scripts
 ├── proto/v1/                 # Protocol Buffer definitions
 ├── Makefile

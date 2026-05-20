@@ -424,3 +424,96 @@ func TestMaintenanceWindow_IsActiveIncludesBoundaries(t *testing.T) {
 		t.Fatal("expected disabled maintenance window to be inactive")
 	}
 }
+
+// TestAlertRule_Validate tests the AlertRule.Validate method
+func TestAlertRule_Validate(t *testing.T) {
+	tests := []struct {
+		name      string
+		rule      AlertRule
+		wantError bool
+	}{
+		{
+			name: "valid rule",
+			rule: AlertRule{
+				Name:       "Test Rule",
+				Conditions: []AlertCondition{{Type: "consecutive_failures", Threshold: 3}},
+				Channels:   []string{"channel-1"},
+			},
+			wantError: false,
+		},
+		{
+			name: "missing name",
+			rule: AlertRule{
+				Conditions: []AlertCondition{{Type: "consecutive_failures", Threshold: 3}},
+				Channels:   []string{"channel-1"},
+			},
+			wantError: true,
+		},
+		{
+			name: "empty conditions",
+			rule: AlertRule{
+				Name:       "Test Rule",
+				Conditions: []AlertCondition{},
+				Channels:   []string{"channel-1"},
+			},
+			wantError: true,
+		},
+		{
+			name: "empty channels",
+			rule: AlertRule{
+				Name:       "Test Rule",
+				Conditions: []AlertCondition{{Type: "consecutive_failures", Threshold: 3}},
+				Channels:   []string{},
+			},
+			wantError: true,
+		},
+		{
+			name: "missing condition type",
+			rule: AlertRule{
+				Name:       "Test Rule",
+				Conditions: []AlertCondition{{Threshold: 3}},
+				Channels:   []string{"channel-1"},
+			},
+			wantError: true,
+		},
+		{
+			name: "invalid condition type",
+			rule: AlertRule{
+				Name:       "Test Rule",
+				Conditions: []AlertCondition{{Type: "invalid_type", Threshold: 3}},
+				Channels:   []string{"channel-1"},
+			},
+			wantError: true,
+		},
+		{
+			name: "negative threshold",
+			rule: AlertRule{
+				Name:       "Test Rule",
+				Conditions: []AlertCondition{{Type: "consecutive_failures", Threshold: -1}},
+				Channels:   []string{"channel-1"},
+			},
+			wantError: true,
+		},
+		{
+			name: "multiple valid conditions",
+			rule: AlertRule{
+				Name: "Test Rule",
+				Conditions: []AlertCondition{
+					{Type: "consecutive_failures", Threshold: 3},
+					{Type: "status_change", From: "alive", To: "dead"},
+				},
+				Channels: []string{"channel-1", "channel-2"},
+			},
+			wantError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.rule.Validate()
+			if (err != nil) != tt.wantError {
+				t.Errorf("AlertRule.Validate() error = %v, wantError = %v", err, tt.wantError)
+			}
+		})
+	}
+}

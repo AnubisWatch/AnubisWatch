@@ -1259,3 +1259,153 @@ func TestClientMessage_UnknownType(t *testing.T) {
 		t.Fatal("Did not receive error response")
 	}
 }
+
+// TestWebSocketServer_BroadcastToWorkspace tests the BroadcastToWorkspace method
+func TestWebSocketServer_BroadcastToWorkspace(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger, &mockAuthenticator{}, nil)
+	server.Start()
+	defer server.Stop()
+
+	// Create a test client in the workspace room
+	client := &WSClient{
+		ID:        "test-client",
+		Workspace: "default",
+		Rooms:     make(map[string]bool),
+		send:      make(chan []byte, 10),
+		server:    server,
+	}
+
+	server.mu.Lock()
+	server.clients[client.ID] = client
+	server.rooms["workspace:default"] = map[string]bool{client.ID: true}
+	client.Rooms["workspace:default"] = true
+	server.mu.Unlock()
+
+	// Broadcast to workspace
+	msg := WSMessage{
+		Type:      "test_message",
+		Timestamp: time.Now().UTC(),
+		Payload:   map[string]string{"key": "value"},
+	}
+	server.BroadcastToWorkspace("default", msg)
+
+	// Give broadcast time to process
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify client received the message
+	select {
+	case data := <-client.send:
+		var received WSMessage
+		if err := json.Unmarshal(data, &received); err != nil {
+			t.Fatalf("Failed to parse message: %v", err)
+		}
+		if received.Type != "test_message" {
+			t.Errorf("Expected type 'test_message', got '%s'", received.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Did not receive broadcast message")
+	}
+}
+
+// TestWebSocketServer_BroadcastToWorkspace_EmptyRoom tests broadcast to workspace with no clients
+func TestWebSocketServer_BroadcastToWorkspace_EmptyRoom(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger, &mockAuthenticator{}, nil)
+	server.Start()
+	defer server.Stop()
+
+	// Broadcast to non-existent workspace
+	msg := WSMessage{
+		Type:      "test",
+		Timestamp: time.Now().UTC(),
+	}
+	// Should not panic
+	server.BroadcastToWorkspace("nonexistent", msg)
+}
+
+// TestWebSocketServer_CheckMessageRateLimit tests the checkMessageRateLimit method
+func TestWebSocketServer_CheckMessageRateLimit(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger, &mockAuthenticator{}, nil)
+	server.messageRateLimit = 5
+	server.messageWindow = time.Minute
+
+	// Test first message - should be allowed
+	if !server.checkMessageRateLimit("client-1") {
+		t.Error("First message should be allowed")
+	}
+
+	// Test within limit
+	for i := 0; i < 4; i++ {
+		if !server.checkMessageRateLimit("client-1") {
+			t.Errorf("Message %d should be allowed", i+2)
+		}
+	}
+
+	// Test at limit - should be blocked
+	if server.checkMessageRateLimit("client-1") {
+		t.Error("Message at rate limit should be blocked")
+	}
+}
+
+// TestWebSocketServer_CheckMessageRateLimit_DifferentClients tests rate limits are per-client
+func TestWebSocketServer_CheckMessageRateLimit_DifferentClients(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger, &mockAuthenticator{}, nil)
+	server.messageRateLimit = 2
+	server.messageWindow = time.Minute
+
+	// Exhaust limit for client-1
+	server.checkMessageRateLimit("client-1")
+	server.checkMessageRateLimit("client-1")
+
+	// client-1 should be rate limited
+	if server.checkMessageRateLimit("client-1") {
+		t.Error("client-1 should be rate limited")
+	}
+
+	// client-2 should not be affected
+	if !server.checkMessageRateLimit("client-2") {
+		t.Error("client-2 should be allowed")
+	}
+}
+
+// TestWebSocketServer_CheckMessageRateLimit_NilIpLimits tests rate limit with nil ipLimits
+func TestWebSocketServer_CheckMessageRateLimit_NilIpLimits(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger, &mockAuthenticator{}, nil)
+	server.ipLimits = nil // explicitly nil
+	server.messageRateLimit = 5
+	server.messageWindow = time.Minute
+
+	// Should handle nil ipLimits gracefully
+	if !server.checkMessageRateLimit("new-client") {
+		t.Error("First message should be allowed even with nil ipLimits")
+	}
+}
+
+// TestWebSocketServer_CheckMessageRateLimit_WindowReset tests rate limit window reset
+func TestWebSocketServer_CheckMessageRateLimit_WindowReset(t *testing.T) {
+	logger := newTestLogger()
+	server := NewWebSocketServer(logger, &mockAuthenticator{}, nil)
+	server.messageRateLimit = 2
+	server.messageWindow = 50 * time.Millisecond
+
+	// Exhaust limit
+	server.checkMessageRateLimit("client-reset")
+	server.checkMessageRateLimit("client-reset")
+
+	// Should be blocked
+	if server.checkMessageRateLimit("client-reset") {
+		t.Error("Should be rate limited")
+	}
+
+	// Wait for window to reset
+	time.Sleep(60 * time.Millisecond)
+
+	// Should be allowed again
+	if !server.checkMessageRateLimit("client-reset") {
+		t.Error("Should be allowed after window reset")
+	}
+}

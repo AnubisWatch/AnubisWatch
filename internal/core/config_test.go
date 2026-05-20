@@ -1700,3 +1700,32 @@ func TestConfig_Validate_FullConfig(t *testing.T) {
 		t.Errorf("validate() error = %v", err)
 	}
 }
+
+// TestBoolPtr tests the BoolPtr function
+func TestBoolPtr(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    bool
+		expected bool
+	}{
+		{"true value", true, true},
+		{"false value", false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := BoolPtr(tt.input)
+			if result == nil {
+				t.Fatal("BoolPtr returned nil")
+			}
+			if *result != tt.expected {
+				t.Errorf("BoolPtr(%v) = %v, want %v", tt.input, *result, tt.expected)
+			}
+			// Verify that the pointer is distinct for each call
+			result2 := BoolPtr(tt.input)
+			if result == result2 {
+				t.Error("BoolPtr should return distinct pointers")
+			}
+		})
+	}
+}

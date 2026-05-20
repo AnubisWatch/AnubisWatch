@@ -13,6 +13,7 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/api"
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 	"github.com/AnubisWatch/anubiswatch/internal/grpcapi"
+	"github.com/AnubisWatch/anubiswatch/internal/journey"
 	"github.com/AnubisWatch/anubiswatch/internal/probe"
 )
 
@@ -671,4 +672,95 @@ func (m *mockAuthenticator) Authenticate(token string) (*api.User, error) {
 		return &api.User{ID: "user-1", Email: "test@example.com", Workspace: "default"}, nil
 	}
 	return nil, fmt.Errorf("invalid token")
+}
+
+func TestAlertStorageAdapter_ListMaintenanceWindows(t *testing.T) {
+	db := setupTestStore(t)
+	adapter := &alertStorageAdapter{store: db}
+
+	// Test with no maintenance windows
+	windows, err := adapter.ListMaintenanceWindows()
+	if err != nil {
+		t.Fatalf("ListMaintenanceWindows failed: %v", err)
+	}
+	if len(windows) != 0 {
+		t.Errorf("expected 0 windows, got %d", len(windows))
+	}
+
+	// Save a maintenance window directly via store and verify it's listed
+	mw := &core.MaintenanceWindow{
+		ID:        "mw-test-1",
+		Name:      "Test Maintenance",
+		StartTime: time.Now(),
+		EndTime:   time.Now().Add(time.Hour),
+		Enabled:   true,
+	}
+	if err := db.SaveMaintenanceWindow(mw); err != nil {
+		t.Fatalf("SaveMaintenanceWindow failed: %v", err)
+	}
+
+	windows, err = adapter.ListMaintenanceWindows()
+	if err != nil {
+		t.Fatalf("ListMaintenanceWindows failed: %v", err)
+	}
+	if len(windows) != 1 {
+		t.Errorf("expected 1 window, got %d", len(windows))
+	}
+	if windows[0].ID != "mw-test-1" {
+		t.Errorf("expected mw-test-1, got %s", windows[0].ID)
+	}
+
+	// Add another window
+	mw2 := &core.MaintenanceWindow{
+		ID:        "mw-test-2",
+		Name:      "Test Maintenance 2",
+		StartTime: time.Now(),
+		EndTime:   time.Now().Add(2 * time.Hour),
+		Enabled:   false,
+	}
+	if err := db.SaveMaintenanceWindow(mw2); err != nil {
+		t.Fatalf("SaveMaintenanceWindow failed: %v", err)
+	}
+
+	windows, err = adapter.ListMaintenanceWindows()
+	if err != nil {
+		t.Fatalf("ListMaintenanceWindows failed: %v", err)
+	}
+	if len(windows) != 2 {
+		t.Errorf("expected 2 windows, got %d", len(windows))
+	}
+}
+
+func TestGrpcStorageAdapter_RunJourneyNoCtx_JourneyExecutorNil(t *testing.T) {
+	db := setupTestStore(t)
+	rest := &restStorageAdapter{store: db}
+	adapter := &grpcStorageAdapter{inner: rest, journey: nil}
+
+	_, err := adapter.RunJourneyNoCtx("default", "nonexistent-journey")
+	if err == nil {
+		t.Error("expected error when journey executor is nil")
+	}
+	if err.Error() != "journey executor not available" {
+		t.Errorf("expected 'journey executor not available', got: %v", err)
+	}
+}
+
+func TestGrpcStorageAdapter_RunJourneyNoCtx_JourneyNotFound(t *testing.T) {
+	db := setupTestStore(t)
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+
+	exec := journey.NewExecutor(db, logger)
+	if exec == nil {
+		t.Fatal("expected non-nil executor")
+	}
+	defer exec.StopAll()
+
+	rest := &restStorageAdapter{store: db}
+	adapter := &grpcStorageAdapter{inner: rest, journey: exec}
+
+	// Test with non-existent journey
+	_, err := adapter.RunJourneyNoCtx("default", "nonexistent-journey")
+	if err == nil {
+		t.Error("expected error when journey not found")
+	}
 }

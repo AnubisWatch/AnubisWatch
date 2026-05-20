@@ -761,6 +761,72 @@ func TestAlertManager_StartStop(t *testing.T) {
 	}
 }
 
+// TestManager_TestChannel tests the TestChannel method
+func TestManager_TestChannel(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels: make(map[string]*core.AlertChannel),
+		rules:    make(map[string]*core.AlertRule),
+	}
+	manager := NewManager(storage, newTestLogger())
+
+	// Register a test channel with a loopback URL that SSRF validation will accept
+	channel := &core.AlertChannel{
+		ID:          "test-channel",
+		Name:        "Test Channel",
+		Type:        core.ChannelWebHook,
+		Enabled:     true,
+		WorkspaceID: "default",
+		Config: map[string]interface{}{
+			"url": "http://127.0.0.1:9999/webhook",
+		},
+	}
+	if err := manager.RegisterChannel(channel); err != nil {
+		t.Fatalf("RegisterChannel failed: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Test channel found - this will fail due to connection refused which is expected
+	// since there's no server listening on 127.0.0.1:9999
+	// The important thing is that it found the channel and attempted to send
+	err := manager.TestChannel(ctx, "test-channel", "default")
+	if err != nil && !strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("TestChannel failed with unexpected error: %v", err)
+	}
+
+	// Test channel not found
+	err = manager.TestChannel(ctx, "nonexistent-channel", "default")
+	if err == nil {
+		t.Error("Expected error for nonexistent channel")
+	}
+
+	// Test channel belongs to different workspace
+	channel2 := &core.AlertChannel{
+		ID:          "other-workspace-channel",
+		Name:        "Other Workspace Channel",
+		Type:        core.ChannelWebHook,
+		Enabled:     true,
+		WorkspaceID: "other-workspace",
+		Config: map[string]interface{}{
+			"url": "http://127.0.0.1:9999/webhook2",
+		},
+	}
+	if err := manager.RegisterChannel(channel2); err != nil {
+		t.Fatalf("RegisterChannel failed: %v", err)
+	}
+
+	err = manager.TestChannel(ctx, "other-workspace-channel", "default")
+	if err == nil {
+		t.Error("Expected error when channel belongs to different workspace")
+	}
+
+	// Test with empty workspace (should default to "default")
+	err = manager.TestChannel(ctx, "test-channel", "")
+	if err != nil && !strings.Contains(err.Error(), "connection refused") {
+		t.Errorf("TestChannel with empty workspace failed with unexpected error: %v", err)
+	}
+}
+
 func TestAlertManager_ListChannels(t *testing.T) {
 	storage := &mockAlertStorage{
 		channels: make(map[string]*core.AlertChannel),

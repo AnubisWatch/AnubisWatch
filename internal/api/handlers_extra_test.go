@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -3222,5 +3223,559 @@ func TestHandleListDashboards_StoreError(t *testing.T) {
 	}
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("Expected status %d, got %d", http.StatusInternalServerError, rec.Code)
+	}
+}
+
+// mockOIDCAuth implements OIDCAuth interface for testing
+type mockOIDCAuth struct {
+	loginURL    string
+	state       string
+	nonce       string
+	loginErr    error
+	user        *User
+	token       string
+	callbackErr error
+}
+
+func (m *mockOIDCAuth) Authenticate(token string) (*User, error) {
+	if token == "valid-token" {
+		return &User{ID: "user-1", Email: "test@example.com", Role: "admin", Workspace: "default"}, nil
+	}
+	return nil, http.ErrNoCookie
+}
+func (m *mockOIDCAuth) Login(email, password string) (*User, string, error) {
+	return nil, "", http.ErrNoCookie
+}
+func (m *mockOIDCAuth) Logout(token string) error { return nil }
+func (m *mockOIDCAuth) Shutdown()                 {}
+func (m *mockOIDCAuth) ChangePassword(token, currentPassword, newPassword string) error {
+	return errors.New("not implemented")
+}
+func (m *mockOIDCAuth) RequestPasswordReset(email string) (string, error) {
+	return "", errors.New("not implemented")
+}
+func (m *mockOIDCAuth) ConfirmPasswordReset(token, newPassword string) error {
+	return errors.New("not implemented")
+}
+func (m *mockOIDCAuth) OIDCLoginURL() (string, string, string, error) {
+	if m.loginErr != nil {
+		return "", "", "", m.loginErr
+	}
+	return m.loginURL, m.state, m.nonce, nil
+}
+func (m *mockOIDCAuth) OIDCCallback(code, state, nonce string) (*User, string, error) {
+	if m.callbackErr != nil {
+		return nil, "", m.callbackErr
+	}
+	return m.user, m.token, nil
+}
+
+// TestHandleOpenAPIDocs tests the OpenAPI documentation endpoint
+func TestHandleOpenAPIDocs(t *testing.T) {
+	store := newMockStorage()
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		store:   store,
+		router:  router,
+		logger:  newTestLogger(),
+		cluster: &mockClusterManager{},
+	}
+
+	router.Handle("GET", "/api/docs", server.handleOpenAPIDocs)
+
+	req := httptest.NewRequest("GET", "/api/docs", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	contentType := w.Header().Get("Content-Type")
+	if !strings.Contains(contentType, "text/html") {
+		t.Errorf("expected HTML content type, got %s", contentType)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "swagger-ui") {
+		t.Error("expected Swagger UI in response")
+	}
+	if !strings.Contains(body, "/api/openapi.json") {
+		t.Error("expected OpenAPI spec URL in response")
+	}
+}
+
+// TestHandleOIDCLogin tests OIDC login redirect
+func TestHandleOIDCLogin(t *testing.T) {
+	store := newMockStorage()
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		store:   store,
+		router:  router,
+		logger:  newTestLogger(),
+		cluster: &mockClusterManager{},
+		auth: &mockOIDCAuth{
+			loginURL: "https://oidc.example.com/auth?client_id=test",
+			state:    "test-state",
+			nonce:    "test-nonce",
+			user:     &User{ID: "oidc-user", Email: "oidc@example.com"},
+			token:    "oidc-token",
+		},
+	}
+
+	router.Handle("GET", "/api/v1/auth/oidc/login", server.handleOIDCLogin)
+
+	req := httptest.NewRequest("GET", "/api/v1/auth/oidc/login", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Errorf("expected status 302, got %d", w.Code)
+	}
+
+	location := w.Header().Get("Location")
+	if location != "https://oidc.example.com/auth?client_id=test" {
+		t.Errorf("expected redirect to OIDC provider, got %s", location)
+	}
+
+	// Check nonce cookie
+	cookies := w.Result().Cookies()
+	var nonceCookie, stateCookie *http.Cookie
+	for _, c := range cookies {
+		if c.Name == "oidc_nonce" {
+			nonceCookie = c
+		}
+		if c.Name == "oidc_state" {
+			stateCookie = c
+		}
+	}
+	if nonceCookie == nil {
+		t.Error("expected oidc_nonce cookie")
+	}
+	if stateCookie == nil {
+		t.Error("expected oidc_state cookie")
+	}
+}
+
+// TestHandleOIDCLogin_NotConfigured tests OIDC login when not configured
+func TestHandleOIDCLogin_NotConfigured(t *testing.T) {
+	store := newMockStorage()
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		store:   store,
+		router:  router,
+		logger:  newTestLogger(),
+		cluster: &mockClusterManager{},
+		auth:    &mockAuthenticator{}, // Does not implement OIDCAuth
+	}
+
+	router.Handle("GET", "/api/v1/auth/oidc/login", server.handleOIDCLogin)
+
+	req := httptest.NewRequest("GET", "/api/v1/auth/oidc/login", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "OIDC not configured") {
+		t.Errorf("expected OIDC not configured error, got %s", w.Body.String())
+	}
+}
+
+// TestHandleOIDCLogin_Error tests OIDC login when OIDC provider fails
+func TestHandleOIDCLogin_Error(t *testing.T) {
+	store := newMockStorage()
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		store:   store,
+		router:  router,
+		logger:  newTestLogger(),
+		cluster: &mockClusterManager{},
+		auth: &mockOIDCAuth{
+			loginErr: errors.New("failed to fetch OIDC config"),
+		},
+	}
+
+	router.Handle("GET", "/api/v1/auth/oidc/login", server.handleOIDCLogin)
+
+	req := httptest.NewRequest("GET", "/api/v1/auth/oidc/login", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected status 500, got %d", w.Code)
+	}
+}
+
+// TestHandleOIDCCallback tests OIDC callback handler
+func TestHandleOIDCCallback(t *testing.T) {
+	store := newMockStorage()
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		store:   store,
+		router:  router,
+		logger:  newTestLogger(),
+		cluster: &mockClusterManager{},
+		auth: &mockOIDCAuth{
+			loginURL: "https://oidc.example.com/auth",
+			state:    "test-state",
+			nonce:    "test-nonce",
+			user:     &User{ID: "oidc-user", Email: "oidc@example.com", Role: "viewer"},
+			token:    "oidc-token-123",
+		},
+	}
+
+	router.Handle("GET", "/api/v1/auth/oidc/callback", server.handleOIDCCallback)
+
+	req := httptest.NewRequest("GET", "/api/v1/auth/oidc/callback?code=auth-code-123&state=test-state", nil)
+	// Add cookies that would normally be set by handleOIDCLogin
+	req.AddCookie(&http.Cookie{Name: "oidc_nonce", Value: "test-nonce"})
+	req.AddCookie(&http.Cookie{Name: "oidc_state", Value: "test-state"})
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if response["token"] != "oidc-token-123" {
+		t.Errorf("expected token in response, got %v", response["token"])
+	}
+	if user, ok := response["user"].(map[string]interface{}); !ok || user["email"] != "oidc@example.com" {
+		t.Errorf("expected user with email in response, got %v", response["user"])
+	}
+
+	// Verify cookies are cleared
+	cookies := w.Result().Cookies()
+	for _, c := range cookies {
+		if c.Name == "oidc_nonce" && c.Value != "" {
+			t.Error("expected nonce cookie to be cleared")
+		}
+		if c.Name == "oidc_state" && c.Value != "" {
+			t.Error("expected state cookie to be cleared")
+		}
+	}
+}
+
+// TestHandleOIDCCallback_MissingParams tests OIDC callback with missing params
+func TestHandleOIDCCallback_MissingParams(t *testing.T) {
+	store := newMockStorage()
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		store:   store,
+		router:  router,
+		logger:  newTestLogger(),
+		cluster: &mockClusterManager{},
+		auth: &mockOIDCAuth{
+			user:  &User{ID: "oidc-user", Email: "oidc@example.com"},
+			token: "oidc-token",
+		},
+	}
+
+	router.Handle("GET", "/api/v1/auth/oidc/callback", server.handleOIDCCallback)
+
+	tests := []struct {
+		name  string
+		query string
+	}{
+		{"missing code", "?state=test-state"},
+		{"missing state", "?code=auth-code"},
+		{"empty params", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/api/v1/auth/oidc/callback"+tt.query, nil)
+			w := httptest.NewRecorder()
+
+			router.ServeHTTP(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("expected status 400, got %d", w.Code)
+			}
+		})
+	}
+}
+
+// TestHandleOIDCCallback_Error tests OIDC callback with error from provider
+func TestHandleOIDCCallback_Error(t *testing.T) {
+	store := newMockStorage()
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		store:   store,
+		router:  router,
+		logger:  newTestLogger(),
+		cluster: &mockClusterManager{},
+		auth: &mockOIDCAuth{
+			user:  &User{ID: "oidc-user", Email: "oidc@example.com"},
+			token: "oidc-token",
+		},
+	}
+
+	router.Handle("GET", "/api/v1/auth/oidc/callback", server.handleOIDCCallback)
+
+	req := httptest.NewRequest("GET", "/api/v1/auth/oidc/callback?code=auth-code&state=test-state&error=access_denied&error_description=user%20denied%20access", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "access_denied") {
+		t.Errorf("expected OIDC error in response, got %s", w.Body.String())
+	}
+}
+
+// TestHandleOIDCCallback_MissingNonceCookie tests OIDC callback without nonce cookie
+func TestHandleOIDCCallback_MissingNonceCookie(t *testing.T) {
+	store := newMockStorage()
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		store:   store,
+		router:  router,
+		logger:  newTestLogger(),
+		cluster: &mockClusterManager{},
+		auth: &mockOIDCAuth{
+			user:  &User{ID: "oidc-user", Email: "oidc@example.com"},
+			token: "oidc-token",
+		},
+	}
+
+	router.Handle("GET", "/api/v1/auth/oidc/callback", server.handleOIDCCallback)
+
+	// No cookies added - missing nonce cookie
+	req := httptest.NewRequest("GET", "/api/v1/auth/oidc/callback?code=auth-code&state=test-state", nil)
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status 400, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "missing nonce cookie") {
+		t.Errorf("expected missing nonce cookie error, got %s", w.Body.String())
+	}
+}
+
+// TestHandleOIDCCallback_CallbackError tests OIDC callback with callback error
+func TestHandleOIDCCallback_CallbackError(t *testing.T) {
+	store := newMockStorage()
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		store:   store,
+		router:  router,
+		logger:  newTestLogger(),
+		cluster: &mockClusterManager{},
+		auth: &mockOIDCAuth{
+			callbackErr: errors.New("invalid state"),
+		},
+	}
+
+	router.Handle("GET", "/api/v1/auth/oidc/callback", server.handleOIDCCallback)
+
+	req := httptest.NewRequest("GET", "/api/v1/auth/oidc/callback?code=auth-code&state=test-state", nil)
+	req.AddCookie(&http.Cookie{Name: "oidc_nonce", Value: "test-nonce"})
+	req.AddCookie(&http.Cookie{Name: "oidc_state", Value: "test-state"})
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected status 401, got %d", w.Code)
+	}
+}
+
+// TestSlugFromLabel tests the slugFromLabel function
+func TestSlugFromLabel(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		// Basic cases
+		{"Hello World", "hello-world"},
+		{"Test Label", "test-label"},
+		{"already-lowercase", "already-lowercase"},
+
+		// Special characters
+		{"Test@Label", "test-label"},
+		{"Test.Label", "test-label"},
+		{"Test_Label", "test-label"},
+		{"Test.Label123", "test-label123"},
+
+		// Numbers
+		{"Test123", "test123"},
+		{"123 Test", "123-test"},
+
+		// Multiple separators
+		{"Test---Label", "test-label"},
+		{"Test...Label", "test-label"},
+		{"  Test   Label  ", "test-label"},
+
+		// Leading/trailing hyphens
+		{"-Test-", "test"},
+		{" Test ", "test"},
+
+		// Empty and whitespace
+		{"", "workspace"},
+		{"   ", "workspace"},
+		{"  \t  ", "workspace"},
+
+		// Unicode letters (non-ASCII) trigger hyphen separator
+		{"Tëst Lábël", "t-st-l-b-l"},
+
+		// Mixed case
+		{"TestLABEL", "testlabel"},
+		{"TEST_LABEL", "test-label"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := slugFromLabel(tt.input)
+			if result != tt.expected {
+				t.Errorf("slugFromLabel(%q) = %q, expected %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestSlugFromLabel_LengthLimit tests that slugFromLabel respects max length
+func TestSlugFromLabel_LengthLimit(t *testing.T) {
+	// Create a label that would produce a slug longer than 63 characters
+	longLabel := strings.Repeat("a", 100)
+	result := slugFromLabel(longLabel)
+
+	if len(result) > 63 {
+		t.Errorf("slugFromLabel produced slug longer than 63 chars: %d", len(result))
+	}
+
+	// Should not have trailing hyphens after trim
+	if strings.HasSuffix(result, "-") {
+		t.Error("slug should not have trailing hyphen")
+	}
+}
+
+// TestSlugFromLabel_NoLeadingHyphen tests that slugFromLabel doesn't start with hyphen
+func TestSlugFromLabel_NoLeadingHyphen(t *testing.T) {
+	tests := []string{
+		".test",
+		"-test",
+		" test",
+	}
+
+	for _, input := range tests {
+		result := slugFromLabel(input)
+		if strings.HasPrefix(result, "-") {
+			t.Errorf("slugFromLabel(%q) produced slug starting with hyphen: %q", input, result)
+		}
+	}
+}
+
+// TestBuildJourneyListItem tests the buildJourneyListItem function
+func TestBuildJourneyListItem(t *testing.T) {
+	storage := newMockStorage()
+	server := newTestServerWithStorage(storage)
+
+	// Create a test journey
+	journey := &core.JourneyConfig{
+		ID:   "journey-1",
+		Name: "Test Journey",
+		Steps: []core.JourneyStep{
+			{Name: "Step 1", Target: "http://example.com"},
+			{Name: "Step 2", Target: "http://example.org"},
+		},
+	}
+
+	// Test with no journey executor (should return basic item)
+	item := server.buildJourneyListItem(context.Background(), "default", journey)
+	if item.ID != "journey-1" {
+		t.Errorf("Expected ID journey-1, got %s", item.ID)
+	}
+	if item.StepCount != 2 {
+		t.Errorf("Expected StepCount 2, got %d", item.StepCount)
+	}
+	if item.LastStatus != "unknown" {
+		t.Errorf("Expected LastStatus unknown, got %s", item.LastStatus)
+	}
+	if item.SuccessRate != 0 {
+		t.Errorf("Expected SuccessRate 0, got %f", item.SuccessRate)
+	}
+}
+
+// TestBuildJourneyListItem_WithRuns tests buildJourneyListItem with runs
+func TestBuildJourneyListItem_WithRuns(t *testing.T) {
+	storage := newMockStorage()
+	server := newTestServerWithStorage(storage)
+
+	// Create a journey executor that returns runs
+	journeyExec := &mockJourneyExecutor{
+		runs: []*core.JourneyRun{
+			{
+				ID:        "run-1",
+				JourneyID: "journey-1",
+				Status:    core.SoulAlive,
+				StartedAt: time.Now().UnixMilli(),
+				Duration:  1500,
+			},
+			{
+				ID:        "run-2",
+				JourneyID: "journey-1",
+				Status:    core.SoulDead,
+				StartedAt: time.Now().Add(-1 * time.Hour).UnixMilli(),
+				Duration:  2000,
+			},
+		},
+	}
+	server.journey = journeyExec
+
+	journey := &core.JourneyConfig{
+		ID:   "journey-1",
+		Name: "Test Journey",
+		Steps: []core.JourneyStep{
+			{Name: "Step 1", Target: "http://example.com"},
+		},
+	}
+
+	item := server.buildJourneyListItem(context.Background(), "default", journey)
+	if item.LastStatus != "passed" {
+		t.Errorf("Expected LastStatus passed, got %s", item.LastStatus)
+	}
+	if item.SuccessRate != 50.0 {
+		t.Errorf("Expected SuccessRate 50.0, got %f", item.SuccessRate)
+	}
+	if item.AvgDuration != 1750.0 {
+		t.Errorf("Expected AvgDuration 1750.0, got %f", item.AvgDuration)
+	}
+}
+
+// TestJourneyRunUIStatus tests the journeyRunUIStatus function
+func TestJourneyRunUIStatus(t *testing.T) {
+	tests := []struct {
+		status   core.SoulStatus
+		expected string
+	}{
+		{core.SoulAlive, "passed"},
+		{core.SoulDead, "failed"},
+		{core.SoulDegraded, "pending"},
+		{core.SoulUnknown, "pending"},
+		{core.SoulEmbalmed, "pending"},
+	}
+
+	for _, tt := range tests {
+		result := journeyRunUIStatus(tt.status)
+		if result != tt.expected {
+			t.Errorf("journeyRunUIStatus(%s) = %s, expected %s", tt.status, result, tt.expected)
+		}
 	}
 }

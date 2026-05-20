@@ -537,6 +537,85 @@ func TestGetAPIURL_Environment(t *testing.T) {
 	}
 }
 
+// TestRaftPeerFromJoinAddr tests raftPeerFromJoinAddr function
+func TestRaftPeerFromJoinAddr(t *testing.T) {
+	tests := []struct {
+		name     string
+		addr     string
+		expected core.RaftPeer
+	}{
+		{
+			name: "simple address without port",
+			addr: "192.168.1.1",
+			expected: core.RaftPeer{
+				ID:      "192-168-1-1",
+				Address: "192.168.1.1",
+				Role:    core.RoleVoter,
+			},
+		},
+		{
+			name: "address with port",
+			addr: "192.168.1.1:7000",
+			expected: core.RaftPeer{
+				ID:      "192-168-1-1",
+				Address: "192.168.1.1:7000",
+				Role:    core.RoleVoter,
+			},
+		},
+		{
+			name: "hostname with port",
+			addr: "node.example.com:7000",
+			expected: core.RaftPeer{
+				ID:      "node-example-com",
+				Address: "node.example.com:7000",
+				Role:    core.RoleVoter,
+			},
+		},
+		{
+			name: "localhost",
+			addr: "localhost:7000",
+			expected: core.RaftPeer{
+				ID:      "localhost",
+				Address: "localhost:7000",
+				Role:    core.RoleVoter,
+			},
+		},
+		{
+			name: "IPv6 address",
+			addr: "[::1]:7000",
+			expected: core.RaftPeer{
+				ID:      "--1",
+				Address: "[::1]:7000",
+				Role:    core.RoleVoter,
+			},
+		},
+		{
+			name: "empty host becomes id",
+			addr: "192.168.1.1",
+			expected: core.RaftPeer{
+				ID:      "192-168-1-1",
+				Address: "192.168.1.1",
+				Role:    core.RoleVoter,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := raftPeerFromJoinAddr(tt.addr)
+			if result.ID != tt.expected.ID {
+				t.Errorf("raftPeerFromJoinAddr(%q).ID = %q, want %q", tt.addr, result.ID, tt.expected.ID)
+			}
+			if result.Address != tt.expected.Address {
+				t.Errorf("raftPeerFromJoinAddr(%q).Address = %q, want %q", tt.addr, result.Address, tt.expected.Address)
+			}
+			if result.Role != tt.expected.Role {
+				t.Errorf("raftPeerFromJoinAddr(%q).Role = %q, want %q", tt.addr, result.Role, tt.expected.Role)
+			}
+		})
+	}
+}
+
 // Test truncate edge cases
 func TestTruncate_EdgeCases(t *testing.T) {
 	tests := []struct {
