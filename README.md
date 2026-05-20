@@ -61,7 +61,6 @@ AnubisWatch is a self-hosted uptime, synthetic monitoring, alerting, and status-
 ├── web/                        # React 19 dashboard source
 ├── configs/                    # JSON/YAML config examples and systemd unit
 ├── deploy/                     # Docker, Kubernetes, Helm examples
-├── deployments/charts/         # Packaged Helm chart variant
 ├── docs/                       # API, config, deployment, backup, MCP, WebSocket docs
 ├── scripts/                    # Release, smoke, preflight, demo scripts
 ├── Dockerfile
@@ -342,7 +341,6 @@ make build
 - Docker Compose: [docker-compose.yml](docker-compose.yml)
 - Kubernetes manifests: [deploy/k8s](deploy/k8s)
 - Helm chart: [deploy/helm/anubiswatch](deploy/helm/anubiswatch)
-- Additional packaged chart: [deployments/charts/anubiswatch](deployments/charts/anubiswatch)
 - Deployment guide: [docs/deployment/guide.md](docs/deployment/guide.md)
 - Production runbook: [docs/deployment/production-runbook.md](docs/deployment/production-runbook.md)
 

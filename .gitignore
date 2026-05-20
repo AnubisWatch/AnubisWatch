@@ -53,12 +53,11 @@ go.work
 *.wal
 *.snapshot
 
-# Config files (keep examples)
+# Config files (keep examples in configs/)
 /anubis.json
 /anubis.yaml
 /values-production.yaml
 /deploy/helm/anubiswatch/values-production.yaml
-!/config/anubis.json
 
 # Dashboard build
 /web/dist/

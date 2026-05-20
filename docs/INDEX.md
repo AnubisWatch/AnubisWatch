@@ -12,6 +12,7 @@
 | **README.md** | Getting started, features, quick start | [Root](../README.md) |
 | **CHANGELOG.md** | Release notes and version history | [Root](../CHANGELOG.md) |
 | **CONTRIBUTING.md** | How to contribute to AnubisWatch | [Root](../CONTRIBUTING.md) |
+| **ARCHITECTURE.md** | System architecture and design | [Root](../ARCHITECTURE.md) |
 | **deployment/guide.md** | Deployment guides (Docker, K8s, systemd) | [docs/deployment/](deployment/guide.md) |
 | **deployment/production-runbook.md** | Production deploy, smoke, and rollback runbook | [docs/deployment/](deployment/production-runbook.md) |
 
@@ -24,34 +25,26 @@
 | Document | Description | Location |
 |----------|-------------|----------|
 | **CONFIGURATION.md** | Complete `anubis.yaml` reference | [docs/](CONFIGURATION.md) |
-| **openapi.yaml** | REST API specification (OpenAPI 3.1.0) | [docs/](openapi.yaml) |
+| **openapi.yaml** | REST API specification (OpenAPI 3.1.0) | [docs/api/](openapi.yaml) |
 | **deployment/guide.md** | Deployment guide | [docs/deployment/](deployment/guide.md) |
 | **deployment/production-runbook.md** | Production deploy, smoke, and rollback runbook | [docs/deployment/](deployment/production-runbook.md) |
+| **TROUBLESHOOTING.md** | Common issues and solutions | [docs/](TROUBLESHOOTING.md) |
 
 ### For Developers
 
 | Document | Description | Location |
 |----------|-------------|----------|
 | **CONTRIBUTING.md** | Contribution guidelines | [Root](../CONTRIBUTING.md) |
+| **ARCHITECTURE.md** | Architecture overview | [Root](../ARCHITECTURE.md) |
+| **openapi.yaml** | API specification for client generation | [docs/api/](openapi.yaml) |
 | **RELEASE_TEMPLATE.md** | GitHub Release template | [.github/](../.github/RELEASE_TEMPLATE.md) |
-| **openapi.yaml** | API specification for client generation | [docs/](openapi.yaml) |
+| **docs/adr/** | Architecture Decision Records | [docs/adr/](adr/) |
 
 ### For Design/Branding
 
 | Document | Description | Location |
 |----------|-------------|----------|
-| **BRANDING.md** | Brand identity, colors, typography | [.project/](../.project/BRANDING.md) |
 | **WEBSITE.md** | anubis.watch landing page content | [docs/](WEBSITE.md) |
-| **ANUBISWATCH_LOGO_PROMPTS.md** | Logo generation prompts | [.project/](../.project/ANUBISWATCH_LOGO_PROMPTS.md) |
-
-### For Architecture/Planning
-
-| Document | Description | Location |
-|----------|-------------|----------|
-| **SPECIFICATION.md** | Technical specification | [.project/](../.project/SPECIFICATION.md) |
-| **IMPLEMENTATION.md** | Implementation plan | [.project/](../.project/IMPLEMENTATION.md) |
-| **TASKS.md** | Development task breakdown | [.project/](../.project/TASKS.md) |
-| **BRANDING.md** | Brand guidelines | [.project/](../.project/BRANDING.md) |
 
 ---
 
@@ -75,14 +68,15 @@
 1. **deployment/guide.md** — Deployment methods
 2. **deployment/production-runbook.md** — Production promotion and rollback
 3. **docker-compose.yml** — Docker Compose examples
-4. **deployments/charts/anubiswatch/** — Helm chart
+4. **deploy/helm/anubiswatch/** — Helm chart
 
 ### Development
 
 1. **CONTRIBUTING.md** — How to contribute
-2. **SPECIFICATION.md** — Technical specs
+2. **ARCHITECTURE.md** — Architecture overview
 3. **openapi.yaml** — API specification
 4. **RELEASE_TEMPLATE.md** — Release process
+5. **docs/adr/** — Architecture Decision Records
 
 ### Operations
 
@@ -123,7 +117,6 @@
 |----------|----------|-------------|
 | CLI Reference | High | Complete CLI command reference |
 | Protocol Guides | Medium | Deep-dive into each protocol checker |
-| Troubleshooting Guide | Medium | Common issues and solutions |
 | FAQ | Low | Frequently asked questions |
 | Tutorial Series | Medium | Step-by-step tutorials |
 | Architecture Diagrams | High | Visual architecture docs |
