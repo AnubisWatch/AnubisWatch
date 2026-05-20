@@ -3200,8 +3200,8 @@ func TestGenerateConfig_Basic(t *testing.T) {
 	if !strings.Contains(config, `"admin_email": "admin@anubis.watch"`) {
 		t.Error("Expected admin email in config")
 	}
-	if !strings.Contains(config, `"tls": false`) {
-		t.Error("Expected tls: false when TLS disabled")
+	if !strings.Contains(config, `"tls": {"enabled": false}`) {
+		t.Error("Expected tls: {enabled: false} when TLS disabled")
 	}
 }
 
