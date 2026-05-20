@@ -47,6 +47,7 @@ need before they touch this codebase.
 - Dashboard: `http://localhost:8080` (default creds generated on first run, stored in `data/.admin_password`)
 - API docs: `http://localhost:8080/api/docs`
 - Prometheus metrics: `http://localhost:8080/metrics`
+- Default port: 8080. gRPC: 9090. Cluster bind: 0.0.0.0:7946.
 - Config reference: `configs/anubis.yaml`
 - Architecture: `ARCHITECTURE.md`
 - Deployment runbook: `docs/deployment/production-runbook.md`

@@ -20,7 +20,7 @@ AnubisWatch is a zero-dependency, single-binary uptime and synthetic monitoring 
 make build
 # Or directly: CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/anubis ./cmd/anubis
 
-# Build dashboard (React 19 + Tailwind 4.1, embedded in binary)
+# Build dashboard (React 19 + Tailwind 4, embedded in binary)
 make dashboard
 # Or directly: cd web && pnpm ci && pnpm run build
 
@@ -59,9 +59,9 @@ go test -v -tags=integration ./...
 
 ### Development
 ```bash
-# Run in development mode (single node, uses ./anubis.yaml)
+# Run in development mode (single node, uses ./configs/anubis.yaml)
 make dev
-# Or directly: go run ./cmd/anubis serve --single --config ./anubis.yaml
+# Or directly: go run ./cmd/anubis serve --single --config ./configs/anubis.yaml
 
 # Run after building (uses bin/anubis)
 make run
@@ -76,7 +76,7 @@ make watch TARGET=https://example.com
 make judge
 
 # Run with custom config
-anubis serve --config ./anubis.yaml
+anubis serve --config ./configs/anubis.yaml
 
 # Format code
 make fmt
@@ -114,7 +114,7 @@ anubis judge
 
 # Server management
 anubis serve --single                    # Single node mode
-anubis serve --config ./anubis.yaml      # Custom config
+anubis serve --config ./configs/anubis.yaml      # Custom config
 anubis status                            # Show server status
 anubis logs --follow                     # View logs
 anubis config validate                   # Validate config
@@ -173,7 +173,7 @@ In-memory B+Tree with configurable order (default 32, range 4–256), WAL for cr
 
 ### API Layer
 
-Custom router (no third-party library) with parameterized routes (`:param` syntax). Middleware chain: logging → security headers → CORS → recovery → JSON validation → path param validation → rate limiting. Auth via `requireAuth()` (token) and `requireRole()` (RBAC). 80+ routes under `/api/v1/`. SSE fallback at `/api/v1/events`. OpenAPI 3.0.3 spec at `.project/openapi.yaml` and served inline at `/api/v1/spec`.
+Custom router (no third-party library) with parameterized routes (`:param` syntax). Middleware chain: logging → security headers → CORS → recovery → JSON validation → path param validation → rate limiting. Auth via `requireAuth()` (token) and `requireRole()` (RBAC). 80+ routes under `/api/v1/`. SSE fallback at `/api/v1/events`. OpenAPI 3.0.3 spec at `docs/api/openapi.yaml` and served inline at `/api/v1/spec`.
 
 ### Authentication (`internal/auth/`)
 
@@ -198,7 +198,7 @@ All implementations use constant-time comparison for secrets and secure random t
 
 Config files support JSON or YAML format. Default locations checked in order:
 1. `./anubis.json`
-2. `./anubis.yaml`
+2. `./configs/anubis.yaml`
 3. `~/.config/anubis/anubis.json`
 4. `/etc/anubis/anubis.json`
 
@@ -265,7 +265,7 @@ Direct Go dependencies:
 - `gopkg.in/yaml.v3` v3.0.1 — YAML config parsing
 
 Dashboard (web/):
-- React 19, React Router DOM 7, Tailwind 4.1, Vite 6
+- React 19, React Router DOM 7, Tailwind 4, Vite 6
 - Recharts, Zustand 5, Lucide React icons
 - Vitest 4 + React Testing Library for unit tests, Playwright for e2e
 - Uses pnpm for package management
