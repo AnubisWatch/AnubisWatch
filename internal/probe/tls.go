@@ -299,6 +299,12 @@ func (c *TLSChecker) diagnoseTLSFailure(soul *core.Soul, dialErr error, timeout 
 	// HIGH-06: Use VerifyPeerCertificate callback to capture certificates for diagnostics
 	// while still performing our own chain verification, rather than blindly accepting
 	// any certificate with InsecureSkipVerify.
+	// Disable default TLS verification — we perform our own certificate validation
+	// via VerifyPeerCertificate below. This is intentional: we intercept the raw certs
+	// and apply custom validation (e.g., cert pinning, CA pinning) rather than relying
+	// on system CAs. VerifyPeerCertificate returning nil means the handshake succeeds,
+	// then we inspect the cert chain and close the connection if validation fails.
+	// nosec G123 — intentional InsecureSkipVerify with custom VerifyPeerCertificate
 	var capturedCerts []*x509.Certificate
 	tlsConfig := &tls.Config{
 		InsecureSkipVerify: true, // Required to not fail handshake; we verify ourselves below
