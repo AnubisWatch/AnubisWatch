@@ -19,6 +19,10 @@ type Manager struct {
 	rules     map[string]*core.AlertRule
 	history   *core.AlertHistory
 	incidents map[string]*core.Incident
+	// failureStreak tracks consecutive non-alive judgments per (ruleID, soulID).
+	// Used by the consecutive_failures condition to know when a streak crosses
+	// its threshold. Reset to 0 by any non-failure judgment.
+	failureStreak map[string]int
 
 	// Dispatchers
 	dispatchers map[core.AlertChannelType]ChannelDispatcher
@@ -82,15 +86,16 @@ type maintenanceWindowStorage interface {
 // NewManager creates a new alert manager
 func NewManager(storage AlertStorage, logger *slog.Logger) *Manager {
 	m := &Manager{
-		channels:    make(map[string]*core.AlertChannel),
-		rules:       make(map[string]*core.AlertRule),
-		history:     &core.AlertHistory{Entries: make(map[string]*core.AlertHistoryEntry)},
-		incidents:   make(map[string]*core.Incident),
-		dispatchers: make(map[core.AlertChannelType]ChannelDispatcher),
-		stopCh:      make(chan struct{}),
-		queue:       make(chan *core.AlertEvent, 1000),
-		logger:      logger.With("component", "alert_manager"),
-		storage:     storage,
+		channels:      make(map[string]*core.AlertChannel),
+		rules:         make(map[string]*core.AlertRule),
+		history:       &core.AlertHistory{Entries: make(map[string]*core.AlertHistoryEntry)},
+		incidents:     make(map[string]*core.Incident),
+		failureStreak: make(map[string]int),
+		dispatchers:   make(map[core.AlertChannelType]ChannelDispatcher),
+		stopCh:        make(chan struct{}),
+		queue:         make(chan *core.AlertEvent, 1000),
+		logger:        logger.With("component", "alert_manager"),
+		storage:       storage,
 	}
 	m.stats.verdictsBySeverity = make(map[string]uint64)
 
@@ -347,9 +352,22 @@ func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, j
 			continue
 		}
 
+		// Update the per-(rule,soul) failure streak BEFORE evaluating
+		// conditions — consecutive_failures reads from this. Any non-dead
+		// status resets the streak so an alive judgment that breaks the
+		// failure chain clears the counter.
+		m.updateFailureStreak(rule.ID, soul.ID, judgment.Status)
+
 		// Check conditions
 		triggered := m.checkConditions(rule, prevStatus, judgment)
 		if !triggered {
+			// On a healthy judgment, auto-resolve any open incident for
+			// this (rule, soul) pair if the rule has AutoResolve enabled.
+			// This is the "recovery" path — rule didn't trigger, but we
+			// might still have an open incident from a prior failure.
+			if judgment.Status == core.SoulAlive && rule.AutoResolve {
+				m.autoResolveOpenIncident(rule.ID, soul)
+			}
 			continue
 		}
 
@@ -368,6 +386,12 @@ func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, j
 			Timestamp:   time.Now().UTC(),
 		}
 
+		// Persist the incident record so operators can ack/resolve it via
+		// /api/v1/incidents. Idempotent: if there's already an open
+		// incident for this (rule, soul) pair, append the event to it
+		// rather than creating a duplicate.
+		m.recordIncident(rule, soul, event)
+
 		// Check deduplication before queuing
 		if m.isDuplicate(rule, event) {
 			m.logger.Debug("Alert deduplicated",
@@ -384,6 +408,90 @@ func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, j
 				"soul_id", soul.ID)
 		}
 	}
+}
+
+// recordIncident creates a new open Incident if none exists for the given
+// (rule, soul) pair, or appends the event to the existing one. Always
+// persists via storage so the REST API at /api/v1/incidents reflects
+// reality. Without this, alert rules fire and notifications dispatch but
+// the incident inbox stays empty forever.
+func (m *Manager) recordIncident(rule *core.AlertRule, soul *core.Soul, event *core.AlertEvent) {
+	m.mu.Lock()
+	for _, inc := range m.incidents {
+		if inc.RuleID == rule.ID && inc.SoulID == soul.ID && inc.Status != core.IncidentResolved {
+			// Open incident already exists — append the event for audit.
+			inc.Events = append(inc.Events, *event)
+			incToSave := inc
+			m.mu.Unlock()
+			if m.storage != nil {
+				if err := m.storage.SaveIncident(incToSave); err != nil {
+					m.logger.Error("Failed to update incident with new event",
+						"incident_id", incToSave.ID, "error", err)
+				}
+			}
+			return
+		}
+	}
+	incident := &core.Incident{
+		ID:          generateIncidentID(),
+		RuleID:      rule.ID,
+		SoulID:      soul.ID,
+		WorkspaceID: soul.WorkspaceID,
+		Status:      core.IncidentOpen,
+		Severity:    event.Severity,
+		StartedAt:   event.Timestamp,
+		Events:      []core.AlertEvent{*event},
+	}
+	m.incidents[incident.ID] = incident
+	m.mu.Unlock()
+
+	if m.storage != nil {
+		if err := m.storage.SaveIncident(incident); err != nil {
+			m.logger.Error("Failed to create incident",
+				"soul_id", soul.ID, "rule_id", rule.ID, "error", err)
+		}
+	}
+	m.logger.Info("Incident opened",
+		"incident_id", incident.ID,
+		"soul_id", soul.ID,
+		"rule_id", rule.ID,
+		"severity", incident.Severity)
+}
+
+// autoResolveOpenIncident finds the open incident for the given (rule,
+// soul) and marks it resolved with "auto-resolved" as the resolver,
+// when the rule has AutoResolve=true and the soul has recovered.
+func (m *Manager) autoResolveOpenIncident(ruleID string, soul *core.Soul) {
+	m.mu.Lock()
+	var target *core.Incident
+	for _, inc := range m.incidents {
+		if inc.RuleID == ruleID && inc.SoulID == soul.ID && inc.Status != core.IncidentResolved {
+			target = inc
+			break
+		}
+	}
+	if target == nil {
+		m.mu.Unlock()
+		return
+	}
+	now := time.Now().UTC()
+	target.Status = core.IncidentResolved
+	target.ResolvedAt = &now
+	target.ResolvedBy = "auto-resolved"
+	m.stats.resolvedAlerts++
+	incToSave := target
+	m.mu.Unlock()
+
+	if m.storage != nil {
+		if err := m.storage.SaveIncident(incToSave); err != nil {
+			m.logger.Error("Failed to save auto-resolved incident",
+				"incident_id", incToSave.ID, "error", err)
+		}
+	}
+	m.logger.Info("Incident auto-resolved",
+		"incident_id", incToSave.ID,
+		"soul_id", soul.ID,
+		"rule_id", ruleID)
 }
 
 func (m *Manager) isSuppressedByMaintenance(soul *core.Soul, now time.Time) bool {
@@ -650,7 +758,26 @@ func (m *Manager) registerDispatchers() {
 func (m *Manager) ruleApplies(rule *core.AlertRule, soul *core.Soul) bool {
 	scope := rule.Scope
 
-	switch scope.Type {
+	// When Type is unset, infer from which sub-field is populated. This
+	// matches the API client's natural shape (`{"scope":{"soul_ids":[...]}}`)
+	// and avoids a footgun where the rule is silently never matched.
+	scopeType := scope.Type
+	if scopeType == "" {
+		switch {
+		case len(scope.SoulIDs) > 0:
+			scopeType = "specific"
+		case len(scope.Tags) > 0:
+			scopeType = "tag"
+		case len(scope.SoulTypes) > 0:
+			scopeType = "type"
+		default:
+			// Empty scope means "applies to every soul" (the simplest rule
+			// shape), so default to all rather than silently rejecting.
+			scopeType = "all"
+		}
+	}
+
+	switch scopeType {
 	case "all":
 		return true
 	case "specific":
@@ -681,10 +808,43 @@ func (m *Manager) ruleApplies(rule *core.AlertRule, soul *core.Soul) bool {
 	}
 }
 
+// updateFailureStreak increments the per-(rule,soul) failure counter on a
+// dead status and resets it on any other status. Bounded growth: capped at
+// 1_000_000 so a permanently-down soul can't overflow int.
+func (m *Manager) updateFailureStreak(ruleID, soulID string, status core.SoulStatus) {
+	key := ruleID + ":" + soulID
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if status == core.SoulDead {
+		if m.failureStreak[key] < 1_000_000 {
+			m.failureStreak[key]++
+		}
+	} else {
+		delete(m.failureStreak, key)
+	}
+}
+
+// failureStreakCount returns the current consecutive-failure count for the
+// given rule+soul pair, used by checkConditions.
+func (m *Manager) failureStreakCount(ruleID, soulID string) int {
+	key := ruleID + ":" + soulID
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.failureStreak[key]
+}
+
 // checkConditions checks if alert conditions are met
 func (m *Manager) checkConditions(rule *core.AlertRule, prevStatus core.SoulStatus, judgment *core.Judgment) bool {
 	for _, cond := range rule.Conditions {
 		switch cond.Type {
+		case "consecutive_failures":
+			// failureStreak is updated by ProcessJudgment before this runs;
+			// here we only read the accumulated count and compare to
+			// threshold. The streak is keyed by ruleID+soulID so multiple
+			// rules can independently track the same soul.
+			if m.failureStreakCount(rule.ID, judgment.SoulID) >= cond.Threshold {
+				return true
+			}
 		case "status_change":
 			if string(prevStatus) == cond.From && string(judgment.Status) == cond.To {
 				return true
@@ -1064,6 +1224,10 @@ func generateAlertID() string {
 	return fmt.Sprintf("alert_%d_%s", time.Now().Unix(), generateShortID())
 }
 
+func generateIncidentID() string {
+	return fmt.Sprintf("inc_%d_%s", time.Now().Unix(), generateShortID())
+}
+
 func generateShortID() string {
 	return fmt.Sprintf("%06x", time.Now().UnixNano()%0xFFFFFF)
 }
@@ -1154,7 +1318,9 @@ func (m *Manager) ResolveIncident(incidentID, userID, workspace string) error {
 	return nil
 }
 
-// ListActiveIncidents returns active incidents
+// ListActiveIncidents returns incidents that are still open or acknowledged
+// (i.e. not yet resolved). Used by alerting/dashboarding callers that
+// specifically want the "current incident inbox" view.
 func (m *Manager) ListActiveIncidents() []*core.Incident {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -1164,6 +1330,21 @@ func (m *Manager) ListActiveIncidents() []*core.Incident {
 		if incident.Status != core.IncidentResolved {
 			incidents = append(incidents, incident)
 		}
+	}
+	return incidents
+}
+
+// ListIncidents returns every incident the manager knows about — open,
+// acknowledged, and resolved. The REST list endpoint uses this so a UI
+// can show recovery history; callers that only want active incidents
+// can keep using ListActiveIncidents.
+func (m *Manager) ListIncidents() []*core.Incident {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	incidents := make([]*core.Incident, 0, len(m.incidents))
+	for _, incident := range m.incidents {
+		incidents = append(incidents, incident)
 	}
 	return incidents
 }

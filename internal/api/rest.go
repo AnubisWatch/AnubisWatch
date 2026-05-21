@@ -238,6 +238,7 @@ type AlertManager interface {
 	AcknowledgeIncident(incidentID, userID, workspace string) error
 	ResolveIncident(incidentID, userID, workspace string) error
 	ListActiveIncidents() []*core.Incident
+	ListIncidents() []*core.Incident
 }
 
 // Authenticator interface for authentication
@@ -1841,10 +1842,23 @@ func (s *RESTServer) handleClusterPeers(ctx *Context) error {
 // Incident handlers
 
 func (s *RESTServer) handleListIncidents(ctx *Context) error {
-	active := s.alert.ListActiveIncidents()
-	incidents := make([]*core.Incident, 0, len(active))
-	for _, incident := range active {
+	// Default to listing every incident so the UI can show recovery history
+	// alongside currently-open incidents. `?status=active` keeps the
+	// previous behaviour for clients that only want open/ack'd incidents.
+	statusFilter := ctx.Request.URL.Query().Get("status")
+	var all []*core.Incident
+	switch statusFilter {
+	case "active", "open", "acknowledged":
+		all = s.alert.ListActiveIncidents()
+	default:
+		all = s.alert.ListIncidents()
+	}
+	incidents := make([]*core.Incident, 0, len(all))
+	for _, incident := range all {
 		if incident == nil {
+			continue
+		}
+		if statusFilter != "" && statusFilter != "all" && statusFilter != "active" && string(incident.Status) != statusFilter {
 			continue
 		}
 		if incident.WorkspaceID == "" || incident.WorkspaceID == ctx.Workspace {

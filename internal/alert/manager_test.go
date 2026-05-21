@@ -2598,15 +2598,16 @@ func TestManager_ProcessJudgment_AlertQueued(t *testing.T) {
 	}
 	// Create manager manually with custom queue
 	m := &Manager{
-		channels:    make(map[string]*core.AlertChannel),
-		rules:       make(map[string]*core.AlertRule),
-		history:     &core.AlertHistory{Entries: make(map[string]*core.AlertHistoryEntry)},
-		incidents:   make(map[string]*core.Incident),
-		dispatchers: make(map[core.AlertChannelType]ChannelDispatcher),
-		stopCh:      make(chan struct{}),
-		queue:       make(chan *core.AlertEvent, 100),
-		logger:      newTestLogger(),
-		storage:     storage,
+		channels:      make(map[string]*core.AlertChannel),
+		rules:         make(map[string]*core.AlertRule),
+		history:       &core.AlertHistory{Entries: make(map[string]*core.AlertHistoryEntry)},
+		incidents:     make(map[string]*core.Incident),
+		failureStreak: make(map[string]int),
+		dispatchers:   make(map[core.AlertChannelType]ChannelDispatcher),
+		stopCh:        make(chan struct{}),
+		queue:         make(chan *core.AlertEvent, 100),
+		logger:        newTestLogger(),
+		storage:       storage,
 	}
 	m.registerDispatchers()
 
@@ -2674,15 +2675,16 @@ func TestManager_ProcessJudgment_SuppressedByMaintenance(t *testing.T) {
 		},
 	}
 	m := &Manager{
-		channels:    make(map[string]*core.AlertChannel),
-		rules:       make(map[string]*core.AlertRule),
-		history:     &core.AlertHistory{Entries: make(map[string]*core.AlertHistoryEntry)},
-		incidents:   make(map[string]*core.Incident),
-		dispatchers: make(map[core.AlertChannelType]ChannelDispatcher),
-		stopCh:      make(chan struct{}),
-		queue:       make(chan *core.AlertEvent, 100),
-		logger:      newTestLogger(),
-		storage:     storage,
+		channels:      make(map[string]*core.AlertChannel),
+		rules:         make(map[string]*core.AlertRule),
+		history:       &core.AlertHistory{Entries: make(map[string]*core.AlertHistoryEntry)},
+		incidents:     make(map[string]*core.Incident),
+		failureStreak: make(map[string]int),
+		dispatchers:   make(map[core.AlertChannelType]ChannelDispatcher),
+		stopCh:        make(chan struct{}),
+		queue:         make(chan *core.AlertEvent, 100),
+		logger:        newTestLogger(),
+		storage:       storage,
 	}
 	m.registerDispatchers()
 
@@ -2731,15 +2733,16 @@ func TestManager_ProcessJudgment_MaintenanceScopeDoesNotSuppressUnmatchedSoul(t 
 		},
 	}
 	m := &Manager{
-		channels:    make(map[string]*core.AlertChannel),
-		rules:       make(map[string]*core.AlertRule),
-		history:     &core.AlertHistory{Entries: make(map[string]*core.AlertHistoryEntry)},
-		incidents:   make(map[string]*core.Incident),
-		dispatchers: make(map[core.AlertChannelType]ChannelDispatcher),
-		stopCh:      make(chan struct{}),
-		queue:       make(chan *core.AlertEvent, 100),
-		logger:      newTestLogger(),
-		storage:     storage,
+		channels:      make(map[string]*core.AlertChannel),
+		rules:         make(map[string]*core.AlertRule),
+		history:       &core.AlertHistory{Entries: make(map[string]*core.AlertHistoryEntry)},
+		incidents:     make(map[string]*core.Incident),
+		failureStreak: make(map[string]int),
+		dispatchers:   make(map[core.AlertChannelType]ChannelDispatcher),
+		stopCh:        make(chan struct{}),
+		queue:         make(chan *core.AlertEvent, 100),
+		logger:        newTestLogger(),
+		storage:       storage,
 	}
 	m.registerDispatchers()
 
@@ -2776,15 +2779,16 @@ func TestManager_ProcessJudgment_NilJudgmentDetails(t *testing.T) {
 		rules:    make(map[string]*core.AlertRule),
 	}
 	m := &Manager{
-		channels:    make(map[string]*core.AlertChannel),
-		rules:       make(map[string]*core.AlertRule),
-		history:     &core.AlertHistory{Entries: make(map[string]*core.AlertHistoryEntry)},
-		incidents:   make(map[string]*core.Incident),
-		dispatchers: make(map[core.AlertChannelType]ChannelDispatcher),
-		stopCh:      make(chan struct{}),
-		queue:       make(chan *core.AlertEvent, 100),
-		logger:      newTestLogger(),
-		storage:     storage,
+		channels:      make(map[string]*core.AlertChannel),
+		rules:         make(map[string]*core.AlertRule),
+		history:       &core.AlertHistory{Entries: make(map[string]*core.AlertHistoryEntry)},
+		incidents:     make(map[string]*core.Incident),
+		failureStreak: make(map[string]int),
+		dispatchers:   make(map[core.AlertChannelType]ChannelDispatcher),
+		stopCh:        make(chan struct{}),
+		queue:         make(chan *core.AlertEvent, 100),
+		logger:        newTestLogger(),
+		storage:       storage,
 	}
 	m.registerDispatchers()
 
@@ -3963,5 +3967,166 @@ func TestSendToChannel_ContextCancellationStopsRetry(t *testing.T) {
 	// Should have cancelled after the first (and possibly second) attempt
 	if dispatcher.callCount > 5 {
 		t.Errorf("expected few attempts before context cancel, got %d", dispatcher.callCount)
+	}
+}
+
+// TestManager_ConsecutiveFailures_OpensAndAutoResolvesIncident is the
+// regression test for four interlocking bugs the production-readiness
+// audit didn't catch (alert→incident pipeline was non-functional):
+//
+//  1. checkConditions had no case for "consecutive_failures" — the only
+//     condition type referenced in CHANGELOG, ARCHITECTURE.md, and
+//     production-readiness docs would silently never trigger.
+//  2. ruleApplies returned false when scope.Type was empty, even if
+//     scope.soul_ids was populated — the natural API client shape.
+//  3. No code path created Incident records when an alert fired; the
+//     /api/v1/incidents endpoint always returned empty.
+//  4. ListActiveIncidents (used by the list handler) hid resolved
+//     incidents so the UI never showed recovery history.
+//
+// This test exercises the full pipeline end-to-end via the public API,
+// proving the four pieces are wired correctly together.
+func TestManager_ConsecutiveFailures_OpensAndAutoResolvesIncident(t *testing.T) {
+	storage := &mockAlertStorage{
+		channels:  make(map[string]*core.AlertChannel),
+		rules:     make(map[string]*core.AlertRule),
+		incidents: make(map[string]*core.Incident),
+	}
+	m := NewManager(storage, newTestLogger())
+
+	rule := &core.AlertRule{
+		ID:          "rule-cf",
+		Name:        "consecutive 3",
+		Enabled:     true,
+		AutoResolve: true,
+		// Use the natural API shape: SoulIDs populated, Type empty.
+		// Pre-fix this would skip the rule entirely.
+		Scope: core.RuleScope{SoulIDs: []string{"soul-1"}},
+		Conditions: []core.AlertCondition{
+			{Type: "consecutive_failures", Threshold: 3},
+		},
+		Channels: []string{},
+		Severity: core.SeverityCritical,
+	}
+	storage.rules[rule.ID] = rule
+	m.rules[rule.ID] = rule
+
+	soul := &core.Soul{ID: "soul-1", WorkspaceID: "default", Name: "demo", Type: core.CheckHTTP}
+
+	// 2 dead judgments shouldn't trigger (threshold is 3)
+	for i := 0; i < 2; i++ {
+		m.ProcessJudgment(soul, core.SoulAlive, &core.Judgment{SoulID: soul.ID, Status: core.SoulDead, Message: "fail"})
+	}
+	if got := len(m.ListIncidents()); got != 0 {
+		t.Fatalf("expected 0 incidents after 2 failures, got %d", got)
+	}
+
+	// 3rd consecutive failure opens an incident
+	m.ProcessJudgment(soul, core.SoulDead, &core.Judgment{SoulID: soul.ID, Status: core.SoulDead, Message: "fail"})
+
+	open := m.ListActiveIncidents()
+	if len(open) != 1 {
+		t.Fatalf("expected 1 open incident after threshold, got %d", len(open))
+	}
+	if open[0].Status != core.IncidentOpen {
+		t.Errorf("expected status open, got %q", open[0].Status)
+	}
+	if open[0].Severity != core.SeverityCritical {
+		t.Errorf("expected severity critical, got %q", open[0].Severity)
+	}
+	if len(open[0].Events) != 1 {
+		t.Errorf("expected 1 event on the incident, got %d", len(open[0].Events))
+	}
+	incidentID := open[0].ID
+
+	// 4th failure: same open incident gets the new event, no duplicate
+	m.ProcessJudgment(soul, core.SoulDead, &core.Judgment{SoulID: soul.ID, Status: core.SoulDead, Message: "fail"})
+	if got := len(m.ListActiveIncidents()); got != 1 {
+		t.Fatalf("expected still 1 open incident after 4th failure, got %d", got)
+	}
+	if got := len(m.incidents[incidentID].Events); got != 2 {
+		t.Errorf("expected events to be appended (want 2, got %d)", got)
+	}
+
+	// Recovery: alive judgment with AutoResolve closes the incident.
+	m.ProcessJudgment(soul, core.SoulDead, &core.Judgment{SoulID: soul.ID, Status: core.SoulAlive, Message: "ok"})
+	if got := len(m.ListActiveIncidents()); got != 0 {
+		t.Errorf("expected 0 active incidents after recovery, got %d", got)
+	}
+
+	all := m.ListIncidents()
+	if len(all) != 1 {
+		t.Fatalf("expected resolved incident to remain in ListIncidents, got %d", len(all))
+	}
+	if all[0].Status != core.IncidentResolved {
+		t.Errorf("expected resolved status after recovery, got %q", all[0].Status)
+	}
+	if all[0].ResolvedBy != "auto-resolved" {
+		t.Errorf("expected resolved_by=auto-resolved, got %q", all[0].ResolvedBy)
+	}
+	if all[0].ResolvedAt == nil {
+		t.Error("expected resolved_at to be set after recovery")
+	}
+
+	// And a fresh failure streak after recovery opens a NEW incident,
+	// not appends to the resolved one.
+	for i := 0; i < 3; i++ {
+		m.ProcessJudgment(soul, core.SoulAlive, &core.Judgment{SoulID: soul.ID, Status: core.SoulDead, Message: "fail again"})
+	}
+	if got := len(m.ListIncidents()); got != 2 {
+		t.Errorf("expected a new incident on the new streak (want 2 total), got %d", got)
+	}
+}
+
+// TestManager_RuleApplies_InfersScopeFromSubfields covers the footgun
+// where an API client populates scope.soul_ids without also setting
+// scope.type. Pre-fix this combination silently matched nothing.
+func TestManager_RuleApplies_InfersScopeFromSubfields(t *testing.T) {
+	m := NewManager(&mockAlertStorage{}, newTestLogger())
+
+	cases := []struct {
+		name  string
+		scope core.RuleScope
+		soul  *core.Soul
+		want  bool
+	}{
+		{
+			name:  "empty scope matches everything",
+			scope: core.RuleScope{},
+			soul:  &core.Soul{ID: "any"},
+			want:  true,
+		},
+		{
+			name:  "soul_ids without type still matches by id",
+			scope: core.RuleScope{SoulIDs: []string{"soul-x"}},
+			soul:  &core.Soul{ID: "soul-x"},
+			want:  true,
+		},
+		{
+			name:  "soul_ids without type rejects non-listed soul",
+			scope: core.RuleScope{SoulIDs: []string{"soul-x"}},
+			soul:  &core.Soul{ID: "soul-y"},
+			want:  false,
+		},
+		{
+			name:  "tags without type matches by tag",
+			scope: core.RuleScope{Tags: []string{"prod"}},
+			soul:  &core.Soul{ID: "s", Tags: []string{"prod", "api"}},
+			want:  true,
+		},
+		{
+			name:  "explicit type=all overrides inference",
+			scope: core.RuleScope{Type: "all", SoulIDs: []string{"different"}},
+			soul:  &core.Soul{ID: "anything"},
+			want:  true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rule := &core.AlertRule{Scope: tc.scope}
+			if got := m.ruleApplies(rule, tc.soul); got != tc.want {
+				t.Errorf("ruleApplies = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

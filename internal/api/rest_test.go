@@ -564,6 +564,7 @@ func (a *mockAlertManager) AcknowledgeIncident(incidentID, userID, workspace str
 }
 func (a *mockAlertManager) ResolveIncident(incidentID, userID, workspace string) error { return nil }
 func (a *mockAlertManager) ListActiveIncidents() []*core.Incident                      { return a.incidents }
+func (a *mockAlertManager) ListIncidents() []*core.Incident                            { return a.incidents }
 
 // failingAlertManager is an AlertManager that always returns errors
 type failingAlertManager struct{}
@@ -603,6 +604,7 @@ func (a *failingAlertManager) ResolveIncident(incidentID, userID, workspace stri
 	return fmt.Errorf("alert error")
 }
 func (a *failingAlertManager) ListActiveIncidents() []*core.Incident { return nil }
+func (a *failingAlertManager) ListIncidents() []*core.Incident       { return nil }
 func (a *failingAlertManager) ListChannelsByWorkspace(workspace string) []*core.AlertChannel {
 	return nil
 }
