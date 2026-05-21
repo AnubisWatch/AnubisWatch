@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-21
+
+### Security
+
+- **CRITICAL**: SSRF protection — removed `grpc`, `tcp`, `udp` schemes from allowed URL schemes; only `http`, `https`, `ws`, `wss` are now permitted
+- **CRITICAL**: LDAP authentication — local fallback now gated on `isConnectionFailure()`; anonymous LDAP bind can no longer silently fall back to local admin account
+- **CRITICAL**: Password reset — token prefix removed from structured log output
+- **HIGH**: LDAP filter injection — `ldap.EscapeFilter()` now applied in default filter case (empty `UserFilter`)
+- **HIGH**: OIDC issuer validation — issuer claim normalized on both provider response and config sides (trailing-slash mismatch fixed)
+- **MEDIUM**: REST TLS — explicit `tls.Config{MinVersion: TLS 1.2, PreferServerCipherSuites: true}` on `ListenAndServeTLS`
+- **MEDIUM**: HSTS header — `Strict-Transport-Security` now sent only when TLS is enabled
+- **MEDIUM**: X-Forwarded-For spoofing — added `TrustedProxies` config; `realIP()` function respects known proxy IPs; XFF is ignored without trusted proxy configured
+- **MEDIUM**: Status page deletion — slug and domain index deletion errors now logged instead of silently ignored
+- **MEDIUM**: TimeSeries compaction — `stopMu sync.Mutex` added to protect `stopCh` channel from race conditions
+- **Configuration**: `api_keys.enabled` set to `false` in container config (no validation implementation)
+
+### Added
+
+- `server.trusted_proxies` config field for X-Forwarded-For validation
+- `server.tls.min_version` and `server.tls.prefer_server` fields for TLS cipher control
+- `TestSSRFValidator_ValidateTarget_BlockedSchemes` covering disallowed schemes
+- `TestIsConnectionFailure` with 12 test cases for LDAP connection vs auth error discrimination
+
+### Helm
+
+- `values.yaml`: added `tls.cert`, `tls.key`, `tls.min_version`, `tls.prefer_server`, `trustedProxies` fields
+- `values-production.example.yaml`: documented TLS and `trustedProxies` production configuration
+- `templates/configmap.yaml`: wired new TLS and `trustedProxies` fields into `anubis.yaml` configmap
+
 ## [0.1.1] - 2026-04-12
 
 ### Added
