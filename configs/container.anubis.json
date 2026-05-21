@@ -26,7 +26,7 @@
       "admin_password": "${ANUBIS_ADMIN_PASSWORD}"
     },
     "api_keys": {
-      "enabled": true
+      "enabled": false
     }
   },
   "dashboard": {

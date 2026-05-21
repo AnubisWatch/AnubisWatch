@@ -2,11 +2,13 @@ package api
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -84,9 +86,15 @@ type RESTServer struct {
 
 	// Rate limiter cleanup channel
 	rateLimitStopCh chan struct{}
+
+	// Trusted proxies for X-Forwarded-For validation (nil/empty = trust none)
+	trustedProxies []string
+
+	// realIP resolves the client IP, checking trusted proxies before XFF
+	realIP func(r *http.Request) string
 }
 
-// JourneyExecutor interface for journey operations
+// Router handles HTTP routing
 type JourneyExecutor interface {
 	RunOnce(ctx context.Context, journey *core.JourneyConfig) (*core.JourneyRun, error)
 	ListRuns(ctx context.Context, workspaceID, journeyID string, limit int) ([]*core.JourneyRun, error)
@@ -310,6 +318,7 @@ func NewRESTServer(config core.ServerConfig, authConfig core.AuthConfig, store S
 		statusPage:      statusPage,
 		uiConfig:        make(map[string]interface{}),
 		rateLimitStopCh: make(chan struct{}),
+		trustedProxies:  config.TrustedProxies,
 	}
 
 	s.setupRoutes()
@@ -495,6 +504,11 @@ func (s *RESTServer) Start() error {
 	s.logger.Info("REST server starting", "addr", addr)
 
 	if s.config.TLS.Enabled {
+		tlsConfig := &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			PreferServerCipherSuites: true,
+		}
+		s.http.TLSConfig = tlsConfig
 		return s.http.ListenAndServeTLS(s.config.TLS.Cert, s.config.TLS.Key)
 	}
 	return s.http.ListenAndServe()
@@ -2483,8 +2497,10 @@ func (s *RESTServer) securityHeadersMiddleware(handler Handler) Handler {
 		ctx.Response.Header().Set("X-XSS-Protection", "1; mode=block")
 		ctx.Response.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		ctx.Response.Header().Set("Content-Security-Policy", "default-src 'self'")
-		// HSTS: force HTTPS (max-age 1 year, include subdomains, preload)
-		ctx.Response.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+		// HSTS: force HTTPS — only set when TLS is actually enabled
+		if s.config.TLS.Enabled {
+			ctx.Response.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+		}
 
 		// Check for required headers on sensitive endpoints
 		if strings.HasPrefix(ctx.Request.URL.Path, "/api/v1/") {
@@ -2579,17 +2595,38 @@ func (s *RESTServer) rateLimitMiddleware(handler Handler) Handler {
 		}
 	}()
 
+	// realIP returns the real client IP, respecting trusted proxies.
+	// When no trusted proxies are configured, RemoteAddr is always used.
+	// When trusted proxies are set, X-Forwarded-For is used only when the
+	// connection comes from a trusted proxy.
+	s.realIP = func(r *http.Request) string {
+		if len(s.trustedProxies) == 0 {
+			return r.RemoteAddr
+		}
+		remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			return r.RemoteAddr
+		}
+		for _, proxy := range s.trustedProxies {
+			if remoteHost == proxy {
+				if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
+					return strings.Split(forwarded, ",")[0]
+				}
+			}
+		}
+		return r.RemoteAddr
+	}
+
 	return func(ctx *Context) error {
 		if strings.HasPrefix(ctx.Request.URL.Path, "/health") ||
 			strings.HasPrefix(ctx.Request.URL.Path, "/ready") {
 			return handler(ctx)
 		}
 
-		// Get client IP
-		ip := ctx.Request.RemoteAddr
-		if forwarded := ctx.Request.Header.Get("X-Forwarded-For"); forwarded != "" {
-			ip = strings.Split(forwarded, ",")[0]
-		}
+		// Get client IP — only trust X-Forwarded-For when the direct connection
+		// is from a known/trusted proxy. Without trusted proxies configured, XFF
+		// is client-supplied and trivially spoofed.
+		ip := s.realIP(ctx.Request)
 
 		// Get user ID if authenticated
 		userID := ""

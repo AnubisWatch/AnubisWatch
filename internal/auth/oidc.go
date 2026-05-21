@@ -627,6 +627,8 @@ func (o *OIDCAuthenticator) parseIDToken(idToken string, expectedNonce string) (
 	if !ok || iss == "" {
 		return nil, fmt.Errorf("missing or invalid issuer claim")
 	}
+	// Normalize both sides: providers may or may not include a trailing slash
+	iss = strings.TrimSuffix(iss, "/")
 	issuer := strings.TrimSuffix(o.config.Issuer, "/")
 	if iss != issuer {
 		return nil, fmt.Errorf("issuer mismatch: expected %s, got %s", issuer, iss)
