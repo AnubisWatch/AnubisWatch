@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-05-22
+
 ### Security
 
 - **CRITICAL-2 follow-up** (`internal/core/config.go`): `validate()` now rejects `tls.enabled: false` when `environment` is `"production"`. Operators who terminate TLS at a reverse proxy can use a different environment label (`"staging"`, `"behind-lb"`, etc.) or omit the field. Closes the remaining hardening item from the production-readiness audit
