@@ -1084,10 +1084,10 @@ func TestBruteForce_AccountLocked(t *testing.T) {
 	attempt := auth.loginAttempts["admin@test.com"]
 	auth.attemptsMu.RUnlock()
 
-	if attempt.lockedUntil.IsZero() {
-		t.Error("Expected lockedUntil to be set")
+	if attempt.LockedUntil.IsZero() {
+		t.Error("Expected LockedUntil to be set")
 	}
-	if time.Now().After(attempt.lockedUntil) {
+	if time.Now().After(attempt.LockedUntil) {
 		t.Error("Expected lockout to still be active")
 	}
 }
@@ -1105,7 +1105,7 @@ func TestBruteForce_AutoReset(t *testing.T) {
 	// Manually expire the lockout
 	auth.attemptsMu.Lock()
 	attempt := auth.loginAttempts["admin@test.com"]
-	attempt.lockedUntil = time.Now().Add(-1 * time.Second)
+	attempt.LockedUntil = time.Now().Add(-1 * time.Second)
 	auth.attemptsMu.Unlock()
 
 	// Next attempt should succeed (lock expired, resets count)
@@ -1127,14 +1127,14 @@ func TestBruteForce_AttemptReset(t *testing.T) {
 
 	// Manually back-date the last attempt
 	auth.attemptsMu.Lock()
-	auth.loginAttempts["admin@test.com"].lastTry = time.Now().Add(-2 * attemptResetWindow)
+	auth.loginAttempts["admin@test.com"].LastTry = time.Now().Add(-2 * attemptResetWindow)
 	auth.attemptsMu.Unlock()
 
 	// Next attempt should reset the count (still fails due to wrong password)
 	_, _, _ = auth.Login("admin@test.com", "wrong")
 
 	auth.attemptsMu.RLock()
-	count := auth.loginAttempts["admin@test.com"].count
+	count := auth.loginAttempts["admin@test.com"].Count
 	auth.attemptsMu.RUnlock()
 
 	// Count should be 1 (reset to 0, then incremented), not 2
@@ -1240,5 +1240,104 @@ func TestValidatePassword(t *testing.T) {
 				t.Errorf("Unexpected error for password %q: %v", tt.password, err)
 			}
 		})
+	}
+}
+
+// TestLocalAuthenticator_LockoutPersistence verifies MED-13: brute-force
+// lockout state must survive process restart by being persisted to the
+// session file. Without this, an attacker could bypass the lockout simply
+// by triggering a restart.
+func TestLocalAuthenticator_LockoutPersistence(t *testing.T) {
+	tmpFile := t.TempDir() + "/sessions.json"
+
+	// Authenticator with persistence — trigger lockout
+	auth1 := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
+	for i := 0; i < maxLoginAttempts; i++ {
+		_, _, _ = auth1.Login("admin@test.com", "wrong-password")
+	}
+	// Confirm lockout was triggered in this process
+	if err := auth1.checkBruteForceProtection("admin@test.com"); err == nil {
+		t.Fatal("expected lockout after max attempts before restart")
+	}
+	auth1.Shutdown()
+
+	// New authenticator over the same file — lockout must persist
+	auth2 := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
+	defer auth2.Shutdown()
+
+	if err := auth2.checkBruteForceProtection("admin@test.com"); err == nil {
+		t.Fatal("expected lockout to survive restart, got nil")
+	}
+
+	// And the correct password is still rejected by Login while locked
+	_, _, err := auth2.Login("admin@test.com", "TestPass1234!")
+	if err == nil {
+		t.Fatal("expected Login to be blocked by persisted lockout")
+	}
+	if !strings.Contains(err.Error(), "temporarily locked") {
+		t.Errorf("expected 'temporarily locked' error after restart, got: %v", err)
+	}
+}
+
+// TestLocalAuthenticator_LockoutPersistence_ExpiredDropped verifies that
+// when loading the session file, lockouts whose deadline has already
+// passed AND whose last attempt is outside the reset window are dropped —
+// otherwise stale entries would accumulate forever in the file.
+func TestLocalAuthenticator_LockoutPersistence_ExpiredDropped(t *testing.T) {
+	tmpFile := t.TempDir() + "/sessions.json"
+
+	auth1 := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
+	for i := 0; i < maxLoginAttempts; i++ {
+		_, _, _ = auth1.Login("admin@test.com", "wrong-password")
+	}
+	// Back-date the entry: lockout deadline already passed AND last attempt
+	// older than the reset window.
+	auth1.attemptsMu.Lock()
+	att := auth1.loginAttempts["admin@test.com"]
+	att.LockedUntil = time.Now().Add(-1 * time.Hour)
+	att.LastTry = time.Now().Add(-2 * attemptResetWindow)
+	auth1.attemptsMu.Unlock()
+	// Force a save so the back-dated entry hits disk.
+	auth1.mu.Lock()
+	auth1.saveSessionsLocked()
+	auth1.mu.Unlock()
+	auth1.Shutdown()
+
+	auth2 := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
+	defer auth2.Shutdown()
+
+	auth2.attemptsMu.RLock()
+	_, exists := auth2.loginAttempts["admin@test.com"]
+	auth2.attemptsMu.RUnlock()
+	if exists {
+		t.Error("expected fully-expired lockout to be dropped on load, but it persisted")
+	}
+}
+
+// TestLocalAuthenticator_LockoutPersistence_ClearedOnSuccess verifies that
+// a successful login removes the lockout entry from disk, so a legitimate
+// user who recovers their password doesn't carry forward the historical
+// failure count.
+func TestLocalAuthenticator_LockoutPersistence_ClearedOnSuccess(t *testing.T) {
+	tmpFile := t.TempDir() + "/sessions.json"
+
+	auth1 := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
+	// One failed attempt that's not yet locking the account.
+	_, _, _ = auth1.Login("admin@test.com", "wrong-password")
+
+	// Successful login must clear the failure record.
+	if _, _, err := auth1.Login("admin@test.com", "TestPass1234!"); err != nil {
+		t.Fatalf("expected successful login, got %v", err)
+	}
+	auth1.Shutdown()
+
+	auth2 := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
+	defer auth2.Shutdown()
+
+	auth2.attemptsMu.RLock()
+	_, exists := auth2.loginAttempts["admin@test.com"]
+	auth2.attemptsMu.RUnlock()
+	if exists {
+		t.Error("expected cleared lockout to not persist after successful login")
 	}
 }

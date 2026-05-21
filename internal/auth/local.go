@@ -40,10 +40,12 @@ type resetToken struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
+// loginAttempt is exported via JSON tags so the field names persist into
+// the on-disk session file (MED-13 — lockout state survives restart).
 type loginAttempt struct {
-	count       int
-	lastTry     time.Time
-	lockedUntil time.Time
+	Count       int       `json:"count"`
+	LastTry     time.Time `json:"last_try"`
+	LockedUntil time.Time `json:"locked_until"`
 }
 
 type session struct {
@@ -53,9 +55,10 @@ type session struct {
 
 // sessionData represents the data persisted to disk
 type sessionData struct {
-	Tokens      map[string]*session    `json:"tokens"`
-	Users       map[string]*api.User   `json:"users"`
-	ResetTokens map[string]*resetToken `json:"reset_tokens"`
+	Tokens      map[string]*session      `json:"tokens"`
+	Users       map[string]*api.User     `json:"users"`
+	ResetTokens map[string]*resetToken   `json:"reset_tokens"`
+	Lockouts    map[string]*loginAttempt `json:"lockouts,omitempty"`
 }
 
 // NewLocalAuthenticator creates a new local authenticator
@@ -154,6 +157,23 @@ func (a *LocalAuthenticator) loadSessions() {
 			a.resetTokens[token] = rt
 		}
 	}
+	// MED-13: restore lockouts so brute-force protection survives restart.
+	// Drop entries whose lockout has already expired and whose last attempt
+	// is outside the reset window — they no longer have effect.
+	if len(sessionData.Lockouts) > 0 {
+		a.attemptsMu.Lock()
+		for email, att := range sessionData.Lockouts {
+			if att == nil {
+				continue
+			}
+			lockoutLive := !att.LockedUntil.IsZero() && now.Before(att.LockedUntil)
+			withinResetWindow := !att.LastTry.IsZero() && now.Sub(att.LastTry) <= attemptResetWindow
+			if lockoutLive || withinResetWindow {
+				a.loginAttempts[email] = att
+			}
+		}
+		a.attemptsMu.Unlock()
+	}
 }
 
 // saveSessionsLocked persists sessions and users to disk
@@ -163,10 +183,27 @@ func (a *LocalAuthenticator) saveSessionsLocked() {
 		return
 	}
 
+	// Snapshot lockouts under attemptsMu so the persist path doesn't race
+	// with concurrent recordFailedAttempt/clearFailedAttempts. We don't
+	// hold attemptsMu while writing to disk — only long enough to copy
+	// the map pointers, since loginAttempt values are mutated in place.
+	a.attemptsMu.RLock()
+	lockoutsCopy := make(map[string]*loginAttempt, len(a.loginAttempts))
+	for email, att := range a.loginAttempts {
+		if att == nil {
+			continue
+		}
+		// Shallow value copy so a subsequent mutation can't race the marshal.
+		dup := *att
+		lockoutsCopy[email] = &dup
+	}
+	a.attemptsMu.RUnlock()
+
 	data := sessionData{
 		Tokens:      a.tokens,
 		Users:       a.users,
 		ResetTokens: a.resetTokens,
+		Lockouts:    lockoutsCopy,
 	}
 
 	jsonData, err := json.Marshal(data)
@@ -449,25 +486,26 @@ func (a *LocalAuthenticator) checkBruteForceProtection(email string) error {
 	}
 
 	// Check if account is locked
-	if !attempt.lockedUntil.IsZero() && time.Now().Before(attempt.lockedUntil) {
-		remaining := time.Until(attempt.lockedUntil)
+	if !attempt.LockedUntil.IsZero() && time.Now().Before(attempt.LockedUntil) {
+		remaining := time.Until(attempt.LockedUntil)
 		return errors.New("account temporarily locked due to failed login attempts. Try again in " + remaining.String())
 	}
 
 	// Reset lock if expired
-	if !attempt.lockedUntil.IsZero() && time.Now().After(attempt.lockedUntil) {
-		attempt.lockedUntil = time.Time{}
-		attempt.count = 0
+	if !attempt.LockedUntil.IsZero() && time.Now().After(attempt.LockedUntil) {
+		attempt.LockedUntil = time.Time{}
+		attempt.Count = 0
 	}
 
 	return nil
 }
 
-// recordFailedAttempt records a failed login attempt
+// recordFailedAttempt records a failed login attempt.
+// MED-13: persists the updated lockout map so brute-force state survives
+// process restart. Callers must hold a.mu so saveSessionsLocked can read
+// sessions/users safely; attemptsMu is acquired and released here.
 func (a *LocalAuthenticator) recordFailedAttempt(email string) {
 	a.attemptsMu.Lock()
-	defer a.attemptsMu.Unlock()
-
 	attempt, exists := a.loginAttempts[email]
 	if !exists {
 		attempt = &loginAttempt{}
@@ -475,25 +513,33 @@ func (a *LocalAuthenticator) recordFailedAttempt(email string) {
 	}
 
 	// Reset count if too much time has passed
-	if time.Since(attempt.lastTry) > attemptResetWindow {
-		attempt.count = 0
+	if time.Since(attempt.LastTry) > attemptResetWindow {
+		attempt.Count = 0
 	}
 
-	attempt.count++
-	attempt.lastTry = time.Now()
+	attempt.Count++
+	attempt.LastTry = time.Now()
 
 	// Lock account if max attempts reached
-	if attempt.count >= maxLoginAttempts {
-		attempt.lockedUntil = time.Now().Add(lockoutDuration)
+	if attempt.Count >= maxLoginAttempts {
+		attempt.LockedUntil = time.Now().Add(lockoutDuration)
 	}
+	a.attemptsMu.Unlock()
+
+	// Persist after releasing attemptsMu so saveSessionsLocked can re-acquire
+	// its RLock without re-entrancy.
+	a.saveSessionsLocked()
 }
 
-// clearFailedAttempts clears failed login attempts on successful login
+// clearFailedAttempts clears failed login attempts on successful login.
+// MED-13: also persists so a successful login removes the lockout entry
+// from the on-disk session file.
 func (a *LocalAuthenticator) clearFailedAttempts(email string) {
 	a.attemptsMu.Lock()
-	defer a.attemptsMu.Unlock()
-
 	delete(a.loginAttempts, email)
+	a.attemptsMu.Unlock()
+
+	a.saveSessionsLocked()
 }
 
 // HashPassword is a helper function to hash a password for storage
