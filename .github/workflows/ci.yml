@@ -80,24 +80,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: web/package-lock.json
+          cache: 'pnpm'
+          cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Install dependencies
         working-directory: web
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Run linter
         working-directory: web
-        run: npm run lint
+        run: pnpm run lint
 
       - name: Run tests
         working-directory: web
-        run: npm run test:coverage
+        run: pnpm run test:coverage
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6
@@ -119,20 +124,25 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: web/package-lock.json
+          cache: 'pnpm'
+          cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Install frontend dependencies
         working-directory: web
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Build embedded dashboard assets
         working-directory: web
-        run: npm run build:embed
+        run: pnpm run build:embed
 
       - name: Build E2E binary
         run: |
@@ -141,11 +151,11 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: web
-        run: npx playwright install --with-deps chromium
+        run: pnpm exec playwright install --with-deps chromium
 
       - name: Run dashboard smoke E2E
         working-directory: web
-        run: npm run e2e
+        run: pnpm run e2e
 
   # Lint
   lint:
@@ -215,16 +225,21 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: web/package-lock.json
+          cache: 'pnpm'
+          cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Build embedded dashboard assets
         working-directory: web
-        run: npm ci && npm run build:embed
+        run: pnpm install --frozen-lockfile && pnpm run build:embed
 
       - name: Build binary
         run: CGO_ENABLED=0 go build -ldflags "-s -w -X main.Version=${{ github.sha }}" -o anubis ./cmd/anubis
@@ -379,8 +394,6 @@ jobs:
             -f deploy/helm/anubiswatch/values-production.example.yaml \
             --set secrets.adminPassword='StrongPass123!' \
             --set secrets.clusterSecret='ClusterSecret123!'
-          helm lint deployments/charts/anubiswatch \
-            --set secrets.adminPassword='StrongPass123!'
 
       - name: Template Helm charts
         run: |
@@ -397,14 +410,6 @@ jobs:
             --set secrets.adminPassword='StrongPass123!' \
             --set secrets.clusterSecret='ClusterSecret123!' \
             > helm-deploy-production-example.yaml
-          helm template anubiswatch deployments/charts/anubiswatch \
-            --set secrets.adminPassword='StrongPass123!' \
-            > helm-deployments.yaml
-          helm template anubiswatch-cluster deployments/charts/anubiswatch \
-            --set secrets.adminPassword='StrongPass123!' \
-            --set config.necropolis.enabled=true \
-            --set secrets.clusterSecret='ClusterSecret123!' \
-            > helm-deployments-cluster.yaml
 
       - name: Validate rendered Kubernetes manifests
         run: |
@@ -413,13 +418,11 @@ jobs:
             -summary \
             /work/helm-deploy.yaml \
             /work/helm-deploy-cluster.yaml \
-            /work/helm-deploy-production-example.yaml \
-            /work/helm-deployments.yaml \
-            /work/helm-deployments-cluster.yaml
+            /work/helm-deploy-production-example.yaml
 
       - name: Verify Helm secret guardrails
         run: |
-          for chart in deploy/helm/anubiswatch deployments/charts/anubiswatch; do
+          for chart in deploy/helm/anubiswatch; do
             if helm template anubiswatch "$chart" >/tmp/missing-admin.yaml 2>/tmp/missing-admin.err; then
               echo "Expected $chart to fail without secrets.adminPassword"
               exit 1

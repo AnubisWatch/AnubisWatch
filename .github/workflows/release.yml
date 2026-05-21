@@ -45,17 +45,24 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Build dashboard (if exists)
         run: |
           if [ -f web/package.json ]; then
             cd web
-            npm ci
-            npm run build:embed
+            pnpm install --frozen-lockfile
+            pnpm run build:embed
             echo "Embedded dashboard built successfully"
           else
             echo "No web/dashboard found (web/package.json missing), skipping dashboard build"
