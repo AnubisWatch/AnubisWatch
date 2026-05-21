@@ -3822,7 +3822,7 @@ func TestSendToChannel_RetriesTransientFailure(t *testing.T) {
 				Enabled: true,
 				RetryPolicy: core.RetryPolicyConfig{
 					MaxRetries:  3,
-					InitialWait:  core.Duration{Duration: 10 * time.Millisecond},
+					InitialWait: core.Duration{Duration: 10 * time.Millisecond},
 					MaxWait:     core.Duration{Duration: 50 * time.Millisecond},
 					Backoff:     "linear",
 				},
@@ -3936,7 +3936,7 @@ func TestSendToChannel_ContextCancellationStopsRetry(t *testing.T) {
 				Type:    core.ChannelWebHook,
 				Enabled: true,
 				RetryPolicy: core.RetryPolicyConfig{
-					MaxRetries:  100, // would retry many times
+					MaxRetries:  100,                                    // would retry many times
 					InitialWait: core.Duration{Duration: 1 * time.Hour}, // huge wait
 					Backoff:     "linear",
 				},

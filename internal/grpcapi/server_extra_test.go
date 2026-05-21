@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	v1 "github.com/AnubisWatch/anubiswatch/internal/grpcapi/v1"
 	"github.com/AnubisWatch/anubiswatch/internal/core"
+	v1 "github.com/AnubisWatch/anubiswatch/internal/grpcapi/v1"
 )
 
 // testUserContext is imported from server_test.go - but since it's in the same package, we can use it directly.
@@ -786,9 +786,9 @@ func TestApplyRuleUpdates_AllFields(t *testing.T) {
 	name := "rule-name"
 	enabled := true
 	config := map[string]string{
-		"severity":     "critical",
-		"channel_ids":  "ch1,ch2",
-		"cooldown":     "10m",
+		"severity":    "critical",
+		"channel_ids": "ch1,ch2",
+		"cooldown":    "10m",
 	}
 	req := &v1.UpdateRuleRequest{Name: &name, Enabled: &enabled, Config: config}
 	applyRuleUpdates(rule, req)

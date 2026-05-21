@@ -12,19 +12,19 @@ import (
 
 // Config is the root configuration for AnubisWatch
 type Config struct {
-	Server     ServerConfig     `yaml:"server"`
-	Storage    StorageConfig    `yaml:"storage"`
-	Necropolis NecropolisConfig `yaml:"necropolis"`
-	Tenants    TenantsConfig    `yaml:"tenants"`
-	Auth       AuthConfig       `yaml:"auth"`
-	Dashboard  DashboardConfig  `yaml:"dashboard"`
-	Souls      []Soul           `yaml:"souls"`
-	Channels   []ChannelConfig  `yaml:"channels"`
-	Verdicts   VerdictsConfig   `yaml:"verdicts"`
-	Journeys   []JourneyConfig  `yaml:"journeys"`
-	Logging    LoggingConfig    `yaml:"logging"`
-	Telemetry  TelemetryConfig  `yaml:"telemetry"`
-	Environment string          `yaml:"environment"`
+	Server      ServerConfig     `yaml:"server"`
+	Storage     StorageConfig    `yaml:"storage"`
+	Necropolis  NecropolisConfig `yaml:"necropolis"`
+	Tenants     TenantsConfig    `yaml:"tenants"`
+	Auth        AuthConfig       `yaml:"auth"`
+	Dashboard   DashboardConfig  `yaml:"dashboard"`
+	Souls       []Soul           `yaml:"souls"`
+	Channels    []ChannelConfig  `yaml:"channels"`
+	Verdicts    VerdictsConfig   `yaml:"verdicts"`
+	Journeys    []JourneyConfig  `yaml:"journeys"`
+	Logging     LoggingConfig    `yaml:"logging"`
+	Telemetry   TelemetryConfig  `yaml:"telemetry"`
+	Environment string           `yaml:"environment"`
 }
 
 // LoadConfig reads and parses the configuration file (YAML or JSON)

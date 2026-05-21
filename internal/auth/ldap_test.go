@@ -313,9 +313,9 @@ func TestLDAPAuthenticator_LDAPLogin_StartTLSError(t *testing.T) {
 
 func TestLDAPAuthenticator_LDAPLogin_ServiceBindError(t *testing.T) {
 	cfg := core.LDAPAuth{
-		URL:       "ldap://127.0.0.1:389",
-		BaseDN:    "dc=example,dc=com",
-		BindDN:    "cn=admin,dc=example,dc=com",
+		URL:          "ldap://127.0.0.1:389",
+		BaseDN:       "dc=example,dc=com",
+		BindDN:       "cn=admin,dc=example,dc=com",
 		BindPassword: "wrong-password",
 	}
 
@@ -332,11 +332,11 @@ func TestLDAPAuthenticator_LDAPLogin_ServiceBindError(t *testing.T) {
 
 func TestLDAPAuthenticator_LDAPLogin_BindDNWithSearch(t *testing.T) {
 	cfg := core.LDAPAuth{
-		URL:           "ldap://127.0.0.1:389",
-		BaseDN:        "dc=example,dc=com",
-		BindDN:        "cn=admin,dc=example,dc=com",
-		BindPassword:  "wrong-password",
-		UserFilter:    "(mail={{mail}})",
+		URL:          "ldap://127.0.0.1:389",
+		BaseDN:       "dc=example,dc=com",
+		BindDN:       "cn=admin,dc=example,dc=com",
+		BindPassword: "wrong-password",
+		UserFilter:   "(mail={{mail}})",
 	}
 
 	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")

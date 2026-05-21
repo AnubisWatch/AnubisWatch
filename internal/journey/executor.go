@@ -262,9 +262,9 @@ func (e *Executor) executeStep(ctx context.Context, jctx *JourneyContext, step c
 
 	// Build soul configuration with interpolated variables
 	soul := &core.Soul{
-		Name:   step.Name,
-		Type:   step.Type,
-		Target: target,
+		Name:    step.Name,
+		Type:    step.Type,
+		Target:  target,
 		Timeout: step.Timeout, // correct: Timeout controls check timeout
 	}
 

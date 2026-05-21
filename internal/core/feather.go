@@ -35,19 +35,19 @@ type LoggingConfig struct {
 // TelemetryConfig defines OpenTelemetry tracing settings
 type TelemetryConfig struct {
 	Enabled    bool    `json:"enabled" yaml:"enabled"`
-	Endpoint   string  `json:"endpoint" yaml:"endpoint"`     // OTLP collector endpoint
+	Endpoint   string  `json:"endpoint" yaml:"endpoint"`       // OTLP collector endpoint
 	SampleRate float64 `json:"sample_rate" yaml:"sample_rate"` // Trace sampling rate (0.0-1.0)
 }
 
 // ServerConfig defines server settings
 type ServerConfig struct {
-	Host            string          `json:"host" yaml:"host"`
-	Port            int             `json:"port" yaml:"port"`
-	GRPCPort        int             `json:"grpc_port" yaml:"grpc_port"`
-	TLS             TLSServerConfig `json:"tls" yaml:"tls"`
-	AllowedOrigins  []string        `json:"allowed_origins" yaml:"allowed_origins"`
-	GRPCReflection  bool            `json:"grpc_reflection" yaml:"grpc_reflection"` // Enable gRPC reflection (default: false for security)
-	TrustedProxies  []string        `json:"trusted_proxies" yaml:"trusted_proxies"` // IPs that can set X-Forwarded-For (empty = trust none)
+	Host           string          `json:"host" yaml:"host"`
+	Port           int             `json:"port" yaml:"port"`
+	GRPCPort       int             `json:"grpc_port" yaml:"grpc_port"`
+	TLS            TLSServerConfig `json:"tls" yaml:"tls"`
+	AllowedOrigins []string        `json:"allowed_origins" yaml:"allowed_origins"`
+	GRPCReflection bool            `json:"grpc_reflection" yaml:"grpc_reflection"` // Enable gRPC reflection (default: false for security)
+	TrustedProxies []string        `json:"trusted_proxies" yaml:"trusted_proxies"` // IPs that can set X-Forwarded-For (empty = trust none)
 }
 
 // TLSServerConfig defines TLS settings
@@ -55,7 +55,7 @@ type TLSServerConfig struct {
 	Enabled      bool   `json:"enabled" yaml:"enabled"`
 	Cert         string `json:"cert" yaml:"cert"`
 	Key          string `json:"key" yaml:"key"`
-	MinVersion   int    `json:"min_version" yaml:"min_version"`     // 0=default (TLS 1.0), 1=TLS 1.0, 2=TLS 1.1, 3=TLS 1.2, 4=TLS 1.3
+	MinVersion   int    `json:"min_version" yaml:"min_version"` // 0=default (TLS 1.0), 1=TLS 1.0, 2=TLS 1.1, 3=TLS 1.2, 4=TLS 1.3
 	PreferServer bool   `json:"prefer_server" yaml:"prefer_server"`
 }
 

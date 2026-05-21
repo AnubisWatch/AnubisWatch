@@ -19,11 +19,11 @@ import (
 // Config holds telemetry configuration
 type Config struct {
 	Enabled        bool
-	Endpoint       string // OTLP collector address (e.g., "localhost:4317")
-	ServiceName    string // Service name for traces
-	ServiceVersion string // Service version
-	Environment    string // Deployment environment (production, staging, dev)
-	Insecure       bool   // Use insecure connection (no TLS)
+	Endpoint       string  // OTLP collector address (e.g., "localhost:4317")
+	ServiceName    string  // Service name for traces
+	ServiceVersion string  // Service version
+	Environment    string  // Deployment environment (production, staging, dev)
+	Insecure       bool    // Use insecure connection (no TLS)
 	SampleRate     float64 // Trace sampling rate (0.0-1.0, 1.0 = 100%)
 }
 

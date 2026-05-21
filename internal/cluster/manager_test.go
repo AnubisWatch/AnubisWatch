@@ -522,7 +522,7 @@ func TestBuildTLSPeerConfig_CAFile(t *testing.T) {
 	cfg := &core.TLSPeerConfig{
 		CertFile: filepath.Join(tempDir, "cert.pem"),
 		KeyFile:  filepath.Join(tempDir, "key.pem"),
-		CAFile:    filepath.Join(tempDir, "ca.pem"),
+		CAFile:   filepath.Join(tempDir, "ca.pem"),
 	}
 
 	_, err := buildTLSPeerConfig(cfg)
@@ -536,8 +536,8 @@ func TestBuildTLSPeerConfig_RequireClientCert(t *testing.T) {
 	tempDir := t.TempDir()
 
 	cfg := &core.TLSPeerConfig{
-		CertFile:        filepath.Join(tempDir, "cert.pem"),
-		KeyFile:         filepath.Join(tempDir, "key.pem"),
+		CertFile:          filepath.Join(tempDir, "cert.pem"),
+		KeyFile:           filepath.Join(tempDir, "key.pem"),
 		RequireClientCert: true,
 	}
 
@@ -552,8 +552,8 @@ func TestBuildTLSPeerConfig_VerifyPeers(t *testing.T) {
 	tempDir := t.TempDir()
 
 	cfg := &core.TLSPeerConfig{
-		CertFile:   filepath.Join(tempDir, "cert.pem"),
-		KeyFile:    filepath.Join(tempDir, "key.pem"),
+		CertFile:    filepath.Join(tempDir, "cert.pem"),
+		KeyFile:     filepath.Join(tempDir, "key.pem"),
 		VerifyPeers: true,
 	}
 

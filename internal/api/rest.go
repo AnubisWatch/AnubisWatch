@@ -505,7 +505,7 @@ func (s *RESTServer) Start() error {
 
 	if s.config.TLS.Enabled {
 		tlsConfig := &tls.Config{
-			MinVersion: tls.VersionTLS12,
+			MinVersion:               tls.VersionTLS12,
 			PreferServerCipherSuites: true,
 		}
 		s.http.TLSConfig = tlsConfig

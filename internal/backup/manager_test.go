@@ -1914,9 +1914,9 @@ func TestManager_ImportFromTar_TruncatedEntry(t *testing.T) {
 
 func TestDeriveKey(t *testing.T) {
 	tests := []struct {
-		name       string
+		name        string
 		keyMaterial []byte
-		wantLen    int
+		wantLen     int
 	}{
 		{"32 bytes input", []byte("test-key-material-12345678901234"), 32},
 		{"16 bytes input", []byte("short-key"), 32},
@@ -2290,7 +2290,7 @@ func TestWriteBackupFile_Compression(t *testing.T) {
 
 	backup := &Backup{
 		Version:    "1.0",
-		CreatedAt: time.Now(),
+		CreatedAt:  time.Now(),
 		BackupType: "full",
 		Checksum:   "test-checksum",
 		Metadata: BackupMetadata{
