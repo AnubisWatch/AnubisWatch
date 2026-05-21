@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### CI / Build
+
+- **Frontend toolchain**: all GitHub Actions jobs (test-frontend, e2e-dashboard, build, release) switched from `npm ci` to `pnpm install --frozen-lockfile`. The frontend dependency upgrade had regenerated `pnpm-lock.yaml` but left `package-lock.json` stale by 16+ packages, so every job that used `npm ci` was failing
+- **Dockerfile**: `npm ci` replaced with `pnpm install --frozen-lockfile` (pnpm installed via `npm install -g pnpm@10` since Alpine's nodejs does not bundle corepack)
+- **Helm tests**: removed lint/template/guardrail references to `deployments/charts/anubiswatch/` — that chart was deleted in commit e7b82e2 ("clean: remove duplicate dirs...") but the CI workflow still referenced it
+- **Orphan lockfile**: `web/package-lock.json` deleted (project uses pnpm)
+
+### Fixed
+
+- **ESLint**: `eslint-plugin-react-hooks` v7's new strict rules (`set-state-in-effect`, `immutability`, `purity`, `use-memo`) flagged canonical React patterns (fetch-on-mount, derived `Date.now()`, callbacks referencing each other via refs/timers) as errors; these are disabled with rationale documented in `web/eslint.config.js`
+- **ErrorBoundary test**: dropped three unused imports/variables (`Component`, `ReactNode`, `err`) that tripped `@typescript-eslint/no-unused-vars`
+- **Playwright e2e**: smoke spec headings re-synced with the Egyptian-themed dashboard rename (Souls → Essence, Judgments → Weighings, Alerts → Divine Warnings, Incidents → Cries of Chaos, Maintenance → Sacred Rest, Journeys → Voyages, Cluster → Necropolis, Status Pages → Temple Squares, Settings → Pharaoh's Chamber); the suite went from 1 failure cascading into 7 skipped tests back to 8/8 passing
+
 ## [0.1.2] - 2026-05-21
 
 ### Security
