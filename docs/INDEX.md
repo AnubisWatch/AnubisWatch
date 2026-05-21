@@ -28,6 +28,7 @@
 | **openapi.yaml** | REST API specification (OpenAPI 3.1.0) | [docs/api/](openapi.yaml) |
 | **deployment/guide.md** | Deployment guide | [docs/deployment/](deployment/guide.md) |
 | **deployment/production-runbook.md** | Production deploy, smoke, and rollback runbook | [docs/deployment/](deployment/production-runbook.md) |
+| **PRODUCTION_READINESS.md** | Security audit, code quality, and operational readiness report | [docs/](PRODUCTION_READINESS.md) |
 | **TROUBLESHOOTING.md** | Common issues and solutions | [docs/](TROUBLESHOOTING.md) |
 
 ### For Developers
