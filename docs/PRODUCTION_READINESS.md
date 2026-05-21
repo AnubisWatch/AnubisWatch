@@ -261,11 +261,11 @@ The Dockerfile itself does not enforce a read-only root filesystem. Kubernetes m
 
 | ID | Severity | File | Finding | Status |
 |----|----------|------|---------|--------|
-| CRITICAL-2 | CRITICAL | `internal/core/feather.go` | TLS disabled by default, no MinVersion | ⏳ TODO (MinVersion field added, production config must enable TLS) |
-| MEDIUM-10 | MEDIUM | `internal/api/rest.go` | Default CORS origins include localhost | ⏳ TODO (document to configure explicit origins) |
-| MEDIUM-11 | MEDIUM | `internal/api/rest.go` | CSP blocks Swagger UI scripts | ⏳ TODO (needs CSP exception for /api/docs) |
-| MEDIUM-13 | MEDIUM | `internal/auth/local.go` | Lockout state in-memory, lost on restart | ⏳ TODO (accepted risk for single-node) |
-| MEDIUM-14 | MEDIUM | Dockerfile | No `readOnlyRootFilesystem` at container level | ⏳ TODO (K8s sets it; document for plain Docker) |
+| CRITICAL-2 | CRITICAL | `internal/core/feather.go` | TLS disabled by default, no MinVersion | ⏳ TODO — operator must enable TLS in production config |
+| MEDIUM-10 | MEDIUM | `internal/api/rest.go` | Default CORS origins include localhost | ✅ Fixed: documented in `getAllowedOrigins` comment; Helm values updated |
+| MEDIUM-11 | MEDIUM | `internal/api/rest.go` | CSP blocks Swagger UI scripts | ⏳ TODO (known limitation — `/api/docs` is unauthenticated) |
+| MEDIUM-13 | MEDIUM | `internal/auth/local.go` | Lockout state in-memory, lost on restart | ⏳ TODO (accepted risk for single-node; use cluster auth for HA) |
+| MEDIUM-14 | MEDIUM | Dockerfile | No `readOnlyRootFilesystem` at container level | ✅ Fixed: Helm `values.yaml` sets `readOnlyRootFilesystem: true` |
 
 ---
 
@@ -302,3 +302,13 @@ The remaining MEDIUM items are configuration hardening or accepted operational r
 | `internal/api/rest.go` | Added `realIP()` function + `TrustedProxies` config — X-Forwarded-For spoofing blocked |
 | `internal/auth/oidc.go` | Issuer claim normalized on both provider response and config sides |
 | `configs/container.anubis.json` | Disabled `api_keys.enabled` (no validation implementation) |
+
+**Commit `e6f6ea1`** (tests + Helm TLS hardening):
+
+| File | Change |
+|------|--------|
+| `internal/probe/ssrf_test.go` | Removed `grpc` from allowed schemes test; added `TestSSRFValidator_ValidateTarget_BlockedSchemes` |
+| `internal/auth/ldap_test.go` | Added `TestIsConnectionFailure` with 12 test cases covering connection vs auth discrimination |
+| `deploy/helm/anubiswatch/values.yaml` | Added `tls.cert/key/min_version/prefer_server` and `trustedProxies` fields with secure defaults |
+| `deploy/helm/anubiswatch/values-production.example.yaml` | Documented TLS and `trustedProxies` production configuration |
+| `deploy/helm/anubiswatch/templates/configmap.yaml` | Wired new TLS and `trustedProxies` fields into `anubis.yaml` configmap |
