@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
@@ -20,6 +21,7 @@ type TimeSeriesStore struct {
 	config core.TimeSeriesConfig
 	logger *slog.Logger
 	stopCh chan struct{}
+	stopMu sync.Mutex // protects stopCh
 }
 
 // TimeResolution represents different time granularities
@@ -214,15 +216,20 @@ func truncateToResolution(t time.Time, resolution TimeResolution) time.Time {
 
 // StartCompaction starts the background compaction goroutine
 func (ts *TimeSeriesStore) StartCompaction() {
+	ts.stopMu.Lock()
 	ts.stopCh = make(chan struct{})
+	ts.stopMu.Unlock()
 	go ts.compactionLoop()
 }
 
 // StopCompaction gracefully stops the compaction goroutine
 func (ts *TimeSeriesStore) StopCompaction() {
+	ts.stopMu.Lock()
 	if ts.stopCh != nil {
 		close(ts.stopCh)
+		ts.stopCh = nil
 	}
+	ts.stopMu.Unlock()
 }
 
 // compactionLoop runs compaction at regular intervals

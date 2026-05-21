@@ -40,11 +40,17 @@ func (l *LDAPAuthenticator) Login(email, password string) (*api.User, string, er
 	// Try LDAP first
 	user, err := l.ldapLogin(email, password)
 	if err != nil {
-		// Fallback to local
-		return l.local.Login(email, password)
+		// Only fall back to local auth for unreachable LDAP server.
+		// Authentication failures (invalid credentials, account locked) do NOT
+		// fall back — this prevents a misconfigured LDAP server (e.g. anonymous
+		// bind) from silently delegating to the local account.
+		if l.isConnectionFailure(err) {
+			return l.local.Login(email, password)
+		}
+		return nil, "", err
 	}
 
-	// Create session
+	// Create session — ldapLogin already populated l.users with the LDAP user
 	token := generateToken()
 	l.mu.Lock()
 	l.tokens[token] = &session{
@@ -209,6 +215,41 @@ func (l *LDAPAuthenticator) Authenticate(token string) (*api.User, error) {
 
 	// Fallback to local auth
 	return l.local.Authenticate(token)
+}
+
+// isConnectionFailure returns true when the LDAP error indicates the server
+// is unreachable, not that authentication failed. This distinction determines
+// whether local fallback is safe to apply.
+func (l *LDAPAuthenticator) isConnectionFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// ldap.ErrCouldNotStartTLS, ldap.ErrInvalidCredentials, and bind failures
+	// all contain specific markers. Connection/dial failures do not.
+	connectionMarkers := []string{
+		"failed to connect",
+		"connection refused",
+		"timeout",
+		"no such host",
+		"network unreachable",
+		"i/o timeout",
+		"connection reset",
+		"use of closed",
+	}
+	for _, m := range connectionMarkers {
+		if strings.Contains(strings.ToLower(msg), m) {
+			return true
+		}
+	}
+	// Invalid credentials / bind failure = auth error, not connection error
+	if strings.Contains(msg, "LDAP bind failed") ||
+		strings.Contains(msg, "invalid credentials") ||
+		strings.Contains(msg, "server bind failed") {
+		return false
+	}
+	// When in doubt, treat it as an auth failure — do not fall back
+	return false
 }
 
 // Logout invalidates a token

@@ -575,7 +575,6 @@ func (a *LocalAuthenticator) RequestPasswordReset(email string) (string, error) 
 	// In production this should be sent via email to the admin.
 	slog.Info("password reset requested",
 		slog.String("email", email),
-		slog.String("token_prefix", token[:8]+"..."),
 		slog.Time("expires", time.Now().Add(1*time.Hour)))
 
 	return token, nil

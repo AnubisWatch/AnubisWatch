@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -111,13 +112,17 @@ func (r *StatusPageRepository) DeleteStatusPage(id string) error {
 	// Delete slug index
 	if page.Slug != "" {
 		slugKey := "statuspage/slug/" + page.Slug
-		r.storage.Delete(slugKey)
+		if err := r.storage.Delete(slugKey); err != nil {
+			slog.Warn("failed to delete statuspage slug index", "key", slugKey, "err", err)
+		}
 	}
 
 	// Delete domain index
 	if page.CustomDomain != "" {
 		domainKey := "statuspage/domain/" + page.CustomDomain
-		r.storage.Delete(domainKey)
+		if err := r.storage.Delete(domainKey); err != nil {
+			slog.Warn("failed to delete statuspage domain index", "key", domainKey, "err", err)
+		}
 	}
 
 	// Delete main record

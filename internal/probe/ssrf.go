@@ -94,9 +94,9 @@ func (v *SSRFValidator) ValidateTarget(target string) error {
 		return fmt.Errorf("invalid URL format: %w", err)
 	}
 
-	// Only allow specific schemes
+	// Only allow web-scheme protocols to prevent internal service probing
 	switch u.Scheme {
-	case "http", "https", "ws", "wss", "grpc", "tcp", "udp":
+	case "http", "https", "ws", "wss":
 		// Allowed
 	default:
 		return fmt.Errorf("URL scheme %q is not allowed", u.Scheme)
