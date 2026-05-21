@@ -218,7 +218,7 @@ async function loginAndOpenSouls(page: Page) {
 
   await page.goto(`${server.baseURL}/souls`)
   await page.waitForURL('**/souls')
-  await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 30000 })
+  await expect(page.getByRole('heading', { name: 'Essence', exact: true })).toBeVisible({ timeout: 30000 })
   await expect(page.locator('div.fixed.bottom-4.right-4').filter({ hasText: 'Live' })).toBeVisible({ timeout: 10000 })
 }
 
@@ -328,16 +328,16 @@ function soulTargetHintsForType(type: string): { label: string } {
 
 const lightModePages = [
   { path: '/', heading: 'Hall of Judgment' },
-  { path: '/souls', heading: 'Souls' },
-  { path: '/judgments', heading: 'Judgments' },
-  { path: '/alerts', heading: 'Alerts' },
-  { path: '/incidents', heading: 'Incidents' },
-  { path: '/maintenance', heading: 'Maintenance' },
-  { path: '/journeys', heading: 'Journeys' },
-  { path: '/cluster', heading: 'Cluster' },
-  { path: '/status-pages', heading: 'Status Pages' },
+  { path: '/souls', heading: 'Essence' },
+  { path: '/judgments', heading: 'Weighings' },
+  { path: '/alerts', heading: 'Divine Warnings' },
+  { path: '/incidents', heading: 'Cries of Chaos' },
+  { path: '/maintenance', heading: 'Sacred Rest' },
+  { path: '/journeys', heading: 'Voyages' },
+  { path: '/cluster', heading: 'Necropolis' },
+  { path: '/status-pages', heading: 'Temple Squares' },
   { path: '/dashboards', heading: 'Custom Dashboards' },
-  { path: '/settings', heading: 'Settings' },
+  { path: '/settings', heading: "Pharaoh's Chamber" },
 ]
 
 async function expectReadableLightPage(page: Page, path: string, headingName: string) {
@@ -413,7 +413,7 @@ test.describe('AnubisWatch E2E Smoke', () => {
     await expect(page.getByLabel('Switch to dark mode')).toBeVisible()
 
     await page.reload()
-    await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 10000 })
+    await expect(page.getByRole('heading', { name: 'Essence', exact: true })).toBeVisible({ timeout: 10000 })
     await expect(root).toHaveClass(/light/)
     await expect(root).toHaveCSS('color-scheme', 'light')
   })
@@ -565,7 +565,7 @@ test.describe('AnubisWatch E2E Smoke', () => {
 
       await expect(page.getByText(/Check passed|Check failed/i)).toBeVisible({ timeout: 10000 })
       await page.goto(`${server.baseURL}/souls`)
-      await expect(page.getByRole('heading', { name: 'Souls', exact: true })).toBeVisible({ timeout: 10000 })
+      await expect(page.getByRole('heading', { name: 'Essence', exact: true })).toBeVisible({ timeout: 10000 })
     }
   })
 

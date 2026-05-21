@@ -10,9 +10,13 @@ WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy source and build the embedded dashboard assets
+# Copy source and build the embedded dashboard assets.
+# The project uses pnpm — install it globally instead of npm ci, since
+# package-lock.json is not maintained and would fail the npm-ci check.
+# Alpine's nodejs package doesn't bundle corepack, so install pnpm directly.
+RUN npm install -g pnpm@10
 COPY . .
-RUN cd web && npm ci && npm run build:embed
+RUN cd web && pnpm install --frozen-lockfile && pnpm run build:embed
 
 # Build binary
 RUN CGO_ENABLED=0 GOOS=linux go build \
