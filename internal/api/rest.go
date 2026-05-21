@@ -2368,7 +2368,10 @@ func (s *RESTServer) corsMiddleware(handler Handler) Handler {
 	}
 }
 
-// getAllowedOrigins returns the list of allowed CORS origins
+// getAllowedOrigins returns the list of allowed CORS origins.
+// Production deployments should always set server.allowed_origins explicitly
+// or via ANUBIS_CORS_ORIGINS. The localhost fallback is safe only for
+// single-node or local development environments.
 func (s *RESTServer) getAllowedOrigins() []string {
 	// Priority 1: Config file settings (MED-18)
 	if len(s.config.AllowedOrigins) > 0 {
