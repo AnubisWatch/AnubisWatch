@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (business-critical)
+
+End-to-end test of the actual uptime-monitoring workflow (target up → down → up) exposed four interlocking bugs in the alert → incident pipeline. CI was green, audit was green, docs claimed it worked — but no incident had ever actually been created from a failure event. Each bug masked the next:
+
+- **`consecutive_failures` condition was a no-op**: `internal/alert/manager.go` `checkConditions` had no case for the condition type referenced in every doc; rules using it silently never fired. Now tracks a per-(rule, soul) `failureStreak` counter that increments on each dead judgment and resets on any non-dead status (bounded at 1M to prevent overflow on permanently-down souls)
+- **`scope.type=""` rejected all souls**: `ruleApplies` switched on `scope.Type` and returned false for the default case. The natural API client shape (`{"scope":{"soul_ids":[...]}}`) sets `soul_ids` without `Type`, so every such rule was silently skipped. Now infers type from which sub-field is populated; empty scope defaults to "all"
+- **Incident records were never created**: alert events queued, channels dispatched notifications, but no code path persisted an `Incident`. `/api/v1/incidents` always returned empty regardless of rule firings. `recordIncident` now opens an Incident on first trigger and appends events on subsequent triggers for the same (rule, soul); `autoResolveOpenIncident` closes it on recovery when `rule.AutoResolve` is set
+- **`/api/v1/incidents` hid resolved history**: `handleListIncidents` called `ListActiveIncidents()` which filtered out resolved entries — recovered incidents disappeared from the UI. Default now returns every incident; the previous behaviour is reachable via `?status=active`
+
+### Tests
+
+- `TestManager_ConsecutiveFailures_OpensAndAutoResolvesIncident` — full pipeline regression: 2 failures don't trigger, 3rd opens an incident, 4th appends to the same incident, recovery auto-resolves it, and a new failure streak opens a separate incident
+- `TestManager_RuleApplies_InfersScopeFromSubfields` (5 sub-cases) — scope inference matrix
+- Replaces the hollow `TestManager_ProcessJudgment` whose comment literally said "may or may not trigger depending on condition logic … just verify the method doesn't panic"
+
 ## [0.1.4] - 2026-05-22
 
 ### Security
