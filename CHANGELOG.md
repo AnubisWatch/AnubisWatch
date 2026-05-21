@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-05-21
+
 ### CI / Build
 
 - **Frontend toolchain**: all GitHub Actions jobs (test-frontend, e2e-dashboard, build, release) switched from `npm ci` to `pnpm install --frozen-lockfile`. The frontend dependency upgrade had regenerated `pnpm-lock.yaml` but left `package-lock.json` stale by 16+ packages, so every job that used `npm ci` was failing
@@ -16,9 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **gofmt drift**: eleven files (mostly tests + `core/config.go`, `core/feather.go`, `api/rest.go`, `journey/executor.go`, `telemetry/tracer.go`, `grpcapi/server.go`) had drifted struct field alignment. Go 1.26.3 (CI) is stricter than 1.26.0 (local), so the drift only surfaced in CI's Lint job; `gofmt -w` applied across the tree
 - **ESLint**: `eslint-plugin-react-hooks` v7's new strict rules (`set-state-in-effect`, `immutability`, `purity`, `use-memo`) flagged canonical React patterns (fetch-on-mount, derived `Date.now()`, callbacks referencing each other via refs/timers) as errors; these are disabled with rationale documented in `web/eslint.config.js`
 - **ErrorBoundary test**: dropped three unused imports/variables (`Component`, `ReactNode`, `err`) that tripped `@typescript-eslint/no-unused-vars`
 - **Playwright e2e**: smoke spec headings re-synced with the Egyptian-themed dashboard rename (Souls → Essence, Judgments → Weighings, Alerts → Divine Warnings, Incidents → Cries of Chaos, Maintenance → Sacred Rest, Journeys → Voyages, Cluster → Necropolis, Status Pages → Temple Squares, Settings → Pharaoh's Chamber); the suite went from 1 failure cascading into 7 skipped tests back to 8/8 passing
+- **Playwright e2e (CI flakiness)**: `submitSoulEditProtocolPayload` now waits for the `/api/v1/souls/{id}` GET response before asserting on the "Edit Soul" heading, so the 30s deadline doesn't include cold-cache asset load + auth round-trip on slow CI hosts
 
 ## [0.1.2] - 2026-05-21
 

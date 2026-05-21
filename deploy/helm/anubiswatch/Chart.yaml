@@ -2,8 +2,8 @@ apiVersion: v2
 name: anubiswatch
 description: A Helm chart for AnubisWatch - Zero-dependency uptime monitoring
 type: application
-version: 0.1.2
-appVersion: "v0.1.2"
+version: 0.1.3
+appVersion: "v0.1.3"
 home: https://github.com/AnubisWatch/anubiswatch
 sources:
   - https://github.com/AnubisWatch/anubiswatch
