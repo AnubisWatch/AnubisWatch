@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, act } from '@testing-library/react'
-import { Component, ReactNode } from 'react'
 import { ErrorBoundary } from './ErrorBoundary'
 
 // Helper to throw during render inside act()
@@ -20,7 +19,6 @@ describe('ErrorBoundary', () => {
 
   it('catches render errors and shows fallback', async () => {
     const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const err = new Error('Render error')
 
     await act(async () => {
       render(
