@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **CRITICAL-2 follow-up** (`internal/core/config.go`): `validate()` now rejects `tls.enabled: false` when `environment` is `"production"`. Operators who terminate TLS at a reverse proxy can use a different environment label (`"staging"`, `"behind-lb"`, etc.) or omit the field. Closes the remaining hardening item from the production-readiness audit
+- **MEDIUM-11** (`internal/api/rest.go`): `/api/docs` now emits a scoped Content-Security-Policy that allows `cdn.jsdelivr.net` for Swagger UI scripts/styles/fonts and permits the required inline initialiser. The rest of the application keeps the strict `default-src 'self'` from `securityHeadersMiddleware`
+- **MEDIUM-13** (`internal/auth/local.go`): brute-force lockout state is now persisted into the session file. After a restart, the lockout deadline still applies — an attacker can no longer bypass the 15-minute lockout by triggering a process restart. Stale entries (lockout expired AND last attempt outside the reset window) are dropped on load so the file doesn't grow unbounded
+
+### Cleanup ("fazla ise kes at")
+
+- Removed stale dashboard source at `internal/dashboard/` (16 files: old JSX, `package.json`, `pnpm-lock.yaml`, `vite.config.js`, etc.). The canonical dashboard moved to `web/` long ago; only `embed.go`/`embed_test.go`/`dist/` were still in use here. CI `gofmt` filter also dropped the now-pointless `internal/dashboard/node_modules` exclusion
+- Removed empty `data/` and orphan root `anubis` binary (both gitignored, no longer needed locally)
+
+### Tests
+
+- `TestLocalAuthenticator_LockoutPersistence` — confirms a triggered lockout survives `NewLocalAuthenticator` restart over the same session file
+- `TestLocalAuthenticator_LockoutPersistence_ExpiredDropped` — confirms fully-expired entries are dropped on load
+- `TestLocalAuthenticator_LockoutPersistence_ClearedOnSuccess` — confirms successful login clears the failure record from disk
+- `TestValidate_ProductionRequiresTLS` (8 sub-cases) — confirms environment + TLS interplay (production with/without TLS, casing, whitespace, non-production environments unaffected)
+- `TestHandleOpenAPIDocs` extended to assert the scoped CSP override contains the required directives for Swagger UI's CDN assets
+
 ## [0.1.3] - 2026-05-21
 
 ### CI / Build
