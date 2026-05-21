@@ -186,7 +186,7 @@ jobs:
 
       - name: Check gofmt
         run: |
-          UNFORMATTED=$(gofmt -l $(find . -name '*.go' -not -path './web/node_modules/*' -not -path './internal/dashboard/node_modules/*'))
+          UNFORMATTED=$(gofmt -l $(find . -name '*.go' -not -path './web/node_modules/*'))
           if [ -n "$UNFORMATTED" ]; then
             echo "Go files need formatting:"
             echo "$UNFORMATTED"
