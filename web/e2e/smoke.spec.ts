@@ -288,13 +288,15 @@ async function submitSoulEditProtocolPayload(
   soul: { name: string; type: string; target: string },
   fillProtocolFields: (form: Locator) => Promise<void>
 ): Promise<SoulCreatePayload> {
-  // SoulEdit renders a spinner until useSoul(id) resolves. On slow CI hosts
-  // the initial bundle parse + auth handshake + GET round-trip can push past
-  // 30s, so give the heading a generous deadline. Don't try to wait for the
-  // GET response separately — it races with goto's network idle and produces
-  // its own timeout without helping.
-  await page.goto(`${server.baseURL}/souls/${soulID}/edit`)
-  await expect(page.getByRole('heading', { name: 'Edit Soul' })).toBeVisible({ timeout: 60000 })
+  // SoulEdit renders a spinner until useSoul(id) resolves. waitUntil:
+  // 'networkidle' gives the bundle parse + auth round-trip + soul GET
+  // a chance to settle before we assert on the heading. Either the form
+  // or the "Soul not found" fallback must be present — assert on the
+  // form's Save button rather than the bare h1 to surface a meaningful
+  // failure if useSoul errored.
+  await page.goto(`${server.baseURL}/souls/${soulID}/edit`, { waitUntil: 'networkidle' })
+  await expect(page.getByRole('button', { name: /Save Changes/i })).toBeVisible({ timeout: 60000 })
+  await expect(page.getByRole('heading', { name: 'Edit Soul' })).toBeVisible({ timeout: 5000 })
 
   const form = page.locator('form').filter({ has: page.getByRole('button', { name: /Save Changes/i }) })
   await form.getByLabel('Soul type').selectOption(soul.type)

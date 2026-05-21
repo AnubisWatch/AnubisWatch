@@ -157,6 +157,17 @@ jobs:
         working-directory: web
         run: pnpm run e2e
 
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-trace-and-results
+          path: |
+            web/test-results/
+            web/playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
+
   # Lint
   lint:
     name: Lint
