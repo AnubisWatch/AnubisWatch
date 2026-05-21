@@ -9,6 +9,58 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
+func TestIsConnectionFailure(t *testing.T) {
+	cfg := core.LDAPAuth{
+		URL:    "ldap://nonexistent.invalid",
+		BaseDN: "dc=example,dc=com",
+	}
+	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
+	defer auth.Shutdown()
+
+	tests := []struct {
+		name     string
+		errMsg   string
+		expected bool
+	}{
+		// Connection failures — should fall back to local
+		{"failed to connect", "failed to connect to ldap server", true},
+		{"connection refused", "connection refused", true},
+		{"timeout", "LDAP timeout", true},
+		{"no such host", "no such host", true},
+		{"network unreachable", "network unreachable", true},
+		{"i/o timeout", "i/o timeout", true},
+		{"connection reset", "connection reset by peer", true},
+		{"use of closed", "use of closed network connection", true},
+		// Auth failures — should NOT fall back
+		{"LDAP bind failed", "LDAP bind failed: invalid credentials", false},
+		{"invalid credentials", "invalid credentials", false},
+		{"server bind failed", "LDAP server bind failed", false},
+		// Other errors — should NOT fall back
+		{"search failed", "LDAP search failed", false},
+		{"malformed DN", "malformed DN", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := &ldapError{msg: tt.errMsg}
+			got := auth.isConnectionFailure(err)
+			if got != tt.expected {
+				t.Errorf("isConnectionFailure(%q) = %v, want %v", tt.errMsg, got, tt.expected)
+			}
+		})
+	}
+
+	// Nil error should always return false
+	if auth.isConnectionFailure(nil) {
+		t.Error("isConnectionFailure(nil) should return false")
+	}
+}
+
+// ldapError is a minimal error type for testing isConnectionFailure.
+type ldapError struct{ msg string }
+
+func (e *ldapError) Error() string { return e.msg }
+
 func TestExtractHostnameFromURL(t *testing.T) {
 	tests := []struct {
 		name     string

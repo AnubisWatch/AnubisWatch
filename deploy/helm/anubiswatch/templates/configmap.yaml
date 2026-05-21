@@ -12,6 +12,15 @@ data:
       grpc_port: {{ .Values.service.grpcPort }}
       tls:
         enabled: {{ .Values.config.server.tls.enabled }}
+        {{- if .Values.config.server.tls.cert }}
+        cert: {{ .Values.config.server.tls.cert | quote }}
+        {{- end }}
+        {{- if .Values.config.server.tls.key }}
+        key: {{ .Values.config.server.tls.key | quote }}
+        {{- end }}
+        min_version: {{ .Values.config.server.tls.min_version }}
+        prefer_server: {{ .Values.config.server.tls.prefer_server }}
+      trusted_proxies: {{ .Values.config.server.trustedProxies | toJson }}
       allowed_origins: {{ .Values.config.server.allowedOrigins | toJson }}
 
     auth:

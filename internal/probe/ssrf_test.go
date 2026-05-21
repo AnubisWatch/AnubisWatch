@@ -52,11 +52,26 @@ func TestSSRFValidator_ValidateTarget_AllowedSchemes(t *testing.T) {
 	defer os.Unsetenv("ANUBIS_SSRF_ALLOW_PRIVATE")
 	v = NewSSRFValidator()
 
-	schemes := []string{"http", "https", "ws", "wss", "grpc"}
+	schemes := []string{"http", "https", "ws", "wss"}
 	for _, scheme := range schemes {
 		err := v.ValidateTarget(scheme + "://example.com")
 		if err != nil {
 			t.Errorf("Scheme %q should be allowed, got: %v", scheme, err)
+		}
+	}
+}
+
+func TestSSRFValidator_ValidateTarget_BlockedSchemes(t *testing.T) {
+	v := NewSSRFValidator()
+
+	blocked := []string{"grpc", "tcp", "udp", "file", "ftp", "dict"}
+	for _, scheme := range blocked {
+		err := v.ValidateTarget(scheme + "://example.com")
+		if err == nil {
+			t.Errorf("Scheme %q should be blocked, got nil", scheme)
+		}
+		if !strings.Contains(err.Error(), "not allowed") {
+			t.Errorf("Scheme %q error should contain 'not allowed', got: %v", scheme, err)
 		}
 	}
 }

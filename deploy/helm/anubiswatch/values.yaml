@@ -89,6 +89,11 @@ config:
     port: 8080
     tls:
       enabled: false
+      cert: ""
+      key: ""
+      min_version: 3    # TLS 1.2 minimum (3=TLS1.2, 4=TLS1.3)
+      prefer_server: true
+    trustedProxies: []
     allowedOrigins:
       - "http://localhost:8080"
       - "http://127.0.0.1:8080"
