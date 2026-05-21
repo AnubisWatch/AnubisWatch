@@ -288,18 +288,13 @@ async function submitSoulEditProtocolPayload(
   soul: { name: string; type: string; target: string },
   fillProtocolFields: (form: Locator) => Promise<void>
 ): Promise<SoulCreatePayload> {
-  // SoulEdit renders a spinner until useSoul(id) resolves; wait for that
-  // GET to settle before asserting on the heading, so the 30s deadline
-  // doesn't include cold-cache asset load + auth round-trip in slow CI.
-  const soulFetch = page.waitForResponse(
-    (res) =>
-      res.url().endsWith(`/api/v1/souls/${soulID}`) &&
-      res.request().method() === 'GET',
-    { timeout: 30000 }
-  )
+  // SoulEdit renders a spinner until useSoul(id) resolves. On slow CI hosts
+  // the initial bundle parse + auth handshake + GET round-trip can push past
+  // 30s, so give the heading a generous deadline. Don't try to wait for the
+  // GET response separately — it races with goto's network idle and produces
+  // its own timeout without helping.
   await page.goto(`${server.baseURL}/souls/${soulID}/edit`)
-  await soulFetch
-  await expect(page.getByRole('heading', { name: 'Edit Soul' })).toBeVisible({ timeout: 30000 })
+  await expect(page.getByRole('heading', { name: 'Edit Soul' })).toBeVisible({ timeout: 60000 })
 
   const form = page.locator('form').filter({ has: page.getByRole('button', { name: /Save Changes/i }) })
   await form.getByLabel('Soul type').selectOption(soul.type)

@@ -154,7 +154,7 @@ jobs:
 
             ### Docker
             ```bash
-            docker run -d -p 8443:8443 -v anubis-data:/var/lib/anubis anubiswatch/anubis:${{ github.ref_name }}
+            docker run -d -p 8443:8443 -v anubis-data:/var/lib/anubis ghcr.io/anubiswatch/anubiswatch:${{ github.ref_name }}
             ```
 
             ## Checksums
@@ -189,8 +189,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
+          # Only push to ghcr.io — Docker Hub (anubiswatch/anubis) is not
+          # configured in this workflow's secrets and would 401 on push.
+          # The docker-build.yml workflow already publishes to ghcr.io on
+          # every main commit; release adds the semver tags here.
           images: |
-            anubiswatch/anubis
             ghcr.io/${{ github.repository }}
           tags: |
             type=ref,event=tag
