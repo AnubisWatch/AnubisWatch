@@ -2,6 +2,7 @@ package core
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -1725,6 +1726,52 @@ func TestBoolPtr(t *testing.T) {
 			result2 := BoolPtr(tt.input)
 			if result == result2 {
 				t.Error("BoolPtr should return distinct pointers")
+			}
+		})
+	}
+}
+
+// TestValidate_ProductionRequiresTLS verifies CRITICAL-2 follow-up:
+// environment="production" rejects tls.enabled=false at config-validate
+// time, so an operator can't accidentally serve plaintext in production.
+// Empty or non-production environments are unaffected (TLS opt-in).
+func TestValidate_ProductionRequiresTLS(t *testing.T) {
+	tests := []struct {
+		name        string
+		environment string
+		tlsEnabled  bool
+		wantError   bool
+	}{
+		{name: "production without TLS rejected", environment: "production", tlsEnabled: false, wantError: true},
+		{name: "production with TLS accepted", environment: "production", tlsEnabled: true, wantError: false},
+		{name: "Production casing accepted", environment: "Production", tlsEnabled: true, wantError: false},
+		{name: "production casing rejected without TLS", environment: "PRODUCTION", tlsEnabled: false, wantError: true},
+		{name: "with surrounding whitespace", environment: "  production ", tlsEnabled: false, wantError: true},
+		{name: "staging without TLS accepted", environment: "staging", tlsEnabled: false, wantError: false},
+		{name: "empty environment without TLS accepted", environment: "", tlsEnabled: false, wantError: false},
+		{name: "dev without TLS accepted", environment: "dev", tlsEnabled: false, wantError: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tls := TLSServerConfig{Enabled: tt.tlsEnabled}
+			if tt.tlsEnabled {
+				// TLS-enabled paths need cert/key to satisfy the unrelated
+				// server.tls validator; supply dummy paths so we isolate
+				// the production-mode-requires-TLS check.
+				tls.Cert = "/tmp/test.crt"
+				tls.Key = "/tmp/test.key"
+			}
+			cfg := &Config{
+				Environment: tt.environment,
+				Server:      ServerConfig{TLS: tls},
+			}
+			err := cfg.validate()
+			if (err != nil) != tt.wantError {
+				t.Errorf("validate() error = %v, wantError = %v", err, tt.wantError)
+			}
+			if tt.wantError && err != nil && !strings.Contains(err.Error(), "tls.enabled must be true") {
+				t.Errorf("expected TLS-related error, got: %v", err)
 			}
 		})
 	}

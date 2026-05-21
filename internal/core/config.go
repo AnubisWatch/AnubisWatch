@@ -324,6 +324,17 @@ func (c *Config) validate() error {
 		return err
 	}
 
+	// CRITICAL-2 follow-up: when environment=production, plaintext serving
+	// is never acceptable. Reject configs that try to deploy without TLS.
+	// Operators who terminate TLS at a reverse proxy can still mark this
+	// instance as a non-production environment (e.g. "behind-lb") or omit
+	// the field entirely; the gate is opt-in via environment="production".
+	if strings.EqualFold(strings.TrimSpace(c.Environment), "production") {
+		if !c.Server.TLS.Enabled {
+			return fmt.Errorf("config error: server.tls.enabled must be true when environment is \"production\"")
+		}
+	}
+
 	return nil
 }
 
