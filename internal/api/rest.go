@@ -712,6 +712,17 @@ window.addEventListener('load', function() {
 </script>
 </body>
 </html>`
+	// Override the default CSP (`default-src 'self'`) for this specific
+	// endpoint — Swagger UI is loaded from jsdelivr CDN and needs an inline
+	// initialization script. Scoped to this handler only; every other route
+	// keeps the strict default from securityHeadersMiddleware.
+	ctx.Response.Header().Set("Content-Security-Policy",
+		"default-src 'self'; "+
+			"script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "+
+			"style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "+
+			"img-src 'self' data:; "+
+			"font-src 'self' data: https://cdn.jsdelivr.net; "+
+			"connect-src 'self'")
 	ctx.Response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	ctx.Response.WriteHeader(http.StatusOK)
 	ctx.Response.Write([]byte(html))

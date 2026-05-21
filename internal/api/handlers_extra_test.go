@@ -3304,6 +3304,30 @@ func TestHandleOpenAPIDocs(t *testing.T) {
 	if !strings.Contains(body, "/api/openapi.json") {
 		t.Error("expected OpenAPI spec URL in response")
 	}
+
+	// MED-11: this handler must override the default `default-src 'self'`
+	// CSP so Swagger UI's CDN-hosted scripts and its inline initialiser
+	// can execute. Verify the override is present and scoped (jsdelivr
+	// is allowed for scripts/styles/fonts but no broader).
+	csp := w.Header().Get("Content-Security-Policy")
+	if csp == "" {
+		t.Fatal("expected Content-Security-Policy header to be set")
+	}
+	requiredDirectives := []string{
+		"script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'",
+		"style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'",
+		"font-src 'self' data: https://cdn.jsdelivr.net",
+	}
+	for _, want := range requiredDirectives {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP missing directive %q; full CSP: %s", want, csp)
+		}
+	}
+	// And the connect-src must NOT permit jsdelivr — we only want assets
+	// from the CDN, not XHR/fetch.
+	if strings.Contains(csp, "connect-src") && strings.Contains(csp, "connect-src 'self' https://cdn.jsdelivr.net") {
+		t.Errorf("CSP connect-src should not allow CDN: %s", csp)
+	}
 }
 
 // TestHandleOIDCLogin tests OIDC login redirect
