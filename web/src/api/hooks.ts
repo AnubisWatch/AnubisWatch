@@ -426,17 +426,59 @@ export function useDashboards() {
 }
 
 // Auth API hooks
+const CACHED_USER_KEY = 'auth_user'
+
+function readCachedUser(): User | null {
+  try {
+    const raw = localStorage.getItem(CACHED_USER_KEY)
+    if (!raw) return null
+    return JSON.parse(raw) as User
+  } catch {
+    return null
+  }
+}
+
+function writeCachedUser(user: User | null) {
+  try {
+    if (user) {
+      localStorage.setItem(CACHED_USER_KEY, JSON.stringify(user))
+    } else {
+      localStorage.removeItem(CACHED_USER_KEY)
+    }
+  } catch {
+    // localStorage might be disabled; ignore.
+  }
+}
+
 export function useAuth() {
-  const [user, setUser] = useState<User | null>(null)
+  // Hydrate from cache so a transient /auth/me failure doesn't flicker the
+  // user back to /login. The /auth/me probe still runs and updates state
+  // when it succeeds; on 401 we clear cache + token. On any other error
+  // (429 rate limit, 5xx, network) we keep the cached user — they have a
+  // valid token, they're authenticated until the server explicitly says
+  // otherwise.
+  const [user, setUser] = useState<User | null>(() => {
+    return localStorage.getItem('auth_token') ? readCachedUser() : null
+  })
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const token = localStorage.getItem('auth_token')
     if (token) {
       api.get<User>('/auth/me')
-        .then(setUser)
-        .catch(() => {
-          api.clearToken()
+        .then((u) => {
+          setUser(u)
+          writeCachedUser(u)
+        })
+        .catch((err: unknown) => {
+          const msg = err instanceof Error ? err.message : String(err)
+          if (msg.startsWith('HTTP 401') || msg.toLowerCase().includes('unauthorized')) {
+            api.clearToken()
+            writeCachedUser(null)
+            setUser(null)
+          }
+          // Other failures: keep the cached user we already loaded from
+          // localStorage. The api client redirects on real 401 already.
         })
         .finally(() => setLoading(false))
     } else {
@@ -448,12 +490,14 @@ export function useAuth() {
     const result = await api.post<{ user: User; token: string }>('/auth/login', { email, password })
     api.setToken(result.token)
     setUser(result.user)
+    writeCachedUser(result.user)
     return result
   }
 
   const logout = async () => {
     await api.post('/auth/logout')
     api.clearToken()
+    writeCachedUser(null)
     setUser(null)
   }
 

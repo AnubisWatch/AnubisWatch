@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -2111,9 +2112,22 @@ func (s *RESTServer) handleListStatusPages(ctx *Context) error {
 }
 
 func (s *RESTServer) handleCreateStatusPage(ctx *Context) error {
+	// On create, default Enabled=true unless the caller explicitly opts
+	// out. Storage's GetStatusPageBySlug filters out !Enabled pages,
+	// so a status page created without enabled silently 404s on the
+	// public /status/{slug} URL — a confusing UX. We can't disambiguate
+	// "field omitted" from "explicit false" with a bool, so use a peek
+	// at the raw JSON body before bind.
+	raw, _ := io.ReadAll(ctx.Request.Body)
+	ctx.Request.Body = io.NopCloser(bytes.NewReader(raw))
+	enabledExplicit := bytes.Contains(raw, []byte(`"enabled"`))
+
 	var page core.StatusPage
 	if err := ctx.Bind(&page); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid status page data")
+	}
+	if !enabledExplicit {
+		page.Enabled = true
 	}
 	if err := normalizeStatusPageForSave(&page); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
