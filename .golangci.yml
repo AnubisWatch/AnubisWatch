@@ -1,8 +1,39 @@
 run:
   timeout: 5m
+  tests: false
 linters:
   enable:
     - govet
     - staticcheck
     - bodyclose
     - misspell
+    - gofmt
+    - errcheck
+    - gosec
+    - noctx
+    - predeclared
+    - exportloopref
+  disable:
+    - deadcode
+    - varcheck
+    - staticgen
+linters-settings:
+  gosec:
+    excludes:
+      - G115
+      - G304
+      - G301
+      - G306
+      - G505
+      - G103
+      - G104
+      - G703
+      - G118
+      - G401
+      - G302
+      - G404
+      - G402
+      - G704
+      - G123
+  gofmt:
+    simplify: true

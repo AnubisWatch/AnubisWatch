@@ -57,8 +57,9 @@ type ServerDependencies struct {
 
 // Server represents the AnubisWatch server
 type Server struct {
-	deps   *ServerDependencies
-	logger *slog.Logger
+	deps    *ServerDependencies
+	logger  *slog.Logger
+	stopCh  chan struct{}
 }
 
 // NewServer creates a new Server instance
@@ -66,6 +67,7 @@ func NewServer(deps *ServerDependencies) *Server {
 	return &Server{
 		deps:   deps,
 		logger: deps.Logger,
+		stopCh: make(chan struct{}),
 	}
 }
 
@@ -145,6 +147,9 @@ func (s *Server) Start(ctx context.Context) error {
 		go func() {
 			if err := s.deps.RESTServer.Start(); err != nil {
 				logger.Error("REST server failed", "err", err)
+				// Signal shutdown so other components stop gracefully when
+				// REST API becomes unavailable (MEDIUM: REST goroutine orphan).
+				close(s.stopCh)
 			}
 		}()
 		logger.Info("REST API server initialized", "addr", fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port))
@@ -220,11 +225,16 @@ func (s *Server) Stop(ctx context.Context) error {
 	return nil
 }
 
-// WaitForShutdown blocks until shutdown signal is received
+// WaitForShutdown blocks until a shutdown signal is received or StopCh is
+// closed. StopCh is closed by component failures (e.g. REST server crash)
+// to trigger graceful shutdown when a critical component becomes unavailable.
 func (s *Server) WaitForShutdown() {
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	<-shutdownCtx.Done()
+	select {
+	case <-shutdownCtx.Done():
+	case <-s.stopCh:
+	}
 }
 
 // ServerOptions holds options for building server dependencies

@@ -44,6 +44,16 @@ ENV ANUBIS_CONFIG=/etc/anubis/anubis.json \
 WORKDIR /var/lib/anubis
 USER anubis:anubis
 
+# NOTE: For production deployments, set the container's root filesystem to
+# read-only (docker run --read-only or Kubernetes securityContext
+# readOnlyRootFilesystem: true). The application only requires write access
+# to the paths backed by volumes:
+#   - /data          (storage data — persist across restarts)
+#   - /etc/anubis    (config, can be baked into image for single-node)
+#   - /var/lib/anubis (temp/working dir, can be tmpfs)
+# See deploy/helm/anubiswatch/values.yaml securityContext for the
+# Kubernetes implementation (runAsNonRoot: true, readOnlyRootFilesystem: true).
+
 # Expose ports
 EXPOSE 8080 8443 9090 7946
 
