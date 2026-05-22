@@ -436,6 +436,7 @@ func (m *Manager) recordIncident(rule *core.AlertRule, soul *core.Soul, event *c
 		ID:          generateIncidentID(),
 		RuleID:      rule.ID,
 		SoulID:      soul.ID,
+		SoulName:    soul.Name,
 		WorkspaceID: soul.WorkspaceID,
 		Status:      core.IncidentOpen,
 		Severity:    event.Severity,

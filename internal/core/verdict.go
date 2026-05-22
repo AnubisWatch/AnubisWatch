@@ -302,6 +302,7 @@ type Incident struct {
 	ID              string         `json:"id"`
 	RuleID          string         `json:"rule_id"`
 	SoulID          string         `json:"soul_id"`
+	SoulName        string         `json:"soul_name,omitempty"`
 	WorkspaceID     string         `json:"workspace_id"`
 	Status          IncidentStatus `json:"status"`
 	Severity        Severity       `json:"severity"`
