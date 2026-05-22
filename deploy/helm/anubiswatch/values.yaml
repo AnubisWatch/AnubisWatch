@@ -94,6 +94,9 @@ config:
       min_version: 3    # TLS 1.2 minimum (3=TLS1.2, 4=TLS1.3)
       prefer_server: true
     trustedProxies: []
+    # REQUIRED in production. Set to the public DNS name of your ingress
+    # (e.g. ["https://anubiswatch.example.com"]). Leaving this empty or
+    # using localhost values will reject browser requests in production.
     allowedOrigins:
       - "http://localhost:8080"
       - "http://127.0.0.1:8080"
