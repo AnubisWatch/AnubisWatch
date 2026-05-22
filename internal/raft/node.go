@@ -816,7 +816,32 @@ func (n *Node) applyLoop() {
 func (n *Node) startElection() {
 	n.mu.Lock()
 
-	// Pre-vote phase: check if we would win an election
+	// Check if single-node mode (no peers)
+	n.peerMu.RLock()
+	peers := make([]*Peer, 0, len(n.peers))
+	for _, p := range n.peers {
+		if p.Role != core.RoleNonVoter {
+			peers = append(peers, p)
+		}
+	}
+	n.peerMu.RUnlock()
+
+	// Single-node mode: if no voting peers, immediately become leader
+	// This allows a standalone node to function without requiring network consensus
+	if len(peers) == 0 {
+		n.logger.Info("Single-node mode: no peers, becoming leader immediately")
+		n.state = core.StateCandidate
+		n.currentTerm++
+		n.votedFor = n.nodeID
+		n.leaderID = ""
+		n.lastContact = time.Now()
+		// Note: becomeLeader acquires its own lock, so we must unlock first
+		n.mu.Unlock()
+		n.becomeLeader()
+		return
+	}
+
+	// Multi-node: proceed with full election process
 	n.state = core.StateCandidate
 	preVoteTerm := n.currentTerm + 1
 	lastLogIndex := uint64(len(n.log) - 1)
@@ -827,14 +852,6 @@ func (n *Node) startElection() {
 		"last_log_index", lastLogIndex,
 		"last_log_term", lastLogTerm)
 
-	n.peerMu.RLock()
-	peers := make([]*Peer, 0, len(n.peers))
-	for _, p := range n.peers {
-		if p.Role != core.RoleNonVoter {
-			peers = append(peers, p)
-		}
-	}
-	n.peerMu.RUnlock()
 	n.mu.Unlock()
 
 	// Request pre-votes from all peers
@@ -872,6 +889,8 @@ func (n *Node) startElection() {
 	// Check if we won
 	votesNeeded := int32((len(peers)+1)/2 + 1)
 	if votesGranted >= votesNeeded {
+		// Note: becomeLeader acquires its own lock, so we must unlock first
+		n.mu.Unlock()
 		n.becomeLeader()
 	} else {
 		n.logger.Info("Election failed",
@@ -1024,7 +1043,11 @@ func (n *Node) requestVotes(term, lastLogIndex, lastLogTerm uint64, peers []*Pee
 }
 
 // becomeLeader transitions to leader state
+// Caller must NOT hold n.mu - this function acquires it internally
 func (n *Node) becomeLeader() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
 	n.logger.Info("Became leader", "term", n.currentTerm)
 
 	n.state = core.StateLeader

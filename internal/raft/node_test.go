@@ -3493,3 +3493,68 @@ func TestNode_HandleRPC_PreVote(t *testing.T) {
 		t.Error("handleRPC timed out for PreVote")
 	}
 }
+
+// Test single-node mode: node should become leader immediately when no peers exist
+func TestNode_SingleNode_Election(t *testing.T) {
+	cfg := newTestRaftNodeConfig()
+	// No peers - this is the key for single-node mode
+	cfg.Peers = nil
+
+	storage := NewInMemoryLogStore()
+	snapshot := NewInMemorySnapshotStore()
+	fsm := NewStorageFSM(NewInMemoryStorage())
+
+	node, err := NewNode(cfg, storage, snapshot, fsm, newTestRaftLogger())
+	if err != nil {
+		t.Fatalf("NewNode failed: %v", err)
+	}
+
+	// Start node
+	if err := node.Start(); err != nil {
+		t.Fatalf("Failed to start node: %v", err)
+	}
+	defer node.Stop()
+
+	// Give election timer a chance to fire
+	// In single-node mode, node should become leader without any peer communication
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify node became leader
+	if !node.IsLeader() {
+		t.Error("Expected node to become leader in single-node mode")
+	}
+
+	// Verify state
+	state := node.State()
+	if state != core.StateLeader {
+		t.Errorf("Expected state Leader, got %s", state)
+	}
+}
+
+// Test single-node election timer fires and becomes leader
+func TestNode_SingleNode_TimerDrivenElection(t *testing.T) {
+	cfg := newTestRaftNodeConfig()
+	cfg.ElectionTimeout = core.Duration{Duration: 50 * time.Millisecond}
+	cfg.Peers = nil // No peers
+
+	storage := NewInMemoryLogStore()
+	snapshot := NewInMemorySnapshotStore()
+	fsm := NewStorageFSM(NewInMemoryStorage())
+
+	node, err := NewNode(cfg, storage, snapshot, fsm, newTestRaftLogger())
+	if err != nil {
+		t.Fatalf("NewNode failed: %v", err)
+	}
+
+	if err := node.Start(); err != nil {
+		t.Fatalf("Failed to start node: %v", err)
+	}
+	defer node.Stop()
+
+	// Wait for election timer to fire
+	time.Sleep(150 * time.Millisecond)
+
+	if !node.IsLeader() {
+		t.Error("Expected node to become leader via election timer in single-node mode")
+	}
+}

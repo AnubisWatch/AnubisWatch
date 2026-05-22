@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
@@ -86,7 +87,7 @@ type MDNSServer struct {
 	port     int
 	ips      []net.IP
 	txt      []string
-	shutdown bool
+	shutdown atomic.Bool
 	conn     *net.UDPConn
 	connMu   sync.Mutex
 }
@@ -96,7 +97,7 @@ type MDNSClient struct {
 	service  string
 	domain   string
 	results  chan *MDNSService
-	shutdown bool
+	shutdown atomic.Bool
 	conn     *net.UDPConn
 	connMu   sync.Mutex
 	ctx      context.Context
@@ -569,7 +570,7 @@ func (s *MDNSServer) Start() error {
 	s.connMu.Lock()
 	s.conn = conn
 	s.connMu.Unlock()
-	s.shutdown = false
+	s.shutdown.Store(false)
 
 	// Start listening
 	go s.listenAndServe()
@@ -582,7 +583,7 @@ func (s *MDNSServer) Start() error {
 
 func (s *MDNSServer) listenAndServe() {
 	buf := make([]byte, 1024)
-	for !s.shutdown {
+	for !s.shutdown.Load() {
 		s.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
 		n, addr, err := s.conn.ReadFromUDP(buf)
 		if err != nil {
@@ -608,7 +609,7 @@ func (s *MDNSServer) broadcastPresence() {
 
 	msg := fmt.Sprintf("_anubiswatch_|%s|%d|%s", s.instance, s.port, strings.Join(s.txt, ";"))
 
-	for !s.shutdown {
+	for !s.shutdown.Load() {
 		// Broadcast to local network
 		broadcastAddr := &net.UDPAddr{
 			IP:   net.IPv4(255, 255, 255, 255),
@@ -628,7 +629,7 @@ func (s *MDNSServer) broadcastPresence() {
 }
 
 func (s *MDNSServer) Stop() {
-	s.shutdown = true
+	s.shutdown.Store(true)
 	s.connMu.Lock()
 	defer s.connMu.Unlock()
 	if s.conn != nil {
@@ -664,7 +665,7 @@ func (c *MDNSClient) Start() error {
 	c.connMu.Lock()
 	c.conn = conn
 	c.connMu.Unlock()
-	c.shutdown = false
+	c.shutdown.Store(false)
 
 	// Start listening for responses
 	go c.listenForResponses()
@@ -677,7 +678,7 @@ func (c *MDNSClient) Start() error {
 
 func (c *MDNSClient) listenForResponses() {
 	buf := make([]byte, 1024)
-	for !c.shutdown {
+	for !c.shutdown.Load() {
 		c.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
 		n, addr, err := c.conn.ReadFromUDP(buf)
 		if err != nil {
@@ -726,14 +727,14 @@ func (c *MDNSClient) queryPeriodically() {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	for !c.shutdown {
+	for !c.shutdown.Load() {
 		c.Query("_anubiswatch._tcp")
 		<-ticker.C
 	}
 }
 
 func (c *MDNSClient) Stop() {
-	c.shutdown = true
+	c.shutdown.Store(true)
 	c.cancel()
 	c.connMu.Lock()
 	defer c.connMu.Unlock()

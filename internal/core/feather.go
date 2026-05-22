@@ -105,6 +105,7 @@ type NecropolisConfig struct {
 	BindAddr      string             `json:"bind_addr" yaml:"bind_addr"`
 	AdvertiseAddr string             `json:"advertise_addr" yaml:"advertise_addr"`
 	ClusterSecret string             `json:"cluster_secret" yaml:"cluster_secret"`
+	SingleNode    bool               `json:"single_node" yaml:"single_node"` // Force single-node mode (no Raft consensus)
 	Discovery     DiscoveryConfig    `json:"discovery" yaml:"discovery"`
 	Raft          RaftConfig         `json:"raft" yaml:"raft"`
 	Distribution  DistributionConfig `json:"distribution" yaml:"distribution"`

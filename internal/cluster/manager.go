@@ -93,7 +93,16 @@ func NewManager(cfg core.NecropolisConfig, db *storage.CobaltDB, logger *slog.Lo
 		config:      cfg.Raft,
 		db:          db,
 		logger:      logger.With("component", "cluster"),
+		// SingleNode mode: explicit single-node operation (self-elected leader)
+		// Standalone mode: no clustering at all
 		isClustered: cfg.Enabled || cfg.Raft.Bootstrap || len(cfg.Raft.Peers) > 0,
+	}
+
+	// If SingleNode is set, we're effectively clustered (for leader election)
+	// but don't need peer connections
+	if cfg.SingleNode && !m.isClustered {
+		m.logger.Info("SingleNode mode enabled - node will self-elect as leader")
+		m.isClustered = true
 	}
 
 	// Create Raft storage components
