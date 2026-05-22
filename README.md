@@ -23,7 +23,7 @@ AnubisWatch is a self-hosted uptime, synthetic monitoring, alerting, and status-
 - Exposes REST, WebSocket, SSE, gRPC, Prometheus metrics, OpenAPI docs, and MCP endpoints.
 - Provides local, OIDC, and LDAP authentication with workspace-aware APIs.
 - Includes backup/restore, status pages, maintenance windows, custom dashboards, and audit/security middleware.
-- Can run standalone or as a Raft cluster with region-aware probe distribution.
+- Can run **standalone (single-node)**, **self-hosted**, or as a **Raft cluster** with region-aware probe distribution.
 
 ## Terminology
 
@@ -39,38 +39,58 @@ AnubisWatch is a self-hosted uptime, synthetic monitoring, alerting, and status-
 | Feather | The embedded CobaltDB storage engine |
 | Duat | The real-time WebSocket/SSE event layer |
 
-## Repository Layout
-
-```text
-.
-├── cmd/anubis/                 # CLI and server entry point
-├── internal/
-│   ├── alert/                  # Alert manager and dispatchers
-│   ├── api/                    # REST, WebSocket, SSE, metrics, OpenAPI, MCP
-│   ├── auth/                   # Local, OIDC, LDAP auth
-│   ├── backup/                 # Backup and restore manager
-│   ├── cluster/                # Cluster coordination
-│   ├── core/                   # Domain models and config
-│   ├── dashboard/              # Embedded dashboard assets
-│   ├── grpcapi/                # gRPC API server and generated protobuf code
-│   ├── journey/                # Synthetic journey executor
-│   ├── probe/                  # Protocol checkers
-│   ├── raft/                   # Raft node, FSM, discovery, transport
-│   ├── statuspage/             # Public status page handler
-│   └── storage/                # CobaltDB storage, time series, retention
-├── web/                        # React 19 dashboard source
-├── configs/                    # JSON/YAML config examples and systemd unit
-├── deploy/                     # Docker, Kubernetes, Helm examples
-├── docs/                       # API, config, deployment, backup, MCP, WebSocket docs
-├── scripts/                    # Release, smoke, preflight, demo scripts
-├── Dockerfile
-├── docker-compose.yml
-└── Makefile
-```
-
 ## Quick Start
 
-### Build And Run Locally
+### One-Click Run (Recommended)
+
+```bash
+git clone https://github.com/AnubisWatch/anubiswatch.git
+cd anubiswatch
+./run.sh
+```
+
+That's it! The `run.sh` script will:
+- Build the binary if not present
+- Create a default config with random admin password
+- Start the server and wait for it to be ready
+- Print the dashboard URL and credentials
+
+```
+⚖️  AnubisWatch — The Judgment Never Sleeps
+
+[✓] Binary found: ./anubis
+[✓] Config created: ~/.anubiswatch/anubis.json
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Admin Password: randomgeneratedpassword
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[✓] Starting AnubisWatch...
+Waiting for server..........
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ⚖️  AnubisWatch is ready!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Dashboard: http://localhost:8443
+  Health:    http://localhost:8443/health
+
+  Press Ctrl+C to stop
+```
+
+### run.sh Options
+
+```bash
+./run.sh --port 9000          # Custom port
+./run.sh --data-dir /opt/anubis  # Custom data directory
+./run.sh --password secret123   # Set admin password
+./run.sh --log-level debug       # Debug logging
+
+# All options combined
+./run.sh --port 9443 --data-dir /data --password mypass --log-level debug
+```
+
+### Build And Run Manually
 
 ```bash
 git clone https://github.com/AnubisWatch/anubiswatch.git
@@ -79,12 +99,12 @@ cd anubiswatch
 go mod download
 cd web && npm ci && npm run build:embed && cd ..
 
-go build -o bin/anubis ./cmd/anubis
-./bin/anubis init
-./bin/anubis serve
+go build -o anubis ./cmd/anubis
+./anubis init
+./anubis serve
 ```
 
-`anubis init` creates `./anubis.json` by default, chooses an available port starting at `8080`, generates a local admin password, and prints the dashboard URL.
+`anubis init` creates `./anubis.json` by default, chooses an available port starting at `8443`, generates a local admin password, and prints the dashboard URL.
 
 ### Make Targets
 
@@ -102,11 +122,11 @@ make docker         # Build anubiswatch/anubis:<version>
 ### Docker Compose
 
 ```bash
-export ANUBIS_ADMIN_PASSWORD='change-me-to-a-strong-password'
+export ANUBIS_ADMIN_PASSWORD=[REDACTED:high_entropy_env]
 docker compose up -d
 ```
 
-The root `docker-compose.yml` builds the local Dockerfile, serves AnubisWatch on `http://localhost:8080`, stores data in the `anubis-data` volume, and mounts `configs/container.anubis.json`.
+The root `docker-compose.yml` builds the local Dockerfile, serves AnubisWatch on `http://localhost:8443`, stores data in the `anubis-data` volume, and mounts `configs/container.anubis.json`.
 
 Cluster and monitoring profiles are also present:
 
@@ -119,13 +139,75 @@ docker compose --profile monitoring up -d
 
 ```bash
 docker build -t anubiswatch/anubis:local .
-docker run --rm -p 8080:8080 \
-  -e ANUBIS_ADMIN_PASSWORD='change-me-to-a-strong-password' \
+docker run --rm -p 8443:8443 \
+  -e ANUBIS_ADMIN_PASSWORD=[REDACTED:high_entropy_env] \
   -v anubis-data:/data \
   anubiswatch/anubis:local
 ```
 
 The Dockerfile builds the dashboard, compiles `/bin/anubis`, runs as the non-root `anubis` user, reads `/etc/anubis/anubis.json`, and stores runtime data under `/data`.
+
+## Deployment Modes
+
+AnubisWatch supports three deployment modes:
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| **Standalone** | No Raft, single process | Development, homelab |
+| **Single-Node** | Raft enabled, self-elected leader | Self-hosted production |
+| **Cluster** | Multi-node Raft consensus | High availability production |
+
+### Standalone Mode (Default)
+
+No cluster configuration needed. Runs with embedded storage.
+
+```bash
+./anubis serve
+# or with run.sh
+./run.sh
+```
+
+### Single-Node Mode
+
+Raft consensus is active but node self-elects as leader (no peer communication needed).
+
+```bash
+# Via config
+cat > anubis.json << 'EOF'
+{
+  "necropolis": {
+    "single_node": true,
+    "node_name": "my-node"
+  }
+}
+EOF
+./anubis serve --config anubis.json
+
+# Or via CLI
+./anubis serve --cluster
+```
+
+Benefits over standalone:
+- Raft log replication enabled (future cluster expansion ready)
+- Full API compatibility with cluster mode
+- Journaled state machine for crash recovery
+
+### Multi-Node Cluster Mode
+
+```bash
+# First node
+./anubis serve --cluster --bootstrap \
+  --node-name jackal-01 \
+  --region eu-west \
+  --bind 0.0.0.0:7946
+
+# Additional node
+./anubis serve --cluster \
+  --join jackal-01:7946 \
+  --node-name jackal-02 \
+  --region us-east \
+  --bind 0.0.0.0:7946
+```
 
 ## CLI
 
@@ -206,7 +288,7 @@ Minimal YAML example:
 ```yaml
 server:
   host: "0.0.0.0"
-  port: 8080
+  port: 8443
   tls:
     enabled: false
 
@@ -240,6 +322,16 @@ souls:
     http:
       method: "GET"
       valid_status: [200]
+```
+
+Single-node mode configuration:
+
+```yaml
+necropolis:
+  single_node: true
+  node_name: "my-node"
+  discovery:
+    mode: "manual"  # No peer discovery needed
 ```
 
 See [configs/anubis.example.yaml](configs/anubis.example.yaml) and [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the full schema.
@@ -281,27 +373,6 @@ The server exposes:
 
 Dashboard routes include Overview, Souls, Judgments, Alerts, Incidents, Maintenance, Journeys, Cluster, Status Pages, Custom Dashboards, Settings, and Login.
 
-## Cluster Mode
-
-Standalone mode is the default for local development. Cluster mode enables Necropolis/Raft:
-
-```bash
-# First node
-anubis serve --cluster --bootstrap \
-  --node-name jackal-01 \
-  --region eu-west \
-  --bind 0.0.0.0:7946
-
-# Additional node
-anubis serve --cluster \
-  --join jackal-01:7946 \
-  --node-name jackal-02 \
-  --region us-east \
-  --bind 0.0.0.0:7946
-```
-
-The cluster manager also supports config-driven discovery with `mdns`, `gossip`, or `manual` modes. See [docs/architecture/overview.md](docs/architecture/overview.md) and the `necropolis` section in [configs/anubis.example.yaml](configs/anubis.example.yaml).
-
 ## Development
 
 Prerequisites:
@@ -315,7 +386,7 @@ Common commands:
 ```bash
 go test ./...
 go test -race -coverprofile=coverage.out ./...
-go test ./internal/probe -run TestHTTP
+go test ./internal/raft -run SingleNode
 
 cd web
 npm ci
@@ -335,6 +406,19 @@ make build
 
 `npm run build:embed` writes the built dashboard into `internal/dashboard/dist` so the Go binary can serve it.
 
+### Testing Single-Node Mode
+
+```bash
+# Run single-node specific tests
+go test ./internal/raft/... -run SingleNode -v
+
+# Run with race detector
+go test ./internal/raft/... -run SingleNode -race
+
+# Manual test with run.sh
+./run.sh --log-level debug
+```
+
 ## Deployment
 
 - Dockerfile: [Dockerfile](Dockerfile)
@@ -348,7 +432,7 @@ Production helper scripts:
 
 ```bash
 ./scripts/production-preflight.sh
-./scripts/production-smoke.sh http://localhost:8080
+./scripts/production-smoke.sh http://localhost:8443
 ./scripts/capture-deployment-evidence.sh ./evidence
 ```
 
@@ -362,6 +446,29 @@ Production helper scripts:
 - [docs/WEBSOCKET.md](docs/WEBSOCKET.md)
 - [ARCHITECTURE.md](ARCHITECTURE.md)
 - [docs/adr/README.md](docs/adr/README.md)
+
+## Architecture Highlights
+
+### Election System
+
+AnubisWatch uses Raft consensus with several optimizations:
+
+- **Pre-Vote**: Prevents disruption from nodes with stale terms
+- **Single-Node Optimization**: When no peers exist, node self-elects immediately without network communication
+- **Joint Consensus**: Membership changes use two-phase approach for safety
+
+```
+Single-Node Election Flow:
+  Election Timer fires → startElection() → len(peers)==0? → becomeLeader() immediately
+```
+
+### Storage Engine (CobaltDB)
+
+Embedded key-value store with:
+- B-tree indexing for efficient lookups
+- Time-series compaction (raw → minute → 5min → hour → day)
+- Automated retention enforcement
+- Optional encryption at rest
 
 ## License
 
