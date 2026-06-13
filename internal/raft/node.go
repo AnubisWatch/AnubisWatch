@@ -1284,11 +1284,7 @@ func (n *Node) handleRequestVote(req *core.RequestVoteRequest) *core.RequestVote
 	// If votedFor is null or candidateId, and candidate's log is at
 	// least as up-to-date as receiver's log, grant vote
 	canVote := n.votedFor == "" || n.votedFor == req.CandidateID
-	lastLogIndex := uint64(len(n.log) - 1)
-	lastLogTerm := n.getLogTerm(lastLogIndex)
-
-	logIsCurrent := req.LastLogTerm > lastLogTerm ||
-		(req.LastLogTerm == lastLogTerm && req.LastLogIndex >= lastLogIndex)
+	logIsCurrent := n.isLogMoreUpToDate(req.LastLogTerm, req.LastLogIndex)
 
 	if canVote && logIsCurrent {
 		n.votedFor = req.CandidateID
@@ -1316,6 +1312,15 @@ func (n *Node) handleRequestVote(req *core.RequestVoteRequest) *core.RequestVote
 	}
 }
 
+// isLogMoreUpToDate checks if the candidate's log is more up-to-date than the receiver's log
+func (n *Node) isLogMoreUpToDate(candidateLastLogTerm, candidateLastLogIndex uint64) bool {
+	lastLogIndex := uint64(len(n.log) - 1)
+	lastLogTerm := n.getLogTerm(lastLogIndex)
+
+	return candidateLastLogTerm > lastLogTerm ||
+		(candidateLastLogTerm == lastLogTerm && candidateLastLogIndex >= lastLogIndex)
+}
+
 // handlePreVote processes PreVote RPC
 func (n *Node) handlePreVote(req *core.PreVoteRequest) *core.PreVoteResponse {
 	n.mu.Lock()
@@ -1340,18 +1345,12 @@ func (n *Node) handlePreVote(req *core.PreVoteRequest) *core.PreVoteResponse {
 	}
 
 	// Check if candidate's log is at least as up-to-date as ours
-	lastLogIndex := uint64(len(n.log) - 1)
-	lastLogTerm := n.getLogTerm(lastLogIndex)
-
-	logIsCurrent := req.LastLogTerm > lastLogTerm ||
-		(req.LastLogTerm == lastLogTerm && req.LastLogIndex >= lastLogIndex)
+	logIsCurrent := n.isLogMoreUpToDate(req.LastLogTerm, req.LastLogIndex)
 
 	if !logIsCurrent {
 		n.logger.Debug("PreVote denied: log not current",
 			"candidate_log_term", req.LastLogTerm,
-			"candidate_log_index", req.LastLogIndex,
-			"my_log_term", lastLogTerm,
-			"my_log_index", lastLogIndex)
+			"candidate_log_index", req.LastLogIndex)
 
 		return &core.PreVoteResponse{
 			Term:        n.currentTerm,
