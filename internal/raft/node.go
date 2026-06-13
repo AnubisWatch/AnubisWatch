@@ -1153,51 +1153,80 @@ func (n *Node) handleAppendEntries(req *core.AppendEntriesRequest) *core.AppendE
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	// Reply false if term < currentTerm
-	if req.Term < n.currentTerm {
-		return &core.AppendEntriesResponse{
-			Term:    n.currentTerm,
-			Success: false,
-		}
-	}
-
-	// If term > currentTerm, become follower
-	if req.Term > n.currentTerm {
-		n.becomeFollower(req.Term)
+	// Handle term mismatch
+	if resp := n.validateTerm(req); resp != nil {
+		return resp
 	}
 
 	// Valid heartbeat from leader
 	n.lastContact = time.Now()
 	n.leaderID = req.LeaderID
 
-	// Reply false if log doesn't contain an entry at prevLogIndex
-	// whose term matches prevLogTerm
-	if req.PrevLogIndex > 0 {
-		if req.PrevLogIndex >= uint64(len(n.log)) {
-			return &core.AppendEntriesResponse{
-				Term:       n.currentTerm,
-				Success:    false,
-				MatchIndex: uint64(len(n.log) - 1),
-			}
-		}
-		if n.log[req.PrevLogIndex].Term != req.PrevLogTerm {
-			// Find conflict index
-			conflictTerm := n.log[req.PrevLogIndex].Term
-			conflictIndex := req.PrevLogIndex
-			for conflictIndex > 0 && n.log[conflictIndex].Term == conflictTerm {
-				conflictIndex--
-			}
-			return &core.AppendEntriesResponse{
-				Term:          n.currentTerm,
-				Success:       false,
-				ConflictTerm:  conflictTerm,
-				ConflictIndex: conflictIndex + 1,
-			}
-		}
+	// Check log consistency with leader
+	if resp := n.checkLogConsistency(req); resp != nil {
+		return resp
 	}
 
-	// If an existing entry conflicts with a new one, delete the existing entry
-	// and all that follow it
+	// Reconcile log entries with leader
+	n.reconcileLogEntries(req)
+
+	// Update commit index
+	n.updateCommitIndex(req)
+
+	return &core.AppendEntriesResponse{
+		Term:       n.currentTerm,
+		Success:    true,
+		MatchIndex: req.PrevLogIndex + uint64(len(req.Entries)),
+	}
+}
+
+// validateTerm checks if the term is valid and updates state if needed
+// Returns error response if term is stale, nil if valid
+func (n *Node) validateTerm(req *core.AppendEntriesRequest) *core.AppendEntriesResponse {
+	if req.Term < n.currentTerm {
+		return &core.AppendEntriesResponse{
+			Term:    n.currentTerm,
+			Success: false,
+		}
+	}
+	if req.Term > n.currentTerm {
+		n.becomeFollower(req.Term)
+	}
+	return nil
+}
+
+// checkLogConsistency verifies the log contains an entry at prevLogIndex with matching term
+// Returns error response if inconsistent, nil if consistent
+func (n *Node) checkLogConsistency(req *core.AppendEntriesRequest) *core.AppendEntriesResponse {
+	if req.PrevLogIndex == 0 {
+		return nil
+	}
+	if req.PrevLogIndex >= uint64(len(n.log)) {
+		return &core.AppendEntriesResponse{
+			Term:       n.currentTerm,
+			Success:    false,
+			MatchIndex: uint64(len(n.log) - 1),
+		}
+	}
+	if n.log[req.PrevLogIndex].Term != req.PrevLogTerm {
+		conflictTerm := n.log[req.PrevLogIndex].Term
+		conflictIndex := req.PrevLogIndex
+		for conflictIndex > 0 && n.log[conflictIndex].Term == conflictTerm {
+			conflictIndex--
+		}
+		return &core.AppendEntriesResponse{
+			Term:          n.currentTerm,
+			Success:       false,
+			ConflictTerm:  conflictTerm,
+			ConflictIndex: conflictIndex + 1,
+		}
+	}
+	return nil
+}
+
+// reconcileLogEntries reconciles local log with entries from the leader
+func (n *Node) reconcileLogEntries(req *core.AppendEntriesRequest) {
+	// Remove conflicting entries
 	for i, entry := range req.Entries {
 		idx := req.PrevLogIndex + uint64(i) + 1
 		if idx < uint64(len(n.log)) {
@@ -1209,16 +1238,17 @@ func (n *Node) handleAppendEntries(req *core.AppendEntriesRequest) *core.AppendE
 			break
 		}
 	}
-
-	// Append any new entries not already in the log
+	// Append new entries
 	for i, entry := range req.Entries {
 		idx := req.PrevLogIndex + uint64(i) + 1
 		if idx >= uint64(len(n.log)) {
 			n.log = append(n.log, entry)
 		}
 	}
+}
 
-	// If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
+// updateCommitIndex updates the commit index based on leader's commit index
+func (n *Node) updateCommitIndex(req *core.AppendEntriesRequest) {
 	if req.LeaderCommit > n.commitIndex {
 		lastNewIndex := req.PrevLogIndex + uint64(len(req.Entries))
 		if req.LeaderCommit < lastNewIndex {
@@ -1227,12 +1257,6 @@ func (n *Node) handleAppendEntries(req *core.AppendEntriesRequest) *core.AppendE
 			n.commitIndex = lastNewIndex
 		}
 		n.commitCh <- n.commitIndex
-	}
-
-	return &core.AppendEntriesResponse{
-		Term:       n.currentTerm,
-		Success:    true,
-		MatchIndex: req.PrevLogIndex + uint64(len(req.Entries)),
 	}
 }
 

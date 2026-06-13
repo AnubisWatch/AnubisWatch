@@ -17,6 +17,7 @@ import {
   AlertCircle
 } from 'lucide-react'
 import { useClusterStatus, useClusterPeers } from '../api/hooks'
+import { getClusterStatusColor, getClusterStatusTextColor } from '../utils/statusUtils'
 
 export function Cluster() {
   const [refreshing, setRefreshing] = useState(false)
@@ -63,24 +64,6 @@ export function Cluster() {
     checks_per_minute: 0,
     active_souls: 0,
     replicated_logs: 0,
-  }
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'healthy': return 'bg-emerald-500'
-      case 'unhealthy': return 'bg-amber-500'
-      case 'offline': return 'bg-rose-500'
-      default: return 'bg-gray-500'
-    }
-  }
-
-  const getStatusTextColor = (status: string) => {
-    switch (status) {
-      case 'healthy': return 'text-emerald-400'
-      case 'unhealthy': return 'text-amber-400'
-      case 'offline': return 'text-rose-400'
-      default: return 'text-gray-400'
-    }
   }
 
   return (
@@ -256,7 +239,7 @@ export function Cluster() {
               <tr key={node.id} className="hover:bg-gray-800/30 transition-colors">
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-3">
-                    <div className={`w-2 h-2 rounded-full ${getStatusColor(node.state === 'leader' || node.state === 'follower' ? 'healthy' : 'unknown')}`} />
+                    <div className={`w-2 h-2 rounded-full ${getClusterStatusColor(node.state === 'leader' || node.state === 'follower' ? 'healthy' : 'unknown')}`} />
                     <div>
                       <p className="font-semibold text-white flex items-center gap-2">
                         {node.id}
@@ -270,7 +253,7 @@ export function Cluster() {
                   </div>
                 </td>
                 <td className="px-6 py-4">
-                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${getStatusTextColor(node.state === 'leader' || node.state === 'follower' ? 'healthy' : 'unknown')} bg-gray-800`}>
+                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${getClusterStatusTextColor(node.state === 'leader' || node.state === 'follower' ? 'healthy' : 'unknown')} bg-gray-800`}>
                     {node.state === 'leader' || node.state === 'follower' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
                     <span className="capitalize">{node.state}</span>
                   </span>

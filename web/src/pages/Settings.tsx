@@ -41,6 +41,19 @@ interface ConfigData {
   websocket_enabled?: boolean
 }
 
+// Efficient shallow comparison for config objects (all values are primitives)
+function hasConfigChanged(original: ConfigData, edited: ConfigData): boolean {
+  const allKeys = Object.keys(original || {}) as Array<keyof ConfigData>
+  for (const key of allKeys) {
+    if (original[key] !== edited[key]) return true
+  }
+  // Check for new keys in edited that don't exist in original
+  for (const key of Object.keys(edited || {}) as Array<keyof ConfigData>) {
+    if (!(key in (original || {})) && edited[key] !== undefined) return true
+  }
+  return false
+}
+
 export function Settings() {
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [saving, setSaving] = useState(false)
@@ -75,9 +88,9 @@ export function Settings() {
     fetchConfig()
   }, [fetchConfig])
 
-  // Track changes
+  // Track changes using efficient comparison instead of JSON.stringify
   useEffect(() => {
-    setHasChanges(JSON.stringify(config) !== JSON.stringify(editedConfig))
+    setHasChanges(hasConfigChanged(config, editedConfig))
   }, [config, editedConfig])
 
   const handleSave = async () => {

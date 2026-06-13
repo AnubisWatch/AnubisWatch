@@ -268,6 +268,16 @@ type grpcStorageAdapter struct {
 	journey *journey.Executor
 }
 
+// sliceToInterface converts a typed slice to []interface{} for gRPC compatibility
+// This eliminates repetitive boilerplate in List*NoCtx methods
+func sliceToInterface[T any](items []T) []interface{} {
+	result := make([]interface{}, len(items))
+	for i, item := range items {
+		result[i] = item
+	}
+	return result
+}
+
 func grpcString(m map[string]interface{}, key string) string {
 	if v, ok := m[key].(string); ok {
 		return v
@@ -407,11 +417,7 @@ func (a *grpcStorageAdapter) ListSoulsNoCtx(ws string, o, l int) ([]interface{},
 	if err != nil {
 		return nil, err
 	}
-	result := make([]interface{}, len(souls))
-	for i, s := range souls {
-		result[i] = s
-	}
-	return result, nil
+	return sliceToInterface(souls), nil
 }
 func (a *grpcStorageAdapter) SaveSoulNoCtx(s interface{}) error {
 	switch soul := s.(type) {
@@ -429,11 +435,7 @@ func (a *grpcStorageAdapter) ListJudgmentsNoCtx(soulID string, start, end time.T
 	if err != nil {
 		return nil, err
 	}
-	result := make([]interface{}, len(judgments))
-	for i, j := range judgments {
-		result[i] = j
-	}
-	return result, nil
+	return sliceToInterface(judgments), nil
 }
 func (a *grpcStorageAdapter) GetChannelNoCtx(id string, ws string) (interface{}, error) {
 	return a.inner.GetChannelNoCtx(id, ws)
@@ -443,11 +445,7 @@ func (a *grpcStorageAdapter) ListChannelsNoCtx(ws string) ([]interface{}, error)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]interface{}, len(channels))
-	for i, c := range channels {
-		result[i] = c
-	}
-	return result, nil
+	return sliceToInterface(channels), nil
 }
 func (a *grpcStorageAdapter) SaveChannelNoCtx(ch interface{}) error {
 	switch channel := ch.(type) {
@@ -470,11 +468,7 @@ func (a *grpcStorageAdapter) ListRulesNoCtx(ws string) ([]interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	result := make([]interface{}, len(rules))
-	for i, r := range rules {
-		result[i] = r
-	}
-	return result, nil
+	return sliceToInterface(rules), nil
 }
 func (a *grpcStorageAdapter) SaveRuleNoCtx(rule interface{}) error {
 	switch r := rule.(type) {
@@ -497,11 +491,7 @@ func (a *grpcStorageAdapter) ListJourneysNoCtx(ws string, o, l int) ([]interface
 	if err != nil {
 		return nil, err
 	}
-	result := make([]interface{}, len(journeys))
-	for i, j := range journeys {
-		result[i] = j
-	}
-	return result, nil
+	return sliceToInterface(journeys), nil
 }
 func (a *grpcStorageAdapter) SaveJourneyNoCtx(j interface{}) error {
 	switch journey := j.(type) {
@@ -531,22 +521,14 @@ func (a *grpcStorageAdapter) ListEvents(soulID string, limit int) ([]interface{}
 	if err != nil {
 		return nil, err
 	}
-	result := make([]interface{}, len(events))
-	for i, e := range events {
-		result[i] = e
-	}
-	return result, nil
+	return sliceToInterface(events), nil
 }
 func (a *grpcStorageAdapter) ListJourneyRunsNoCtx(workspace, journeyID string, limit int) ([]interface{}, error) {
 	runs, err := a.inner.store.QueryJourneyRuns(context.Background(), workspace, journeyID, limit)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]interface{}, len(runs))
-	for i, r := range runs {
-		result[i] = r
-	}
-	return result, nil
+	return sliceToInterface(runs), nil
 }
 func (a *grpcStorageAdapter) GetJourneyRunNoCtx(workspace, journeyID, runID string) (interface{}, error) {
 	return a.inner.store.GetJourneyRun(context.Background(), workspace, journeyID, runID)
@@ -755,12 +737,19 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 }
 
 func applyServerOptionOverrides(cfg *core.Config, opts ServerOptions) {
+	applyEnvOverrides(cfg, opts)
+	applyClusterDefaults(cfg, opts)
+}
+
+func applyEnvOverrides(cfg *core.Config, opts ServerOptions) {
+	// Override server port from environment
 	if envPort := os.Getenv("ANUBIS_HTTP_PORT"); envPort != "" {
 		if port, err := strconv.Atoi(envPort); err == nil {
 			cfg.Server.Port = port
 		}
 	}
 
+	// Override node settings from environment
 	if envNodeID := os.Getenv("ANUBIS_NODE_ID"); envNodeID != "" && opts.NodeName == "" {
 		opts.NodeName = envNodeID
 	}
@@ -771,12 +760,14 @@ func applyServerOptionOverrides(cfg *core.Config, opts ServerOptions) {
 		opts.BindAddr = "0.0.0.0:" + envRaftPort
 	}
 
+	// Handle single-node mode
 	if opts.SingleNode {
 		cfg.Necropolis.Enabled = false
 		cfg.Necropolis.Raft.Bootstrap = false
 		cfg.Necropolis.Raft.Peers = nil
 	}
 
+	// Handle cluster mode
 	if opts.ClusterSet {
 		cfg.Necropolis.Enabled = opts.Cluster
 	}
@@ -787,6 +778,7 @@ func applyServerOptionOverrides(cfg *core.Config, opts ServerOptions) {
 		cfg.Necropolis.Raft.Bootstrap = opts.Bootstrap
 	}
 
+	// Apply CLI options to config
 	if opts.NodeName != "" {
 		cfg.Necropolis.NodeName = opts.NodeName
 		cfg.Necropolis.Raft.NodeID = opts.NodeName
@@ -804,36 +796,41 @@ func applyServerOptionOverrides(cfg *core.Config, opts ServerOptions) {
 		cfg.Necropolis.Raft.AdvertiseAddr = opts.AdvertiseAddr
 	}
 
+	// Add peer addresses
 	for _, addr := range opts.JoinAddrs {
 		if addr == "" {
 			continue
 		}
 		cfg.Necropolis.Raft.Peers = append(cfg.Necropolis.Raft.Peers, raftPeerFromJoinAddr(addr))
 	}
+}
 
-	if cfg.Necropolis.Enabled {
-		if cfg.Necropolis.NodeName == "" {
-			if hostname, err := os.Hostname(); err == nil && hostname != "" {
-				cfg.Necropolis.NodeName = hostname
-			} else {
-				cfg.Necropolis.NodeName = "jackal-1"
-			}
+func applyClusterDefaults(cfg *core.Config, opts ServerOptions) {
+	if !cfg.Necropolis.Enabled {
+		return
+	}
+
+	if cfg.Necropolis.NodeName == "" {
+		if hostname, err := os.Hostname(); err == nil && hostname != "" {
+			cfg.Necropolis.NodeName = hostname
+		} else {
+			cfg.Necropolis.NodeName = "jackal-1"
 		}
-		if cfg.Necropolis.Region == "" {
-			cfg.Necropolis.Region = "default"
-		}
-		if cfg.Necropolis.Raft.NodeID == "" {
-			cfg.Necropolis.Raft.NodeID = cfg.Necropolis.NodeName
-		}
-		if cfg.Necropolis.Raft.BindAddr == "" {
-			cfg.Necropolis.Raft.BindAddr = cfg.Necropolis.BindAddr
-		}
-		if cfg.Necropolis.Raft.AdvertiseAddr == "" {
-			cfg.Necropolis.Raft.AdvertiseAddr = cfg.Necropolis.AdvertiseAddr
-		}
-		if cfg.Necropolis.Raft.Region == "" {
-			cfg.Necropolis.Raft.Region = cfg.Necropolis.Region
-		}
+	}
+	if cfg.Necropolis.Region == "" {
+		cfg.Necropolis.Region = "default"
+	}
+	if cfg.Necropolis.Raft.NodeID == "" {
+		cfg.Necropolis.Raft.NodeID = cfg.Necropolis.NodeName
+	}
+	if cfg.Necropolis.Raft.BindAddr == "" {
+		cfg.Necropolis.Raft.BindAddr = cfg.Necropolis.BindAddr
+	}
+	if cfg.Necropolis.Raft.AdvertiseAddr == "" {
+		cfg.Necropolis.Raft.AdvertiseAddr = cfg.Necropolis.AdvertiseAddr
+	}
+	if cfg.Necropolis.Raft.Region == "" {
+		cfg.Necropolis.Raft.Region = cfg.Necropolis.Region
 	}
 }
 

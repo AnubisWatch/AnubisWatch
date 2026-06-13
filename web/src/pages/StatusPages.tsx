@@ -44,15 +44,22 @@ function formThemeFromPage(theme: StatusPage['theme']): 'dark' | 'light' | 'auto
   return 'dark'
 }
 
-function statusPageUrl(page: StatusPage): string {
+// Shared helper for status page base URL (custom domain or default)
+function getStatusPageBase(page: StatusPage): string {
   if (page.domain) return `https://${page.domain}`
   if (page.custom_domain) return `https://${page.custom_domain}`
+  return ''
+}
+
+function statusPageUrl(page: StatusPage): string {
+  const base = getStatusPageBase(page)
+  if (base) return base
   return `${window.location.origin}/status/${page.slug}`
 }
 
 function statusPageHref(page: StatusPage): string {
-  if (page.domain) return `https://${page.domain}`
-  if (page.custom_domain) return `https://${page.custom_domain}`
+  const base = getStatusPageBase(page)
+  if (base) return base
   return `/status/${page.slug}`
 }
 

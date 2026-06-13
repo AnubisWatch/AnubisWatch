@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
@@ -1077,27 +1078,16 @@ func (m *Manager) checkAnomaly(cond core.AlertCondition, judgment *core.Judgment
 	}
 	mean := sum / float64(len(values))
 
-	// Calculate standard deviation
+	// Calculate standard deviation (population std dev)
 	var sqSum float64
 	for _, v := range values {
 		diff := v - mean
 		sqSum += diff * diff
 	}
 	stdDev := 0.0
-	if len(values) > 1 {
-		stdDev = sqSum / float64(len(values)-1)
-		if stdDev > 0 {
-			stdDev = stdDev / float64(len(values)-1) // Fix: variance = sqSum/(n-1), stdDev = sqrt(variance)
-			// Actually let's compute properly:
-			stdDev = 0
-			for _, v := range values {
-				d := v - mean
-				stdDev += d * d
-			}
-			stdDev = stdDev / float64(len(values))
-			// sqrt without math package
-			stdDev = sqrtApprox(stdDev)
-		}
+	if len(values) > 0 {
+		variance := sqSum / float64(len(values))
+		stdDev = math.Sqrt(variance)
 	}
 
 	// Determine threshold: mean ± (stdDev * anomalyStdDev)

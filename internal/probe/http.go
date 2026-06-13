@@ -246,7 +246,52 @@ func (c *HTTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		judgment.TLSInfo = extractTLSInfo(resp.TLS)
 	}
 
-	// Run assertions
+	// Run assertions using extracted helper
+	assertions, allPassed := c.evaluateAssertions(cfg, bodyBytes, resp, duration)
+
+	// Handle feather (performance budget) - marks as degraded if exceeded
+	if cfg.Feather.Duration > 0 {
+		withinBudget := duration <= cfg.Feather.Duration
+		assertions = append(assertions, core.AssertionResult{
+			Type:     "feather",
+			Expected: cfg.Feather.String(),
+			Actual:   duration.String(),
+			Passed:   withinBudget,
+		})
+		if !withinBudget && allPassed {
+			// Mark as degraded, not dead
+			judgment.Status = core.SoulDegraded
+			judgment.Message = fmt.Sprintf("HTTP %d in %s (exceeds feather %s)",
+				resp.StatusCode, duration.Round(time.Millisecond), cfg.Feather.Duration)
+		}
+	}
+
+	judgment.Details.Assertions = assertions
+
+	// Determine final status
+	if judgment.Status == "" {
+		if allPassed {
+			judgment.Status = core.SoulAlive
+			judgment.Message = fmt.Sprintf("HTTP %d in %s", resp.StatusCode, duration.Round(time.Millisecond))
+		} else {
+			judgment.Status = core.SoulDead
+			// Build failure message
+			var failures []string
+			for _, a := range assertions {
+				if !a.Passed {
+					failures = append(failures, a.Type+": expected "+a.Expected)
+				}
+			}
+			judgment.Message = strings.Join(failures, "; ")
+		}
+	}
+
+	return judgment, nil
+}
+
+// evaluateAssertions runs all HTTP check assertions and returns the results.
+// Extracted from Judge() to improve readability and testability.
+func (c *HTTPChecker) evaluateAssertions(cfg *core.HTTPConfig, bodyBytes []byte, resp *http.Response, duration time.Duration) ([]core.AssertionResult, bool) {
 	assertions := make([]core.AssertionResult, 0)
 	allPassed := true
 
@@ -347,44 +392,9 @@ func (c *HTTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		}
 	}
 
-	// 7. Performance budget (Feather of Ma'at)
-	if cfg.Feather.Duration > 0 {
-		withinBudget := duration <= cfg.Feather.Duration
-		assertions = append(assertions, core.AssertionResult{
-			Type:     "feather",
-			Expected: cfg.Feather.String(),
-			Actual:   duration.String(),
-			Passed:   withinBudget,
-		})
-		if !withinBudget && allPassed {
-			// Mark as degraded, not dead
-			judgment.Status = core.SoulDegraded
-			judgment.Message = fmt.Sprintf("HTTP %d in %s (exceeds feather %s)",
-				resp.StatusCode, duration.Round(time.Millisecond), cfg.Feather.Duration)
-		}
-	}
+	// 7. Performance budget (Feather of Ma'at) - handled separately by caller
 
-	judgment.Details.Assertions = assertions
-
-	// Determine final status
-	if judgment.Status == "" {
-		if allPassed {
-			judgment.Status = core.SoulAlive
-			judgment.Message = fmt.Sprintf("HTTP %d in %s", resp.StatusCode, duration.Round(time.Millisecond))
-		} else {
-			judgment.Status = core.SoulDead
-			// Build failure message
-			var failures []string
-			for _, a := range assertions {
-				if !a.Passed {
-					failures = append(failures, a.Type+": expected "+a.Expected)
-				}
-			}
-			judgment.Message = strings.Join(failures, "; ")
-		}
-	}
-
-	return judgment, nil
+	return assertions, allPassed
 }
 
 // extractTLSInfo extracts TLS information from connection state

@@ -3107,7 +3107,7 @@ func TestCobaltDB_GetJudgmentNoCtx_Exists(t *testing.T) {
 	db := newTestDB(t)
 	defer db.Close()
 
-	// Save a judgment directly using Put (no SaveJudgment function exists)
+	// Save a judgment using SaveJudgment (which creates the secondary index)
 	judgment := &core.Judgment{
 		ID:        "judgment-1",
 		SoulID:    "test-soul",
@@ -3116,17 +3116,13 @@ func TestCobaltDB_GetJudgmentNoCtx_Exists(t *testing.T) {
 		Message:   "Test judgment",
 	}
 
-	data, err := json.Marshal(judgment)
-	if err != nil {
-		t.Fatalf("Marshal failed: %v", err)
+	// SaveJudgment creates both the data and the index entry
+	ctx := core.ContextWithWorkspaceID(context.Background(), "default")
+	if err := db.SaveJudgment(ctx, judgment); err != nil {
+		t.Fatalf("SaveJudgment failed: %v", err)
 	}
 
-	key := "default/judgments/test-soul/judgment-1"
-	if err := db.Put(key, data); err != nil {
-		t.Fatalf("Put failed: %v", err)
-	}
-
-	// Get judgment
+	// Get judgment using the secondary index
 	retrieved, err := db.GetJudgmentNoCtx("judgment-1")
 	if err != nil {
 		t.Fatalf("GetJudgmentNoCtx failed: %v", err)
@@ -3219,7 +3215,7 @@ func TestCobaltDB_GetJudgmentNoCtx_Found(t *testing.T) {
 	db := newTestDB(t)
 	defer db.Close()
 
-	// Save a judgment directly using Put (GetJudgmentNoCtx searches by ID suffix)
+	// Save a judgment using SaveJudgment (which creates the secondary index)
 	judgment := &core.Judgment{
 		ID:        "test-judgment-direct",
 		SoulID:    "test-soul",
@@ -3228,18 +3224,13 @@ func TestCobaltDB_GetJudgmentNoCtx_Found(t *testing.T) {
 		Message:   "Test judgment",
 	}
 
-	data, err := json.Marshal(judgment)
-	if err != nil {
-		t.Fatalf("Marshal failed: %v", err)
+	// SaveJudgment creates both the data and the index entry
+	ctx := core.ContextWithWorkspaceID(context.Background(), "default")
+	if err := db.SaveJudgment(ctx, judgment); err != nil {
+		t.Fatalf("SaveJudgment failed: %v", err)
 	}
 
-	// Key format: default/judgments/{soul}/{timestamp}
-	key := "default/judgments/test-soul/test-judgment-direct"
-	if err := db.Put(key, data); err != nil {
-		t.Fatalf("Put failed: %v", err)
-	}
-
-	// GetJudgmentNoCtx searches by ID suffix
+	// GetJudgmentNoCtx uses the secondary index for O(1) lookup
 	result, err := db.GetJudgmentNoCtx("test-judgment-direct")
 	if err != nil {
 		t.Fatalf("GetJudgmentNoCtx failed: %v", err)

@@ -28,6 +28,14 @@ type CobaltDB struct {
 	closedMu   sync.Mutex
 	btreeOrder int        // Configurable B+Tree order
 	encryptor  *encryptor // AES-256-GCM encryption (nil if disabled)
+
+	// Secondary indexes for O(1) lookups by ID (replaces O(n) PrefixScan)
+	soulIndex       map[string]string // soulID -> workspaceID
+	judgmentIndex   map[string]string // judgmentID -> workspaceID
+	channelIndex    map[string]string // channelID -> workspaceID
+	ruleIndex       map[string]string // ruleID -> workspaceID
+	journeyIndex    map[string]string // journeyID -> workspaceID
+	incidentIndex   map[string]string // incidentID -> workspaceID
 }
 
 // btreeIndex is an in-memory B+Tree index (simplified for Phase 1)
@@ -36,6 +44,35 @@ type btreeIndex struct {
 	nextSeq    uint64
 	mu         sync.RWMutex
 	btreeOrder int // B+Tree order
+}
+
+// scanAllNodes returns all key-value pairs in the B+Tree
+func (idx *btreeIndex) scanAllNodes() (map[string][]byte, error) {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+
+	result := make(map[string][]byte)
+
+	// Find leftmost leaf node
+	node := idx.root
+	for !node.isLeaf {
+		if len(node.children) == 0 {
+			return result, nil
+		}
+		node = node.children[0]
+	}
+
+	// Scan through all leaf nodes
+	for node != nil {
+		for i, key := range node.keys {
+			if node.values[i] != nil {
+				result[key] = node.values[i]
+			}
+		}
+		node = node.next
+	}
+
+	return result, nil
 }
 
 type btreeNode struct {
@@ -123,11 +160,23 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 		logger:     logger.With("component", "cobaltdb"),
 		btreeOrder: btreeOrder,
 		encryptor:  enc,
+		// Initialize secondary indexes for O(1) lookups
+		soulIndex:     make(map[string]string),
+		judgmentIndex: make(map[string]string),
+		channelIndex:  make(map[string]string),
+		ruleIndex:     make(map[string]string),
+		journeyIndex:  make(map[string]string),
+		incidentIndex: make(map[string]string),
 	}
 
 	// Recover from WAL
 	if err := db.recoverFromWAL(); err != nil {
 		logger.Warn("WAL recovery failed, starting fresh", "err", err)
+	}
+
+	// Rebuild secondary indexes from existing data
+	if err := db.rebuildSecondaryIndexes(); err != nil {
+		logger.Warn("Secondary index rebuild failed", "err", err)
 	}
 
 	logger.Info("CobaltDB initialized", "path", config.Path, "btree_order", btreeOrder)
@@ -707,17 +756,24 @@ func (db *CobaltDB) recoverFromWAL() error {
 
 // SaveSoul saves a soul to storage
 func (db *CobaltDB) SaveSoul(ctx context.Context, soul *core.Soul) error {
-	key := fmt.Sprintf("%s/souls/%s", soul.WorkspaceID, soul.ID)
-	if soul.WorkspaceID == "" {
-		key = fmt.Sprintf("default/souls/%s", soul.ID)
+	workspaceID := soul.WorkspaceID
+	if workspaceID == "" {
+		workspaceID = "default"
 	}
+	key := fmt.Sprintf("%s/souls/%s", workspaceID, soul.ID)
 
 	data, err := json.Marshal(soul)
 	if err != nil {
 		return fmt.Errorf("failed to marshal soul: %w", err)
 	}
 
-	return db.Put(key, data)
+	if err := db.Put(key, data); err != nil {
+		return err
+	}
+
+	// Update secondary index for O(1) GetSoulNoCtx lookup
+	db.soulIndex[soul.ID] = workspaceID
+	return nil
 }
 
 // GetSoul retrieves a soul by ID
@@ -899,25 +955,25 @@ func (db *CobaltDB) DeleteWorkspace(ctx context.Context, id string) error {
 
 // REST API Storage interface wrappers (without context for simpler interface)
 
-// GetSoulNoCtx retrieves a soul by ID (REST API compatible)
+// GetSoulNoCtx retrieves a soul by ID using O(1) index lookup (REST API compatible)
+// Formerly O(n) PrefixScan(""), now O(1) via secondary index
 func (db *CobaltDB) GetSoulNoCtx(id string) (*core.Soul, error) {
-	results, err := db.PrefixScan("")
+	workspaceID, ok := db.soulIndex[id]
+	if !ok {
+		return nil, &core.NotFoundError{Entity: "soul", ID: id}
+	}
+
+	key := fmt.Sprintf("%s/souls/%s", workspaceID, id)
+	data, err := db.Get(key)
 	if err != nil {
 		return nil, err
 	}
 
-	for key, data := range results {
-		if !strings.HasSuffix(key, "/souls/"+id) && key != "souls/"+id {
-			continue
-		}
-		var soul core.Soul
-		if err := json.Unmarshal(data, &soul); err != nil {
-			continue
-		}
-		return &soul, nil
+	var soul core.Soul
+	if err := json.Unmarshal(data, &soul); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal soul: %w", err)
 	}
-
-	return nil, &core.NotFoundError{Entity: "soul", ID: id}
+	return &soul, nil
 }
 
 // ListSoulsNoCtx lists souls for REST API (no context)
@@ -925,28 +981,33 @@ func (db *CobaltDB) ListSoulsNoCtx(workspace string, offset, limit int) ([]*core
 	return db.ListSouls(context.Background(), workspace, offset, limit)
 }
 
-// GetJudgmentNoCtx retrieves a judgment by ID
+// GetJudgmentNoCtx retrieves a judgment by ID using O(1) index lookup
+// Formerly O(n) PrefixScan(""), now O(1) via secondary index
 func (db *CobaltDB) GetJudgmentNoCtx(id string) (*core.Judgment, error) {
-	results, err := db.PrefixScan("")
+	// Look up the index key from our secondary index
+	idxKey, ok := db.judgmentIndex[id]
+	if !ok {
+		return nil, &core.NotFoundError{Entity: "judgment", ID: id}
+	}
+
+	// Get the primary key from the index
+	idxData, err := db.Get(idxKey)
 	if err != nil {
 		return nil, err
 	}
-	for key, data := range results {
-		if !strings.Contains(key, "/judgments/") {
-			continue
-		}
-		var j core.Judgment
-		if err := json.Unmarshal(data, &j); err != nil {
-			continue
-		}
-		if j.ID == id || strings.HasSuffix(key, "/"+id) {
-			if j.WorkspaceID == "" {
-				j.WorkspaceID = strings.SplitN(key, "/", 2)[0]
-			}
-			return &j, nil
-		}
+	primaryKey := string(idxData)
+
+	// Get the judgment data using the primary key
+	judgmentData, err := db.Get(primaryKey)
+	if err != nil {
+		return nil, err
 	}
-	return nil, &core.NotFoundError{Entity: "judgment", ID: id}
+
+	var j core.Judgment
+	if err := json.Unmarshal(judgmentData, &j); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal judgment: %w", err)
+	}
+	return &j, nil
 }
 
 // ListJudgmentsNoCtx lists judgments in time range
@@ -1093,4 +1154,46 @@ func (db *CobaltDB) ListDashboardsNoCtx() ([]*core.CustomDashboard, error) {
 
 func (db *CobaltDB) DeleteDashboardNoCtx(id string) error {
 	return db.DeleteDashboard(id)
+}
+
+// rebuildSecondaryIndexes scans all existing data and populates the secondary
+// indexes for O(1) lookups by ID. This is called once at startup.
+func (db *CobaltDB) rebuildSecondaryIndexes() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+
+	// Scan all keys and populate indexes based on key prefixes
+	results, err := db.data.scanAllNodes()
+	if err != nil {
+		return fmt.Errorf("failed to scan all keys: %w", err)
+	}
+
+	for key := range results {
+		// Parse key format: "workspaceID/souls/soulID" or "workspaceID/judgment-idx/judgmentID" etc.
+		parts := strings.SplitN(key, "/", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		workspaceID := parts[0]
+		resourceType := parts[1]
+		resourceID := parts[2]
+
+		switch resourceType {
+		case "souls":
+			db.soulIndex[resourceID] = workspaceID
+		case "judgment-idx":
+			// Store judgmentID -> indexKey for O(1) lookup
+			db.judgmentIndex[resourceID] = key
+		case "channels":
+			db.channelIndex[resourceID] = workspaceID
+		case "rules":
+			db.ruleIndex[resourceID] = workspaceID
+		case "journeys":
+			db.journeyIndex[resourceID] = workspaceID
+		case "incidents":
+			db.incidentIndex[resourceID] = workspaceID
+		}
+	}
+
+	return nil
 }

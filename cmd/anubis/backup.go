@@ -10,6 +10,13 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/backup"
 )
 
+// errorLogger returns a logger that only outputs errors (for backup operations)
+func errorLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelError,
+	}))
+}
+
 // backupCommand handles backup subcommands
 func backupCommand() {
 	if len(os.Args) < 3 {
@@ -89,11 +96,7 @@ func backupCreate() {
 	defer store.Close()
 
 	// Create backup manager
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelError,
-	}))
-
-	mgr := backup.NewManager(store, getDataDir(), logger)
+	mgr := backup.NewManager(store, getDataDir(), errorLogger())
 	if err := mgr.Init(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing backup manager: %v\n", err)
 		os.Exit(1)
@@ -140,11 +143,7 @@ func backupCreate() {
 
 // backupList lists available backups
 func backupList() {
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelError,
-	}))
-
-	mgr := backup.NewManager(nil, getDataDir(), logger)
+	mgr := backup.NewManager(nil, getDataDir(), errorLogger())
 	if err := mgr.Init(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing backup manager: %v\n", err)
 		os.Exit(1)
@@ -191,11 +190,7 @@ func backupDelete() {
 
 	fmt.Printf("⚖️  Deleting backup: %s\n", filename)
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelError,
-	}))
-
-	mgr := backup.NewManager(nil, getDataDir(), logger)
+	mgr := backup.NewManager(nil, getDataDir(), errorLogger())
 	if err := mgr.Init(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing backup manager: %v\n", err)
 		os.Exit(1)
@@ -218,11 +213,7 @@ func backupInfo() {
 
 	filename := os.Args[3]
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: slog.LevelError,
-	}))
-
-	mgr := backup.NewManager(nil, getDataDir(), logger)
+	mgr := backup.NewManager(nil, getDataDir(), errorLogger())
 	if err := mgr.Init(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing backup manager: %v\n", err)
 		os.Exit(1)

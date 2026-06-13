@@ -1268,21 +1268,37 @@ func (s *RESTServer) handleListAllJudgments(ctx *Context) error {
 		return s.internalError(ctx, err, "failed to list souls")
 	}
 
-	var allJudgments []*core.Judgment
 	start := time.Now().Add(-24 * time.Hour) // Last 24 hours
 	end := time.Now()
 
-	// Collect judgments from each soul (limit to 100 per soul)
-	for _, soul := range souls {
+	// Collect judgments from each soul concurrently (limit to 100 per soul)
+	type judgmentResult struct {
+		judgments []*core.Judgment
+	}
+	results := make([]judgmentResult, len(souls))
+	var wg sync.WaitGroup
+
+	for i, soul := range souls {
 		if soul == nil {
 			continue
 		}
-		soulID := soul.ID
-		judgments, err := s.store.ListJudgmentsNoCtx(soulID, start, end, 100)
-		if err != nil {
-			continue // Skip souls with errors
-		}
-		allJudgments = append(allJudgments, judgments...)
+		wg.Add(1)
+		go func(idx int, soulID string) {
+			defer wg.Done()
+			judgments, err := s.store.ListJudgmentsNoCtx(soulID, start, end, 100)
+			if err != nil {
+				results[idx] = judgmentResult{}
+				return
+			}
+			results[idx] = judgmentResult{judgments: judgments}
+		}(i, soul.ID)
+	}
+	wg.Wait()
+
+	// Aggregate results
+	var allJudgments []*core.Judgment
+	for _, result := range results {
+		allJudgments = append(allJudgments, result.judgments...)
 	}
 
 	// Sort by timestamp descending

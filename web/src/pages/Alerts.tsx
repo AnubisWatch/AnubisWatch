@@ -58,17 +58,17 @@ export function Alerts() {
   const [ruleFormError, setRuleFormError] = useState<string | null>(null)
 
   // Channel form state
-  const [chName, setChName] = useState('')
-  const [chType, setChType] = useState<ChannelType>('webhook')
-  const [chWebhookUrl, setChWebhookUrl] = useState('')
-  const [chEmail, setChEmail] = useState('')
-  const [chSlackUrl, setChSlackUrl] = useState('')
-  const [chDiscordUrl, setChDiscordUrl] = useState('')
-  const [chPagerDutyKey, setChPagerDutyKey] = useState('')
-  const [chSmtpHost, setChSmtpHost] = useState('')
-  const [chSmtpPort, setChSmtpPort] = useState('587')
-  const [chSmtpFrom, setChSmtpFrom] = useState('')
-  const [chEnabled, setChEnabled] = useState(true)
+  const [channelName, setChannelName] = useState('')
+  const [channelType, setChannelType] = useState<ChannelType>('webhook')
+  const [channelWebhookUrl, setChannelWebhookUrl] = useState('')
+  const [channelEmail, setChannelEmail] = useState('')
+  const [channelSlackUrl, setChannelSlackUrl] = useState('')
+  const [channelDiscordUrl, setChannelDiscordUrl] = useState('')
+  const [channelPagerDutyKey, setChannelPagerDutyKey] = useState('')
+  const [channelSmtpHost, setChannelSmtpHost] = useState('')
+  const [channelSmtpPort, setChannelSmtpPort] = useState('587')
+  const [channelSmtpFrom, setChannelSmtpFrom] = useState('')
+  const [channelEnabled, setChannelEnabled] = useState(true)
 
   // Rule form state
   const [ruleName, setRuleName] = useState('')
@@ -80,17 +80,17 @@ export function Alerts() {
   const [ruleEnabled, setRuleEnabled] = useState(true)
 
   const resetChannelForm = () => {
-    setChName('')
-    setChType('webhook')
-    setChWebhookUrl('')
-    setChEmail('')
-    setChSlackUrl('')
-    setChDiscordUrl('')
-    setChPagerDutyKey('')
-    setChSmtpHost('')
-    setChSmtpPort('587')
-    setChSmtpFrom('')
-    setChEnabled(true)
+    setChannelName('')
+    setChannelType('webhook')
+    setChannelWebhookUrl('')
+    setChannelEmail('')
+    setChannelSlackUrl('')
+    setChannelDiscordUrl('')
+    setChannelPagerDutyKey('')
+    setChannelSmtpHost('')
+    setChannelSmtpPort('587')
+    setChannelSmtpFrom('')
+    setChannelEnabled(true)
     setChannelFormError(null)
     setEditingChannel(null)
     setSaving(false)
@@ -112,18 +112,18 @@ export function Alerts() {
   const handleOpenEditChannel = (channel: AlertChannel) => {
     resetChannelForm()
     setEditingChannel(channel)
-    setChName(channel.name)
-    setChType(channel.type as ChannelType)
+    setChannelName(channel.name)
+    setChannelType(channel.type as ChannelType)
     const config = channel.config || {}
-    setChWebhookUrl(typeof config.url === 'string' ? config.url : '')
-    setChEmail(Array.isArray(config.to) ? config.to.filter((value): value is string => typeof value === 'string').join(', ') : typeof config.to === 'string' ? config.to : typeof config.email === 'string' ? config.email : '')
-    setChSlackUrl(typeof config.webhook_url === 'string' && channel.type === 'slack' ? config.webhook_url : '')
-    setChDiscordUrl(typeof config.webhook_url === 'string' && channel.type === 'discord' ? config.webhook_url : '')
-    setChPagerDutyKey(typeof config.integration_key === 'string' ? config.integration_key : '')
-    setChSmtpHost(typeof config.smtp_host === 'string' ? config.smtp_host : '')
-    setChSmtpPort(typeof config.smtp_port === 'number' ? String(config.smtp_port) : typeof config.smtp_port === 'string' ? config.smtp_port : '587')
-    setChSmtpFrom(typeof config.from === 'string' ? config.from : '')
-    setChEnabled(channel.enabled)
+    setChannelWebhookUrl(typeof config.url === 'string' ? config.url : '')
+    setChannelEmail(Array.isArray(config.to) ? config.to.filter((value): value is string => typeof value === 'string').join(', ') : typeof config.to === 'string' ? config.to : typeof config.email === 'string' ? config.email : '')
+    setChannelSlackUrl(typeof config.webhook_url === 'string' && channel.type === 'slack' ? config.webhook_url : '')
+    setChannelDiscordUrl(typeof config.webhook_url === 'string' && channel.type === 'discord' ? config.webhook_url : '')
+    setChannelPagerDutyKey(typeof config.integration_key === 'string' ? config.integration_key : '')
+    setChannelSmtpHost(typeof config.smtp_host === 'string' ? config.smtp_host : '')
+    setChannelSmtpPort(typeof config.smtp_port === 'number' ? String(config.smtp_port) : typeof config.smtp_port === 'string' ? config.smtp_port : '587')
+    setChannelSmtpFrom(typeof config.from === 'string' ? config.from : '')
+    setChannelEnabled(channel.enabled)
     setShowChannelModal(true)
   }
 
@@ -216,22 +216,22 @@ export function Alerts() {
     setSaving(true)
     try {
       const config: Record<string, unknown> = {}
-      if (chType === 'webhook') config.url = chWebhookUrl
-      else if (chType === 'email') {
-        config.smtp_host = chSmtpHost
-        config.smtp_port = Number(chSmtpPort) || 587
-        config.from = chSmtpFrom
-        config.to = chEmail.split(',').map(email => email.trim()).filter(Boolean)
+      if (channelType === 'webhook') config.url = channelWebhookUrl
+      else if (channelType === 'email') {
+        config.smtp_host = channelSmtpHost
+        config.smtp_port = Number(channelSmtpPort) || 587
+        config.from = channelSmtpFrom
+        config.to = channelEmail.split(',').map(email => email.trim()).filter(Boolean)
       }
-      else if (chType === 'slack') config.webhook_url = chSlackUrl
-      else if (chType === 'discord') config.webhook_url = chDiscordUrl
-      else if (chType === 'pagerduty') config.integration_key = chPagerDutyKey
+      else if (channelType === 'slack') config.webhook_url = channelSlackUrl
+      else if (channelType === 'discord') config.webhook_url = channelDiscordUrl
+      else if (channelType === 'pagerduty') config.integration_key = channelPagerDutyKey
 
       const payload = {
-        name: chName,
-        type: chType,
+        name: channelName,
+        type: channelType,
         config,
-        enabled: chEnabled
+        enabled: channelEnabled
       } as Omit<AlertChannel, 'id'>
       if (editingChannel) {
         await updateChannel(editingChannel.id, payload)
@@ -296,15 +296,15 @@ export function Alerts() {
   })
 
   const channelValidationMessage = (() => {
-    if (!chName.trim()) return 'Channel name is required.'
-    if (chType === 'webhook' && !chWebhookUrl.trim()) return 'Webhook URL is required.'
-    if (chType === 'slack' && !chSlackUrl.trim()) return 'Slack webhook URL is required.'
-    if (chType === 'discord' && !chDiscordUrl.trim()) return 'Discord webhook URL is required.'
-    if (chType === 'pagerduty' && !chPagerDutyKey.trim()) return 'PagerDuty integration key is required.'
-    if (chType === 'email') {
-      if (!chSmtpHost.trim()) return 'SMTP host is required.'
-      if (!chSmtpFrom.trim()) return 'Sender email is required.'
-      if (chEmail.split(',').map(email => email.trim()).filter(Boolean).length === 0) return 'At least one recipient is required.'
+    if (!channelName.trim()) return 'Channel name is required.'
+    if (channelType === 'webhook' && !channelWebhookUrl.trim()) return 'Webhook URL is required.'
+    if (channelType === 'slack' && !channelSlackUrl.trim()) return 'Slack webhook URL is required.'
+    if (channelType === 'discord' && !channelDiscordUrl.trim()) return 'Discord webhook URL is required.'
+    if (channelType === 'pagerduty' && !channelPagerDutyKey.trim()) return 'PagerDuty integration key is required.'
+    if (channelType === 'email') {
+      if (!channelSmtpHost.trim()) return 'SMTP host is required.'
+      if (!channelSmtpFrom.trim()) return 'Sender email is required.'
+      if (channelEmail.split(',').map(email => email.trim()).filter(Boolean).length === 0) return 'At least one recipient is required.'
     }
     return ''
   })()
@@ -805,8 +805,8 @@ export function Alerts() {
                 <label className="block text-sm font-medium text-gray-300 mb-2">Name</label>
                 <input
                   type="text"
-                  value={chName}
-                  onChange={(e) => setChName(e.target.value)}
+                  value={channelName}
+                  onChange={(e) => setChannelName(e.target.value)}
                   placeholder="e.g., Ops Slack"
                   className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
                 />
@@ -824,9 +824,9 @@ export function Alerts() {
                   ]).map((t) => (
                     <button
                       key={t.value}
-                      onClick={() => { setChType(t.value); setChannelFormError(null) }}
+                      onClick={() => { setChannelType(t.value); setChannelFormError(null) }}
                       className={`p-3 rounded-xl text-sm font-medium transition-all ${
-                        chType === t.value
+                        channelType === t.value
                           ? 'bg-amber-500/10 border-2 border-amber-500 text-amber-400'
                           : 'bg-gray-950 border border-gray-700/50 text-gray-400 hover:border-gray-600'
                       }`}
@@ -837,40 +837,40 @@ export function Alerts() {
                 </div>
               </div>
 
-              {chType === 'webhook' && (
+              {channelType === 'webhook' && (
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-2">Webhook URL</label>
                   <input
                     type="url"
-                    value={chWebhookUrl}
-                    onChange={(e) => setChWebhookUrl(e.target.value)}
+                    value={channelWebhookUrl}
+                    onChange={(e) => setChannelWebhookUrl(e.target.value)}
                     placeholder="https://example.com/webhook"
                     className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
                   />
                 </div>
               )}
 
-              {chType === 'slack' && (
+              {channelType === 'slack' && (
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-2">Slack Webhook URL</label>
                   <input
                     type="url"
-                    value={chSlackUrl}
-                    onChange={(e) => setChSlackUrl(e.target.value)}
+                    value={channelSlackUrl}
+                    onChange={(e) => setChannelSlackUrl(e.target.value)}
                     placeholder="https://hooks.slack.com/services/..."
                     className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
                   />
                 </div>
               )}
 
-              {chType === 'email' && (
+              {channelType === 'email' && (
                 <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-300 mb-2">SMTP Host</label>
                     <input
                       type="text"
-                      value={chSmtpHost}
-                      onChange={(e) => setChSmtpHost(e.target.value)}
+                      value={channelSmtpHost}
+                      onChange={(e) => setChannelSmtpHost(e.target.value)}
                       placeholder="smtp.example.com"
                       className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
                     />
@@ -880,8 +880,8 @@ export function Alerts() {
                       <label className="block text-sm font-medium text-gray-300 mb-2">SMTP Port</label>
                       <input
                         type="number"
-                        value={chSmtpPort}
-                        onChange={(e) => setChSmtpPort(e.target.value)}
+                        value={channelSmtpPort}
+                        onChange={(e) => setChannelSmtpPort(e.target.value)}
                         min={1}
                         className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
                       />
@@ -890,8 +890,8 @@ export function Alerts() {
                       <label className="block text-sm font-medium text-gray-300 mb-2">From</label>
                       <input
                         type="email"
-                        value={chSmtpFrom}
-                        onChange={(e) => setChSmtpFrom(e.target.value)}
+                        value={channelSmtpFrom}
+                        onChange={(e) => setChannelSmtpFrom(e.target.value)}
                         placeholder="alerts@example.com"
                         className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
                       />
@@ -901,8 +901,8 @@ export function Alerts() {
                     <label className="block text-sm font-medium text-gray-300 mb-2">Recipients</label>
                     <input
                       type="text"
-                      value={chEmail}
-                      onChange={(e) => setChEmail(e.target.value)}
+                      value={channelEmail}
+                      onChange={(e) => setChannelEmail(e.target.value)}
                       placeholder="ops@example.com, oncall@example.com"
                       className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
                     />
@@ -910,26 +910,26 @@ export function Alerts() {
                 </div>
               )}
 
-              {chType === 'discord' && (
+              {channelType === 'discord' && (
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-2">Discord Webhook URL</label>
                   <input
                     type="url"
-                    value={chDiscordUrl}
-                    onChange={(e) => setChDiscordUrl(e.target.value)}
+                    value={channelDiscordUrl}
+                    onChange={(e) => setChannelDiscordUrl(e.target.value)}
                     placeholder="https://discord.com/api/webhooks/..."
                     className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
                   />
                 </div>
               )}
 
-              {chType === 'pagerduty' && (
+              {channelType === 'pagerduty' && (
                 <div>
                   <label className="block text-sm font-medium text-gray-300 mb-2">Integration Key</label>
                   <input
                     type="password"
-                    value={chPagerDutyKey}
-                    onChange={(e) => setChPagerDutyKey(e.target.value)}
+                    value={channelPagerDutyKey}
+                    onChange={(e) => setChannelPagerDutyKey(e.target.value)}
                     placeholder="PagerDuty Events API key"
                     className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
                   />
@@ -939,8 +939,8 @@ export function Alerts() {
               <label className="flex items-center gap-3 cursor-pointer">
                 <input
                   type="checkbox"
-                  checked={chEnabled}
-                  onChange={(e) => setChEnabled(e.target.checked)}
+                  checked={channelEnabled}
+                  onChange={(e) => setChannelEnabled(e.target.checked)}
                   className="w-5 h-5 rounded border-gray-600 bg-gray-800 text-emerald-500 focus:ring-emerald-500"
                 />
                 <span className="text-sm text-gray-300">Enabled</span>

@@ -30,7 +30,20 @@ func (db *CobaltDB) SaveJudgment(ctx context.Context, j *core.Judgment) error {
 		return fmt.Errorf("failed to marshal judgment: %w", err)
 	}
 
-	return db.Put(key, data)
+	if err := db.Put(key, data); err != nil {
+		return err
+	}
+
+	// Update secondary index for O(1) GetJudgmentNoCtx lookup
+	// Index key: {workspace}/judgment-idx/{judgmentID} -> primary key
+	idxKey := fmt.Sprintf("%s/judgment-idx/%s", workspaceID, j.ID)
+	if err := db.Put(idxKey, []byte(key)); err != nil {
+		return err
+	}
+
+	// Update in-memory index map for O(1) lookup
+	db.judgmentIndex[j.ID] = idxKey
+	return nil
 }
 
 // GetJudgment retrieves a judgment by soul ID and timestamp

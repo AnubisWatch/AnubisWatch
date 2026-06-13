@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import {
   Plus,
   Search,
@@ -32,6 +32,7 @@ import {
   type SoulFormData,
   type SoulType,
 } from '../utils/soulForm'
+import { getStatusColor, getStatusText, getStatusLabel } from '../utils/statusUtils'
 
 type SoulDisplayStatus = 'healthy' | 'unhealthy' | 'unknown' | 'checking' | 'check_failed'
 
@@ -135,61 +136,33 @@ export function Souls() {
     await retryInitialCheck(soul.id)
   }
 
-  const filteredSouls = souls.filter(soul => {
-    const matchesSearch = soul.name.toLowerCase().includes(search.toLowerCase()) ||
-                         soul.target.toLowerCase().includes(search.toLowerCase())
-    const matchesFilter = filter === 'all' ||
-                         (filter === 'enabled' && soul.enabled) ||
-                         (filter === 'disabled' && !soul.enabled) ||
-                         (filter === 'http' && soul.type === 'http') ||
-                         (filter === 'tcp' && soul.type === 'tcp') ||
-                         (filter === 'issues' && soul.status === 'unhealthy')
-    return matchesSearch && matchesFilter
-  })
+  const filteredSouls = useMemo(() => {
+    return souls.filter(soul => {
+      const matchesSearch = soul.name.toLowerCase().includes(search.toLowerCase()) ||
+                           soul.target.toLowerCase().includes(search.toLowerCase())
+      const matchesFilter = filter === 'all' ||
+                           (filter === 'enabled' && soul.enabled) ||
+                           (filter === 'disabled' && !soul.enabled) ||
+                           (filter === 'http' && soul.type === 'http') ||
+                           (filter === 'tcp' && soul.type === 'tcp') ||
+                           (filter === 'issues' && soul.status === 'unhealthy')
+      return matchesSearch && matchesFilter
+    })
+  }, [souls, search, filter])
 
-  const stats = {
+  const stats = useMemo(() => ({
     total: souls.length,
     active: souls.filter(s => s.enabled).length,
     disabled: souls.filter(s => !s.enabled).length,
     issues: souls.filter(s => s.status === 'unhealthy').length,
     types: new Set(souls.map(s => s.type)).size
-  }
+  }), [souls])
 
   const getDisplayStatus = (soul: SoulWithStatus): SoulDisplayStatus => {
     const initialCheck = initialChecks[soul.id]
     if (initialCheck === 'running') return 'checking'
     if (initialCheck === 'failed') return 'check_failed'
     return soul.status ?? 'unknown'
-  }
-
-  const getStatusColor = (status?: SoulDisplayStatus) => {
-    switch (status) {
-      case 'healthy': return 'bg-emerald-500'
-      case 'unhealthy': return 'bg-rose-500'
-      case 'checking': return 'bg-amber-400 animate-pulse'
-      case 'check_failed': return 'bg-rose-500'
-      default: return 'bg-gray-500'
-    }
-  }
-
-  const getStatusText = (status?: SoulDisplayStatus) => {
-    switch (status) {
-      case 'healthy': return 'text-emerald-400'
-      case 'unhealthy': return 'text-rose-400'
-      case 'checking': return 'text-amber-400'
-      case 'check_failed': return 'text-rose-400'
-      default: return 'text-gray-400'
-    }
-  }
-
-  const getStatusLabel = (status?: SoulDisplayStatus) => {
-    switch (status) {
-      case 'healthy': return 'Healthy'
-      case 'unhealthy': return 'Unhealthy'
-      case 'checking': return 'Checking'
-      case 'check_failed': return 'Check failed'
-      default: return 'Unknown'
-    }
   }
 
   return (
