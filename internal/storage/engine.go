@@ -30,12 +30,12 @@ type CobaltDB struct {
 	encryptor  *encryptor // AES-256-GCM encryption (nil if disabled)
 
 	// Secondary indexes for O(1) lookups by ID (replaces O(n) PrefixScan)
-	soulIndex       map[string]string // soulID -> workspaceID
-	judgmentIndex   map[string]string // judgmentID -> workspaceID
-	channelIndex    map[string]string // channelID -> workspaceID
-	ruleIndex       map[string]string // ruleID -> workspaceID
-	journeyIndex    map[string]string // journeyID -> workspaceID
-	incidentIndex   map[string]string // incidentID -> workspaceID
+	soulIndex     map[string]string // soulID -> workspaceID
+	judgmentIndex map[string]string // judgmentID -> workspaceID
+	channelIndex  map[string]string // channelID -> workspaceID
+	ruleIndex     map[string]string // ruleID -> workspaceID
+	journeyIndex  map[string]string // journeyID -> workspaceID
+	incidentIndex map[string]string // incidentID -> workspaceID
 }
 
 // btreeIndex is an in-memory B+Tree index (simplified for Phase 1)

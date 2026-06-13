@@ -57,9 +57,9 @@ type ServerDependencies struct {
 
 // Server represents the AnubisWatch server
 type Server struct {
-	deps    *ServerDependencies
-	logger  *slog.Logger
-	stopCh  chan struct{}
+	deps   *ServerDependencies
+	logger *slog.Logger
+	stopCh chan struct{}
 }
 
 // NewServer creates a new Server instance
