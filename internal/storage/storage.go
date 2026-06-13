@@ -182,6 +182,9 @@ func (db *CobaltDB) SaveJourney(ctx context.Context, j *core.JourneyConfig) erro
 		return fmt.Errorf("failed to marshal journey: %w", err)
 	}
 
+	// Update secondary index for O(1) GetJourneyNoCtx lookup
+	db.journeyIndex[j.ID] = workspaceID
+
 	return db.Put(key, data)
 }
 

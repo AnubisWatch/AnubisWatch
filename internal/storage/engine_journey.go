@@ -3,7 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
-	"strings"
+	"fmt"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
@@ -11,23 +11,24 @@ import (
 // Journey NoCtx wrappers
 
 func (db *CobaltDB) GetJourneyNoCtx(id string) (*core.JourneyConfig, error) {
-	results, err := db.PrefixScan("")
+	// O(1) lookup via secondary index
+	workspaceID, ok := db.journeyIndex[id]
+	if !ok {
+		return nil, &core.NotFoundError{Entity: "journey", ID: id}
+	}
+
+	key := fmt.Sprintf("%s/journeys/%s", workspaceID, id)
+	data, err := db.Get(key)
 	if err != nil {
 		return nil, err
 	}
 
-	for key, data := range results {
-		if !strings.HasSuffix(key, "/journeys/"+id) {
-			continue
-		}
-		var journey core.JourneyConfig
-		if err := json.Unmarshal(data, &journey); err != nil {
-			continue
-		}
-		return &journey, nil
+	var journey core.JourneyConfig
+	if err := json.Unmarshal(data, &journey); err != nil {
+		return nil, err
 	}
 
-	return nil, &core.NotFoundError{Entity: "journey", ID: id}
+	return &journey, nil
 }
 
 func (db *CobaltDB) ListJourneysNoCtx(workspace string, offset, limit int) ([]*core.JourneyConfig, error) {
