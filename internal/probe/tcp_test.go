@@ -466,10 +466,15 @@ func TestUDPChecker_Judge_ZeroTimeout(t *testing.T) {
 		Name:   "Test UDP",
 		Type:   core.CheckUDP,
 		Target: "127.0.0.1:53",
-		// Timeout is zero - should default to 10s
+		// Timeout is zero - should default to 10s, but we also wrap the
+		// call in a short context so the test doesn't hang the suite.
 	}
 
-	ctx := context.Background()
+	// Use a short context so a slow / unreachable target can't hold the
+	// test binary for the 10s default. The test only checks "doesn't
+	// panic", so the exact failure mode is irrelevant.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
 	judgment, _ := checker.Judge(ctx, soul)
 
 	// Should not panic

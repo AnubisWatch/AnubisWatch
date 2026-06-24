@@ -106,14 +106,24 @@ Subcommands:
 Use "anubis <command> --help" for more information about a command.
 
 Environment Variables:
-  ANUBIS_CONFIG         Config file path (default: ./anubis.json)
-  ANUBIS_HOST           Server bind host
-  ANUBIS_PORT           Server bind port
-  ANUBIS_DATA_DIR       Data directory path
-  ANUBIS_ENCRYPTION_KEY Encryption key for storage
-  ANUBIS_CLUSTER_SECRET Cluster secret for Raft
-  ANUBIS_ADMIN_PASSWORD Initial admin password
-  ANUBIS_LOG_LEVEL      Log level (debug, info, warn, error)
+  ANUBIS_CONFIG              Config file path (default: ./anubis.json)
+  ANUBIS_HOST                Server bind host
+  ANUBIS_PORT                Server bind port
+  ANUBIS_DATA_DIR            Data directory path
+  ANUBIS_ENCRYPTION_KEY      Encryption key for storage
+  ANUBIS_CLUSTER_SECRET      Cluster HMAC secret (K9: applied to necropolis.clusterSecret on
+                            load; equivalent to setting necropolis.clusterSecret in the
+                            config file. Required for multi-node, ignored in --single)
+  ANUBIS_ADMIN_PASSWORD      Initial admin password (K6: applied to auth.local.adminPassword
+                            on load; equivalent to setting auth.local.adminPassword in
+                            the config file. Used only on first run to seed the admin
+                            user when no admin exists yet; ignored after that)
+  ANUBIS_LOG_LEVEL           Log level (debug, info, warn, error)
+  ANUBIS_ALLOW_INSECURE_TLS  K7: allow per-soul InsecureSkipVerify (default: 0, MITM vector if 1)
+
+Security flags (K7):
+  --insecure-skip-verify   Master switch — enables per-soul InsecureSkipVerify
+                            on TLS checks. Defaults to off. Use only in dev/test.
 `)
 }
 
@@ -242,18 +252,27 @@ func serve() {
 
 	// Use the refactored server initialization
 	opts := ServerOptions{
-		ConfigPath:    configPath,
-		Logger:        logger,
-		SingleNode:    serveOpts.SingleNode,
-		Cluster:       serveOpts.Cluster,
-		ClusterSet:    serveOpts.ClusterSet,
-		Bootstrap:     serveOpts.Bootstrap,
-		BootstrapSet:  serveOpts.BootstrapSet,
-		JoinAddrs:     serveOpts.JoinAddrs,
-		NodeName:      serveOpts.NodeName,
-		Region:        serveOpts.Region,
-		BindAddr:      serveOpts.BindAddr,
-		AdvertiseAddr: serveOpts.AdvertiseAddr,
+		ConfigPath:         configPath,
+		Logger:             logger,
+		SingleNode:         serveOpts.SingleNode,
+		Cluster:            serveOpts.Cluster,
+		ClusterSet:         serveOpts.ClusterSet,
+		Bootstrap:          serveOpts.Bootstrap,
+		BootstrapSet:       serveOpts.BootstrapSet,
+		JoinAddrs:          serveOpts.JoinAddrs,
+		NodeName:           serveOpts.NodeName,
+		Region:             serveOpts.Region,
+		BindAddr:           serveOpts.BindAddr,
+		AdvertiseAddr:      serveOpts.AdvertiseAddr,
+		InsecureSkipVerify: serveOpts.InsecureSkipVerify,
+	}
+
+	if serveOpts.InsecureSkipVerify {
+		logger.Warn("K7: InsecureSkipVerify enabled — TLS verification is disabled for any check that requests it. THIS IS A MITM VECTOR IN PRODUCTION.",
+			"event", "k7_insecure_skip_verify_enabled",
+			"source", "cli",
+			"flag", "--insecure-skip-verify",
+		)
 	}
 
 	deps, err := BuildServerDependencies(opts)
@@ -295,6 +314,14 @@ type serveOptions struct {
 	Region        string
 	BindAddr      string
 	AdvertiseAddr string
+
+	// InsecureSkipVerify is the K7 master switch. When true, the probe
+	// engine honours per-soul InsecureSkipVerify=true on TLS checks
+	// (HTTP/SMTP/IMAP/gRPC/WebSocket). When false (the default), the
+	// engine forces every check to do full TLS verification, logging
+	// a warning for any soul that asked for insecure mode.
+	// Overridable via ANUBIS_ALLOW_INSECURE_TLS=1.
+	InsecureSkipVerify bool
 }
 
 func parseServeOptions(args []string) serveOptions {
@@ -355,8 +382,25 @@ func parseServeOptions(args []string) serveOptions {
 			i++
 		case strings.HasPrefix(arg, "--advertise-addr="):
 			opts.AdvertiseAddr = strings.TrimPrefix(arg, "--advertise-addr=")
+
+		// K7: master TLS-verification toggle. Also honour
+		// ANUBIS_ALLOW_INSECURE_TLS as a fallback for container envs
+		// where the CLI is generated from an image entrypoint.
+		case arg == "--insecure-skip-verify":
+			opts.InsecureSkipVerify = true
+		case strings.HasPrefix(arg, "--insecure-skip-verify="):
+			opts.InsecureSkipVerify = parseBoolFlagValue(strings.TrimPrefix(arg, "--insecure-skip-verify="))
 		}
 	}
+
+	// Env var fallback. Only applies when the CLI flag was not set,
+	// so explicit --insecure-skip-verify=false still wins.
+	if !opts.InsecureSkipVerify {
+		if v := os.Getenv("ANUBIS_ALLOW_INSECURE_TLS"); v != "" {
+			opts.InsecureSkipVerify = parseBoolFlagValue(v)
+		}
+	}
+
 	return opts
 }
 

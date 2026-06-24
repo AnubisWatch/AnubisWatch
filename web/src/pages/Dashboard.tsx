@@ -123,13 +123,15 @@ export function Dashboard() {
   const stats = useMemo(() => {
     const soulsArray = Array.isArray(souls) ? souls : []
     const total = soulsArray.length
-    const healthy = soulsArray.filter(s => s.enabled).length
-    const failed = total - healthy
+    const healthy = soulsArray.filter(s => s.status === 'healthy').length
+    const failed = soulsArray.filter(s => s.status === 'unhealthy').length
+    const enabled = soulsArray.filter(s => s.enabled).length
 
     return {
       total,
       healthy,
       failed,
+      enabled,
       uptime: statsData?.souls ?
         Math.round(((statsData.souls.healthy + statsData.souls.degraded) / Math.max(statsData.souls.total, 1)) * 1000) / 10 :
         100,

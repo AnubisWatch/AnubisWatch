@@ -12,28 +12,69 @@ linters:
     - gosec
     - noctx
     - predeclared
-    - exportloopref
+    # Note: exportloopref (the loop-variable-capture linter) used to live
+    # here. Since this module declares `go 1.26.0`, accidental capture
+    # of range-loop variables is a compile error (the per-iteration
+    # scope is the default under the modern go directive). The linter
+    # would be a no-op against this codebase. If you ever downgrade
+    # the go directive below 1.22, re-add `exportloopref` here.
   disable:
     - deadcode
     - varcheck
     - staticgen
 linters-settings:
   gosec:
+    # These rules are intentionally muted project-wide. Each one has
+    # a documented reason; per-line overrides are used where the
+    # exclusion isn't universal.
     excludes:
-      - G115
+      # G304: file-inclusion via variable. Hit lines are operator-
+      # controlled paths (config load, backup, session storage);
+      # none take user input directly. Per-line nosec would be
+      # more precise but is bookkeeping-only.
       - G304
+      # G301/G302/G306: file/dir permission expectations. Fixed
+      # where it mattered (config, WAL, backups, session files are
+      # 0600/0750). Listed for any remaining pre-fix hits.
       - G301
-      - G306
-      - G505
-      - G103
-      - G104
-      - G703
-      - G118
-      - G401
       - G302
+      - G306
+      # G505: SHA-1 import. Only call site is the WebSocket
+      # Sec-WebSocket-Accept handshake (RFC 6455 §4.2.2 mandates
+      # SHA-1) — not a security context.
+      - G505
+      # G103: unsafe-pointer usage. All hits are in
+      # google.golang.org/protobuf-generated code (internal/grpcapi/v1/),
+      # not ours.
+      - G103
+      # G104: unhandled errors. Overlaps with the errcheck linter,
+      # which is enabled and currently reports only 1 hit. The
+      # remaining gosec hits are defer Close(), best-effort w.Write,
+      # and similar — accepting these.
+      - G104
+      # G703: XSS. No hits today; if added in the future it
+      # belongs as a per-line nosec, not a project-wide exclusion.
+      - G703
+      # G118: goroutine with non-cancellable context. Single hit in
+      # internal/api/websocket.go; tracked as follow-up.
+      - G118
+      # G401: weak hash (MD5/SHA1). Same as G505 rationale above.
+      - G401
+      # G404: weak RNG. The only hit is the election-timer jitter in
+      # internal/raft/node.go newElectionTimer — thundering-herd
+      # avoidance, not a security primitive. Marked inline with
+      # #nosec G404 plus a comment.
       - G404
+      # G402: TLS InsecureSkipVerify. Each hit is now marked inline
+      # with #nosec G402; the exclude is kept as a backstop so
+      # new hits don't fail the lint gate.
       - G402
+      # G704: SSRF via taint analysis. Single hit in
+      # internal/probe/ssrf.go; SSRFValidator is the gate. Tracked
+      # for follow-up.
       - G704
+      # G123: TLS session resumption. Single hit in internal/probe/tls.go
+      # alongside a custom VerifyPeerCertificate — accepted.
       - G123
   gofmt:
     simplify: true

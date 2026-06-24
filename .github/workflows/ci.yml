@@ -12,7 +12,7 @@ permissions:
   id-token: write
 
 env:
-  GO_VERSION: '1.26.3'
+  GO_VERSION: '1.26.4'
   NODE_VERSION: '22'
   ANUBIS_DATA_DIR: /tmp/anubis
   ANUBIS_CONFIG: /tmp/anubis.json
@@ -169,8 +169,12 @@ jobs:
           if-no-files-found: ignore
 
   # Lint
-  lint:
-    name: Lint
+  # Static analysis gate (K10): gofmt, govet, gosec, govulncheck.
+  # All four run on every PR — a finding in any of them blocks
+  # the build. Combined into one job to share the Go module
+  # cache and to give PR authors a single failure surface.
+  static-analysis:
+    name: Static Analysis (gofmt/vet/gosec/govulncheck)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -181,6 +185,31 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Cache Go modules
+        uses: actions/cache@v5
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      # golangci-lint config sanity — catches YAML drift and
+      # references to linters/options that don't exist in the
+      # pinned version. Fast (~1s) and runs before any linter
+      # work would, so a bad config fails the job with a clear
+      # "unknown linter" message instead of a half-broken lint
+      # run. The full `golangci-lint run` is not gated here
+      # (add it as a separate job if/when the team wants it).
+      - name: Verify golangci-lint config
+        uses: golangci/golangci-lint-action@v9.2.1
+        with:
+          version: v2.12.2
+          args: config verify
+          only-new-issues: false
+
       - name: Run go vet
         run: go vet ./...
 
@@ -190,6 +219,75 @@ jobs:
           if [ -n "$UNFORMATTED" ]; then
             echo "Go files need formatting:"
             echo "$UNFORMATTED"
+            exit 1
+          fi
+
+      # gosec — fail on severity ≥ medium, confidence ≥ medium.
+      # The exclude list mirrors .golangci.yml rationale. We do
+      # NOT pass -no-fail, so any new finding breaks the build.
+      # We do NOT pass -quiet either — verbose output is part of
+      # the audit trail in the CI log.
+      - name: Run gosec
+        id: gosec
+        uses: securego/gosec@v2.26.1
+        with:
+          args: >-
+            -exclude=G115,G304,G301,G306,G505,G103,G104,G703,G118,G401,G302,G404,G402,G704,G123
+            -exclude-dir=web/node_modules
+            -exclude-dir=internal/grpcapi/v1
+            -severity=medium
+            -confidence=medium
+            -fmt sarif -out gosec.sarif ./...
+
+      - name: Assert gosec clean
+        # Belt-and-braces: the securego action propagates the
+        # exit code, but a future bump in default behaviour could
+        # silently weaken the gate. Re-assert explicitly.
+        run: |
+          if ! grep -q '"level":"error"' gosec.sarif 2>/dev/null; then
+            echo "gosec: no high/medium findings — OK"
+          else
+            echo "gosec: high/medium findings present in SARIF"
+            grep -A 1 '"level":"error"' gosec.sarif | head -40
+            exit 1
+          fi
+
+      - name: Upload SARIF to GitHub
+        uses: github/codeql-action/upload-sarif@v4
+        if: always()
+        with:
+          sarif_file: gosec.sarif
+
+      # govulncheck — exit 1 on any CVE in our call graph. We
+      # install at the same Go version the test matrix uses, so
+      # the vuln DB matches. The output grep below is the gating
+      # check; govulncheck's own exit code is a backstop.
+      - name: Run govulncheck
+        id: vuln
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          # set +e so we can inspect the output even on non-zero exit
+          set +e
+          "$(go env GOPATH)/bin/govulncheck" ./... | tee /tmp/vuln.out
+          EXIT=$?
+          set -e
+          echo "govulncheck exit code: $EXIT"
+          echo "----- summary -----"
+          grep -E "Your code is affected by ([0-9]+) vulnerabilities" /tmp/vuln.out || echo "summary line not found"
+          if [ $EXIT -ne 0 ]; then
+            echo "govulncheck failed — see step log"
+            exit $EXIT
+          fi
+
+      - name: Assert govulncheck count is zero
+        # Belt-and-braces: the govulncheck exit code already gates
+        # this job, but the explicit grep catches any future tool
+        # release that changes the exit-code semantics (e.g. adds
+        # warnings without changing the code).
+        run: |
+          COUNT=$(grep -oE "Your code is affected by [0-9]+ vulnerabilities" /tmp/vuln.out | grep -oE "[0-9]+" || echo "?")
+          if [ -z "$COUNT" ] || [ "$COUNT" != "0" ]; then
+            echo "govulncheck reported $COUNT vulnerability class(es) — see step log"
             exit 1
           fi
 
@@ -226,7 +324,12 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [test-backend, lint, script-validation]
+    # K10: static-analysis (gofmt/vet/gosec/govulncheck) is the
+    # primary gate — any new gosec finding or CVE breaks the
+    # build before we spend minutes on chaos/load/integration
+    # suites. The job was renamed from `lint` and now bundles
+    # security; see K10 notes in the static-analysis job below.
+    needs: [test-backend, static-analysis, script-validation]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -269,6 +372,16 @@ jobs:
           name: anubis-linux-amd64
           path: anubis
           retention-days: 1
+
+      - name: Verify .dockerignore
+        # Catches the regression where a future contributor adds
+        # a file with secrets (anubis.json, *.pem, secrets/) and
+        # forgets to add it to .dockerignore. The script does two
+        # things: (1) lint .dockerignore for missing required
+        # patterns, (2) build the real Dockerfile and inspect the
+        # final image's filesystem for leaks. ~3min on a clean
+        # cache; subsequent PRs hit the buildx cache.
+        run: ./scripts/check-dockerignore.sh
 
       - name: Build Docker image
         run: |
@@ -467,39 +580,6 @@ jobs:
             fi
             grep -q "secrets.clusterSecret is required" /tmp/missing-cluster-secret.err
           done
-
-  # Security Scan
-  security:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Run gosec
-        uses: securego/gosec@v2.26.1
-        with:
-          args: >-
-            -exclude=G115,G304,G301,G306,G505,G103,G104,G703,G118,G401,G302,G404,G402,G704,G123
-            -exclude-dir=web/node_modules
-            -exclude-dir=internal/grpcapi/v1
-            -fmt sarif -out gosec.sarif ./...
-
-      - name: Upload SARIF to GitHub
-        uses: github/codeql-action/upload-sarif@v4
-        if: always()
-        with:
-          sarif_file: gosec.sarif
-
-      - name: Run govulncheck
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          "$(go env GOPATH)/bin/govulncheck" ./...
 
   # Docker Security Scan
   docker-security:

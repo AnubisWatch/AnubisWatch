@@ -10,8 +10,21 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/api"
 )
 
+// newTestLocalAuth wraps NewLocalAuthenticator for tests so the (auth, err)
+// return shape doesn't litter every test body. Tests that want to exercise
+// the error path call NewLocalAuthenticator directly.
+func newTestLocalAuth(t *testing.T, sessionPath, email, password string) *LocalAuthenticator {
+	t.Helper()
+	a, err := NewLocalAuthenticator(sessionPath, email, password)
+	if err != nil {
+		t.Fatalf("NewLocalAuthenticator: %v", err)
+	}
+	t.Cleanup(func() { a.Shutdown() })
+	return a
+}
+
 func TestLocalAuthenticator(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
+	auth := newTestLocalAuth(t, "", "admin@anubis.watch", "TestPass1234!")
 
 	// Test login
 	user, token, err := auth.Login("admin@anubis.watch", "TestPass1234!")
@@ -50,7 +63,7 @@ func TestLocalAuthenticator(t *testing.T) {
 }
 
 func TestInvalidCredentials(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
+	auth := newTestLocalAuth(t,"", "admin@anubis.watch", "TestPass1234!")
 
 	_, _, err := auth.Login("", "")
 	if err == nil {
@@ -60,7 +73,7 @@ func TestInvalidCredentials(t *testing.T) {
 
 // TestLogin_EmptyEmail tests login with empty email
 func TestLogin_EmptyEmail(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
+	auth := newTestLocalAuth(t,"", "admin@anubis.watch", "TestPass1234!")
 
 	_, _, err := auth.Login("", "password")
 	if err == nil {
@@ -70,7 +83,7 @@ func TestLogin_EmptyEmail(t *testing.T) {
 
 // TestLogin_EmptyPassword tests login with empty password
 func TestLogin_EmptyPassword(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
+	auth := newTestLocalAuth(t,"", "admin@anubis.watch", "TestPass1234!")
 
 	_, _, err := auth.Login("admin@anubis.watch", "")
 	if err == nil {
@@ -80,7 +93,7 @@ func TestLogin_EmptyPassword(t *testing.T) {
 
 // TestLogin_RepeatedLoginSameUser tests that repeated logins with same email return same user
 func TestLogin_RepeatedLoginSameUser(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
+	auth := newTestLocalAuth(t,"", "admin@anubis.watch", "TestPass1234!")
 
 	user1, token1, err := auth.Login("admin@anubis.watch", "TestPass1234!")
 	if err != nil {
@@ -103,7 +116,7 @@ func TestLogin_RepeatedLoginSameUser(t *testing.T) {
 
 // TestLogout_NonExistentToken tests logout with non-existent token
 func TestLogout_NonExistentToken(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
+	auth := newTestLocalAuth(t,"", "admin@anubis.watch", "TestPass1234!")
 
 	err := auth.Logout("non-existent-token")
 	if err != nil {
@@ -113,7 +126,7 @@ func TestLogout_NonExistentToken(t *testing.T) {
 
 // TestAuthenticate_NonExistentToken tests authenticate with non-existent token
 func TestAuthenticate_NonExistentToken(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
+	auth := newTestLocalAuth(t,"", "admin@anubis.watch", "TestPass1234!")
 
 	_, err := auth.Authenticate("non-existent-token")
 	if err == nil {
@@ -126,7 +139,7 @@ func TestSessionPersistence(t *testing.T) {
 	tmpFile := t.TempDir() + "/sessions.json"
 
 	// Create authenticator with persistence
-	auth1 := NewLocalAuthenticator(tmpFile, "admin@anubis.watch", "TestPass1234!")
+	auth1 := newTestLocalAuth(t,tmpFile, "admin@anubis.watch", "TestPass1234!")
 
 	// Login
 	user1, token, err := auth1.Login("admin@anubis.watch", "TestPass1234!")
@@ -164,7 +177,7 @@ func TestSessionPersistence(t *testing.T) {
 	t.Logf("File contents: %s", string(fileData))
 
 	// Create new authenticator (simulating restart)
-	auth2 := NewLocalAuthenticator(tmpFile, "admin@anubis.watch", "TestPass1234!")
+	auth2 := newTestLocalAuth(t,tmpFile, "admin@anubis.watch", "TestPass1234!")
 	defer func() {
 		auth2.stopCleanup <- struct{}{}
 		<-auth2.cleanupDone
@@ -188,8 +201,7 @@ func TestSessionPersistence(t *testing.T) {
 func TestSessionExpiration(t *testing.T) {
 	tmpFile := t.TempDir() + "/sessions.json"
 
-	auth := NewLocalAuthenticator(tmpFile, "admin@anubis.watch", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,tmpFile, "admin@anubis.watch", "TestPass1234!")
 
 	// Login
 	_, token, err := auth.Login("admin@anubis.watch", "TestPass1234!")
@@ -221,8 +233,7 @@ func TestLoadSessions_CorruptedFile(t *testing.T) {
 	}
 
 	// Should not panic, just start fresh
-	auth := NewLocalAuthenticator(tmpFile, "admin@anubis.watch", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,tmpFile, "admin@anubis.watch", "TestPass1234!")
 
 	// Should be able to login normally
 	_, _, err := auth.Login("admin@anubis.watch", "TestPass1234!")
@@ -236,8 +247,7 @@ func TestLoadSessions_NonExistentFile(t *testing.T) {
 	tmpFile := t.TempDir() + "/nonexistent.json"
 
 	// Should not panic, just start fresh
-	auth := NewLocalAuthenticator(tmpFile, "admin@anubis.watch", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,tmpFile, "admin@anubis.watch", "TestPass1234!")
 
 	// Should be able to login normally
 	_, _, err := auth.Login("admin@anubis.watch", "TestPass1234!")
@@ -273,8 +283,7 @@ func TestLoadSessions_ExpiredSessionsFiltered(t *testing.T) {
 		t.Fatalf("Failed to write session file: %v", err)
 	}
 
-	auth := NewLocalAuthenticator(tmpFile, "admin@anubis.watch", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,tmpFile, "admin@anubis.watch", "TestPass1234!")
 
 	// Valid token should work
 	user, err := auth.Authenticate("valid_token")
@@ -294,8 +303,7 @@ func TestLoadSessions_ExpiredSessionsFiltered(t *testing.T) {
 
 // TestSaveSessions_NoSessionPath tests saveSessions with no session path
 func TestSaveSessions_NoSessionPath(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@anubis.watch", "TestPass1234!")
 
 	// Login should work without persistence
 	_, token, err := auth.Login("admin@anubis.watch", "TestPass1234!")
@@ -314,8 +322,7 @@ func TestSaveSessions_NoSessionPath(t *testing.T) {
 // TestAuthenticate_UserNotFound tests authenticate when user is not found
 func TestAuthenticate_UserNotFound(t *testing.T) {
 	tmpFile := t.TempDir() + "/sessions.json"
-	auth := NewLocalAuthenticator(tmpFile, "admin@anubis.watch", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,tmpFile, "admin@anubis.watch", "TestPass1234!")
 
 	// Manually add a session without a corresponding user
 	auth.mu.Lock()
@@ -335,7 +342,7 @@ func TestAuthenticate_UserNotFound(t *testing.T) {
 // TestCleanupExpiredSessions tests the cleanup goroutine
 func TestCleanupExpiredSessions(t *testing.T) {
 	tmpFile := t.TempDir() + "/cleanup.json"
-	auth := NewLocalAuthenticator(tmpFile, "admin@anubis.watch", "TestPass1234!")
+	auth := newTestLocalAuth(t,tmpFile, "admin@anubis.watch", "TestPass1234!")
 
 	// Login
 	_, token, err := auth.Login("admin@anubis.watch", "TestPass1234!")
@@ -352,7 +359,7 @@ func TestCleanupExpiredSessions(t *testing.T) {
 	auth.Shutdown()
 
 	// Create new authenticator and verify token is gone
-	auth2 := NewLocalAuthenticator(tmpFile, "admin@anubis.watch", "TestPass1234!")
+	auth2 := newTestLocalAuth(t,tmpFile, "admin@anubis.watch", "TestPass1234!")
 	defer auth2.Shutdown()
 
 	_, err = auth2.Authenticate(token)
@@ -363,8 +370,14 @@ func TestCleanupExpiredSessions(t *testing.T) {
 
 // TestGenerateToken tests the token generation
 func TestGenerateToken(t *testing.T) {
-	token1 := generateToken()
-	token2 := generateToken()
+	token1, err := generateToken()
+	if err != nil {
+		t.Fatalf("generateToken: %v", err)
+	}
+	token2, err := generateToken()
+	if err != nil {
+		t.Fatalf("generateToken: %v", err)
+	}
 
 	if token1 == "" {
 		t.Error("Token should not be empty")
@@ -381,8 +394,14 @@ func TestGenerateToken(t *testing.T) {
 
 // TestGenerateID tests the ID generation
 func TestGenerateID(t *testing.T) {
-	id1 := generateID()
-	id2 := generateID()
+	id1, err := generateID()
+	if err != nil {
+		t.Fatalf("generateID: %v", err)
+	}
+	id2, err := generateID()
+	if err != nil {
+		t.Fatalf("generateID: %v", err)
+	}
 
 	if id1 == "" {
 		t.Error("ID should not be empty")
@@ -399,8 +418,7 @@ func TestGenerateID(t *testing.T) {
 
 // TestLoadSessions_EmptyPath tests loadSessions with empty path
 func TestLoadSessions_EmptyPath(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@anubis.watch", "TestPass1234!")
 
 	// Should work without session path
 	_, _, err := auth.Login("admin@anubis.watch", "TestPass1234!")
@@ -415,8 +433,7 @@ func TestLoadSessions_EmptyPath(t *testing.T) {
 // TestSaveSessionsLocked_MkdirError tests saveSessionsLocked when directory creation fails
 func TestSaveSessionsLocked_MkdirError(t *testing.T) {
 	// Use an invalid path that will cause MkdirAll to fail
-	auth := NewLocalAuthenticator("/invalid_path_that_cannot_be_created/sessions.json", "admin@anubis.watch", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"/invalid_path_that_cannot_be_created/sessions.json", "admin@anubis.watch", "TestPass1234!")
 
 	// Login should still work even if persistence fails
 	_, _, err := auth.Login("admin@anubis.watch", "TestPass1234!")
@@ -428,7 +445,7 @@ func TestSaveSessionsLocked_MkdirError(t *testing.T) {
 // TestCleanupExpiredSessions_Ticker tests the cleanup ticker by triggering multiple cleanups
 func TestCleanupExpiredSessions_Ticker(t *testing.T) {
 	tmpFile := t.TempDir() + "/ticker.json"
-	auth := NewLocalAuthenticator(tmpFile, "admin@anubis.watch", "TestPass1234!")
+	auth := newTestLocalAuth(t,tmpFile, "admin@anubis.watch", "TestPass1234!")
 
 	// Login multiple users
 	_, token1, _ := auth.Login("admin@anubis.watch", "TestPass1234!")
@@ -443,7 +460,7 @@ func TestCleanupExpiredSessions_Ticker(t *testing.T) {
 	auth.Shutdown()
 
 	// Verify second session still works after restart
-	auth2 := NewLocalAuthenticator(tmpFile, "admin@anubis.watch", "TestPass1234!")
+	auth2 := newTestLocalAuth(t,tmpFile, "admin@anubis.watch", "TestPass1234!")
 	defer auth2.Shutdown()
 
 	// Expired token should be gone
@@ -461,8 +478,7 @@ func TestCleanupExpiredSessions_Ticker(t *testing.T) {
 
 // TestLocalAuthenticator_SaveSessions_NoPath tests saveSessions with empty path
 func TestLocalAuthenticator_SaveSessions_NoPath(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@anubis.watch", "TestPass1234!")
 
 	// Login to create a session
 	_, _, err := auth.Login("admin@anubis.watch", "TestPass1234!")
@@ -474,8 +490,7 @@ func TestLocalAuthenticator_SaveSessions_NoPath(t *testing.T) {
 
 // TestLocalAuthenticator_Login_EmptyCredentials tests login with empty fields
 func TestLocalAuthenticator_Login_EmptyCredentials(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@anubis.watch", "TestPass1234!")
 
 	tests := []struct {
 		email    string
@@ -501,8 +516,7 @@ func TestLocalAuthenticator_Login_EmptyCredentials(t *testing.T) {
 
 // TestLocalAuthenticator_Authenticate_InvalidToken tests authenticate with bad token
 func TestLocalAuthenticator_Authenticate_InvalidToken(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@anubis.watch", "TestPass1234!")
 
 	// Non-existent token
 	_, err := auth.Authenticate("non-existent-token")
@@ -513,7 +527,7 @@ func TestLocalAuthenticator_Authenticate_InvalidToken(t *testing.T) {
 
 // TestLocalAuthenticator_CleanupDone tests cleanup channel is closed on shutdown
 func TestLocalAuthenticator_CleanupDone(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
+	auth := newTestLocalAuth(t,"", "admin@anubis.watch", "TestPass1234!")
 
 	// Shutdown should complete without hanging
 	auth.Shutdown()
@@ -521,7 +535,7 @@ func TestLocalAuthenticator_CleanupDone(t *testing.T) {
 
 // TestLocalAuthenticator_Shutdown_Idempotent tests shutdown can be called multiple times safely
 func TestLocalAuthenticator_Shutdown_Idempotent(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@anubis.watch", "TestPass1234!")
+	auth := newTestLocalAuth(t,"", "admin@anubis.watch", "TestPass1234!")
 
 	// First shutdown should succeed
 	auth.Shutdown()
@@ -534,8 +548,7 @@ func TestLocalAuthenticator_Shutdown_Idempotent(t *testing.T) {
 func TestLocalAuthenticator_SaveSessions_WriteError(t *testing.T) {
 	// Create a directory (not a file) as session path - will cause write error
 	tmpDir := t.TempDir()
-	auth := NewLocalAuthenticator(tmpDir+"/sessions.json", "admin@anubis.watch", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,tmpDir+"/sessions.json", "admin@anubis.watch", "TestPass1234!")
 
 	// Login to create a session
 	_, _, err := auth.Login("admin@anubis.watch", "TestPass1234!")
@@ -547,8 +560,7 @@ func TestLocalAuthenticator_SaveSessions_WriteError(t *testing.T) {
 
 // TestLocalAuthenticator_ChangePassword tests the password change flow
 func TestLocalAuthenticator_ChangePassword(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	// Login to get a valid token
 	user, token, err := auth.Login("admin@test.com", "TestPass1234!")
@@ -589,8 +601,7 @@ func TestLocalAuthenticator_ChangePassword(t *testing.T) {
 
 // TestLocalAuthenticator_ChangePassword_WrongCurrentPassword tests with incorrect current password
 func TestLocalAuthenticator_ChangePassword_WrongCurrentPassword(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	user, token, err := auth.Login("admin@test.com", "TestPass1234!")
 	if err != nil {
@@ -611,8 +622,7 @@ func TestLocalAuthenticator_ChangePassword_WrongCurrentPassword(t *testing.T) {
 
 // TestLocalAuthenticator_ChangePassword_InvalidToken tests with invalid token
 func TestLocalAuthenticator_ChangePassword_InvalidToken(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	err := auth.ChangePassword("invalid-token", "TestPass1234!", "NewPass5678!")
 	if err == nil {
@@ -622,8 +632,7 @@ func TestLocalAuthenticator_ChangePassword_InvalidToken(t *testing.T) {
 
 // TestLocalAuthenticator_ChangePassword_ExpiredToken tests with expired token
 func TestLocalAuthenticator_ChangePassword_ExpiredToken(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	// Manually inject an expired token
 	auth.mu.Lock()
@@ -644,8 +653,18 @@ func TestLocalAuthenticator_ChangePassword_ExpiredToken(t *testing.T) {
 
 // TestLocalAuthenticator_ChangePassword_WeakNewPassword tests password policy
 func TestLocalAuthenticator_ChangePassword_WeakNewPassword(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	// This test is slow (~1s under `go test -race`, normal ~250ms):
+	// newTestLocalAuth runs bcrypt.GenerateFromPassword at the
+	// production cost (12) when creating the admin user, and
+	// auth.Login below runs bcrypt.CompareHashAndPassword against
+	// that hash. The two policy-rejection paths don't reach the
+	// hash path themselves, but the setup and login do. CI's
+	// default `go test` timeout (10m) is plenty; the previous
+	// confusing comment here suggested a 30s default which was
+	// wrong. If you run a tight per-package timeout locally
+	// (e.g. `go test -timeout 60s ./internal/auth/...`), use a
+	// higher value.
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	_, token, err := auth.Login("admin@test.com", "TestPass1234!")
 	if err != nil {
@@ -667,8 +686,7 @@ func TestLocalAuthenticator_ChangePassword_WeakNewPassword(t *testing.T) {
 
 // TestLocalAuthenticator_RequestPasswordReset tests requesting a reset token
 func TestLocalAuthenticator_RequestPasswordReset(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	token, err := auth.RequestPasswordReset("admin@test.com")
 	if err != nil {
@@ -681,8 +699,7 @@ func TestLocalAuthenticator_RequestPasswordReset(t *testing.T) {
 
 // TestLocalAuthenticator_RequestPasswordReset_WrongEmail tests with unknown email
 func TestLocalAuthenticator_RequestPasswordReset_WrongEmail(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	// Should not error (prevents email enumeration)
 	token, err := auth.RequestPasswordReset("unknown@test.com")
@@ -696,8 +713,7 @@ func TestLocalAuthenticator_RequestPasswordReset_WrongEmail(t *testing.T) {
 
 // TestLocalAuthenticator_ConfirmPasswordReset tests the full reset flow
 func TestLocalAuthenticator_ConfirmPasswordReset(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	// Login first
 	_, oldToken, err := auth.Login("admin@test.com", "TestPass1234!")
@@ -732,8 +748,7 @@ func TestLocalAuthenticator_ConfirmPasswordReset(t *testing.T) {
 
 // TestLocalAuthenticator_ConfirmPasswordReset_InvalidToken tests with invalid reset token
 func TestLocalAuthenticator_ConfirmPasswordReset_InvalidToken(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	err := auth.ConfirmPasswordReset("invalid-reset-token", "NewPass5678!")
 	if err == nil {
@@ -743,8 +758,7 @@ func TestLocalAuthenticator_ConfirmPasswordReset_InvalidToken(t *testing.T) {
 
 // TestLocalAuthenticator_ConfirmPasswordReset_ExpiredToken tests with expired reset token
 func TestLocalAuthenticator_ConfirmPasswordReset_ExpiredToken(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	// Manually inject an expired reset token
 	token := "expired-reset-token"
@@ -763,8 +777,7 @@ func TestLocalAuthenticator_ConfirmPasswordReset_ExpiredToken(t *testing.T) {
 
 // TestLocalAuthenticator_ConfirmPasswordReset_WeakPassword tests password policy on reset
 func TestLocalAuthenticator_ConfirmPasswordReset_WeakPassword(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	resetToken, err := auth.RequestPasswordReset("admin@test.com")
 	if err != nil {
@@ -788,7 +801,7 @@ func TestLocalAuthenticator_ResetTokenPersistence(t *testing.T) {
 	tmpFile := t.TempDir() + "/sessions.json"
 
 	// Create authenticator with persistence
-	auth1 := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
+	auth1 := newTestLocalAuth(t,tmpFile, "admin@test.com", "TestPass1234!")
 	resetToken, err := auth1.RequestPasswordReset("admin@test.com")
 	if err != nil {
 		t.Fatalf("RequestPasswordReset failed: %v", err)
@@ -796,7 +809,7 @@ func TestLocalAuthenticator_ResetTokenPersistence(t *testing.T) {
 	auth1.Shutdown()
 
 	// Create new authenticator (simulates restart)
-	auth2 := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
+	auth2 := newTestLocalAuth(t,tmpFile, "admin@test.com", "TestPass1234!")
 	defer auth2.Shutdown()
 
 	// Reset token should still be valid
@@ -810,8 +823,7 @@ func TestLocalAuthenticator_ResetTokenPersistence(t *testing.T) {
 func TestLocalAuthenticator_ChangePassword_SessionPersistence(t *testing.T) {
 	tmpFile := t.TempDir() + "/sessions.json"
 
-	auth := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,tmpFile, "admin@test.com", "TestPass1234!")
 
 	_, token, err := auth.Login("admin@test.com", "TestPass1234!")
 	if err != nil {
@@ -857,13 +869,15 @@ func TestHashPassword(t *testing.T) {
 
 // TestLocalAuthenticator_GenerateTokenAndID tests the token and ID generation
 func TestLocalAuthenticator_GenerateTokenAndID(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	_ = newTestLocalAuth(t, "", "admin@test.com", "TestPass1234!")
 
 	// Generate multiple tokens to verify randomness
 	tokens := make(map[string]bool)
 	for i := 0; i < 100; i++ {
-		token := generateToken()
+		token, err := generateToken()
+		if err != nil {
+			t.Fatalf("generateToken: %v", err)
+		}
 		if token == "" {
 			t.Fatal("Generated empty token")
 		}
@@ -876,7 +890,10 @@ func TestLocalAuthenticator_GenerateTokenAndID(t *testing.T) {
 	// Generate multiple IDs to verify randomness
 	ids := make(map[string]bool)
 	for i := 0; i < 100; i++ {
-		id := generateID()
+		id, err := generateID()
+		if err != nil {
+			t.Fatalf("generateID: %v", err)
+		}
 		if id == "" {
 			t.Fatal("Generated empty ID")
 		}
@@ -889,8 +906,7 @@ func TestLocalAuthenticator_GenerateTokenAndID(t *testing.T) {
 
 // TestLocalAuthenticator_CleanupExpiredSessions tests session cleanup
 func TestLocalAuthenticator_CleanupExpiredSessions(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	// Login to get a valid session
 	_, token, err := auth.Login("admin@test.com", "TestPass1234!")
@@ -928,8 +944,7 @@ func TestLocalAuthenticator_CleanupExpiredSessions(t *testing.T) {
 
 // TestLocalAuthenticator_BruteForceProtection tests brute force detection
 func TestLocalAuthenticator_BruteForceProtection(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	// Simulate multiple failed attempts
 	for i := 0; i < 10; i++ {
@@ -1000,8 +1015,7 @@ func TestLocalAuthenticator_NewLocalAuthenticator_WithExistingFile(t *testing.T)
 		t.Fatalf("Failed to write session file: %v", err)
 	}
 
-	auth := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,tmpFile, "admin@test.com", "TestPass1234!")
 
 	// Should have loaded the existing user (since token is not expired)
 	auth.mu.RLock()
@@ -1024,8 +1038,7 @@ func TestLocalAuthenticator_NewLocalAuthenticator_WithExistingFile(t *testing.T)
 
 // TestLocalAuthenticator_EmptyAdminCredentials tests creation with empty credentials
 func TestLocalAuthenticator_EmptyAdminCredentials(t *testing.T) {
-	auth := NewLocalAuthenticator("", "", "")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "", "")
 
 	// Should not have any admin user
 	auth.mu.RLock()
@@ -1047,8 +1060,7 @@ func TestLocalAuthenticator_EmptyAdminCredentials(t *testing.T) {
 func TestLocalAuthenticator_WithPreHashedPassword(t *testing.T) {
 	// Use a valid bcrypt hash (generated from "TestPass1234!")
 	preHashed := "$2a$12$LJ3m4ys3Lk9zRqHqK5qGnOq5xVlK5zRqHqK5qGnOq5xVlK5zRqHqK"
-	auth := NewLocalAuthenticator("", "admin@test.com", preHashed)
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", preHashed)
 
 	// Authenticator should be created without error (password hash accepted as-is)
 	auth.mu.RLock()
@@ -1062,8 +1074,7 @@ func TestLocalAuthenticator_WithPreHashedPassword(t *testing.T) {
 
 // TestBruteForce_AccountLocked tests the account lockout after max failed attempts
 func TestBruteForce_AccountLocked(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	// Simulate maxLoginAttempts failed attempts to trigger lockout
 	for i := 0; i < maxLoginAttempts; i++ {
@@ -1094,8 +1105,7 @@ func TestBruteForce_AccountLocked(t *testing.T) {
 
 // TestBruteForce_AutoReset tests that expired locks are reset
 func TestBruteForce_AutoReset(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	// Trigger max attempts
 	for i := 0; i < maxLoginAttempts; i++ {
@@ -1119,8 +1129,7 @@ func TestBruteForce_AutoReset(t *testing.T) {
 
 // TestBruteForce_AttemptReset tests that old attempts are cleared after the reset window
 func TestBruteForce_AttemptReset(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	// Record a failed attempt
 	auth.recordFailedAttempt("admin@test.com")
@@ -1168,8 +1177,7 @@ func TestSaveSessionsLocked_RenameError(t *testing.T) {
 // TestSaveSessionsLocked_ChmodError tests saveSessionsLocked when chmod fails on tmp file
 func TestSaveSessionsLocked_ChmodError(t *testing.T) {
 	// On Windows, chmod works differently; skip if needed
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	// Set an invalid session path where chmod would fail
 	// Using a read-only directory
@@ -1185,8 +1193,7 @@ func TestSaveSessionsLocked_ChmodError(t *testing.T) {
 }
 
 func TestLocalAuthenticator_SwitchWorkspace(t *testing.T) {
-	auth := NewLocalAuthenticator("", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLocalAuth(t,"", "admin@test.com", "TestPass1234!")
 
 	user, token, err := auth.Login("admin@test.com", "TestPass1234!")
 	if err != nil {
@@ -1251,7 +1258,7 @@ func TestLocalAuthenticator_LockoutPersistence(t *testing.T) {
 	tmpFile := t.TempDir() + "/sessions.json"
 
 	// Authenticator with persistence — trigger lockout
-	auth1 := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
+	auth1 := newTestLocalAuth(t,tmpFile, "admin@test.com", "TestPass1234!")
 	for i := 0; i < maxLoginAttempts; i++ {
 		_, _, _ = auth1.Login("admin@test.com", "wrong-password")
 	}
@@ -1262,7 +1269,7 @@ func TestLocalAuthenticator_LockoutPersistence(t *testing.T) {
 	auth1.Shutdown()
 
 	// New authenticator over the same file — lockout must persist
-	auth2 := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
+	auth2 := newTestLocalAuth(t,tmpFile, "admin@test.com", "TestPass1234!")
 	defer auth2.Shutdown()
 
 	if err := auth2.checkBruteForceProtection("admin@test.com"); err == nil {
@@ -1286,7 +1293,7 @@ func TestLocalAuthenticator_LockoutPersistence(t *testing.T) {
 func TestLocalAuthenticator_LockoutPersistence_ExpiredDropped(t *testing.T) {
 	tmpFile := t.TempDir() + "/sessions.json"
 
-	auth1 := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
+	auth1 := newTestLocalAuth(t,tmpFile, "admin@test.com", "TestPass1234!")
 	for i := 0; i < maxLoginAttempts; i++ {
 		_, _, _ = auth1.Login("admin@test.com", "wrong-password")
 	}
@@ -1303,7 +1310,7 @@ func TestLocalAuthenticator_LockoutPersistence_ExpiredDropped(t *testing.T) {
 	auth1.mu.Unlock()
 	auth1.Shutdown()
 
-	auth2 := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
+	auth2 := newTestLocalAuth(t,tmpFile, "admin@test.com", "TestPass1234!")
 	defer auth2.Shutdown()
 
 	auth2.attemptsMu.RLock()
@@ -1321,7 +1328,7 @@ func TestLocalAuthenticator_LockoutPersistence_ExpiredDropped(t *testing.T) {
 func TestLocalAuthenticator_LockoutPersistence_ClearedOnSuccess(t *testing.T) {
 	tmpFile := t.TempDir() + "/sessions.json"
 
-	auth1 := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
+	auth1 := newTestLocalAuth(t,tmpFile, "admin@test.com", "TestPass1234!")
 	// One failed attempt that's not yet locking the account.
 	_, _, _ = auth1.Login("admin@test.com", "wrong-password")
 
@@ -1331,7 +1338,7 @@ func TestLocalAuthenticator_LockoutPersistence_ClearedOnSuccess(t *testing.T) {
 	}
 	auth1.Shutdown()
 
-	auth2 := NewLocalAuthenticator(tmpFile, "admin@test.com", "TestPass1234!")
+	auth2 := newTestLocalAuth(t,tmpFile, "admin@test.com", "TestPass1234!")
 	defer auth2.Shutdown()
 
 	auth2.attemptsMu.RLock()

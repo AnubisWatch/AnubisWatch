@@ -24,7 +24,31 @@ type Config struct {
 	Journeys    []JourneyConfig  `yaml:"journeys"`
 	Logging     LoggingConfig    `yaml:"logging"`
 	Telemetry   TelemetryConfig  `yaml:"telemetry"`
+	Security    SecurityConfig   `yaml:"security"`
 	Environment string           `yaml:"environment"`
+}
+
+// SecurityConfig controls process-wide security gates. Every per-soul
+// "insecure" toggle (InsecureSkipVerify on HTTP/SMTP/IMAP/gRPC/WebSocket
+// checks) is AND-ed with the matching field here, so a process started
+// in production refuses to honour insecure flags regardless of what a
+// tampered config file or stored soul record claims. The default for every
+// field is the secure option (false / disabled).
+//
+// To override at runtime:
+//   - CLI:    anubis serve --insecure-skip-verify
+//   - ENV:    ANUBIS_ALLOW_INSECURE_TLS=1
+//   - CONFIG: security.allow_insecure_skip_verify: true
+//
+// K7: this closes a MITM vector where a misconfigured soul (or a config
+// file injected via a compromised admin path) could silently disable TLS
+// verification for individual checks.
+type SecurityConfig struct {
+	// AllowInsecureSkipVerify is the master switch for TLS verification.
+	// When false (the default), every probe checker refuses to honour
+	// per-soul InsecureSkipVerify=true and instead fails the check
+	// with a clear error. Set to true only in dev/test environments.
+	AllowInsecureSkipVerify bool `yaml:"allow_insecure_skip_verify" json:"allow_insecure_skip_verify"`
 }
 
 // LoadConfig reads and parses the configuration file (YAML or JSON)
@@ -351,7 +375,13 @@ func SaveConfig(path string, config *Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
-	return os.WriteFile(path, data, 0644)
+	// Config files often carry secrets (admin password, encryption
+	// key, cluster secret). G306: tighten permissions to 0600 so the
+	// file isn't world-readable on a multi-user host.
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return err
+	}
+	return nil
 }
 
 // GenerateDefaultConfig creates a default configuration file

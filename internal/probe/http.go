@@ -105,7 +105,11 @@ func (c *HTTPChecker) getTransport(cfg *core.HTTPConfig, timeout time.Duration) 
 
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: cfg.InsecureSkipVerify,
+			// G402 suppress: cfg.InsecureSkipVerify is gated by K7's
+			// applySecurityGate at the engine level. The flag is
+			// only honoured when the process was started with
+			// --insecure-skip-verify (or ANUBIS_ALLOW_INSECURE_TLS=1).
+			InsecureSkipVerify: cfg.InsecureSkipVerify, // #nosec G402 -- see K7 gate
 		},
 		DialContext: (&net.Dialer{
 			Timeout:   10 * time.Second,

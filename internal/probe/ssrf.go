@@ -147,17 +147,17 @@ func (v *SSRFValidator) parseIP(host string) net.IP {
 	}
 	// Try decimal: 2130706433 -> 127.0.0.1
 	if parsed, err := strconv.ParseUint(host, 10, 32); err == nil {
-		return net.IPv4(byte(parsed>>24), byte(parsed>>16), byte(parsed>>8), byte(parsed))
+		return net.IPv4(byte(parsed>>24&0xff), byte(parsed>>16&0xff), byte(parsed>>8&0xff), byte(parsed&0xff))
 	}
 	// Try hex: 0x7F000001 -> 127.0.0.1
 	if len(host) >= 3 && host[:2] == "0x" || host[:2] == "0X" {
 		if parsed, err := strconv.ParseUint(host[2:], 16, 32); err == nil {
-			return net.IPv4(byte(parsed>>24), byte(parsed>>16), byte(parsed>>8), byte(parsed))
+			return net.IPv4(byte(parsed>>24&0xff), byte(parsed>>16&0xff), byte(parsed>>8&0xff), byte(parsed&0xff))
 		}
 	}
 	// Try pure octal (no dots): 0177 -> 127.0.0.1
 	if parsed, err := strconv.ParseUint(host, 8, 32); err == nil && !strings.Contains(host, ".") {
-		return net.IPv4(byte(parsed>>24), byte(parsed>>16), byte(parsed>>8), byte(parsed))
+		return net.IPv4(byte(parsed>>24&0xff), byte(parsed>>16&0xff), byte(parsed>>8&0xff), byte(parsed&0xff))
 	}
 	return nil
 }

@@ -15,24 +15,30 @@ import (
 
 // LDAPAuthenticator implements LDAP/Active Directory authentication
 type LDAPAuthenticator struct {
-	mu     sync.RWMutex
-	cfg    core.LDAPAuth
-	local  *LocalAuthenticator
-	users  map[string]*api.User // ID -> user
-	tokens map[string]*session  // token -> session
-	stopCh chan struct{}
+	mu       sync.RWMutex
+	cfg      core.LDAPAuth
+	local    *LocalAuthenticator
+	users    map[string]*api.User // ID -> user
+	tokens   map[string]*session  // token -> session
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
-// NewLDAPAuthenticator creates a new LDAP authenticator with local fallback
-func NewLDAPAuthenticator(cfg core.LDAPAuth, localPath, adminEmail, adminPassword string) *LDAPAuthenticator {
-	localAuth := NewLocalAuthenticator(localPath, adminEmail, adminPassword)
+// NewLDAPAuthenticator creates a new LDAP authenticator with local fallback.
+// Returns an error if the embedded local authenticator fails to initialize
+// (e.g. weak admin password — see K6).
+func NewLDAPAuthenticator(cfg core.LDAPAuth, localPath, adminEmail, adminPassword string) (*LDAPAuthenticator, error) {
+	localAuth, err := NewLocalAuthenticator(localPath, adminEmail, adminPassword)
+	if err != nil {
+		return nil, fmt.Errorf("local authenticator init: %w", err)
+	}
 	return &LDAPAuthenticator{
 		cfg:    cfg,
 		local:  localAuth,
 		users:  make(map[string]*api.User),
 		tokens: make(map[string]*session),
 		stopCh: make(chan struct{}),
-	}
+	}, nil
 }
 
 // Login validates credentials against LDAP and creates a session
@@ -51,7 +57,10 @@ func (l *LDAPAuthenticator) Login(email, password string) (*api.User, string, er
 	}
 
 	// Create session — ldapLogin already populated l.users with the LDAP user
-	token := generateToken()
+	token, err := generateToken()
+	if err != nil {
+		return nil, "", err
+	}
 	l.mu.Lock()
 	l.tokens[token] = &session{
 		UserID:    user.ID,
@@ -147,8 +156,12 @@ func (l *LDAPAuthenticator) ldapLogin(email, password string) (*api.User, error)
 		return existing, nil
 	}
 
+	newID, err := generateID()
+	if err != nil {
+		return nil, err
+	}
 	user := &api.User{
-		ID:        generateID(),
+		ID:        newID,
 		Email:     email,
 		Name:      name,
 		Role:      "viewer",
@@ -289,10 +302,11 @@ func (l *LDAPAuthenticator) SwitchWorkspace(token, workspace string) (*api.User,
 	return l.local.SwitchWorkspace(token, workspace)
 }
 
-// Shutdown gracefully stops the authenticator
+// Shutdown gracefully stops the authenticator. Idempotent — t.Cleanup
+// hooks plus deferred Shutdown() calls in tests can both fire safely.
 func (l *LDAPAuthenticator) Shutdown() {
 	l.local.Shutdown()
-	close(l.stopCh)
+	l.stopOnce.Do(func() { close(l.stopCh) })
 }
 
 // ChangePassword delegates to local authenticator (HIGH-04)
@@ -322,13 +336,18 @@ func (l *LDAPAuthenticator) GetUsers() []*api.User {
 	return users
 }
 
-// AddUser adds a user (for admin management)
-func (l *LDAPAuthenticator) AddUser(email, name, role string) *api.User {
+// AddUser adds a user (for admin management). Returns the new user or
+// an error if the system CSPRNG is unavailable (K6: previously panicked).
+func (l *LDAPAuthenticator) AddUser(email, name, role string) (*api.User, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	newID, err := generateID()
+	if err != nil {
+		return nil, err
+	}
 	user := &api.User{
-		ID:        generateID(),
+		ID:        newID,
 		Email:     email,
 		Name:      name,
 		Role:      role,
@@ -336,5 +355,5 @@ func (l *LDAPAuthenticator) AddUser(email, name, role string) *api.User {
 		CreatedAt: time.Now(),
 	}
 	l.users[user.ID] = user
-	return user
+	return user, nil
 }

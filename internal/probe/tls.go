@@ -296,18 +296,27 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 
 // diagnoseTLSFailure attempts to get certificate info even when TLS verification fails
 func (c *TLSChecker) diagnoseTLSFailure(soul *core.Soul, dialErr error, timeout time.Duration) *core.Judgment {
-	// HIGH-06: Use VerifyPeerCertificate callback to capture certificates for diagnostics
-	// while still performing our own chain verification, rather than blindly accepting
-	// any certificate with InsecureSkipVerify.
-	// Disable default TLS verification — we perform our own certificate validation
-	// via VerifyPeerCertificate below. This is intentional: we intercept the raw certs
-	// and apply custom validation (e.g., cert pinning, CA pinning) rather than relying
-	// on system CAs. VerifyPeerCertificate returning nil means the handshake succeeds,
-	// then we inspect the cert chain and close the connection if validation fails.
+	// HIGH-06: this runs only on the error path — Judge (above) already
+	// attempted a secure dial and the handshake failed. We re-dial with
+	// skip-verify so VerifyPeerCertificate can intercept the raw cert
+	// chain for the diagnostic judgment; we never trust the result.
+	// The captured certs are parsed into a *core.TLSInfo alongside the
+	// original error — the judgment returned is always a failure, with
+	// the cert chain attached for operator review.
+	//
+	// IMPORTANT: this path is NOT gated by K7's applySecurityGate. K7
+	// only flips per-soul InsecureSkipVerify on HTTP/SMTP/IMAP/GRPC/
+	// WebSocket configs; core.TLSConfig has no such field, so the TLS
+	// checker is not in the gate's set. That's intentional — disabling
+	// skip-verify here would defeat the diagnostic. The safety is that
+	// the function never returns success: dialErr is always surfaced.
 	// nosec G123 — intentional InsecureSkipVerify with custom VerifyPeerCertificate
 	var capturedCerts []*x509.Certificate
 	tlsConfig := &tls.Config{
-		InsecureSkipVerify: true, // Required to not fail handshake; we verify ourselves below
+		// G402 suppress: see HIGH-06 above. The K7 gate does NOT cover
+		// this path; the safety here is that the function never
+		// returns a successful judgment.
+		InsecureSkipVerify: true, // #nosec G402 -- see HIGH-06 comment
 		VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
 			certs := make([]*x509.Certificate, len(rawCerts))
 			for i, rawCert := range rawCerts {

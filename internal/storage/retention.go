@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"path/filepath"
@@ -120,36 +121,40 @@ func (rm *RetentionManager) runCleanup() {
 
 // purgeRawData removes raw judgments older than cutoff
 func (rm *RetentionManager) purgeRawData(cutoff time.Time) error {
-	// Find all workspaces
-	prefix := "/judgments/"
-	results, err := rm.db.PrefixScan("")
-	if err != nil {
-		return err
+	// Iterate known workspaces and scan each {ws}/judgments/ prefix.
+	// Avoids the previous PrefixScan("") which walked the entire B+Tree.
+	workspaces := rm.db.ListWorkspaceIDs()
+	if len(workspaces) == 0 {
+		workspaces = []string{"default"}
 	}
 
 	deleted := 0
-	for key := range results {
-		if !strings.Contains(key, prefix) {
-			continue
-		}
-
-		// Parse timestamp from key: {workspace}/judgments/{soul}/{timestamp}
-		parts := strings.Split(key, "/")
-		if len(parts) < 4 {
-			continue
-		}
-
-		ts, err := strconv.ParseInt(parts[3], 10, 64)
+	for _, ws := range workspaces {
+		prefix := fmt.Sprintf("%s/judgments/", ws)
+		results, err := rm.db.PrefixScan(prefix)
 		if err != nil {
-			continue
+			return err
 		}
 
-		judgmentTime := time.Unix(0, ts)
-		if judgmentTime.Before(cutoff) {
-			if err := rm.db.Delete(key); err != nil {
-				rm.logger.Warn("failed to delete old judgment", "key", key, "err", err)
-			} else {
-				deleted++
+		for key := range results {
+			// Parse timestamp from key: {workspace}/judgments/{soul}/{timestamp}
+			parts := strings.Split(key, "/")
+			if len(parts) < 4 {
+				continue
+			}
+
+			ts, err := strconv.ParseInt(parts[3], 10, 64)
+			if err != nil {
+				continue
+			}
+
+			judgmentTime := time.Unix(0, ts)
+			if judgmentTime.Before(cutoff) {
+				if err := rm.db.Delete(key); err != nil {
+					rm.logger.Warn("failed to delete old judgment", "key", key, "err", err)
+				} else {
+					deleted++
+				}
 			}
 		}
 	}
@@ -160,36 +165,43 @@ func (rm *RetentionManager) purgeRawData(cutoff time.Time) error {
 
 // purgeSummaries removes aggregated summaries older than cutoff
 func (rm *RetentionManager) purgeSummaries(resolution string, cutoff time.Time) error {
-	// Find all time-series summaries
-	prefix := "/ts/"
-	results, err := rm.db.PrefixScan("")
-	if err != nil {
-		return err
+	// Iterate known workspaces and scan each {ws}/ts/{resolution}/ prefix.
+	// Avoids the previous PrefixScan("") which walked the entire B+Tree.
+	workspaces := rm.db.ListWorkspaceIDs()
+	if len(workspaces) == 0 {
+		workspaces = []string{"default"}
 	}
 
 	deleted := 0
-	for key := range results {
-		if !strings.Contains(key, prefix) || !strings.Contains(key, "/"+resolution+"/") {
-			continue
-		}
-
-		// Parse timestamp from key: {workspace}/ts/{soul}/{resolution}/{timestamp}
-		parts := strings.Split(key, "/")
-		if len(parts) < 5 {
-			continue
-		}
-
-		ts, err := strconv.ParseInt(parts[4], 10, 64)
+	for _, ws := range workspaces {
+		prefix := fmt.Sprintf("%s/ts/", ws)
+		results, err := rm.db.PrefixScan(prefix)
 		if err != nil {
-			continue
+			return err
 		}
 
-		summaryTime := time.Unix(ts, 0)
-		if summaryTime.Before(cutoff) {
-			if err := rm.db.Delete(key); err != nil {
-				rm.logger.Warn("failed to delete old summary", "key", key, "err", err)
-			} else {
-				deleted++
+		for key := range results {
+			// Only keys for the requested resolution: {ws}/ts/{soul}/{resolution}/{ts}
+			if !strings.Contains(key, "/"+resolution+"/") {
+				continue
+			}
+			parts := strings.Split(key, "/")
+			if len(parts) < 5 {
+				continue
+			}
+
+			ts, err := strconv.ParseInt(parts[4], 10, 64)
+			if err != nil {
+				continue
+			}
+
+			summaryTime := time.Unix(ts, 0)
+			if summaryTime.Before(cutoff) {
+				if err := rm.db.Delete(key); err != nil {
+					rm.logger.Warn("failed to delete old summary", "key", key, "err", err)
+				} else {
+					deleted++
+				}
 			}
 		}
 	}
@@ -200,24 +212,78 @@ func (rm *RetentionManager) purgeSummaries(resolution string, cutoff time.Time) 
 
 // GetStorageStats returns storage statistics including disk usage
 func (rm *RetentionManager) GetStorageStats(ctx context.Context) (*StorageStats, error) {
-	// Scan all keys
-	results, err := rm.db.PrefixScan("")
-	if err != nil {
-		return nil, err
+	// Iterate known workspaces and aggregate per-key stats across all of
+	// their prefixes. Previously this did PrefixScan("") which loaded every
+	// key-value pair into memory before categorising.
+	workspaces := rm.db.ListWorkspaceIDs()
+	if len(workspaces) == 0 {
+		workspaces = []string{"default"}
 	}
 
 	stats := &StorageStats{
-		TotalKeys: len(results),
 		KeyCounts: make(map[string]int),
 		TypeSizes: make(map[string]int64),
 	}
 
-	for key, data := range results {
-		// Categorize by key prefix
-		category := categorizeKey(key)
-		stats.KeyCounts[category]++
-		stats.TypeSizes[category] += int64(len(data))
-		stats.TotalSize += int64(len(data))
+	// Walk each workspace's known resource prefixes. This still scans
+	// every value once, but skips the workspace/<...> keys directly
+	// and keeps the working set bounded per iteration.
+	prefixes := []string{
+		"workspaces/",   // shared keyspace (not workspace-scoped)
+		"system/",
+		"raft/",
+	}
+	entityPrefixes := []string{
+		"souls/",
+		"judgments/",
+		"ts/",
+		"verdicts/",
+		"journeys/",
+		"journey-runs/",
+		"channels/",
+		"alerts/",
+		"statuspages/",
+		"dashboards/",
+		"maintenance/",
+		"workspace/", // alias kept for legacy keys if any
+	}
+
+	scan := func(prefix string) error {
+		results, err := rm.db.PrefixScan(prefix)
+		if err != nil {
+			return err
+		}
+		for key, data := range results {
+			category := categorizeKey(key)
+			stats.KeyCounts[category]++
+			stats.TypeSizes[category] += int64(len(data))
+			stats.TotalSize += int64(len(data))
+			stats.TotalKeys++
+		}
+		return nil
+	}
+
+	for _, p := range prefixes {
+		if err := scan(p); err != nil {
+			return nil, err
+		}
+	}
+	for _, ws := range workspaces {
+		for _, p := range entityPrefixes {
+			if err := scan(ws + "/" + p); err != nil {
+				return nil, err
+			}
+		}
+	}
+	// Cover legacy keys that don't carry a workspace prefix at all
+	// (e.g. "/souls/workspace1/soul-1" used by some tests and older data
+	// shapes). The leading slash makes the per-workspace scan above miss
+	// them, so we explicitly scan a leading-slash variant of every entity
+	// prefix.
+	for _, p := range entityPrefixes {
+		if err := scan("/" + p); err != nil {
+			return nil, err
+		}
 	}
 
 	// Add disk usage stats if data path is available
@@ -272,30 +338,48 @@ type StorageStats struct {
 	TypeSizes map[string]int64 `json:"type_sizes"`
 }
 
-// categorizeKey returns the category for a given key
+// categorizeKey returns the category for a given key. The buckets
+// here MUST stay in sync with the entityPrefixes list in
+// GetStorageStats (retention.go:236-249) — otherwise new resource
+// types silently fall into the "other" bucket and operators can't
+// see their storage footprint.
+//
+// Order matters: more-specific patterns come first so a key like
+// `{ws}/alerts/channels/X` is bucketed as "alerts" rather than
+// "channels", and `journey-runs` (hyphenated) is bucketed before
+// the more general `journeys` check has a chance to miss it.
 func categorizeKey(key string) string {
-	if strings.Contains(key, "/souls/") {
+	switch {
+	case strings.Contains(key, "/souls/"):
 		return "souls"
-	}
-	if strings.Contains(key, "/judgments/") {
+	case strings.Contains(key, "/judgments/"):
 		return "judgments"
-	}
-	if strings.Contains(key, "/ts/") {
+	case strings.Contains(key, "/ts/"):
 		return "timeseries"
-	}
-	if strings.Contains(key, "/verdicts/") {
+	case strings.Contains(key, "/verdicts/"):
 		return "verdicts"
-	}
-	if strings.Contains(key, "/journeys/") {
+	case strings.Contains(key, "/journey-runs/"):
+		return "journey-runs"
+	case strings.Contains(key, "/journeys/"):
 		return "journeys"
-	}
-	if strings.Contains(key, "/channels/") {
+	case strings.Contains(key, "/alerts/"):
+		// must precede /channels/ — alerts subkeys contain /channels/
+		return "alerts"
+	case strings.Contains(key, "/statuspages/"):
+		return "statuspages"
+	case strings.Contains(key, "/dashboards/"):
+		return "dashboards"
+	case strings.Contains(key, "/maintenance/"):
+		return "maintenance"
+	case strings.Contains(key, "/channels/"):
 		return "channels"
-	}
-	if strings.Contains(key, "system/") {
+	case strings.Contains(key, "workspaces/") || strings.HasPrefix(key, "workspaces/"):
+		return "workspaces"
+	case strings.Contains(key, "workspace/") || strings.HasPrefix(key, "workspace/"):
+		return "workspace" // legacy alias
+	case strings.Contains(key, "system/"):
 		return "system"
-	}
-	if strings.Contains(key, "raft/") {
+	case strings.Contains(key, "raft/"):
 		return "raft"
 	}
 	return "other"

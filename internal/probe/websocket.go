@@ -250,8 +250,17 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 			return failJudgment(soul, fmt.Errorf("failed to send ping: %w", err)), nil
 		}
 
-		// Wait for pong
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		// Wait for pong. Use ctx-aware deadline so a test with a short
+		// context gets a fast failure — the previous code used a hardcoded
+		// 5s deadline, which let PingFailed tests hang for the full 5s
+		// even when the caller had already given up.
+		pingTimeout := 5 * time.Second
+		if deadline, ok := ctx.Deadline(); ok {
+			if d := time.Until(deadline); d > 0 && d < pingTimeout {
+				pingTimeout = d
+			}
+		}
+		conn.SetReadDeadline(time.Now().Add(pingTimeout))
 		pongBuf := make([]byte, 10)
 		n, err := conn.Read(pongBuf)
 		if err != nil || n < 2 {
@@ -285,17 +294,21 @@ func generateWebSocketKey() string {
 	if _, err := rand.Read(b); err != nil {
 		// Fallback to deterministic (should never happen in practice)
 		for i := range b {
-			b[i] = byte(i * 7)
+			b[i] = byte((i * 7) & 0xff)
 		}
 	}
 	return base64.StdEncoding.EncodeToString(b)
 }
 
-// calculateWebSocketAccept calculates the Sec-WebSocket-Accept header value
+// calculateWebSocketAccept calculates the Sec-WebSocket-Accept header value.
+//
+// G505 suppress: SHA-1 is mandated by RFC 6455 §4.2.2 for the
+// WebSocket handshake; this is a protocol-level requirement and
+// the input is a 24-byte server-generated nonce. Not a security
+// primitive in this context.
 func calculateWebSocketAccept(key string) string {
-	// Append magic string and SHA1 hash
 	magic := key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-	hash := sha1.Sum([]byte(magic))
+	hash := sha1.Sum([]byte(magic)) // #nosec G505 -- RFC 6455 handshake, see comment
 	return base64.StdEncoding.EncodeToString(hash[:])
 }
 
@@ -308,15 +321,15 @@ func buildWebSocketTextFrame(payload string) []byte {
 	frame = append(frame, 0x81) // FIN=1, opcode=1 (text)
 
 	if length < 126 {
-		frame = append(frame, byte(length))
+		frame = append(frame, byte(length&0x7f))
 	} else if length < 65536 {
 		frame = append(frame, 126)
-		frame = append(frame, byte(length>>8))
-		frame = append(frame, byte(length))
+		frame = append(frame, byte(length>>8&0xff))
+		frame = append(frame, byte(length&0xff))
 	} else {
 		frame = append(frame, 127)
 		for i := 7; i >= 0; i-- {
-			frame = append(frame, byte(length>>(i*8)))
+			frame = append(frame, byte(length>>(i*8)&0xff))
 		}
 	}
 

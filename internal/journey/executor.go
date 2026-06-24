@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -154,20 +155,6 @@ func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyC
 
 	e.logger.Debug("executing journey", "journey_id", journey.ID, "name", journey.Name)
 
-	// Check JSONPath dedup: if the last HTTP step response produces the same
-	// dedup hash as the previous run, skip execution to avoid duplicate alerts.
-	if allowDedupSkip {
-		if hash := e.computeDedupHash(journey); hash != "" {
-			e.mu.RLock()
-			lastHash := e.lastHash[journey.ID]
-			e.mu.RUnlock()
-			if lastHash == hash {
-				e.logger.Debug("skipping journey run - dedup hash unchanged", "journey_id", journey.ID)
-				return nil
-			}
-		}
-	}
-
 	run := &core.JourneyRun{
 		ID:          core.GenerateID(),
 		JourneyID:   journey.ID,
@@ -234,11 +221,29 @@ func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyC
 		// Continue - don't fail the journey execution due to storage issues
 	}
 
-	// Update dedup hash for deduplication
-	if hash := e.computeDedupHash(journey); hash != "" {
-		e.mu.Lock()
-		e.lastHash[journey.ID] = hash
-		e.mu.Unlock()
+	// Post-execution dedup: if the extracted values haven't changed since
+	// the last run, skip saving to avoid duplicate alerts.
+	if allowDedupSkip {
+		if hash := e.computeDedupHashFromRun(journey, run); hash != "" {
+			e.mu.RLock()
+			lastHash := e.lastHash[journey.ID]
+			e.mu.RUnlock()
+			if lastHash == hash {
+				e.logger.Debug("skipping journey run save - extracted values unchanged", "journey_id", journey.ID)
+				return nil
+			}
+			// Update dedup hash for next comparison
+			e.mu.Lock()
+			e.lastHash[journey.ID] = hash
+			e.mu.Unlock()
+		}
+	} else {
+		// Manual run: still update the hash so the next scheduled run can dedup
+		if hash := e.computeDedupHashFromRun(journey, run); hash != "" {
+			e.mu.Lock()
+			e.lastHash[journey.ID] = hash
+			e.mu.Unlock()
+		}
 	}
 
 	e.logger.Debug("completed journey execution",
@@ -524,34 +529,39 @@ func (e *Executor) extractJSONPath(body, path string) string {
 	}
 }
 
-// computeDedupHash computes a deduplication hash for a journey by evaluating
-// all JSONPath extraction rules across all HTTP steps. Returns empty string if
-// no JSONPath rules are configured (dedup disabled).
-func (e *Executor) computeDedupHash(journey *core.JourneyConfig) string {
-	// Collect all JSONPath expressions from step extraction rules
-	var paths []string
+// computeDedupHashFromRun computes a deduplication hash from the actual
+// extracted variable values in a completed journey run. Returns empty string
+// if no JSONPath extraction rules are configured (dedup disabled).
+func (e *Executor) computeDedupHashFromRun(journey *core.JourneyConfig, run *core.JourneyRun) string {
+	// Check if any step has JSONPath extraction rules
+	hasJSONPath := false
 	for _, step := range journey.Steps {
 		for _, rule := range step.Extract {
 			if rule.From == "body" && rule.Path != "" {
-				paths = append(paths, rule.Path)
+				hasJSONPath = true
+				break
 			}
 		}
 	}
-	if len(paths) == 0 {
+	if !hasJSONPath {
 		return ""
 	}
 
-	// Build a synthetic body from the journey config to extract values
-	// In practice, we compute the hash from the configured JSONPath expressions
-	// against the actual response body. For dedup between runs, we hash the
-	// configured paths themselves — if they haven't changed, the result is the
-	// same (assuming the target is stable). A more sophisticated approach would
-	// cache the last response body and hash the extracted values.
+	// Hash the actual extracted values — if they haven't changed,
+	// the response content is the same and we can dedup.
 	h := sha256.New()
-	for _, path := range paths {
-		h.Write([]byte(path))
+	// Sort variable keys for deterministic hashing
+	keys := make([]string, 0, len(run.Variables))
+	for k := range run.Variables {
+		keys = append(keys, k)
 	}
-	h.Write([]byte(journey.Steps[0].Target)) // include target URL
+	sort.Strings(keys)
+	for _, k := range keys {
+		h.Write([]byte(k))
+		h.Write([]byte("="))
+		h.Write([]byte(run.Variables[k]))
+		h.Write([]byte("\n"))
+	}
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
 

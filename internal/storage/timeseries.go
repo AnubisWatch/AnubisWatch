@@ -218,8 +218,9 @@ func truncateToResolution(t time.Time, resolution TimeResolution) time.Time {
 func (ts *TimeSeriesStore) StartCompaction() {
 	ts.stopMu.Lock()
 	ts.stopCh = make(chan struct{})
+	stopCh := ts.stopCh
 	ts.stopMu.Unlock()
-	go ts.compactionLoop()
+	go ts.compactionLoop(stopCh)
 }
 
 // StopCompaction gracefully stops the compaction goroutine
@@ -232,14 +233,18 @@ func (ts *TimeSeriesStore) StopCompaction() {
 	ts.stopMu.Unlock()
 }
 
-// compactionLoop runs compaction at regular intervals
-func (ts *TimeSeriesStore) compactionLoop() {
+// compactionLoop runs compaction at regular intervals. The stop channel
+// is captured by value (passed in from StartCompaction) so the goroutine
+// never reads ts.stopCh directly — that field is reassigned by callers
+// and reads against it raced with StopCompaction's close+nil under the
+// race detector.
+func (ts *TimeSeriesStore) compactionLoop(stopCh <-chan struct{}) {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ts.stopCh:
+		case <-stopCh:
 			ts.logger.Info("compaction stopped")
 			return
 		case <-ticker.C:
@@ -286,19 +291,23 @@ func (ts *TimeSeriesStore) compactToResolution(srcRes, tgtRes TimeResolution, th
 
 	cutoff := time.Now().Add(-threshold)
 	srcBucket := truncateToResolution(cutoff, srcRes)
-	tgtBucket := truncateToResolution(cutoff, tgtRes)
 
 	ts.logger.Debug("compacting resolution",
 		"from", srcRes, "to", tgtRes,
 		"cutoff", cutoff,
 		"src_bucket", srcBucket,
-		"tgt_bucket", tgtBucket)
+		// tgt_bucket is observability-only — the compaction code below
+		// doesn't branch on it, but operators reading the log want to
+		// see the target window this run is aiming at. If a future
+		// change adds per-bucket work here, the value is
+		// truncateToResolution(cutoff, tgtRes).
+		"tgt_bucket", truncateToResolution(cutoff, tgtRes))
 
-	// Find all souls with data in source resolution.
-	// Pattern: {workspace}/ts/{soul}/{resolution}/{timestamp}
-	results, err := ts.db.PrefixScan("")
-	if err != nil {
-		return err
+	// Iterate known workspaces and scan each {ws}/ts/{srcRes}/ prefix.
+	// Avoids the previous PrefixScan("") which walked the entire B+Tree.
+	workspaces := ts.db.ListWorkspaceIDs()
+	if len(workspaces) == 0 {
+		workspaces = []string{"default"}
 	}
 
 	// Group summaries by soul and target bucket
@@ -309,37 +318,46 @@ func (ts *TimeSeriesStore) compactToResolution(srcRes, tgtRes TimeResolution, th
 	}
 	aggregations := make(map[targetKey][]*JudgmentSummary)
 
-	for key, data := range results {
-		// Parse key: {workspace}/ts/{soul}/{resolution}/{timestamp}
-		parts := strings.Split(key, "/")
-		if len(parts) != 5 || parts[1] != "ts" || parts[3] != string(srcRes) {
-			continue
-		}
-
-		workspaceID := parts[0]
-		soulID := parts[2]
-		tsUnix, err := strconv.ParseInt(parts[4], 10, 64)
+	for _, ws := range workspaces {
+		// Pattern: {workspace}/ts/{soul}/{srcRes}/{timestamp}
+		prefix := fmt.Sprintf("%s/ts/", ws)
+		results, err := ts.db.PrefixScan(prefix)
 		if err != nil {
-			continue
+			return err
 		}
 
-		bucketTime := time.Unix(tsUnix, 0)
-		if bucketTime.After(srcBucket) {
-			continue // Too recent, don't compact yet
-		}
+		for key, data := range results {
+			// Parse key: {workspace}/ts/{soul}/{resolution}/{timestamp}
+			parts := strings.Split(key, "/")
+			if len(parts) != 5 || parts[1] != "ts" || parts[3] != string(srcRes) {
+				continue
+			}
 
-		var summary JudgmentSummary
-		if err := json.Unmarshal(data, &summary); err != nil {
-			ts.logger.Warn("failed to unmarshal summary for compaction", "err", err)
-			continue
-		}
+			workspaceID := parts[0]
+			soulID := parts[2]
+			tsUnix, err := strconv.ParseInt(parts[4], 10, 64)
+			if err != nil {
+				continue
+			}
 
-		tKey := targetKey{
-			workspaceID: workspaceID,
-			soulID:      soulID,
-			bucketTime:  truncateToResolution(bucketTime, tgtRes),
+			bucketTime := time.Unix(tsUnix, 0)
+			if bucketTime.After(srcBucket) {
+				continue // Too recent, don't compact yet
+			}
+
+			var summary JudgmentSummary
+			if err := json.Unmarshal(data, &summary); err != nil {
+				ts.logger.Warn("failed to unmarshal summary for compaction", "err", err)
+				continue
+			}
+
+			tKey := targetKey{
+				workspaceID: workspaceID,
+				soulID:      soulID,
+				bucketTime:  truncateToResolution(bucketTime, tgtRes),
+			}
+			aggregations[tKey] = append(aggregations[tKey], &summary)
 		}
-		aggregations[tKey] = append(aggregations[tKey], &summary)
 	}
 
 	// Aggregate and save target summaries

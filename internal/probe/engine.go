@@ -17,6 +17,16 @@ type EngineConfig struct {
 	CircuitBreaker      CircuitBreakerConfig
 	NodeID              string
 	Region              string
+
+	// AllowInsecureSkipVerify is the K7 master switch. When false (the
+	// default), every probe checker refuses to honour per-soul
+	// InsecureSkipVerify=true and fails the check with a clear error.
+	// Set via the --insecure-skip-verify CLI flag, the
+	// ANUBIS_ALLOW_INSECURE_TLS env var, or
+	// security.allow_insecure_skip_verify in config. Production must
+	// keep this false; enabling it disables TLS verification for any
+	// check that requests it, which is a MITM vector.
+	AllowInsecureSkipVerify bool
 }
 
 // CircuitBreakerConfig configures circuit breaker behavior
@@ -57,15 +67,17 @@ type Engine struct {
 	wg     sync.WaitGroup
 	logger *slog.Logger
 
-	// Callbacks for Raft integration
-	onJudgment func(*core.Judgment)
+	// Callbacks for Raft integration. Stored as an atomic.Pointer
+	// so the per-check read in judgeSoul/TriggerImmediate doesn't
+	// need a mutex round-trip — the callback is set once at startup
+	// and read on every check, which is the natural fit for atomics.
+	onJudgment atomic.Pointer[func(*core.Judgment)]
 
 	// Concurrency limiting
 	semaphore chan struct{}
 
-	// Circuit breaker state
+	// Circuit breaker state — guarded by e.mu (not a separate lock)
 	circuitBreakers map[string]*circuitBreaker
-	cbMu            sync.RWMutex
 
 	// Stats
 	checksRunning atomic.Int64
@@ -131,7 +143,7 @@ func NewEngine(opts EngineOptions) *Engine {
 		opts.Config.CircuitBreaker.FailureThreshold = 0 // Disabled
 	}
 
-	return &Engine{
+	e := &Engine{
 		registry:        opts.Registry,
 		store:           opts.Store,
 		alerter:         opts.Alerter,
@@ -142,10 +154,18 @@ func NewEngine(opts EngineOptions) *Engine {
 		ctx:             ctx,
 		cancel:          cancel,
 		logger:          opts.Logger.With("component", "probe-engine"),
-		onJudgment:      opts.OnJudgment,
 		semaphore:       make(chan struct{}, opts.Config.MaxConcurrentChecks),
 		circuitBreakers: make(map[string]*circuitBreaker),
 	}
+
+	// Seed the judgment callback atomically so the very first check
+	// (which can fire before SetOnJudgment is called) sees the value
+	// the engine was constructed with.
+	if opts.OnJudgment != nil {
+		fn := opts.OnJudgment
+		e.onJudgment.Store(&fn)
+	}
+	return e
 }
 
 // AssignSouls sets the souls this Jackal is responsible for checking.
@@ -176,7 +196,9 @@ func (e *Engine) AssignSouls(souls []*core.Soul) {
 			runner.cancel()
 			runner.ticker.Stop()
 			delete(e.souls, id)
-			// Clean up circuit breaker for unassigned soul
+			// Clean up circuit breaker for unassigned soul. e.mu
+			// (held above) also guards e.circuitBreakers — keep the
+			// two maps' lifecycles in sync.
 			delete(e.circuitBreakers, id)
 			e.logger.Info("soul unassigned", "soul", id)
 		}
@@ -278,6 +300,15 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 	e.totalChecks.Add(1)
 	defer e.checksRunning.Add(-1)
 
+	// K7: apply the master security gate before dispatching the check.
+	// If the soul requests InsecureSkipVerify but the process is not
+	// started with --insecure-skip-verify (or ANUBIS_ALLOW_INSECURE_TLS),
+	// we override the per-soul flag to false so the underlying checker
+	// does the secure thing. We also log a warning so the operator
+	// notices the misconfiguration. The original (insecure) intent is
+	// preserved in the audit event for forensic review.
+	soul = e.applySecurityGate(soul)
+
 	checker, ok := e.registry.Get(soul.Type)
 	if !ok {
 		e.logger.Error("unknown checker type", "type", soul.Type, "soul", soul.Name)
@@ -327,9 +358,10 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 		}
 	}
 
-	// Notify Raft (for distributed aggregation)
-	if e.onJudgment != nil {
-		e.onJudgment(judgment)
+	// Notify Raft (for distributed aggregation). Atomic load — no
+	// mutex on the per-check hot path.
+	if onJudgment := e.onJudgment.Load(); onJudgment != nil {
+		(*onJudgment)(judgment)
 	}
 
 	// Evaluate alert rules
@@ -387,7 +419,11 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	judgment, err := checker.Judge(checkCtx, runner.soul)
+	// K7: apply the same master security gate here so manually-triggered
+	// checks honour the global InsecureSkipVerify policy.
+	checkSoul := e.applySecurityGate(runner.soul)
+
+	judgment, err := checker.Judge(checkCtx, checkSoul)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -425,8 +461,8 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 		}
 	}
 
-	if e.onJudgment != nil {
-		e.onJudgment(judgment)
+	if onJudgment := e.onJudgment.Load(); onJudgment != nil {
+		(*onJudgment)(judgment)
 	}
 
 	if e.alerter != nil {
@@ -494,11 +530,15 @@ func (e *Engine) Stop() {
 	e.logger.Info("probe engine stopped")
 }
 
-// SetOnJudgment sets the callback function for judgment events
+// SetOnJudgment sets the callback function for judgment events.
+// Safe to call concurrently with a check in flight — readers use
+// atomic.Load. Passing nil clears the callback.
 func (e *Engine) SetOnJudgment(fn func(*core.Judgment)) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.onJudgment = fn
+	if fn == nil {
+		e.onJudgment.Store(nil)
+		return
+	}
+	e.onJudgment.Store(&fn)
 }
 
 // Stats returns engine statistics
@@ -523,19 +563,94 @@ func (e *Engine) Config() EngineConfig {
 	return e.config
 }
 
-// getCircuitBreaker returns or creates a circuit breaker for a soul
+// applySecurityGate enforces the K7 master switch. The input soul is
+// shallow-copied before any per-soul InsecureSkipVerify field is
+// mutated, so callers retain their original struct untouched. The
+// function returns the same Soul value by default; only when a per-soul
+// InsecureSkipVerify flag is true while the global allow is false does
+// it clone and zero the field, logging a warning so the operator
+// notices a misconfigured soul running under a strict process.
+//
+// The function does NOT block the check entirely — K7's design is
+// "fail secure", which means the check still runs, just with TLS
+// verification enabled. If you want to fail-loud instead, set
+// Soul.HTTP.InsecureSkipVerify to false and add an explicit deny
+// rule in the dispatch layer.
+func (e *Engine) applySecurityGate(soul *core.Soul) *core.Soul {
+	if e.config.AllowInsecureSkipVerify {
+		return soul
+	}
+
+	// Detect on the original struct whether any per-soul flag is set.
+	// We must read the *original* (caller-owned) pointer here; once
+	// we copy below, the "did the caller want insecure?" signal is
+	// gone. This is the only place we look at the unfiltered values.
+	wasInsecure := (soul.HTTP != nil && soul.HTTP.InsecureSkipVerify) ||
+		(soul.SMTP != nil && soul.SMTP.InsecureSkipVerify) ||
+		(soul.IMAP != nil && soul.IMAP.InsecureSkipVerify) ||
+		(soul.GRPC != nil && soul.GRPC.InsecureSkipVerify) ||
+		(soul.WebSocket != nil && soul.WebSocket.InsecureSkipVerify)
+	if !wasInsecure {
+		return soul
+	}
+
+	// Build a private copy. Each per-soul config that had
+	// InsecureSkipVerify=true gets a fresh struct allocated so we
+	// never mutate the caller's shared state. The original fields
+	// are copied across; only the boolean is forced to false.
+	c := *soul
+	if c.HTTP != nil && c.HTTP.InsecureSkipVerify {
+		original := *c.HTTP
+		c.HTTP = &original
+		c.HTTP.InsecureSkipVerify = false
+	}
+	if c.SMTP != nil && c.SMTP.InsecureSkipVerify {
+		original := *c.SMTP
+		c.SMTP = &original
+		c.SMTP.InsecureSkipVerify = false
+	}
+	if c.IMAP != nil && c.IMAP.InsecureSkipVerify {
+		original := *c.IMAP
+		c.IMAP = &original
+		c.IMAP.InsecureSkipVerify = false
+	}
+	if c.GRPC != nil && c.GRPC.InsecureSkipVerify {
+		original := *c.GRPC
+		c.GRPC = &original
+		c.GRPC.InsecureSkipVerify = false
+	}
+	if c.WebSocket != nil && c.WebSocket.InsecureSkipVerify {
+		original := *c.WebSocket
+		c.WebSocket = &original
+		c.WebSocket.InsecureSkipVerify = false
+	}
+
+	e.logger.Warn("K7: soul requested InsecureSkipVerify but process has it disabled; running with TLS verification",
+		"event", "k7_insecure_skip_overridden",
+		"soul", c.Name,
+		"soul_id", c.ID,
+		"override_flag", "--insecure-skip-verify",
+		"env_var", "ANUBIS_ALLOW_INSECURE_TLS",
+	)
+
+	return &c
+}
+
+// getCircuitBreaker returns or creates a circuit breaker for a soul.
+// e.mu guards the map (not a separate cbMu) so a concurrent
+// AssignSouls/Stop can safely delete an entry while a check is in flight.
 func (e *Engine) getCircuitBreaker(soulID string) *circuitBreaker {
-	e.cbMu.RLock()
+	e.mu.RLock()
 	cb, exists := e.circuitBreakers[soulID]
-	e.cbMu.RUnlock()
+	e.mu.RUnlock()
 
 	if exists {
 		return cb
 	}
 
 	// Create new circuit breaker
-	e.cbMu.Lock()
-	defer e.cbMu.Unlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
 	// Double-check after acquiring write lock
 	if cb, exists = e.circuitBreakers[soulID]; exists {

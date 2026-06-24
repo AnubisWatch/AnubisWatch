@@ -44,6 +44,9 @@ type WebSocketServer struct {
 	rateLimitWindow  time.Duration                 // rate limit window duration
 	messageRateLimit int                           // max messages per window per client
 	messageWindow    time.Duration                 // message rate limit window
+
+	// Shutdown coordination
+	stopWg sync.WaitGroup
 }
 
 // WSClient represents a connected WebSocket client
@@ -89,12 +92,25 @@ func NewWebSocketServer(logger *slog.Logger, authenticator Authenticator, allowe
 
 // Start starts the WebSocket server
 func (s *WebSocketServer) Start() {
+	s.stopWg.Add(1)
 	go s.broadcastLoop()
 	s.logger.Info("WebSocket server started")
 }
 
 // Stop stops the WebSocket server
 func (s *WebSocketServer) Stop() {
+	// Close broadcast channel first — this signals broadcastLoop to exit.
+	// Closing while holding no lock is safe here: broadcastLoop reads
+	// the channel without holding the mutex; recover() in safeSend
+	// prevents panic from sends to a closed channel.
+	if s.broadcast != nil {
+		close(s.broadcast)
+	}
+	// Wait for broadcastLoop to exit before closing client channels.
+	// This prevents the race: broadcastLoop sending on s.broadcast while
+	// Stop() closes it (detected by race detector).
+	s.stopWg.Wait()
+
 	s.mu.Lock()
 	for _, client := range s.clients {
 		if client.send != nil {
@@ -110,9 +126,6 @@ func (s *WebSocketServer) Stop() {
 	s.clients = make(map[string]*WSClient)
 	s.rooms = make(map[string]map[string]bool)
 	s.mu.Unlock()
-	if s.broadcast != nil {
-		close(s.broadcast)
-	}
 	s.logger.Info("WebSocket server stopped")
 }
 
@@ -454,6 +467,8 @@ func (s *WebSocketServer) removeClient(clientID string) {
 	}
 
 	delete(s.clients, clientID)
+	// Clean up the per-client message rate limiter entry created by checkMessageRateLimit
+	delete(s.ipLimits, clientID)
 	s.mu.Unlock()
 
 	// Decrement connection count for rate limiting (outside of lock to avoid deadlock)
@@ -471,6 +486,7 @@ func (s *WebSocketServer) removeClient(clientID string) {
 
 // broadcastLoop broadcasts messages to all clients
 func (s *WebSocketServer) broadcastLoop() {
+	defer s.stopWg.Done()
 	for msg := range s.broadcast {
 		data, err := json.Marshal(msg)
 		if err != nil {
@@ -530,13 +546,20 @@ func (s *WebSocketServer) broadcastToRoom(room string, msg WSMessage) {
 		return
 	}
 
+	// Snapshot client IDs before iterating — prevents racing with removeClient
+	// which may delete entries from the room map
+	clientIDs := make([]string, 0, len(clients))
+	for id := range clients {
+		clientIDs = append(clientIDs, id)
+	}
+
 	data, err := json.Marshal(msg)
 	if err != nil {
 		s.logger.Error("Failed to marshal message", "error", err)
 		return
 	}
 
-	for clientID := range clients {
+	for _, clientID := range clientIDs {
 		s.mu.RLock()
 		client, ok := s.clients[clientID]
 		s.mu.RUnlock()

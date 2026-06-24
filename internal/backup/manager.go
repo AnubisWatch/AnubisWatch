@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
@@ -141,7 +142,7 @@ func NewManager(storage BackupStorage, dataDir string, logger *slog.Logger) *Man
 
 // Init initializes the backup manager (creates directories)
 func (m *Manager) Init() error {
-	if err := os.MkdirAll(m.backupsDir, 0755); err != nil {
+	if err := os.MkdirAll(m.backupsDir, 0750); err != nil {
 		return fmt.Errorf("failed to create backups directory: %w", err)
 	}
 	return nil
@@ -599,13 +600,10 @@ func (m *Manager) readBackupFile(path string) (*Backup, error) {
 
 	// Detect if compressed
 	if filepath.Ext(path) == ".gz" || isGzipped(file) {
-		// Need to reopen for gzip
-		file.Close()
-		file, err = os.Open(path)
-		if err != nil {
+		// Reset to start for the gzip reader (isGzipped read 2 bytes)
+		if _, err := file.Seek(0, 0); err != nil {
 			return nil, err
 		}
-		defer file.Close()
 
 		gzipReader, err := gzip.NewReader(file)
 		if err != nil {
@@ -679,7 +677,18 @@ func isWithinDirectory(path, dir string) bool {
 	if err != nil {
 		return false
 	}
-	return len(absPath) > len(absDir) && absPath[:len(absDir)] == absDir
+	// Clean both paths to resolve any . or .. components
+	absPath = filepath.Clean(absPath)
+	absDir = filepath.Clean(absDir)
+	// Check that absPath is a strict child of absDir (not absDir itself).
+	// Using filepath.Rel ensures the separator boundary is respected,
+	// preventing /data/backupsEVIL from matching /data/backups.
+	rel, err := filepath.Rel(absDir, absPath)
+	if err != nil {
+		return false
+	}
+	// Reject ".", "..", and any ".."-prefixed relative path
+	return !strings.HasPrefix(rel, "..") && rel != "."
 }
 
 // IsWithinDirectory checks if a path is within a directory (exported for testing)
@@ -747,6 +756,7 @@ func (m *Manager) ExportToTar(ctx context.Context, w io.Writer, opts Options) er
 func (m *Manager) ImportFromTar(storage RestoreStorage, r io.Reader, opts RestoreOptions) error {
 	tr := tar.NewReader(r)
 
+	restored := false
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -776,16 +786,26 @@ func (m *Manager) ImportFromTar(storage RestoreStorage, r io.Reader, opts Restor
 			return err
 		}
 
-		// Create temp file for restore
+		// Create temp file for restore. G306: backups carry the
+		// entire config (secrets included); 0600 keeps multi-user
+		// hosts from leaking them via /tmp races.
 		tempFile := filepath.Join(m.backupsDir, "temp_restore.json")
-		if err := os.WriteFile(tempFile, data, 0644); err != nil {
+		if err := os.WriteFile(tempFile, data, 0600); err != nil {
 			return err
 		}
-		defer os.Remove(tempFile)
 
-		// Restore
+		// Restore — clean up temp file immediately (not deferred, since we're in a loop)
 		ctx := context.Background()
-		return m.Restore(ctx, storage, tempFile, opts)
+		restoreErr := m.Restore(ctx, storage, tempFile, opts)
+		os.Remove(tempFile)
+		if restoreErr != nil {
+			return restoreErr
+		}
+		restored = true
+	}
+
+	if !restored {
+		return fmt.Errorf("no valid backup entries found in tar archive")
 	}
 
 	return nil
@@ -838,7 +858,23 @@ func (m *Manager) getEncryptionKey(opts Options) ([]byte, string, error) {
 // encryptData encrypts data using AES-256-GCM.
 // Returns: salt(32) + nonce(12) + ciphertext+tag.
 func encryptData(key []byte, plaintext []byte) ([]byte, error) {
-	derivedKey, err := deriveKey(key)
+	// Generate random nonce
+	nonce := make([]byte, 12) // AES-GCM standard nonce size
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	// Generate random salt
+	salt := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return nil, fmt.Errorf("failed to generate salt: %w", err)
+	}
+
+	// Derive key with salt for this specific encryption
+	saltKey := make([]byte, len(key)+len(salt))
+	copy(saltKey, key)
+	copy(saltKey[len(key):], salt)
+	derivedKey, err := deriveKey(saltKey)
 	if err != nil {
 		return nil, err
 	}
@@ -854,39 +890,8 @@ func encryptData(key []byte, plaintext []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to create GCM: %w", err)
 	}
 
-	// Generate random nonce
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return nil, fmt.Errorf("failed to generate nonce: %w", err)
-	}
-
-	// Generate random salt
-	salt := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
-		return nil, fmt.Errorf("failed to generate salt: %w", err)
-	}
-
-	// Re-derive key with salt for this specific encryption
-	saltKey := make([]byte, len(key)+len(salt))
-	copy(saltKey, key)
-	copy(saltKey[len(key):], salt)
-	derivedKey, err = deriveKey(saltKey)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { derivedKey[0] = 0 }()
-
-	block2, err := aes.NewCipher(derivedKey)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
-	}
-	gcm2, err := cipher.NewGCM(block2)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create GCM: %w", err)
-	}
-
 	// Encrypt with derived key
-	ciphertext := gcm2.Seal(nil, nonce, plaintext, nil)
+	ciphertext := gcm.Seal(nil, nonce, plaintext, nil)
 
 	// Format: salt(32) + nonce(12) + ciphertext+tag
 	result := make([]byte, len(salt)+len(nonce)+len(ciphertext))

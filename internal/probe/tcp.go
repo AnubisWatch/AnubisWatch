@@ -214,8 +214,16 @@ func (c *UDPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 	}
 	defer conn.Close()
 
-	// Set deadline
-	conn.SetDeadline(time.Now().Add(timeout))
+	// Set deadline. Prefer the parent context's deadline if it's sooner
+	// than soul.Timeout, so a 100ms test context gets a fast failure
+	// instead of waiting for the full soul.Timeout.
+	deadline := time.Now().Add(timeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok {
+		if d := ctxDeadline; d.Before(deadline) {
+			deadline = d
+		}
+	}
+	conn.SetDeadline(deadline)
 
 	// Build payload
 	var payload []byte

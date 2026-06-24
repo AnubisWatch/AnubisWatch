@@ -41,8 +41,12 @@ func (db *CobaltDB) SaveJudgment(ctx context.Context, j *core.Judgment) error {
 		return err
 	}
 
-	// Update in-memory index map for O(1) lookup
+	// Update in-memory index map and workspace index under db.mu so
+	// concurrent readers/writers see a consistent view.
+	db.mu.Lock()
 	db.judgmentIndex[j.ID] = idxKey
+	db.recordWorkspaceLocked(workspaceID)
+	db.mu.Unlock()
 	return nil
 }
 

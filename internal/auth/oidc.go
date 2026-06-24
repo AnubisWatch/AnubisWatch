@@ -33,6 +33,7 @@ type OIDCAuthenticator struct {
 	users     map[string]*api.User  // email -> user
 	tokens    map[string]*session   // token -> session
 	stopCh    chan struct{}
+	stopOnce  sync.Once
 	stateHMAC []byte // HMAC key for signing state (cluster-compatible)
 
 	// JWK cache
@@ -102,13 +103,22 @@ type userInfoResponse struct {
 	EmailVerified bool   `json:"email_verified"`
 }
 
-// NewOIDCAuthenticator creates a new OIDC authenticator with local fallback
-func NewOIDCAuthenticator(cfg core.OIDCAuth, localPath, adminEmail, adminPassword string) *OIDCAuthenticator {
-	localAuth := NewLocalAuthenticator(localPath, adminEmail, adminPassword)
-	// Generate random HMAC key for state signing (cluster-compatible)
+// NewOIDCAuthenticator creates a new OIDC authenticator with local fallback.
+// Returns an error if the embedded local authenticator or HMAC key
+// generation fails (K6: previously panicked).
+func NewOIDCAuthenticator(cfg core.OIDCAuth, localPath, adminEmail, adminPassword string) (*OIDCAuthenticator, error) {
+	localAuth, err := NewLocalAuthenticator(localPath, adminEmail, adminPassword)
+	if err != nil {
+		return nil, fmt.Errorf("local authenticator init: %w", err)
+	}
+	// Generate random HMAC key for state signing (cluster-compatible).
+	// A failure here is fatal — without a per-process HMAC key, OIDC
+	// state tokens are forgeable, which is a security regression. We
+	// still return an error rather than panicking so the caller can
+	// decide whether to retry, fail startup, or run in degraded mode.
 	stateHMAC := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, stateHMAC); err != nil {
-		panic(fmt.Sprintf("failed to generate state HMAC key: %v", err))
+		return nil, fmt.Errorf("failed to generate state HMAC key: %w", err)
 	}
 	return &OIDCAuthenticator{
 		config:    cfg,
@@ -119,7 +129,7 @@ func NewOIDCAuthenticator(cfg core.OIDCAuth, localPath, adminEmail, adminPasswor
 		stopCh:    make(chan struct{}),
 		stateHMAC: stateHMAC,
 		jwksTTL:   24 * time.Hour, // Cache JWKs for 24 hours
-	}
+	}, nil
 }
 
 // signState creates an HMAC-signed state token for cluster compatibility.
@@ -158,8 +168,14 @@ func (o *OIDCAuthenticator) OIDCLoginURL() (string, string, string, error) {
 	}
 
 	// Generate CSRF state and nonce
-	state := generateToken()
-	nonce := generateToken() // Used to bind state to session (CSRF protection)
+	state, err := generateToken()
+	if err != nil {
+		return "", "", "", err
+	}
+	nonce, err := generateToken() // Used to bind state to session (CSRF protection)
+	if err != nil {
+		return "", "", "", err
+	}
 	expiresAt := time.Now().Add(10 * time.Minute)
 
 	o.mu.Lock()
@@ -242,8 +258,13 @@ func (o *OIDCAuthenticator) OIDCCallback(code, state, nonce string) (*api.User, 
 	o.mu.Lock()
 	user, exists := o.users[userInfo.Email]
 	if !exists {
+		newID, err := generateID()
+		if err != nil {
+			o.mu.Unlock()
+			return nil, "", err
+		}
 		user = &api.User{
-			ID:        generateID(),
+			ID:        newID,
 			Email:     userInfo.Email,
 			Name:      userInfo.Name,
 			Role:      "viewer", // Default role for OIDC users
@@ -256,7 +277,10 @@ func (o *OIDCAuthenticator) OIDCCallback(code, state, nonce string) (*api.User, 
 	o.mu.Unlock()
 
 	// Generate session token
-	token := generateToken()
+	token, err := generateToken()
+	if err != nil {
+		return nil, "", err
+	}
 	o.mu.Lock()
 	o.tokens[token] = &session{
 		UserID:    user.ID,
@@ -762,10 +786,11 @@ func (o *OIDCAuthenticator) SwitchWorkspace(token, workspace string) (*api.User,
 	return o.local.SwitchWorkspace(token, workspace)
 }
 
-// Shutdown gracefully stops the authenticator
+// Shutdown gracefully stops the authenticator. Idempotent — t.Cleanup
+// hooks plus deferred Shutdown() calls in tests can both fire safely.
 func (o *OIDCAuthenticator) Shutdown() {
 	o.local.Shutdown()
-	close(o.stopCh)
+	o.stopOnce.Do(func() { close(o.stopCh) })
 }
 
 // ChangePassword delegates to local authenticator (HIGH-04)
@@ -795,13 +820,18 @@ func (o *OIDCAuthenticator) GetUsers() []*api.User {
 	return users
 }
 
-// AddUser adds a user (for admin management)
-func (o *OIDCAuthenticator) AddUser(email, name, role string) *api.User {
+// AddUser adds a user (for admin management). Returns the new user or
+// an error if the system CSPRNG is unavailable (K6: previously panicked).
+func (o *OIDCAuthenticator) AddUser(email, name, role string) (*api.User, error) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
+	newID, err := generateID()
+	if err != nil {
+		return nil, err
+	}
 	user := &api.User{
-		ID:        generateID(),
+		ID:        newID,
 		Email:     email,
 		Name:      name,
 		Role:      role,
@@ -810,5 +840,5 @@ func (o *OIDCAuthenticator) AddUser(email, name, role string) *api.User {
 	}
 	o.users[user.ID] = user
 	o.users[user.Email] = user
-	return user
+	return user, nil
 }

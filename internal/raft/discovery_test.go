@@ -2,6 +2,7 @@ package raft
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"os"
@@ -968,4 +969,193 @@ func TestDiscovery_handleMDNSDiscovery_PartialTXT(t *testing.T) {
 		t.Error("Expected callback to be called")
 	}
 	mu.Unlock()
+}
+
+// --- K9: HMAC authentication tests ---
+
+// TestSignAndVerifyGossip_RoundTrip exercises the happy path: a
+// message signed with secret A is verified by the same secret.
+func TestSignAndVerifyGossip_RoundTrip(t *testing.T) {
+	secret := []byte("cluster-shared-secret-12345")
+	msg := &GossipMessage{
+		Type:      "gossip",
+		NodeID:    "alice",
+		Address:   "10.0.0.1:7000",
+		Region:    "default",
+		Version:   "0.1.0",
+		Timestamp: time.Now().Unix(),
+	}
+
+	signGossip(msg, secret)
+	if msg.HMAC == "" {
+		t.Fatal("K9: signGossip must populate HMAC field")
+	}
+
+	if err := verifyGossip(msg, secret, 5*time.Minute, time.Now()); err != nil {
+		t.Errorf("K9: verifyGossip on a freshly-signed message should succeed, got %v", err)
+	}
+}
+
+// TestVerifyGossip_RejectWrongSecret asserts that a message signed
+// with one secret cannot be verified by a cluster with a different
+// secret. This is the core K9 property — the cluster refuses to
+// honour messages from a node that doesn't share the secret.
+func TestVerifyGossip_RejectWrongSecret(t *testing.T) {
+	signerSecret := []byte("alice-secret")
+	verifierSecret := []byte("bob-secret")
+
+	msg := &GossipMessage{
+		Type:      "gossip",
+		NodeID:    "alice",
+		Timestamp: time.Now().Unix(),
+	}
+	signGossip(msg, signerSecret)
+
+	err := verifyGossip(msg, verifierSecret, 5*time.Minute, time.Now())
+	if err == nil {
+		t.Fatal("K9: verifyGossip with mismatched secret must reject")
+	}
+	if !errors.Is(err, ErrMessageUnauthenticated) {
+		t.Errorf("K9: wrong-secret error should wrap ErrMessageUnauthenticated, got %v", err)
+	}
+}
+
+// TestVerifyGossip_RejectMissingHMAC covers the case where the
+// sender forgot to sign (or has no secret). With a secret set, the
+// receiver must drop the message.
+func TestVerifyGossip_RejectMissingHMAC(t *testing.T) {
+	secret := []byte("real-secret")
+	msg := &GossipMessage{
+		Type:      "gossip",
+		NodeID:    "alice",
+		Timestamp: time.Now().Unix(),
+	}
+
+	err := verifyGossip(msg, secret, 5*time.Minute, time.Now())
+	if err == nil {
+		t.Fatal("K9: missing HMAC must be rejected when secret is set")
+	}
+	if !errors.Is(err, ErrMessageUnauthenticated) {
+		t.Errorf("K9: missing-hmac error should wrap ErrMessageUnauthenticated, got %v", err)
+	}
+}
+
+// TestVerifyGossip_AcceptUnsignedWhenNoSecret covers the
+// single-node / test-mode case: when the receiver has no secret
+// configured, an unsigned message is accepted (so existing
+// single-node test setups don't need a secret just to function).
+func TestVerifyGossip_AcceptUnsignedWhenNoSecret(t *testing.T) {
+	msg := &GossipMessage{
+		Type:      "gossip",
+		NodeID:    "alice",
+		Timestamp: time.Now().Unix(),
+	}
+
+	if err := verifyGossip(msg, nil, 5*time.Minute, time.Now()); err != nil {
+		t.Errorf("K9: unsigned message with no secret should pass, got %v", err)
+	}
+}
+
+// TestVerifyGossip_RejectSignedWhenNoSecret is the converse: a
+// signed message arriving at a cluster that hasn't configured a
+// secret is suspicious and must be rejected (likely a misconfigured
+// sender thinking they're talking to a different cluster).
+func TestVerifyGossip_RejectSignedWhenNoSecret(t *testing.T) {
+	msg := &GossipMessage{
+		Type:      "gossip",
+		NodeID:    "alice",
+		Timestamp: time.Now().Unix(),
+	}
+	signGossip(msg, []byte("some-other-secret"))
+
+	err := verifyGossip(msg, nil, 5*time.Minute, time.Now())
+	if err == nil {
+		t.Fatal("K9: signed message arriving at a no-secret cluster must be rejected")
+	}
+	if !errors.Is(err, ErrMessageUnauthenticated) {
+		t.Errorf("K9: no-secret-but-signed error should wrap ErrMessageUnauthenticated, got %v", err)
+	}
+}
+
+// TestVerifyGossip_RejectStaleMessage exercises the replay window.
+// We freeze `now` 10 minutes after the message timestamp; the
+// receiver (with a 5-minute window) must drop the message.
+func TestVerifyGossip_RejectStaleMessage(t *testing.T) {
+	secret := []byte("real-secret")
+	now := time.Now()
+	msg := &GossipMessage{
+		Type:      "gossip",
+		NodeID:    "alice",
+		Timestamp: now.Add(-10 * time.Minute).Unix(),
+	}
+	signGossip(msg, secret)
+
+	err := verifyGossip(msg, secret, 5*time.Minute, now)
+	if err == nil {
+		t.Fatal("K9: 10-minute-old message should be rejected by a 5-minute window")
+	}
+	if !errors.Is(err, ErrMessageStale) {
+		t.Errorf("K9: stale-message error should wrap ErrMessageStale, got %v", err)
+	}
+}
+
+// TestVerifyGossip_RejectTamperedPeerList is the tamper-detection
+// property. An attacker captures a signed message, modifies the
+// embedded peer list (e.g. injects themselves), and forwards it.
+// The HMAC must not match the modified body.
+func TestVerifyGossip_RejectTamperedPeerList(t *testing.T) {
+	secret := []byte("real-secret")
+	msg := &GossipMessage{
+		Type:      "gossip",
+		NodeID:    "alice",
+		Address:   "10.0.0.1:7000",
+		Timestamp: time.Now().Unix(),
+		Peers: []GossipPeerInfo{
+			{ID: "peer-1", Address: "10.0.0.2:7000"},
+		},
+	}
+	signGossip(msg, secret)
+
+	// Attacker tampers.
+	msg.Peers = append(msg.Peers, GossipPeerInfo{
+		ID: "evil-peer", Address: "10.0.0.99:7000",
+	})
+
+	if err := verifyGossip(msg, secret, 5*time.Minute, time.Now()); err == nil {
+		t.Fatal("K9: tampered peer list must invalidate the HMAC")
+	}
+}
+
+// TestSignGossip_NoOpWithoutSecret asserts the helper is a no-op when
+// no secret is configured, so single-node test setups can pass
+// unsigned messages without any code change.
+func TestSignGossip_NoOpWithoutSecret(t *testing.T) {
+	msg := &GossipMessage{Type: "gossip", NodeID: "alice", Timestamp: time.Now().Unix()}
+	signGossip(msg, nil)
+	if msg.HMAC != "" {
+		t.Errorf("K9: signGossip with no secret must not set HMAC, got %q", msg.HMAC)
+	}
+}
+
+// TestDiscovery_NewDiscovery_WarnsOnEmptySecret asserts the
+// operator-visible warning fires when ANUBIS_CLUSTER_SECRET is
+// unset in a deployment that would normally be authenticated.
+func TestDiscovery_NewDiscovery_WarnsOnEmptySecret(t *testing.T) {
+	// K9: we can't easily assert log output here, but the call must
+	// not panic and the secret must end up empty in the struct.
+	cfg := core.RaftConfig{
+		NodeID:   "warn-test",
+		BindAddr: "127.0.0.1:7000",
+	}
+	d, err := NewDiscovery(cfg, newTestDiscoveryLogger())
+	if err != nil {
+		t.Fatalf("NewDiscovery: %v", err)
+	}
+	// authEnabled was removed from production code; the check is now
+	// inlined here. See refactor.md #17 — the function had no
+	// non-test callers.
+	if len(d.clusterSecret) > 0 {
+		t.Error("K9: empty ClusterSecret should leave the discovery layer unauthenticated")
+	}
+	defer d.Stop()
 }

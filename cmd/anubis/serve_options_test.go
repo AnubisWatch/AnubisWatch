@@ -113,6 +113,55 @@ func TestParseServeOptions_NodeIdFlag(t *testing.T) {
 	}
 }
 
+// TestParseServeOptions_InsecureSkipVerify exercises the K7 master
+// switch on the CLI: both the boolean form and the kv form must set
+// the flag, and the env-var fallback must work when the CLI is silent.
+func TestParseServeOptions_InsecureSkipVerify(t *testing.T) {
+	// Boolean form
+	opts := parseServeOptions([]string{"anubis", "serve", "--insecure-skip-verify"})
+	if !opts.InsecureSkipVerify {
+		t.Error("K7: --insecure-skip-verify (boolean) should set InsecureSkipVerify=true")
+	}
+
+	// kv form
+	opts = parseServeOptions([]string{"anubis", "serve", "--insecure-skip-verify=true"})
+	if !opts.InsecureSkipVerify {
+		t.Error("K7: --insecure-skip-verify=true (kv) should set InsecureSkipVerify=true")
+	}
+
+	// kv false form
+	opts = parseServeOptions([]string{"anubis", "serve", "--insecure-skip-verify=false"})
+	if opts.InsecureSkipVerify {
+		t.Error("K7: --insecure-skip-verify=false (kv) should clear the flag")
+	}
+
+	// default absent
+	opts = parseServeOptions([]string{"anubis", "serve"})
+	if opts.InsecureSkipVerify {
+		t.Error("K7: with no flag, InsecureSkipVerify should default to false")
+	}
+}
+
+// TestParseServeOptions_InsecureSkipVerify_EnvFallback verifies the
+// ANUBIS_ALLOW_INSECURE_TLS env var is honoured when the CLI flag
+// wasn't passed. We must unset the var first to keep tests hermetic.
+func TestParseServeOptions_InsecureSkipVerify_EnvFallback(t *testing.T) {
+	// Make sure the env is clean for this test.
+	prev, hadPrev := os.LookupEnv("ANUBIS_ALLOW_INSECURE_TLS")
+	if hadPrev {
+		os.Unsetenv("ANUBIS_ALLOW_INSECURE_TLS")
+		defer os.Setenv("ANUBIS_ALLOW_INSECURE_TLS", prev)
+	}
+
+	os.Setenv("ANUBIS_ALLOW_INSECURE_TLS", "1")
+	defer os.Unsetenv("ANUBIS_ALLOW_INSECURE_TLS")
+
+	opts := parseServeOptions([]string{"anubis", "serve"})
+	if !opts.InsecureSkipVerify {
+		t.Error("K7: ANUBIS_ALLOW_INSECURE_TLS=1 should enable InsecureSkipVerify")
+	}
+}
+
 func TestParseServeOptions_BindAddrFlags(t *testing.T) {
 	// Test --bind flag with separate value
 	opts := parseServeOptions([]string{

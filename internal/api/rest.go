@@ -59,6 +59,7 @@ func (m *maxDepthReader) Read(p []byte) (int, error) {
 // RESTServer implements the HTTP REST API
 // The scribes record the judgments on papyrus scrolls
 type RESTServer struct {
+	mu         sync.Mutex // protects http field during Start/Stop race
 	config     core.ServerConfig
 	authConfig core.AuthConfig
 	router     *Router
@@ -494,7 +495,7 @@ func (s *RESTServer) Start() error {
 		addr = ":8080"
 	}
 
-	s.http = &http.Server{
+	server := &http.Server{
 		Addr:              addr,
 		Handler:           s.router,
 		ReadTimeout:       30 * time.Second,
@@ -503,6 +504,10 @@ func (s *RESTServer) Start() error {
 		IdleTimeout:       120 * time.Second,
 	}
 
+	s.mu.Lock()
+	s.http = server
+	s.mu.Unlock()
+
 	s.logger.Info("REST server starting", "addr", addr)
 
 	if s.config.TLS.Enabled {
@@ -510,10 +515,10 @@ func (s *RESTServer) Start() error {
 			MinVersion:               tls.VersionTLS12,
 			PreferServerCipherSuites: true,
 		}
-		s.http.TLSConfig = tlsConfig
-		return s.http.ListenAndServeTLS(s.config.TLS.Cert, s.config.TLS.Key)
+		server.TLSConfig = tlsConfig
+		return server.ListenAndServeTLS(s.config.TLS.Cert, s.config.TLS.Key)
 	}
-	return s.http.ListenAndServe()
+	return server.ListenAndServe()
 }
 
 // Stop stops the REST server
@@ -522,8 +527,11 @@ func (s *RESTServer) Stop(ctx context.Context) error {
 	if s.rateLimitStopCh != nil {
 		close(s.rateLimitStopCh)
 	}
-	if s.http != nil {
-		return s.http.Shutdown(ctx)
+	s.mu.Lock()
+	http := s.http
+	s.mu.Unlock()
+	if http != nil {
+		return http.Shutdown(ctx)
 	}
 	return nil
 }

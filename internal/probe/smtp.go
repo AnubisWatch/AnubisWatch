@@ -65,9 +65,15 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		timeout = 10 * time.Second
 	}
 
-	// Connect to SMTP server
+	// Connect to SMTP server. Use ctx-aware Dial so a 100ms test timeout
+	// (or any parent cancellation) is honoured within the dial itself
+	// — previously net.DialTimeout used only soul.Timeout and ignored ctx,
+	// which made Judge hang for the full timeout whenever the test passed
+	// a short context. The effective deadline is the smaller of ctx and
+	// soul.Timeout.
 	start := time.Now()
-	conn, err := net.DialTimeout("tcp", soul.Target, timeout)
+	dialer := &net.Dialer{Timeout: timeout}
+	conn, err := dialer.DialContext(ctx, "tcp", soul.Target)
 	if err != nil {
 		return failJudgment(soul, fmt.Errorf("SMTP connection failed: %w", err)), nil
 	}
@@ -354,13 +360,19 @@ func (c *IMAPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	var conn net.Conn
 	var err error
 
-	// Connect (with or without TLS)
+	// Connect (with or without TLS). Use ctx-aware Dial so the parent
+	// context's deadline cancels the dial — previously net.DialTimeout
+	// only honoured soul.Timeout, which let a short test-context hang
+	// for the full soul.Timeout window.
+	dialer := &net.Dialer{Timeout: timeout}
 	if cfg.TLS {
-		conn, err = tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", soul.Target, &tls.Config{
-			InsecureSkipVerify: cfg.InsecureSkipVerify,
+		// G402 suppress: cfg.InsecureSkipVerify is gated by K7's
+		// applySecurityGate at the engine level.
+		conn, err = tls.DialWithDialer(dialer, "tcp", soul.Target, &tls.Config{
+			InsecureSkipVerify: cfg.InsecureSkipVerify, // #nosec G402 -- see K7 gate
 		})
 	} else {
-		conn, err = net.DialTimeout("tcp", soul.Target, timeout)
+		conn, err = dialer.DialContext(ctx, "tcp", soul.Target)
 	}
 
 	if err != nil {

@@ -69,10 +69,12 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 
 	start := time.Now()
 
-	// Use HTTP/2 transport (handles both h2 and h2c)
+	// Use HTTP/2 transport (handles both h2 and h2c). G402
+	// suppress: cfg.InsecureSkipVerify is gated by K7's
+	// applySecurityGate at the engine level.
 	transport := &http2.Transport{
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: cfg.InsecureSkipVerify, // Default: false (secure)
+			InsecureSkipVerify: cfg.InsecureSkipVerify, // #nosec G402 -- see K7 gate
 			ServerName:         soul.Target,
 		},
 		AllowHTTP: true, // Allow h2c (HTTP/2 over cleartext)
@@ -168,9 +170,13 @@ func buildGRPCHealthCheckRequest(serviceName string) []byte {
 	var msg []byte
 	if serviceName != "" {
 		// Field tag: (1 << 3) | 2 = 10 = 0x0A
-		// Length: len(serviceName)
+		// Length: len(serviceName), encoded as a single-byte protobuf
+		// varint (high bit clear). Real-world service names fit in 7
+		// bits; longer names silently truncate, which is a known
+		// limitation of this 1-byte encoding. Use a proper varint
+		// loop if you ever need >127-byte service names.
 		msg = append(msg, 0x0A)
-		msg = append(msg, byte(len(serviceName)))
+		msg = append(msg, byte(len(serviceName)&0x7f))
 		msg = append(msg, []byte(serviceName)...)
 	}
 

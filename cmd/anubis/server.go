@@ -251,6 +251,12 @@ type ServerOptions struct {
 	Region        string
 	BindAddr      string
 	AdvertiseAddr string
+
+	// InsecureSkipVerify enables the K7 master switch that allows
+	// per-soul InsecureSkipVerify=true on TLS checks. Defaults to
+	// false (secure). When true, TLS verification is disabled for
+	// any check that requests it, which is a MITM vector.
+	InsecureSkipVerify bool
 }
 
 // grpcProbeAdapter adapts probe.Engine to grpcapi.ProbeEngine
@@ -628,13 +634,25 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	var authenticator api.Authenticator
 	switch cfg.Auth.Type {
 	case "oidc":
-		authenticator = auth.NewOIDCAuthenticator(cfg.Auth.OIDC, sessionPath, adminEmail, adminPassword)
+		oidcAuth, err := auth.NewOIDCAuthenticator(cfg.Auth.OIDC, sessionPath, adminEmail, adminPassword)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize OIDC authenticator: %w", err)
+		}
+		authenticator = oidcAuth
 		logger.Info("OIDC authentication initialized", "issuer", cfg.Auth.OIDC.Issuer)
 	case "ldap":
-		authenticator = auth.NewLDAPAuthenticator(cfg.Auth.LDAP, sessionPath, adminEmail, adminPassword)
+		ldapAuth, err := auth.NewLDAPAuthenticator(cfg.Auth.LDAP, sessionPath, adminEmail, adminPassword)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize LDAP authenticator: %w", err)
+		}
+		authenticator = ldapAuth
 		logger.Info("LDAP authentication initialized", "url", cfg.Auth.LDAP.URL)
 	default:
-		authenticator = auth.NewLocalAuthenticator(sessionPath, adminEmail, adminPassword)
+		localAuth, err := auth.NewLocalAuthenticator(sessionPath, adminEmail, adminPassword)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize local authenticator: %w", err)
+		}
+		authenticator = localAuth
 	}
 
 	// Initialize alert manager
@@ -650,7 +668,28 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		NodeID:   cfg.Necropolis.NodeName,
 		Region:   cfg.Necropolis.Region,
 		Logger:   logger,
+		Config: probe.EngineConfig{
+			// K7: honour the master TLS-verification switch. The CLI
+			// flag and env var have already been parsed into
+			// ServerOptions; the config file's
+			// security.allow_insecure_skip_verify is OR-ed in here so
+			// any of the three sources can enable it.
+			AllowInsecureSkipVerify: opts.InsecureSkipVerify || cfg.Security.AllowInsecureSkipVerify,
+		},
 	})
+
+	if probeEngine.Config().AllowInsecureSkipVerify {
+		logger.Warn("K7: InsecureSkipVerify enabled at engine level — per-soul TLS-skip flags will be honoured",
+			"event", "k7_insecure_skip_verify_enabled",
+			// Source is the post-resolution view at server startup:
+			// ServerOptions is populated from CLI flag, env var, or
+			// config field. The exact origin is no longer recoverable
+			// at this point, so we report the resolved fact rather
+			// than the original input. Audit-grade traceability lives
+			// in the applySecurityGate audit event per-check.
+			"resolved", true,
+		)
+	}
 
 	// Initialize journey executor
 	journeyExec := journey.NewExecutor(store, logger)

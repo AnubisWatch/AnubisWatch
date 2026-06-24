@@ -21,9 +21,16 @@ chmod +x anubis
 # Initialize configuration
 ./anubis init
 
-# Start server
+# Start server (single-node mode — no cluster peers, no leader election)
 ./anubis serve --single
 ```
+
+> `--single` runs the node standalone: it self-elects as leader, gossip is
+> disabled, and `ANUBIS_CLUSTER_SECRET` is not required. Set the secret
+> (and remove `--single`) only when you scale to multiple nodes — the
+> Helm chart enforces this in `deploy/helm/anubiswatch/templates/secret.yaml`
+> by failing the install when `config.necropolis.enabled=true` and the
+> secret is empty.
 
 Access the dashboard at `http://localhost:8080`
 
@@ -149,6 +156,11 @@ docker run -d \
   ghcr.io/anubiswatch/anubiswatch:latest \
   serve --single
 ```
+
+No `ANUBIS_CLUSTER_SECRET` is required in single-node mode. The
+binary self-elects as leader and the gossip/join path is disabled.
+Set the secret only when scaling to multiple nodes (see "Join
+Additional Nodes" above).
 
 ### Multi-Node with Docker Compose
 

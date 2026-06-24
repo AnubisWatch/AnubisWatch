@@ -508,6 +508,13 @@ func TestWebSocketChecker_Judge_PingFailed(t *testing.T) {
 	}
 	defer listener.Close()
 
+	// done is closed when the test goroutine finishes; the mock server
+	// checks it before sleeping so the goroutine exits immediately once
+	// the assertion has been made instead of holding the test binary
+	// alive for the full sleep window.
+	done := make(chan struct{})
+	defer close(done)
+
 	go func() {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -529,8 +536,14 @@ func TestWebSocketChecker_Judge_PingFailed(t *testing.T) {
 				"\r\n"
 			conn.Write([]byte(response))
 
-			// Don't respond to ping
-			time.Sleep(10 * time.Second)
+			// Don't respond to ping. Block until the test signals done
+			// (or the listener is closed by the test's defer). We
+			// previously did time.Sleep(10s) which let the goroutine
+			// outlive the test and slowed down the package.
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+			}
 		}
 	}()
 

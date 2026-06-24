@@ -9,13 +9,25 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
+// newTestLDAPAuth wraps NewLDAPAuthenticator for tests so the (auth, err)
+// return shape doesn't litter every test body. The returned authenticator
+// is shut down via t.Cleanup.
+func newTestLDAPAuth(t *testing.T, cfg core.LDAPAuth, localPath, email, password string) *LDAPAuthenticator {
+	t.Helper()
+	a, err := NewLDAPAuthenticator(cfg, localPath, email, password)
+	if err != nil {
+		t.Fatalf("NewLDAPAuthenticator: %v", err)
+	}
+	t.Cleanup(func() { a.Shutdown() })
+	return a
+}
+
 func TestIsConnectionFailure(t *testing.T) {
 	cfg := core.LDAPAuth{
 		URL:    "ldap://nonexistent.invalid",
 		BaseDN: "dc=example,dc=com",
 	}
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	tests := []struct {
 		name     string
@@ -90,8 +102,7 @@ func TestLDAPAuthenticator_DelegationMethods(t *testing.T) {
 		URL:    "ldap://nonexistent.invalid",
 		BaseDN: "dc=example,dc=com",
 	}
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Login first to get a valid token
 	_, token, err := auth.Login("admin@test.com", "TestPass1234!")
@@ -128,8 +139,7 @@ func TestLDAPAuthenticator_NewLDAPAuthenticator(t *testing.T) {
 		BaseDN: "dc=example,dc=com",
 	}
 
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	if auth == nil {
 		t.Fatal("NewLDAPAuthenticator returned nil")
@@ -146,8 +156,7 @@ func TestLDAPAuthenticator_LocalFallback(t *testing.T) {
 		BaseDN: "dc=example,dc=com",
 	}
 
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// LDAP connection will fail, should fall back to local
 	user, token, err := auth.Login("admin@test.com", "TestPass1234!")
@@ -180,10 +189,12 @@ func TestLDAPAuthenticator_AddUser(t *testing.T) {
 		BaseDN: "dc=example,dc=com",
 	}
 
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
-	user := auth.AddUser("user@example.com", "Test User", "editor")
+	user, err := auth.AddUser("user@example.com", "Test User", "editor")
+	if err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
 	if user == nil {
 		t.Fatal("AddUser returned nil")
 	}
@@ -212,8 +223,7 @@ func TestLDAPAuthenticator_TokenExpiration(t *testing.T) {
 		BaseDN: "dc=example,dc=com",
 	}
 
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	_, token, err := auth.Login("admin@test.com", "TestPass1234!")
 	if err != nil {
@@ -280,8 +290,7 @@ func TestLDAPAuthenticator_LDAPLogin_ConnectionError(t *testing.T) {
 		BaseDN: "dc=example,dc=com",
 	}
 
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Should fail because LDAP server is unreachable
 	_, err := auth.ldapLogin("user@example.com", "password")
@@ -296,8 +305,7 @@ func TestLDAPAuthenticator_LDAPLogin_StartTLSError(t *testing.T) {
 		BaseDN: "dc=example,dc=com",
 	}
 
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Connection should fail - either at dial or at StartTLS
 	_, err := auth.ldapLogin("user@example.com", "password")
@@ -319,8 +327,7 @@ func TestLDAPAuthenticator_LDAPLogin_ServiceBindError(t *testing.T) {
 		BindPassword: "wrong-password",
 	}
 
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Service bind should fail (simulates invalid service credentials)
 	_, err := auth.ldapLogin("user@example.com", "user-password")
@@ -339,8 +346,7 @@ func TestLDAPAuthenticator_LDAPLogin_BindDNWithSearch(t *testing.T) {
 		UserFilter:   "(mail={{mail}})",
 	}
 
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// This will fail at various points - service bind or connection
 	_, err := auth.ldapLogin("user@example.com", "user-password")
@@ -357,8 +363,7 @@ func TestLDAPAuthenticator_LDAPLogin_UserNotFoundInSearch(t *testing.T) {
 		BaseDN: "dc=example,dc=com",
 	}
 
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// LDAP connection fails, falls back to local
 	user, _, err := auth.Login("admin@test.com", "TestPass1234!")
@@ -376,12 +381,20 @@ func TestLDAPAuthenticator_GetUsers(t *testing.T) {
 		BaseDN: "dc=example,dc=com",
 	}
 
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
-	auth.AddUser("user1@example.com", "User One", "viewer")
-	auth.AddUser("user2@example.com", "User Two", "editor")
-	auth.AddUser("user3@example.com", "User Three", "admin")
+	_, err1 := auth.AddUser("user1@example.com", "User One", "viewer")
+	if err1 != nil {
+		t.Fatalf("AddUser 1: %v", err1)
+	}
+	_, err2 := auth.AddUser("user2@example.com", "User Two", "editor")
+	if err2 != nil {
+		t.Fatalf("AddUser 2: %v", err2)
+	}
+	_, err3 := auth.AddUser("user3@example.com", "User Three", "admin")
+	if err3 != nil {
+		t.Fatalf("AddUser 3: %v", err3)
+	}
 
 	users := auth.GetUsers()
 	if len(users) < 3 {
@@ -395,10 +408,12 @@ func TestLDAPAuthenticator_Authenticate_ExpiredToken(t *testing.T) {
 		BaseDN: "dc=example,dc=com",
 	}
 
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
-	user := auth.AddUser("user@example.com", "Test User", "viewer")
+	user, err := auth.AddUser("user@example.com", "Test User", "viewer")
+	if err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
 
 	// Manually inject an expired session
 	token := "expired-token-123"
@@ -409,7 +424,7 @@ func TestLDAPAuthenticator_Authenticate_ExpiredToken(t *testing.T) {
 	}
 	auth.mu.Unlock()
 
-	_, err := auth.Authenticate(token)
+	_, err = auth.Authenticate(token)
 	if err == nil {
 		t.Error("Expected error for expired token")
 	}
@@ -421,8 +436,7 @@ func TestLDAPAuthenticator_Authenticate_MissingUser(t *testing.T) {
 		BaseDN: "dc=example,dc=com",
 	}
 
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Manually inject a session pointing to a non-existent user
 	token := "orphan-token-123"
@@ -446,8 +460,7 @@ func TestLDAPAuthenticator_SwitchWorkspace(t *testing.T) {
 		BaseDN: "dc=example,dc=com",
 	}
 
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Login to get a valid token (falls back to local since LDAP unreachable)
 	_, token, err := auth.Login("admin@test.com", "TestPass1234!")
@@ -484,8 +497,7 @@ func TestLDAPAuthenticator_SwitchWorkspace_ExpiredToken(t *testing.T) {
 		BaseDN: "dc=example,dc=com",
 	}
 
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Create a token directly in the LDAP authenticator's tokens map
 	// (bypassing the login which falls back to local)
@@ -517,8 +529,7 @@ func TestLDAPAuthenticator_SwitchWorkspace_UserNotFound(t *testing.T) {
 		BaseDN: "dc=example,dc=com",
 	}
 
-	auth := NewLDAPAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestLDAPAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Create a session with a non-existent user
 	token := "orphan-token"

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { api, ApiResponse, Soul, Judgment, AlertChannel, AlertRule, Incident, Stats, ClusterStatus, StatusPage, User, CustomDashboard } from './client'
 
 // Generic hook for API calls
@@ -9,6 +9,12 @@ function useApi<T>(
   const [data, setData] = useState<T | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const mountedRef = useRef(true)
+
+  useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -16,28 +22,27 @@ function useApi<T>(
 
     try {
       const result = await fetcher()
-      setData(result)
+      if (mountedRef.current) {
+        setData(result)
+      }
       return result
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
+      if (mountedRef.current) {
+        setError(err instanceof Error ? err.message : 'Unknown error')
+      }
       throw err
     } finally {
-      setLoading(false)
+      if (mountedRef.current) {
+        setLoading(false)
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, deps)
 
   useEffect(() => {
-    let cancelled = false
-
     fetchData().catch(() => {
-      if (!cancelled) {
-        // Error state is set by fetchData.
-      }
+      // Error state is set by fetchData.
     })
-    return () => {
-      cancelled = true
-    }
   }, [fetchData])
 
   return { data, loading, error, refetch: fetchData }

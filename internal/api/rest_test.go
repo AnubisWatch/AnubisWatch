@@ -5516,8 +5516,18 @@ func TestHandleSSE(t *testing.T) {
 		close(done)
 	}()
 
-	// Wait a short moment for the initial message to be sent
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the handler to exit before reading the body.
+	// This avoids the race between handleSSE writing to rec.Body and
+	// rec.Body.String() being called in the test goroutine.
+	// The handler writes the "connected" message before entering the
+	// broadcast loop, so we assert on that message after the goroutine ends.
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for SSE handler to exit")
+	}
 
 	body := rec.Body.String()
 	if !strings.Contains(body, `"type":"connected"`) {
@@ -5527,15 +5537,6 @@ func TestHandleSSE(t *testing.T) {
 	contentType := rec.Header().Get("Content-Type")
 	if contentType != "text/event-stream" {
 		t.Errorf("Expected text/event-stream content type, got %s", contentType)
-	}
-
-	// Cancel context to stop the handler
-	cancel()
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for SSE handler to exit")
 	}
 }
 

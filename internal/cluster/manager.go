@@ -88,9 +88,17 @@ type Manager struct {
 
 // NewManager creates a new cluster manager
 func NewManager(cfg core.NecropolisConfig, db *storage.CobaltDB, logger *slog.Logger) (*Manager, error) {
+	raftCfg := cfg.Raft
+	// K9: propagate the cluster HMAC secret from NecropolisConfig to
+	// the Raft config so the discovery layer can use it. The
+	// NecropolisConfig is the canonical source (env override, YAML
+	// key, CLI flag all flow into it); the RaftConfig mirror exists
+	// so the raft package doesn't have to depend on NecropolisConfig.
+	raftCfg.ClusterSecret = cfg.ClusterSecret
+
 	m := &Manager{
 		necroConfig: cfg,
-		config:      cfg.Raft,
+		config:      raftCfg,
 		db:          db,
 		logger:      logger.With("component", "cluster"),
 		// SingleNode mode: explicit single-node operation (self-elected leader)

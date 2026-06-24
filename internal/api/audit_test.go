@@ -7,21 +7,39 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 )
 
 // mockAuditBackend implements AuditBackend for testing
 type mockAuditBackend struct {
+	mu     sync.Mutex
 	events []*AuditEvent
 }
 
 func (m *mockAuditBackend) Write(event *AuditEvent) error {
+	m.mu.Lock()
 	m.events = append(m.events, event)
+	m.mu.Unlock()
 	return nil
 }
 
+func (m *mockAuditBackend) GetEvents() []*AuditEvent {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.events
+}
+
+func (m *mockAuditBackend) SetEvents(events []*AuditEvent) {
+	m.mu.Lock()
+	m.events = events
+	m.mu.Unlock()
+}
+
 func (m *mockAuditBackend) Query(filter AuditFilter) ([]*AuditEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	var result []*AuditEvent
 	for _, e := range m.events {
 		if filter.EventTypes != nil {
@@ -82,11 +100,11 @@ func TestAuditLogger_Log(t *testing.T) {
 	}
 	backend.Write(event)
 
-	if len(backend.events) != 1 {
-		t.Errorf("Expected 1 event, got %d", len(backend.events))
+	if len(backend.GetEvents()) != 1 {
+		t.Errorf("Expected 1 event, got %d", len(backend.GetEvents()))
 	}
 
-	retrieved := backend.events[0]
+	retrieved := backend.GetEvents()[0]
 	if retrieved.EventType != "auth" {
 		t.Errorf("Expected event type 'auth', got %s", retrieved.EventType)
 	}
@@ -144,11 +162,11 @@ func TestAuditLogger_Query(t *testing.T) {
 	defer al.Stop()
 
 	// Add some events directly to backend
-	backend.events = []*AuditEvent{
+	backend.SetEvents([]*AuditEvent{
 		{EventType: "auth", UserID: "user-1", Resource: "/api/login"},
 		{EventType: "request", UserID: "user-1", Resource: "/api/souls"},
 		{EventType: "auth", UserID: "user-2", Resource: "/api/login"},
-	}
+	})
 
 	// Query by event type
 	events, err := al.Query(AuditFilter{EventTypes: []string{"auth"}})
@@ -687,8 +705,8 @@ func TestAuditLogger_writeLoop_BatchFull(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Verify at least 100 events were written (the first batch)
-	if len(backend.events) < 100 {
-		t.Errorf("Expected at least 100 writes (first batch flush), got %d", len(backend.events))
+	if len(backend.GetEvents()) < 100 {
+		t.Errorf("Expected at least 100 writes (first batch flush), got %d", len(backend.GetEvents()))
 	}
 }
 
@@ -708,8 +726,8 @@ func TestAuditLogger_writeLoop_TickerFlush(t *testing.T) {
 	// The ticker runs every 5 seconds; give it time
 	time.Sleep(6 * time.Second)
 
-	if len(backend.events) < 5 {
-		t.Errorf("Expected at least 5 writes after ticker flush, got %d", len(backend.events))
+	if len(backend.GetEvents()) < 5 {
+		t.Errorf("Expected at least 5 writes after ticker flush, got %d", len(backend.GetEvents()))
 	}
 }
 
@@ -728,7 +746,7 @@ func TestAuditLogger_writeLoop_ShutdownFlush(t *testing.T) {
 	al.Stop()
 
 	// Some events should have been written
-	if len(backend.events) == 0 {
+	if len(backend.GetEvents()) == 0 {
 		t.Error("Expected some writes after shutdown flush")
 	}
 }
@@ -745,7 +763,7 @@ func TestAuditLogger_LogRequest_FailureStatus(t *testing.T) {
 	// Stop triggers flush of remaining events
 	al.Stop()
 
-	if len(backend.events) < 1 {
+	if len(backend.GetEvents()) < 1 {
 		t.Error("Expected event to be logged")
 	}
 }

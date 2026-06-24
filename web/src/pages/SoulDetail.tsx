@@ -26,6 +26,8 @@ import {
 } from 'lucide-react'
 import { useState, useMemo } from 'react'
 import { useSoul, useSoulJudgments } from '../api/hooks'
+import type { Judgment } from '../api/client'
+import type { LucideIcon } from 'lucide-react'
 
 interface UptimeData {
   date: string
@@ -33,11 +35,14 @@ interface UptimeData {
   responseTime: number
 }
 
+const TABS = ['overview', 'performance', 'history', 'settings'] as const
+type TabId = (typeof TABS)[number]
+
 export function SoulDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [timeRange, setTimeRange] = useState('24h')
-  const [activeTab, setActiveTab] = useState('overview')
+  const [activeTab, setActiveTab] = useState<TabId>('overview')
   const [isDeleting, setIsDeleting] = useState(false)
   const [isChecking, setIsChecking] = useState(false)
   const [checkResult, setCheckResult] = useState<{ success: boolean; message: string } | null>(null)
@@ -350,16 +355,17 @@ export function SoulDetail() {
 
       {/* Tabs */}
       <div className="border-b border-gray-700/50">
-        <div className="flex gap-6" role="tablist" aria-label="Soul detail sections">
-          {['overview', 'performance', 'history', 'settings'].map((tab) => (
+        <nav className="flex gap-6" role="tablist" aria-label="Soul detail sections">
+          {TABS.map((tab) => (
             <button
               key={tab}
+              type="button"
               onClick={() => setActiveTab(tab)}
               role="tab"
               aria-selected={activeTab === tab}
               aria-controls={`soul-panel-${tab}`}
               id={`soul-tab-${tab}`}
-              className={`pb-3 text-sm font-medium capitalize transition-colors relative ${
+              className={`pb-3 pt-1 text-sm font-medium capitalize transition-colors relative ${
                 activeTab === tab ? 'text-amber-400' : 'text-gray-400 hover:text-gray-300'
               }`}
             >
@@ -369,296 +375,373 @@ export function SoulDetail() {
               )}
             </button>
           ))}
-        </div>
+        </nav>
       </div>
 
-      {/* Content */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Uptime Chart */}
-          <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-6">
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-                  <TrendingUp className="w-5 h-5 text-amber-400" />
-                  Response Time & Uptime
-                </h3>
-                <p className="text-sm text-gray-400 mt-1">Performance trends over the last 7 days</p>
+      {/* ===================== Overview Tab ===================== */}
+      {activeTab === 'overview' && (
+        <div
+          role="tabpanel"
+          id="soul-panel-overview"
+          aria-labelledby="soul-tab-overview"
+          className="grid grid-cols-1 lg:grid-cols-3 gap-6"
+        >
+          {/* Left: Recent activity summary */}
+          <div className="lg:col-span-2 space-y-6">
+            {/* Availability */}
+            <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
+              <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                <TrendingUp className="w-5 h-5 text-amber-400" />
+                Availability
+              </h3>
+              <div className="space-y-4">
+                <AvailabilityBar label="24 Hours" value={stats.uptime24h} />
+                <AvailabilityBar label="7 Days" value={stats.uptime7d} />
+                <AvailabilityBar label="30 Days" value={stats.uptime30d} />
               </div>
-              <select
-                value={timeRange}
-                onChange={(e) => setTimeRange(e.target.value)}
-                className="bg-gray-800 border border-gray-700/50 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-amber-500/50"
-              >
-                <option value="1h">Last Hour</option>
-                <option value="24h">Last 24 Hours</option>
-                <option value="7d">Last 7 Days</option>
-                <option value="30d">Last 30 Days</option>
-              </select>
             </div>
 
-            {uptimeData.some(d => d.responseTime > 0) ? (
-              <>
-                {/* Chart Bars */}
-                <div className="h-48 flex items-end justify-between gap-3">
-                  {uptimeData.map((day) => (
-                    <div key={day.date} className="flex-1 flex flex-col items-center gap-2">
-                      <div className="w-full flex flex-col gap-1">
-                        <div
-                          className="w-full bg-emerald-500/80 rounded-t-lg transition-all hover:bg-emerald-400"
-                          style={{ height: `${day.uptime * 1.5}px` }}
-                          title={`Uptime: ${day.uptime}%`}
-                        />
-                        <div
-                          className="w-full bg-amber-500/60 rounded-t-lg transition-all hover:bg-amber-400"
-                          style={{ height: `${Math.min(day.responseTime, 100)}px` }}
-                          title={`Response: ${day.responseTime * 10}ms`}
-                        />
-                      </div>
-                      <span className="text-xs text-gray-500">{day.date}</span>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="flex items-center justify-center gap-6 mt-4 pt-4 border-t border-gray-700/50">
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 bg-emerald-500/80 rounded" />
-                    <span className="text-sm text-gray-400">Uptime %</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 bg-amber-500/60 rounded" />
-                    <span className="text-sm text-gray-400">Response Time</span>
-                  </div>
-                </div>
-              </>
-            ) : (
-              <div className="h-48 flex items-center justify-center">
-                <div className="text-center">
-                  <Activity className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-                  <p className="text-gray-400">No data available yet</p>
-                  <p className="text-sm text-gray-500 mt-1">Judgments will appear here after checks run</p>
-                </div>
+            {/* Recent Judgments summary */}
+            <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl overflow-hidden">
+              <div className="p-5 border-b border-gray-700/50 flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-amber-400" />
+                  Recent Judgments
+                </h3>
+                <button
+                  onClick={() => setActiveTab('history')}
+                  className="text-sm text-amber-400 hover:text-amber-300 transition-colors"
+                >
+                  View All
+                </button>
               </div>
-            )}
+              <JudgmentsList
+                judgments={judgments.slice(0, 5)}
+                loading={judgmentsLoading}
+                error={judgmentsError}
+                getStatusIcon={getStatusIcon}
+                getStatusTextColor={getStatusTextColor}
+                emptyHint="Click &quot;Test Now&quot; to run the first check"
+              />
+            </div>
           </div>
 
-          {/* Recent Judgments */}
+          {/* Right: Quick info */}
+          <div className="space-y-6">
+            {/* Tags */}
+            <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
+              <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                <Tag className="w-5 h-5 text-amber-400" />
+                Tags
+              </h3>
+              <div className="flex flex-wrap gap-2">
+                {(soul.tags || []).length > 0 ? (
+                  soul.tags?.map(tag => (
+                    <span
+                      key={tag}
+                      className="px-3 py-1.5 bg-gray-800 text-gray-300 rounded-xl text-sm border border-gray-700/50 hover:border-amber-500/30 transition-colors"
+                    >
+                      {tag}
+                    </span>
+                  ))
+                ) : (
+                  <span className="text-sm text-gray-500">No tags</span>
+                )}
+              </div>
+            </div>
+
+            {/* Info */}
+            <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
+              <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-amber-400" />
+                Information
+              </h3>
+              <div className="space-y-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400">Soul ID</span>
+                  <span className="text-gray-300 font-mono text-xs">{soul.id}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400">Created</span>
+                  <span className="text-gray-300">
+                    {soul.created_at ? new Date(soul.created_at).toLocaleDateString() : 'Unknown'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400">Updated</span>
+                  <span className="text-gray-300">
+                    {soul.updated_at ? new Date(soul.updated_at).toLocaleDateString() : 'Unknown'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================== Performance Tab ===================== */}
+      {activeTab === 'performance' && (
+        <div
+          role="tabpanel"
+          id="soul-panel-performance"
+          aria-labelledby="soul-tab-performance"
+          className="grid grid-cols-1 lg:grid-cols-3 gap-6"
+        >
+          {/* Left: Chart */}
+          <div className="lg:col-span-2 space-y-6">
+            <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-6">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-amber-400" />
+                    Response Time & Uptime
+                  </h3>
+                  <p className="text-sm text-gray-400 mt-1">Performance trends over the last 7 days</p>
+                </div>
+                <select
+                  value={timeRange}
+                  onChange={(e) => setTimeRange(e.target.value)}
+                  className="bg-gray-800 border border-gray-700/50 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-amber-500/50"
+                >
+                  <option value="1h">Last Hour</option>
+                  <option value="24h">Last 24 Hours</option>
+                  <option value="7d">Last 7 Days</option>
+                  <option value="30d">Last 30 Days</option>
+                </select>
+              </div>
+
+              {uptimeData.some(d => d.responseTime > 0) ? (
+                <>
+                  {/* Chart Bars */}
+                  <div className="h-48 flex items-end justify-between gap-3">
+                    {uptimeData.map((day) => (
+                      <div key={day.date} className="flex-1 flex flex-col items-center gap-2">
+                        <div className="w-full flex flex-col gap-1">
+                          <div
+                            className="w-full bg-emerald-500/80 rounded-t-lg transition-all hover:bg-emerald-400"
+                            style={{ height: `${day.uptime * 1.5}px` }}
+                            title={`Uptime: ${day.uptime}%`}
+                          />
+                          <div
+                            className="w-full bg-amber-500/60 rounded-t-lg transition-all hover:bg-amber-400"
+                            style={{ height: `${Math.min(day.responseTime, 100)}px` }}
+                            title={`Response: ${day.responseTime * 10}ms`}
+                          />
+                        </div>
+                        <span className="text-xs text-gray-500">{day.date}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center justify-center gap-6 mt-4 pt-4 border-t border-gray-700/50">
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 bg-emerald-500/80 rounded" />
+                      <span className="text-sm text-gray-400">Uptime %</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 bg-amber-500/60 rounded" />
+                      <span className="text-sm text-gray-400">Response Time</span>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="h-48 flex items-center justify-center">
+                  <div className="text-center">
+                    <Activity className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+                    <p className="text-gray-400">No data available yet</p>
+                    <p className="text-sm text-gray-500 mt-1">Judgments will appear here after checks run</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Right: Availability breakdown */}
+          <div className="space-y-6">
+            <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
+              <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                <TrendingUp className="w-5 h-5 text-amber-400" />
+                Availability Breakdown
+              </h3>
+              <div className="space-y-4">
+                <AvailabilityBar label="24 Hours" value={stats.uptime24h} />
+                <AvailabilityBar label="7 Days" value={stats.uptime7d} />
+                <AvailabilityBar label="30 Days" value={stats.uptime30d} />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===================== History Tab ===================== */}
+      {activeTab === 'history' && (
+        <div
+          role="tabpanel"
+          id="soul-panel-history"
+          aria-labelledby="soul-tab-history"
+        >
           <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl overflow-hidden">
             <div className="p-5 border-b border-gray-700/50 flex items-center justify-between">
               <h3 className="text-lg font-semibold text-white flex items-center gap-2">
                 <Clock className="w-5 h-5 text-amber-400" />
-                Recent Judgments
+                Judgment History
               </h3>
               <button
                 onClick={() => navigate('/judgments')}
                 className="text-sm text-amber-400 hover:text-amber-300 transition-colors"
               >
-                View All
+                Global Judgments
               </button>
             </div>
-            {judgmentsLoading ? (
-              <div className="flex items-center justify-center py-12">
-                <div className="w-8 h-8 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
-              </div>
-            ) : judgmentsError ? (
-              <div className="text-center py-8">
-                <p className="text-rose-400">{judgmentsError}</p>
-              </div>
-            ) : judgments.length === 0 ? (
-              <div className="text-center py-8">
-                <Activity className="w-12 h-12 text-gray-600 mx-auto mb-3" />
-                <p className="text-gray-400">No judgments yet</p>
-                <p className="text-sm text-gray-500 mt-1">Click &quot;Test Now&quot; to run the first check</p>
-              </div>
-            ) : (
-              <div className="divide-y divide-gray-700/50">
-                {judgments.slice(0, 8).map((judgment) => (
-                  <div
-                    key={judgment.id}
-                    className="p-4 flex items-center justify-between hover:bg-gray-800/50 transition-colors"
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                        judgment.status === 'passed' ? 'bg-emerald-500/10' :
-                        judgment.status === 'failed' ? 'bg-rose-500/10' : 'bg-amber-500/10'
-                      }`}>
-                        {getStatusIcon(judgment.status)}
-                      </div>
-                      <div>
-                        <p className={`font-medium capitalize ${getStatusTextColor(judgment.status)}`}>
-                          {judgment.status}
-                        </p>
-                        {judgment.error && (
-                          <p className="text-sm text-rose-400">{judgment.error}</p>
-                        )}
-                        <p className="text-sm text-gray-500 flex items-center gap-2">
-                          <MapPin className="w-3 h-3" />
-                          {judgment.region || 'unknown'}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-white font-mono">
-                        {judgment.latency > 1000 ? `${(judgment.latency / 1000).toFixed(1)}s` : `${judgment.latency}ms`}
-                      </p>
-                      <p className="text-sm text-gray-500">
-                        {new Date(judgment.timestamp).toLocaleTimeString()}
-                      </p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+            <JudgmentsList
+              judgments={judgments}
+              loading={judgmentsLoading}
+              error={judgmentsError}
+              getStatusIcon={getStatusIcon}
+              getStatusTextColor={getStatusTextColor}
+              emptyHint="Click &quot;Test Now&quot; to run the first check"
+            />
           </div>
         </div>
+      )}
 
-        {/* Right Column */}
-        <div className="space-y-6">
-          {/* Quick Stats */}
-          <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
-            <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-amber-400" />
-              Availability
-            </h3>
-            <div className="space-y-4">
-              <div>
-                <div className="flex items-center justify-between text-sm mb-1">
-                  <span className="text-gray-400">24 Hours</span>
-                  <span className="text-emerald-400 font-semibold">{stats.uptime24h}%</span>
-                </div>
-                <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full" style={{ width: `${Math.min(stats.uptime24h, 100)}%` }} />
-                </div>
+      {/* ===================== Settings Tab ===================== */}
+      {activeTab === 'settings' && (
+        <div
+          role="tabpanel"
+          id="soul-panel-settings"
+          aria-labelledby="soul-tab-settings"
+          className="grid grid-cols-1 lg:grid-cols-3 gap-6"
+        >
+          {/* Left: Configuration */}
+          <div className="lg:col-span-2 space-y-6">
+            <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <Settings2 className="w-5 h-5 text-amber-400" />
+                  Configuration
+                </h3>
+                <button
+                  onClick={() => navigate(`/souls/${id}/edit`)}
+                  className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-all"
+                >
+                  <Edit3 className="w-3.5 h-3.5" />
+                  Edit
+                </button>
               </div>
-              <div>
-                <div className="flex items-center justify-between text-sm mb-1">
-                  <span className="text-gray-400">7 Days</span>
-                  <span className="text-emerald-400 font-semibold">{stats.uptime7d}%</span>
-                </div>
-                <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full" style={{ width: `${Math.min(stats.uptime7d, 100)}%` }} />
-                </div>
-              </div>
-              <div>
-                <div className="flex items-center justify-between text-sm mb-1">
-                  <span className="text-gray-400">30 Days</span>
-                  <span className="text-emerald-400 font-semibold">{stats.uptime30d}%</span>
-                </div>
-                <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
-                  <div className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full" style={{ width: `${Math.min(stats.uptime30d, 100)}%` }} />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Configuration */}
-          <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
-            <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-              <Settings2 className="w-5 h-5 text-amber-400" />
-              Configuration
-            </h3>
-            <div className="space-y-4">
-              <div className="flex items-center justify-between py-2 border-b border-gray-700/50">
-                <div className="flex items-center gap-2 text-gray-400">
-                  <Server className="w-4 h-4" />
-                  <span className="text-sm">Type</span>
-                </div>
-                <span className="text-white font-medium uppercase px-2 py-1 bg-amber-500/10 rounded-lg text-sm">
-                  {soul.type}
-                </span>
-              </div>
-              <div className="flex items-center justify-between py-2 border-b border-gray-700/50">
-                <div className="flex items-center gap-2 text-gray-400">
-                  <Timer className="w-4 h-4" />
-                  <span className="text-sm">Interval</span>
-                </div>
-                <span className="text-white font-medium">{soul.interval || soul.weight}s</span>
-              </div>
-              <div className="flex items-center justify-between py-2 border-b border-gray-700/50">
-                <div className="flex items-center gap-2 text-gray-400">
-                  <Clock className="w-4 h-4" />
-                  <span className="text-sm">Timeout</span>
-                </div>
-                <span className="text-white font-medium">{soul.timeout}s</span>
-              </div>
-              <div className="flex items-center justify-between py-2 border-b border-gray-700/50">
-                <div className="flex items-center gap-2 text-gray-400">
-                  <MapPin className="w-4 h-4" />
-                  <span className="text-sm">Region</span>
-                </div>
-                <span className="text-white font-medium">{soul.region || 'global'}</span>
-              </div>
-              {soul.http_config && (
-                <div className="flex items-center justify-between py-2">
-                  <div className="flex items-center gap-2 text-gray-400">
-                    <Activity className="w-4 h-4" />
-                    <span className="text-sm">Method</span>
-                  </div>
-                  <span className="text-white font-medium">{soul.http_config.method}</span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Tags */}
-          <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
-            <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-              <Tag className="w-5 h-5 text-amber-400" />
-              Tags
-            </h3>
-            <div className="flex flex-wrap gap-2">
-              {(soul.tags || []).length > 0 ? (
-                soul.tags?.map(tag => (
-                  <span
-                    key={tag}
-                    className="px-3 py-1.5 bg-gray-800 text-gray-300 rounded-xl text-sm border border-gray-700/50 hover:border-amber-500/30 transition-colors"
-                  >
-                    {tag}
+              <div className="space-y-4">
+                <ConfigRow icon={Server} label="Type">
+                  <span className="text-white font-medium uppercase px-2 py-1 bg-amber-500/10 rounded-lg text-sm">
+                    {soul.type}
                   </span>
-                ))
-              ) : (
-                <span className="text-sm text-gray-500">No tags</span>
-              )}
+                </ConfigRow>
+                <ConfigRow icon={Timer} label="Interval">
+                  <span className="text-white font-medium">{soul.interval || soul.weight}s</span>
+                </ConfigRow>
+                <ConfigRow icon={Clock} label="Timeout">
+                  <span className="text-white font-medium">{soul.timeout}s</span>
+                </ConfigRow>
+                <ConfigRow icon={MapPin} label="Region">
+                  <span className="text-white font-medium">{soul.region || 'global'}</span>
+                </ConfigRow>
+                {soul.http_config && (
+                  <ConfigRow icon={Activity} label="Method">
+                    <span className="text-white font-medium">{soul.http_config.method}</span>
+                  </ConfigRow>
+                )}
+              </div>
+            </div>
+
+            {/* Danger Zone */}
+            <div className="bg-gradient-to-br from-rose-950/40 to-gray-900 border border-rose-700/30 rounded-2xl p-5">
+              <h3 className="text-lg font-semibold text-rose-300 mb-4 flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-rose-400" />
+                Danger Zone
+              </h3>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between p-3 bg-gray-900/50 rounded-xl">
+                  <div>
+                    <p className="text-white font-medium">
+                      {soul.enabled ? 'Pause Monitoring' : 'Resume Monitoring'}
+                    </p>
+                    <p className="text-sm text-gray-400">
+                      {soul.enabled
+                        ? 'Temporarily stop checks for this soul'
+                        : 'Resume checks for this soul'}
+                    </p>
+                  </div>
+                  <button
+                    onClick={handleToggleEnabled}
+                    className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl transition-all"
+                  >
+                    {soul.enabled ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                    {soul.enabled ? 'Pause' : 'Resume'}
+                  </button>
+                </div>
+                <div className="flex items-center justify-between p-3 bg-gray-900/50 rounded-xl">
+                  <div>
+                    <p className="text-white font-medium">Delete Soul</p>
+                    <p className="text-sm text-gray-400">Permanently remove this soul and all its data</p>
+                  </div>
+                  <button
+                    onClick={handleDelete}
+                    disabled={isDeleting}
+                    className="flex items-center gap-2 px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-xl transition-all disabled:opacity-50"
+                  >
+                    {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                    Delete
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Info */}
-          <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
-            <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
-              <Calendar className="w-5 h-5 text-amber-400" />
-              Information
-            </h3>
-            <div className="space-y-3 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-gray-400">Soul ID</span>
-                <span className="text-gray-300 font-mono text-xs">{soul.id}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-400">Created</span>
-                <span className="text-gray-300">
-                  {soul.created_at ? new Date(soul.created_at).toLocaleDateString() : 'Unknown'}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-400">Updated</span>
-                <span className="text-gray-300">
-                  {soul.updated_at ? new Date(soul.updated_at).toLocaleDateString() : 'Unknown'}
-                </span>
+          {/* Right: Soul metadata */}
+          <div className="space-y-6">
+            <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
+              <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-amber-400" />
+                Information
+              </h3>
+              <div className="space-y-3 text-sm">
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400">Soul ID</span>
+                  <span className="text-gray-300 font-mono text-xs">{soul.id}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400">Created</span>
+                  <span className="text-gray-300">
+                    {soul.created_at ? new Date(soul.created_at).toLocaleDateString() : 'Unknown'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400">Updated</span>
+                  <span className="text-gray-300">
+                    {soul.updated_at ? new Date(soul.updated_at).toLocaleDateString() : 'Unknown'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400">Status</span>
+                  <span className={soul.enabled ? 'text-emerald-400' : 'text-gray-500'}>
+                    {soul.enabled ? 'Active' : 'Disabled'}
+                  </span>
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }
+
+// ===================== Sub-components =====================
 
 interface StatCardProps {
   label: string
   value: string
   subValue: string
-  icon: typeof Activity
+  icon: LucideIcon
   gradient: string
   iconColor: string
   borderColor: string
@@ -677,6 +760,112 @@ function StatCard({ label, value, subValue, icon: Icon, gradient, iconColor, bor
           <Icon className={`w-6 h-6 ${iconColor}`} />
         </div>
       </div>
+    </div>
+  )
+}
+
+function AvailabilityBar({ label, value }: { label: string; value: number }) {
+  return (
+    <div>
+      <div className="flex items-center justify-between text-sm mb-1">
+        <span className="text-gray-400">{label}</span>
+        <span className="text-emerald-400 font-semibold">{value}%</span>
+      </div>
+      <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
+        <div
+          className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full"
+          style={{ width: `${Math.min(value, 100)}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
+function ConfigRow({ icon: Icon, label, children }: { icon: LucideIcon; label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between py-2 border-b border-gray-700/50 last:border-0">
+      <div className="flex items-center gap-2 text-gray-400">
+        <Icon className="w-4 h-4" />
+        <span className="text-sm">{label}</span>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+interface JudgmentsListProps {
+  judgments: Judgment[]
+  loading: boolean
+  error: string | null
+  getStatusIcon: (status: string) => React.ReactNode
+  getStatusTextColor: (status: string) => string
+  emptyHint: string
+}
+
+function JudgmentsList({ judgments, loading, error, getStatusIcon, getStatusTextColor, emptyHint }: JudgmentsListProps) {
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <div className="w-8 h-8 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="text-center py-8">
+        <p className="text-rose-400">{error}</p>
+      </div>
+    )
+  }
+
+  if (judgments.length === 0) {
+    return (
+      <div className="text-center py-8">
+        <Activity className="w-12 h-12 text-gray-600 mx-auto mb-3" />
+        <p className="text-gray-400">No judgments yet</p>
+        <p className="text-sm text-gray-500 mt-1" dangerouslySetInnerHTML={{ __html: emptyHint }} />
+      </div>
+    )
+  }
+
+  return (
+    <div className="divide-y divide-gray-700/50">
+      {judgments.map((judgment) => (
+        <div
+          key={judgment.id}
+          className="p-4 flex items-center justify-between hover:bg-gray-800/50 transition-colors"
+        >
+          <div className="flex items-center gap-4">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+              judgment.status === 'passed' ? 'bg-emerald-500/10' :
+              judgment.status === 'failed' ? 'bg-rose-500/10' : 'bg-amber-500/10'
+            }`}>
+              {getStatusIcon(judgment.status)}
+            </div>
+            <div>
+              <p className={`font-medium capitalize ${getStatusTextColor(judgment.status)}`}>
+                {judgment.status}
+              </p>
+              {judgment.error && (
+                <p className="text-sm text-rose-400">{judgment.error}</p>
+              )}
+              <p className="text-sm text-gray-500 flex items-center gap-2">
+                <MapPin className="w-3 h-3" />
+                {judgment.region || 'unknown'}
+              </p>
+            </div>
+          </div>
+          <div className="text-right">
+            <p className="text-white font-mono">
+              {judgment.latency > 1000 ? `${(judgment.latency / 1000).toFixed(1)}s` : `${judgment.latency}ms`}
+            </p>
+            <p className="text-sm text-gray-500">
+              {new Date(judgment.timestamp).toLocaleTimeString()}
+            </p>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

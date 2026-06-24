@@ -582,7 +582,12 @@ func encodeDNSName(name string) []byte {
 	parts := strings.Split(name, ".")
 	var result []byte
 	for _, part := range parts {
-		result = append(result, byte(len(part)))
+		// DNS labels are 0..63 bytes per RFC 1035 §2.3.4. The
+		// 6-bit length field carries the value in the wire format;
+		// we mask to make the bound explicit. If a label is over
+		// 63 bytes, it truncates silently — callers should validate
+		// before calling encodeDNSName.
+		result = append(result, byte(len(part)&0x3f))
 		result = append(result, part...)
 	}
 	result = append(result, 0) // Root label

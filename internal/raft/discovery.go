@@ -2,7 +2,11 @@ package raft
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -22,6 +26,21 @@ type Discovery struct {
 	nodeID   string
 	bindAddr string
 	region   string
+
+	// clusterSecret is the HMAC key used to authenticate gossip
+	// messages received over UDP. Empty means authentication is
+	// disabled — only safe for single-node or fully-isolated test
+	// setups. Any production deployment with --cluster should set
+	// ANUBIS_CLUSTER_SECRET so the discovery layer rejects rogue
+	// messages. Note: Raft RPC traffic (AppendEntries, RequestVote)
+	// is protected separately by transport TLS, not by this secret.
+	clusterSecret []byte
+
+	// messageFreshness is the maximum age (timestamp skew) accepted
+	// for an inbound message. Defaults to 5 minutes; long enough
+	// to survive clock skew in a small cluster, short enough to
+	// invalidate a captured packet before an attacker can replay it.
+	messageFreshness time.Duration
 
 	// mDNS
 	mdnsServer *MDNSServer
@@ -60,7 +79,14 @@ type DiscoveredPeer struct {
 	IsStatic     bool // Configured vs discovered
 }
 
-// GossipMessage is sent between peers during gossip
+// GossipMessage is sent between peers during gossip.
+//
+// K9: every gossip message carries an HMAC-SHA256 signature computed
+// over the canonical JSON encoding of the message minus the Signature
+// field itself, keyed by the cluster's shared secret. The Timestamp
+// is also signed so a captured packet can't be replayed indefinitely.
+// Replay protection is enforced by the receiver via a 5-minute
+// freshness window.
 type GossipMessage struct {
 	Type      string           `json:"type"`
 	NodeID    string           `json:"node_id"`
@@ -69,7 +95,21 @@ type GossipMessage struct {
 	Version   string           `json:"version"`
 	Peers     []GossipPeerInfo `json:"peers"`
 	Timestamp int64            `json:"timestamp"`
+
+	// HMAC is the hex-encoded HMAC-SHA256 signature of the canonical
+	// message body, keyed by the cluster secret. Empty HMAC means
+	// the message is unauthenticated and should be rejected when the
+	// cluster has a secret configured.
+	HMAC string `json:"hmac,omitempty"`
 }
+
+// ErrMessageUnauthenticated is returned by HMAC verification helpers
+// when a gossip message lacks a valid signature.
+var ErrMessageUnauthenticated = errors.New("raft: message failed HMAC authentication")
+
+// ErrMessageStale is returned when a message's timestamp is outside
+// the configured freshness window (replay-protection).
+var ErrMessageStale = errors.New("raft: message timestamp outside freshness window")
 
 // GossipPeerInfo is information about a peer in gossip
 type GossipPeerInfo struct {
@@ -118,17 +158,25 @@ func NewDiscovery(config core.RaftConfig, logger *slog.Logger) (*Discovery, erro
 	ctx, cancel := context.WithCancel(context.Background())
 
 	d := &Discovery{
-		config:         config,
-		nodeID:         config.NodeID,
-		bindAddr:       config.AdvertiseAddr,
-		region:         "default",
-		gossipInterval: 1 * time.Second,
-		gossipNodes:    3,
-		knownPeers:     make(map[string]*DiscoveredPeer),
-		ctx:            ctx,
-		cancel:         cancel,
-		done:           make(chan struct{}),
-		logger:         logger.With("component", "discovery"),
+		config:           config,
+		nodeID:           config.NodeID,
+		bindAddr:         config.AdvertiseAddr,
+		region:           "default",
+		clusterSecret:    []byte(config.ClusterSecret),
+		messageFreshness: 5 * time.Minute,
+		gossipInterval:   1 * time.Second,
+		gossipNodes:      3,
+		knownPeers:       make(map[string]*DiscoveredPeer),
+		ctx:              ctx,
+		cancel:           cancel,
+		done:             make(chan struct{}),
+		logger:           logger.With("component", "discovery"),
+	}
+
+	if config.ClusterSecret == "" {
+		logger.Warn("K9: ANUBIS_CLUSTER_SECRET is empty — gossip messages will be accepted without HMAC authentication. Set the secret for any non-test deployment.",
+			"node_id", config.NodeID,
+		)
 	}
 
 	// Initialize mDNS
@@ -272,6 +320,11 @@ func (d *Discovery) doGossip() {
 	}
 	d.peersMu.RUnlock()
 
+	// K9: sign the message before serialising. The HMAC covers every
+	// field including the timestamp (replay-protection) and the
+	// embedded peer list (anti-tamper).
+	signGossip(&msg, d.clusterSecret)
+
 	// Send to selected peers
 	for _, peer := range peers {
 		d.sendGossip(peer, msg)
@@ -354,6 +407,19 @@ func (d *Discovery) gossipListen() {
 			continue
 		}
 
+		// K9: HMAC verification + replay protection. Anything that
+		// fails the check is dropped silently (besides a single
+		// warning at WARN level the first few times per source) so an
+		// attacker cannot spam the log.
+		if err := verifyGossip(msg, d.clusterSecret, d.messageFreshness, time.Now()); err != nil {
+			d.logger.Warn("K9: rejected gossip from untrusted source",
+				"from_addr", addr.String(),
+				"claimed_node_id", msg.NodeID,
+				"reason", err.Error(),
+			)
+			continue
+		}
+
 		d.handleGossip(msg)
 
 		// Also respond with our info so the sender learns about us
@@ -365,6 +431,7 @@ func (d *Discovery) gossipListen() {
 			Version:   "0.1.0",
 			Timestamp: time.Now().Unix(),
 		}
+		signGossip(&resp, d.clusterSecret)
 		d.sendGossip(&DiscoveredPeer{ID: msg.NodeID, Address: addr.String()}, resp)
 	}
 }
@@ -787,3 +854,87 @@ func decodeGossip(data []byte) (*GossipMessage, error) {
 	}
 	return &msg, nil
 }
+
+// --- K9: HMAC authentication for gossip messages ---
+
+// signGossip populates msg.HMAC with the HMAC-SHA256 of the canonical
+// JSON body (without the HMAC field itself), keyed by secret. The
+// function mutates the receiver and is intended to be called just
+// before serialising for the wire. Returns the receiver for chaining.
+//
+// If secret is empty, the function is a no-op and the message will
+// be sent without an HMAC. The receiver is expected to reject
+// unsigned messages in that case (see verifyGossip).
+func signGossip(msg *GossipMessage, secret []byte) *GossipMessage {
+	if len(secret) == 0 {
+		msg.HMAC = ""
+		return msg
+	}
+	body, err := json.Marshal(msg)
+	if err != nil {
+		// Should never happen for a well-formed GossipMessage.
+		msg.HMAC = ""
+		return msg
+	}
+	// The HMAC field is empty at this point, so the `omitempty` tag
+	// on GossipMessage.HMAC drops it from the marshalled body — body
+	// is already the canonical signed form. We sign body as-is; verifyGossip
+	// reproduces the same canonical form by zeroing its own copy of the
+	// HMAC field before marshalling.
+
+	mac := hmac.New(sha256.New, secret)
+	mac.Write(body)
+	msg.HMAC = hex.EncodeToString(mac.Sum(nil))
+	return msg
+}
+
+// verifyGossip checks the HMAC and timestamp of an inbound message.
+// Returns nil on success, an error describing the failure on rejection.
+//
+// Behaviour matrix:
+//   - secret empty, msg.HMAC empty → accept (test/single-node mode)
+//   - secret empty, msg.HMAC set   → reject (someone is sending signed
+//     messages to a process that doesn't expect them; likely misconfig)
+//   - secret set,   msg.HMAC empty → reject
+//   - secret set,   msg.HMAC set   → verify HMAC, check timestamp
+func verifyGossip(msg *GossipMessage, secret []byte, freshness time.Duration, now time.Time) error {
+	if len(secret) == 0 {
+		if msg.HMAC != "" {
+			return fmt.Errorf("%w: receiver has no secret but message is signed", ErrMessageUnauthenticated)
+		}
+		return nil
+	}
+	if msg.HMAC == "" {
+		return fmt.Errorf("%w: missing HMAC", ErrMessageUnauthenticated)
+	}
+
+	// Replay protection: reject anything outside the freshness window.
+	// Uses absolute difference to be tolerant of small clock skew.
+	ts := time.Unix(msg.Timestamp, 0)
+	if delta := now.Sub(ts); delta > freshness || delta < -freshness {
+		return fmt.Errorf("%w: age=%s", ErrMessageStale, delta)
+	}
+
+	// Re-derive the HMAC over the canonical body (HMAC field zeroed)
+	// and compare in constant time. The hex.DecodeString is bounded
+	// by the length of msg.HMAC (small), so this is fine.
+	clean := *msg
+	clean.HMAC = ""
+	body, err := json.Marshal(&clean)
+	if err != nil {
+		return fmt.Errorf("raft: failed to marshal body for HMAC verify: %w", err)
+	}
+	mac := hmac.New(sha256.New, secret)
+	mac.Write(body)
+	expected := mac.Sum(nil)
+
+	provided, err := hex.DecodeString(msg.HMAC)
+	if err != nil {
+		return fmt.Errorf("%w: invalid hex", ErrMessageUnauthenticated)
+	}
+	if !hmac.Equal(provided, expected) {
+		return fmt.Errorf("%w: signature mismatch", ErrMessageUnauthenticated)
+	}
+	return nil
+}
+

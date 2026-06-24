@@ -135,6 +135,12 @@ type RaftConfig struct {
 	Peers             []RaftPeer     `json:"peers" yaml:"peers"`
 	TLS               *TLSPeerConfig `json:"tls" yaml:"tls"`
 	Role              RaftRole       `json:"role" yaml:"role"`
+
+	// ClusterSecret is the K9 shared HMAC key. Mirror of
+	// NecropolisConfig.ClusterSecret; populated by the cluster
+	// manager when it builds the Raft config. Empty means
+	// authentication is disabled.
+	ClusterSecret string `json:"cluster_secret" yaml:"cluster_secret"`
 }
 
 // TLSPeerConfig holds TLS configuration for peer-to-peer communication

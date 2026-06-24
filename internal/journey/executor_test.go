@@ -1322,7 +1322,7 @@ func TestJourney_VariablePassingBetweenSteps(t *testing.T) {
 	t.Log("Journey with variable passing executed successfully")
 }
 
-// Tests for computeDedupHash
+// Tests for computeDedupHashFromRun
 
 func TestComputeDedupHash_NoPaths(t *testing.T) {
 	db := newTestDB(t)
@@ -1333,8 +1333,11 @@ func TestComputeDedupHash_NoPaths(t *testing.T) {
 		ID:    "test-journey",
 		Steps: []core.JourneyStep{},
 	}
+	run := &core.JourneyRun{
+		Variables: map[string]string{},
+	}
 
-	hash := executor.computeDedupHash(journey)
+	hash := executor.computeDedupHashFromRun(journey, run)
 	if hash != "" {
 		t.Errorf("Expected empty hash when no JSONPath rules, got %s", hash)
 	}
@@ -1364,10 +1367,34 @@ func TestComputeDedupHash_WithPaths(t *testing.T) {
 			},
 		},
 	}
+	run := &core.JourneyRun{
+		Variables: map[string]string{
+			"token": "abc123",
+			"id":    "42",
+		},
+	}
 
-	hash := executor.computeDedupHash(journey)
+	hash := executor.computeDedupHashFromRun(journey, run)
 	if hash == "" {
 		t.Error("Expected non-empty hash when JSONPath rules exist")
+	}
+
+	// Same values should produce same hash
+	hash2 := executor.computeDedupHashFromRun(journey, run)
+	if hash != hash2 {
+		t.Error("Expected same hash for same values")
+	}
+
+	// Different values should produce different hash
+	run2 := &core.JourneyRun{
+		Variables: map[string]string{
+			"token": "different",
+			"id":    "42",
+		},
+	}
+	hash3 := executor.computeDedupHashFromRun(journey, run2)
+	if hash == hash3 {
+		t.Error("Expected different hash for different values")
 	}
 }
 

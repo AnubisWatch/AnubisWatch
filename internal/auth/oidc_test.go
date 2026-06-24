@@ -20,6 +20,19 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
+// newTestOIDCAuth wraps NewOIDCAuthenticator for tests so the (auth, err)
+// return shape doesn't litter every test body. The returned authenticator
+// is shut down via t.Cleanup.
+func newTestOIDCAuth(t *testing.T, cfg core.OIDCAuth, localPath, email, password string) *OIDCAuthenticator {
+	t.Helper()
+	a, err := NewOIDCAuthenticator(cfg, localPath, email, password)
+	if err != nil {
+		t.Fatalf("NewOIDCAuthenticator: %v", err)
+	}
+	t.Cleanup(func() { a.Shutdown() })
+	return a
+}
+
 func TestOIDCAuthenticator_NewOIDCAuthenticator(t *testing.T) {
 	cfg := core.OIDCAuth{
 		Issuer:       "https://accounts.google.com",
@@ -28,8 +41,7 @@ func TestOIDCAuthenticator_NewOIDCAuthenticator(t *testing.T) {
 		RedirectURL:  "http://localhost:8080/api/v1/auth/oidc/callback",
 	}
 
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	if auth == nil {
 		t.Fatal("NewOIDCAuthenticator returned nil")
@@ -48,8 +60,7 @@ func TestOIDCAuthenticator_LocalFallback(t *testing.T) {
 		RedirectURL:  "http://localhost:8080/callback",
 	}
 
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Test local fallback login
 	user, token, err := auth.Login("admin@test.com", "TestPass1234!")
@@ -84,10 +95,12 @@ func TestOIDCAuthenticator_AddUser(t *testing.T) {
 		RedirectURL:  "http://localhost:8080/callback",
 	}
 
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
-	user := auth.AddUser("user@example.com", "Test User", "editor")
+	user, err := auth.AddUser("user@example.com", "Test User", "editor")
+	if err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
 	if user == nil {
 		t.Fatal("AddUser returned nil")
 	}
@@ -119,8 +132,7 @@ func TestOIDCAuthenticator_OIDCCallback_InvalidState(t *testing.T) {
 		RedirectURL:  "http://localhost:8080/callback",
 	}
 
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Test callback with invalid state (no matching state was generated)
 	_, _, err := auth.OIDCCallback("test-code", "invalid.state.here", "invalid-nonce")
@@ -137,8 +149,7 @@ func TestOIDCAuthenticator_OIDCCallback_InvalidNonce(t *testing.T) {
 		RedirectURL:  "http://localhost:8080/callback",
 	}
 
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Create a valid state with a nonce
 	state := "valid-state"
@@ -168,8 +179,7 @@ func TestOIDCAuthenticator_OIDCLoginURL_ConfigError(t *testing.T) {
 		RedirectURL:  "http://localhost:8080/callback",
 	}
 
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Should fail because the issuer domain doesn't exist
 	_, _, _, err := auth.OIDCLoginURL()
@@ -186,8 +196,7 @@ func TestOIDCAuthenticator_TokenExpiration(t *testing.T) {
 		RedirectURL:  "http://localhost:8080/callback",
 	}
 
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Login and get token
 	_, token, err := auth.Login("admin@test.com", "TestPass1234!")
@@ -480,13 +489,18 @@ func TestOIDCAuthenticator_GetUsers(t *testing.T) {
 		RedirectURL:  "http://localhost:8080/callback",
 	}
 
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Add some users
-	auth.AddUser("user1@example.com", "User One", "viewer")
-	auth.AddUser("user2@example.com", "User Two", "editor")
-	auth.AddUser("user3@example.com", "User Three", "admin")
+	if _, err := auth.AddUser("user1@example.com", "User One", "viewer"); err != nil {
+		t.Fatalf("AddUser 1: %v", err)
+	}
+	if _, err := auth.AddUser("user2@example.com", "User Two", "editor"); err != nil {
+		t.Fatalf("AddUser 2: %v", err)
+	}
+	if _, err := auth.AddUser("user3@example.com", "User Three", "admin"); err != nil {
+		t.Fatalf("AddUser 3: %v", err)
+	}
 
 	users := auth.GetUsers()
 	if len(users) < 3 {
@@ -502,8 +516,7 @@ func TestOIDCAuthenticator_OIDCCallback_StateExpiration(t *testing.T) {
 		RedirectURL:  "http://localhost:8080/callback",
 	}
 
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Manually add an expired state
 	expiredState := "expired-state"
@@ -537,8 +550,7 @@ func TestOIDCAuthenticator_OIDCCallback_OIDCError(t *testing.T) {
 
 	// Use the mock server as issuer (it won't work but tests the error path)
 	cfg.Issuer = server.URL
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Generate a valid state
 	loginURL, state, nonce, _ := auth.OIDCLoginURL()
@@ -963,12 +975,11 @@ func TestOIDCAuthenticator_OIDCLoginURL_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	auth := NewOIDCAuthenticator(core.OIDCAuth{
+	auth := newTestOIDCAuth(t, core.OIDCAuth{
 		Issuer:      server.URL,
 		ClientID:    "test-client",
 		RedirectURL: "http://localhost:8080/callback",
 	}, "", "", "")
-	defer auth.Shutdown()
 
 	url, state, nonce, err := auth.OIDCLoginURL()
 	if err != nil {
@@ -1052,10 +1063,12 @@ func TestOIDCAuthenticator_Authenticate_ExpiredToken(t *testing.T) {
 		RedirectURL:  "http://localhost:8080/callback",
 	}
 
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
-	user := auth.AddUser("user@example.com", "Test User", "viewer")
+	user, err := auth.AddUser("user@example.com", "Test User", "viewer")
+	if err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
 
 	// Manually inject an expired session
 	token := "expired-oidc-token"
@@ -1066,7 +1079,7 @@ func TestOIDCAuthenticator_Authenticate_ExpiredToken(t *testing.T) {
 	}
 	auth.mu.Unlock()
 
-	_, err := auth.Authenticate(token)
+	_, err = auth.Authenticate(token)
 	if err == nil {
 		t.Error("Expected error for expired token")
 	}
@@ -1080,8 +1093,7 @@ func TestOIDCAuthenticator_Authenticate_MissingUser(t *testing.T) {
 		RedirectURL:  "http://localhost:8080/callback",
 	}
 
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Manually inject a session pointing to a non-existent user
 	token := "orphan-oidc-token"
@@ -1151,7 +1163,7 @@ func TestOIDCAuthenticator_OIDCCallback_Success(t *testing.T) {
 	}
 	idToken = createTestJWT(t, priv, claims)
 
-	auth := NewOIDCAuthenticator(core.OIDCAuth{
+	auth := newTestOIDCAuth(t, core.OIDCAuth{
 		Issuer:       server.URL,
 		ClientID:     "client-id",
 		ClientSecret: "client-secret",
@@ -1229,7 +1241,7 @@ func TestOIDCAuthenticator_OIDCCallback_EmptyEmail(t *testing.T) {
 	}
 	idToken = createTestJWT(t, priv, claims)
 
-	auth := NewOIDCAuthenticator(core.OIDCAuth{
+	auth := newTestOIDCAuth(t, core.OIDCAuth{
 		Issuer:       server.URL,
 		ClientID:     "client-id",
 		ClientSecret: "client-secret",
@@ -1303,7 +1315,7 @@ func TestOIDCAuthenticator_OIDCCallback_GetUserInfoError(t *testing.T) {
 	}
 	idToken = createTestJWT(t, priv, claims)
 
-	auth := NewOIDCAuthenticator(core.OIDCAuth{
+	auth := newTestOIDCAuth(t, core.OIDCAuth{
 		Issuer:       server.URL,
 		ClientID:     "client-id",
 		ClientSecret: "client-secret",
@@ -1378,8 +1390,7 @@ func TestOIDCAuthenticator_DelegationMethods(t *testing.T) {
 		ClientSecret: "test-client-secret",
 		RedirectURL:  "http://localhost:8080/api/v1/auth/oidc/callback",
 	}
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Login first to get a valid token
 	_, token, err := auth.Login("admin@test.com", "TestPass1234!")
@@ -1550,8 +1561,7 @@ func TestVerifyJWTSignature_EmptyAndInvalid(t *testing.T) {
 		ClientID:    "test-client",
 		RedirectURL: "http://localhost/callback",
 	}
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Empty token
 	_, err := auth.verifyJWTSignature("")
@@ -1618,8 +1628,7 @@ func TestVerifyState_InvalidFormat(t *testing.T) {
 		ClientID:    "test-client",
 		RedirectURL: "http://localhost/callback",
 	}
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// No dot separator
 	_, err := auth.verifyState("nodothere")
@@ -1671,8 +1680,7 @@ func TestParseIDToken_ValidationErrors(t *testing.T) {
 	defer server.Close()
 
 	cfg.Issuer = server.URL
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// We need the private key from the server to sign tokens.
 	// Since the server generates a new key each request, we can't sign valid tokens.
@@ -1720,8 +1728,7 @@ func TestFindKeyForJWT_NoMatchingKid(t *testing.T) {
 	defer server.Close()
 
 	cfg.Issuer = server.URL
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	headers := map[string]interface{}{"kid": "nonexistent-key", "alg": "RS256"}
 	_, err := auth.findKeyForJWT(headers)
@@ -1764,8 +1771,7 @@ func TestVerifyJWTSignature_KeyTypeMismatch(t *testing.T) {
 	defer server.Close()
 
 	cfg.Issuer = server.URL
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT","kid":"rsa-key"}`))
 	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"https://example.com","sub":"123","aud":"test-client","exp":9999999999}`))
@@ -1807,8 +1813,7 @@ func TestVerifyJWTSignature_ES256KeyTypeMismatch(t *testing.T) {
 	defer server.Close()
 
 	cfg.Issuer = server.URL
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"ES256","typ":"JWT","kid":"ec-key"}`))
 	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"https://example.com","sub":"123","aud":"test-client","exp":9999999999}`))
@@ -1836,8 +1841,7 @@ func TestFetchJWKs_MissingJWKSURI(t *testing.T) {
 	defer server.Close()
 
 	cfg.Issuer = server.URL
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	_, err := auth.fetchJWKs()
 	if err == nil {
@@ -1878,8 +1882,7 @@ func TestVerifyJWTSignature_UnsupportedAlgorithm(t *testing.T) {
 	defer server.Close()
 
 	cfg.Issuer = server.URL
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// JWT header matches the RS384 key alg
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS384","typ":"JWT","kid":"rsa-key"}`))
@@ -1928,8 +1931,7 @@ func TestParseIDToken_NonceMismatch(t *testing.T) {
 		ClientID:    "test-client-id",
 		RedirectURL: "http://localhost/callback",
 	}
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT","kid":"test-key"}`))
 	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"` + server.URL + `","sub":"123","aud":"test-client-id","exp":9999999999,"nonce":"different-nonce"}`))
@@ -1978,8 +1980,7 @@ func TestParseIDToken_AudienceInList(t *testing.T) {
 		ClientID:    "test-client-id",
 		RedirectURL: "http://localhost/callback",
 	}
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT","kid":"test-key"}`))
 	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"` + server.URL + `","sub":"123","aud":["other-client","test-client-id"],"exp":9999999999}`))
@@ -2043,8 +2044,7 @@ func TestParseIDToken_InvalidPayloadJSON(t *testing.T) {
 		ClientID:    "test-client",
 		RedirectURL: "http://localhost/callback",
 	}
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT","kid":"test-key"}`))
 	payload := base64.RawURLEncoding.EncodeToString([]byte(`not-json-at-all`))
@@ -2091,8 +2091,7 @@ func TestVerifyJWTSignature_SignatureDecodeError(t *testing.T) {
 	defer server.Close()
 
 	cfg.Issuer = server.URL
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT","kid":"rsa-key"}`))
 	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"https://example.com","sub":"123","aud":"test-client","exp":9999999999}`))
@@ -2116,8 +2115,7 @@ func TestOIDCAuthenticator_SwitchWorkspace(t *testing.T) {
 		RedirectURL:  "http://localhost:8080/callback",
 	}
 
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Login to get a valid token (local fallback)
 	_, token, err := auth.Login("admin@test.com", "TestPass1234!")
@@ -2172,8 +2170,7 @@ func TestOIDCAuthenticator_SwitchWorkspace_UserNotFound(t *testing.T) {
 		RedirectURL:  "http://localhost:8080/callback",
 	}
 
-	auth := NewOIDCAuthenticator(cfg, "", "admin@test.com", "TestPass1234!")
-	defer auth.Shutdown()
+	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	// Create a session with a non-existent user
 	token := "orphan-token"

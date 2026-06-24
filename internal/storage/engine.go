@@ -30,12 +30,23 @@ type CobaltDB struct {
 	encryptor  *encryptor // AES-256-GCM encryption (nil if disabled)
 
 	// Secondary indexes for O(1) lookups by ID (replaces O(n) PrefixScan)
-	soulIndex     map[string]string // soulID -> workspaceID
-	judgmentIndex map[string]string // judgmentID -> workspaceID
-	channelIndex  map[string]string // channelID -> workspaceID
-	ruleIndex     map[string]string // ruleID -> workspaceID
-	journeyIndex  map[string]string // journeyID -> workspaceID
-	incidentIndex map[string]string // incidentID -> workspaceID
+	soulIndex        map[string]string // soulID -> workspaceID
+	judgmentIndex    map[string]string // judgmentID -> workspaceID
+	channelIndex     map[string]string // channelID -> workspaceID
+	ruleIndex        map[string]string // ruleID -> workspaceID
+	journeyIndex     map[string]string // journeyID -> workspaceID
+	incidentIndex    map[string]string // incidentID -> workspaceID
+	statusPageIndex  map[string]string // statusPageID -> workspaceID
+	dashboardIndex   map[string]string // dashboardID -> workspaceID
+	maintenanceIndex map[string]string // maintenanceWindowID -> workspaceID
+	alertEventIndex  map[string]string // alertEventID -> workspaceID
+
+	// workspaceIndex tracks all known workspace IDs so cross-workspace
+	// queries (ListStatusPages, ListDashboards, retention, GetStorageStats)
+	// can iterate workspaces instead of scanning every key in the B+Tree.
+	// Order of first appearance is preserved for deterministic listing.
+	workspaceIndex map[string]struct{}
+	workspaceOrder []string
 }
 
 // btreeIndex is an in-memory B+Tree index (simplified for Phase 1)
@@ -161,12 +172,18 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 		btreeOrder: btreeOrder,
 		encryptor:  enc,
 		// Initialize secondary indexes for O(1) lookups
-		soulIndex:     make(map[string]string),
-		judgmentIndex: make(map[string]string),
-		channelIndex:  make(map[string]string),
-		ruleIndex:     make(map[string]string),
-		journeyIndex:  make(map[string]string),
-		incidentIndex: make(map[string]string),
+		soulIndex:        make(map[string]string),
+		judgmentIndex:    make(map[string]string),
+		channelIndex:     make(map[string]string),
+		ruleIndex:        make(map[string]string),
+		journeyIndex:     make(map[string]string),
+		incidentIndex:    make(map[string]string),
+		statusPageIndex:  make(map[string]string),
+		dashboardIndex:   make(map[string]string),
+		maintenanceIndex: make(map[string]string),
+		alertEventIndex:  make(map[string]string),
+		workspaceIndex:   make(map[string]struct{}),
+		workspaceOrder:   nil,
 	}
 
 	// Recover from WAL
@@ -567,7 +584,10 @@ func insertNode(slice []*btreeNode, idx int, val *btreeNode) []*btreeNode {
 // WAL operations
 
 func newWAL(path string) (*writeAheadLog, error) {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
+	// G302: WAL contains committed judgments and may carry
+	// sensitive verdicts; 0600 keeps multi-user hosts from
+	// peeking at the on-disk log via /proc/<pid>/fd races.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -596,10 +616,10 @@ func (w *writeAheadLog) Append(key string, value []byte) error {
 
 	// Write length-prefixed entry
 	length := make([]byte, 4)
-	length[0] = byte(len(data) >> 24)
-	length[1] = byte(len(data) >> 16)
-	length[2] = byte(len(data) >> 8)
-	length[3] = byte(len(data))
+	length[0] = byte(len(data) >> 24 & 0xff)
+	length[1] = byte(len(data) >> 16 & 0xff)
+	length[2] = byte(len(data) >> 8 & 0xff)
+	length[3] = byte(len(data) & 0xff)
 
 	if _, err := w.file.Write(length); err != nil {
 		return err
@@ -627,10 +647,10 @@ func (w *writeAheadLog) AppendDelete(key string) error {
 	}
 
 	length := make([]byte, 4)
-	length[0] = byte(len(data) >> 24)
-	length[1] = byte(len(data) >> 16)
-	length[2] = byte(len(data) >> 8)
-	length[3] = byte(len(data))
+	length[0] = byte(len(data) >> 24 & 0xff)
+	length[1] = byte(len(data) >> 16 & 0xff)
+	length[2] = byte(len(data) >> 8 & 0xff)
+	length[3] = byte(len(data) & 0xff)
 
 	if _, err := w.file.Write(length); err != nil {
 		return err
@@ -743,7 +763,8 @@ func (db *CobaltDB) recoverFromWAL() error {
 	if err := os.Remove(walPath); err != nil {
 		return fmt.Errorf("failed to remove WAL after recovery: %w", err)
 	}
-	newFile, err := os.OpenFile(walPath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
+	// G302: see newWAL above — same rationale.
+	newFile, err := os.OpenFile(walPath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to recreate WAL: %w", err)
 	}
@@ -771,8 +792,13 @@ func (db *CobaltDB) SaveSoul(ctx context.Context, soul *core.Soul) error {
 		return err
 	}
 
-	// Update secondary index for O(1) GetSoulNoCtx lookup
+	// Update secondary index for O(1) GetSoulNoCtx lookup.
+	// db.mu protects soulIndex + workspaceOrder from concurrent mutation
+	// (e.g. parallel SaveSoul calls racing with rebuildSecondaryIndexes).
+	db.mu.Lock()
 	db.soulIndex[soul.ID] = workspaceID
+	db.recordWorkspaceLocked(workspaceID)
+	db.mu.Unlock()
 	return nil
 }
 
@@ -956,9 +982,13 @@ func (db *CobaltDB) DeleteWorkspace(ctx context.Context, id string) error {
 // REST API Storage interface wrappers (without context for simpler interface)
 
 // GetSoulNoCtx retrieves a soul by ID using O(1) index lookup (REST API compatible)
-// Formerly O(n) PrefixScan(""), now O(1) via secondary index
+// Formerly O(n) PrefixScan(""), now O(1) via secondary index.
+// db.mu.RLock pairs with the writer in SaveSoul (engine.go) and
+// rebuildSecondaryIndexes — both take db.mu.Lock when mutating the map.
 func (db *CobaltDB) GetSoulNoCtx(id string) (*core.Soul, error) {
+	db.mu.RLock()
 	workspaceID, ok := db.soulIndex[id]
+	db.mu.RUnlock()
 	if !ok {
 		return nil, &core.NotFoundError{Entity: "soul", ID: id}
 	}
@@ -982,10 +1012,15 @@ func (db *CobaltDB) ListSoulsNoCtx(workspace string, offset, limit int) ([]*core
 }
 
 // GetJudgmentNoCtx retrieves a judgment by ID using O(1) index lookup
-// Formerly O(n) PrefixScan(""), now O(1) via secondary index
+// Formerly O(n) PrefixScan(""), now O(1) via secondary index.
+// db.mu.RLock pairs with the writer in SaveJudgment (judgments.go)
+// and rebuildSecondaryIndexes — both take db.mu.Lock when mutating
+// the map.
 func (db *CobaltDB) GetJudgmentNoCtx(id string) (*core.Judgment, error) {
 	// Look up the index key from our secondary index
+	db.mu.RLock()
 	idxKey, ok := db.judgmentIndex[id]
+	db.mu.RUnlock()
 	if !ok {
 		return nil, &core.NotFoundError{Entity: "judgment", ID: id}
 	}
@@ -1169,12 +1204,24 @@ func (db *CobaltDB) rebuildSecondaryIndexes() error {
 	}
 
 	for key := range results {
-		// Parse key format: "workspaceID/souls/soulID" or "workspaceID/judgment-idx/judgmentID" etc.
+		// Parse key format: "workspaceID/<type>/resourceID[/...]"
 		parts := strings.SplitN(key, "/", 3)
-		if len(parts) < 3 {
+		if len(parts) < 2 {
 			continue
 		}
 		workspaceID := parts[0]
+
+		// Track every workspace we encounter so cross-workspace queries
+		// (ListStatusPages, ListDashboards, retention, GetStorageStats)
+		// don't need PrefixScan("").
+		db.recordWorkspaceLocked(workspaceID)
+
+		// Some keys (workspaces, system, raft) don't have a resourceID
+		// after the type; the length-3 split yields the whole tail, which
+		// is fine for the index — we just won't index them below.
+		if len(parts) < 3 {
+			continue
+		}
 		resourceType := parts[1]
 		resourceID := parts[2]
 
@@ -1190,10 +1237,69 @@ func (db *CobaltDB) rebuildSecondaryIndexes() error {
 			db.ruleIndex[resourceID] = workspaceID
 		case "journeys":
 			db.journeyIndex[resourceID] = workspaceID
-		case "incidents":
-			db.incidentIndex[resourceID] = workspaceID
+		case "alerts":
+			// alerts/<channel|rule|event|incident>/<id>[/...]
+			// The third path segment tells us which sub-index to populate.
+			subParts := strings.SplitN(resourceID, "/", 2)
+			subType := subParts[0]
+			subID := ""
+			if len(subParts) == 2 {
+				subID = subParts[1]
+			}
+			switch subType {
+			case "channels":
+				db.channelIndex[subID] = workspaceID
+			case "rules":
+				db.ruleIndex[subID] = workspaceID
+			case "incidents":
+				db.incidentIndex[subID] = workspaceID
+			case "events":
+				// events use a composite key: {soulID}/{tsNanos}/{eventID}
+				if subID != "" {
+					eventParts := strings.SplitN(subID, "/", 3)
+					if len(eventParts) == 3 {
+						db.alertEventIndex[eventParts[2]] = workspaceID
+					}
+				}
+			}
+		case "statuspages":
+			// Skip statuspages/subscriptions/* — those are nested
+			// resources of a status page, not a status page themselves.
+			if !strings.HasPrefix(resourceID, "subscriptions/") {
+				db.statusPageIndex[resourceID] = workspaceID
+			}
+		case "dashboards":
+			db.dashboardIndex[resourceID] = workspaceID
+		case "maintenance":
+			db.maintenanceIndex[resourceID] = workspaceID
 		}
 	}
 
 	return nil
+}
+
+// recordWorkspaceLocked records a workspace in workspaceIndex/workspaceOrder
+// preserving first-seen order. Caller must hold db.mu.
+func (db *CobaltDB) recordWorkspaceLocked(workspaceID string) {
+	if workspaceID == "" {
+		return
+	}
+	if _, ok := db.workspaceIndex[workspaceID]; ok {
+		return
+	}
+	db.workspaceIndex[workspaceID] = struct{}{}
+	db.workspaceOrder = append(db.workspaceOrder, workspaceID)
+}
+
+// ListWorkspaceIDs returns the known workspace IDs in first-seen order.
+// Callers that previously did PrefixScan("") can iterate these instead
+// and run a per-workspace PrefixScan, reducing the scan from O(totalKeys)
+// to O(totalKeys) but partitioned into smaller, cache-friendly chunks
+// (and skipping keys from unrelated resources entirely).
+func (db *CobaltDB) ListWorkspaceIDs() []string {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	out := make([]string, len(db.workspaceOrder))
+	copy(out, db.workspaceOrder)
+	return out
 }

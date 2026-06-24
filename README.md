@@ -9,9 +9,33 @@
 AnubisWatch is a self-hosted uptime, synthetic monitoring, alerting, and status-page platform written in Go. It ships as a single `anubis` binary with embedded storage, an embedded React dashboard, REST/WebSocket/SSE/gRPC APIs, and optional Raft-backed clustering.
 
 [![CI](https://github.com/AnubisWatch/anubiswatch/actions/workflows/ci.yml/badge.svg)](https://github.com/AnubisWatch/anubiswatch/actions/workflows/ci.yml)
+[![Static Analysis](https://github.com/AnubisWatch/anubiswatch/actions/workflows/ci.yml/badge.svg?event=push&job=static-analysis)](https://github.com/AnubisWatch/anubiswatch/actions/workflows/ci.yml?query=workflow%3Aci+job%3Astatic-analysis)
+[![Backend Tests](https://github.com/AnubisWatch/anubiswatch/actions/workflows/ci.yml/badge.svg?event=push&job=test-backend)](https://github.com/AnubisWatch/anubiswatch/actions/workflows/ci.yml?query=workflow%3Aci+job%3Atest-backend)
+[![Build](https://github.com/AnubisWatch/anubiswatch/actions/workflows/ci.yml/badge.svg?event=push&job=build)](https://github.com/AnubisWatch/anubiswatch/actions/workflows/ci.yml?query=workflow%3Aci+job%3Abuild)
+[![Helm Tests](https://github.com/AnubisWatch/anubiswatch/actions/workflows/ci.yml/badge.svg?event=push&job=helm-tests)](https://github.com/AnubisWatch/anubiswatch/actions/workflows/ci.yml?query=workflow%3Aci+job%3Ahelm-tests)
+[![Docker Security](https://github.com/AnubisWatch/anubiswatch/actions/workflows/ci.yml/badge.svg?event=push&job=docker-security)](https://github.com/AnubisWatch/anubiswatch/actions/workflows/ci.yml?query=workflow%3Aci+job%3Adocker-security)
 [![Release](https://img.shields.io/github/v/release/AnubisWatch/anubiswatch)](https://github.com/AnubisWatch/anubiswatch/releases)
+[![codecov](https://codecov.io/gh/AnubisWatch/anubiswatch/branch/main/graph/badge.svg)](https://codecov.io/gh/AnubisWatch/anubiswatch)
 [![Go Report Card](https://goreportcard.com/badge/github.com/AnubisWatch/anubiswatch)](https://goreportcard.com/report/github.com/AnubisWatch/anubiswatch)
 [![License](https://img.shields.io/github/license/AnubisWatch/anubiswatch)](LICENSE)
+
+### Gate-Level Status
+
+Each badge above maps to a specific CI gate. A green badge means the gate
+passed on the last run; a red one means the gate failed. PR authors see all
+gates as required checks before merge.
+
+| Badge | Job | What it gates | Run on |
+|-------|------|---------------|--------|
+| Static Analysis | `static-analysis` | gofmt, go vet, gosec (≥medium), govulncheck (0 CVE) | every push + PR |
+| Backend Tests | `test-backend` | `go test -race -coverprofile` | every push + PR |
+| Build | `build` | binary build, `anubis init` smoke, Docker image | every push + PR |
+| Helm Tests | `helm-tests` | `helm lint` + `kubeconform` + secret guardrails | every push + PR |
+| Docker Security | `docker-security` | Trivy image scan | main push only |
+
+PR authors also see four sub-checks inside `static-analysis` (one per step:
+`gofmt`, `go vet`, `gosec`, `govulncheck`); they show up as collapsible rows
+under the parent check, with their own pass/fail annotation in the PR.
 
 ## What It Does
 

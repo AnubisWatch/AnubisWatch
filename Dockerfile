@@ -1,5 +1,8 @@
-# Build stage
-FROM golang:1.26.3-alpine AS builder
+# Build stage. Pin both the Go version and the Alpine minor so the
+# build is reproducible — `golang:1.26.4-alpine` would float the
+# underlying musl libc across rebuilds. The Go team publishes
+# `golang:X.Y.Z-alpineN.M` tags for each stable Alpine.
+FROM golang:1.26.4-alpine3.24 AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git nodejs npm
@@ -24,8 +27,13 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /build/anubis \
     ./cmd/anubis
 
-# Final stage - minimal image
-FROM alpine:latest
+# Final stage - minimal image. Pinned to alpine 3.24 (the current
+# stable; security-only branches are 3.22 and 3.21). Float `latest`
+# here was a reproducibility hazard — every rebuild would silently
+# pick up whatever musl version Docker Hub is currently serving,
+# which is the kind of drift that turns "I just rebuilt" into
+# "now my Go binary segfaults on startup because musl changed".
+FROM alpine:3.24
 
 # Install ca-certificates for HTTPS and create a non-root runtime user.
 RUN apk --no-cache add ca-certificates \

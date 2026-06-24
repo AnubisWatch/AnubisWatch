@@ -28,6 +28,9 @@ type LocalAuthenticator struct {
 	sessionPath       string
 	stopCleanup       chan struct{}
 	cleanupDone       chan struct{}
+	// stopOnce makes Shutdown idempotent — t.Cleanup hooks plus
+	// explicit defer Shutdown() calls in tests can both fire safely.
+	stopOnce sync.Once
 	// login attempts tracking for brute force protection
 	loginAttempts map[string]*loginAttempt
 	attemptsMu    sync.RWMutex
@@ -61,10 +64,16 @@ type sessionData struct {
 	Lockouts    map[string]*loginAttempt `json:"lockouts,omitempty"`
 }
 
-// NewLocalAuthenticator creates a new local authenticator
-// If sessionPath is provided, sessions are persisted to disk
-// adminPassword should be plaintext; it will be hashed internally
-func NewLocalAuthenticator(sessionPath, adminEmail, adminPassword string) *LocalAuthenticator {
+// NewLocalAuthenticator creates a new local authenticator.
+// If sessionPath is provided, sessions are persisted to disk.
+// adminPassword should be plaintext; it will be hashed internally.
+//
+// Returns an error if the password fails policy validation (K6) or if
+// bcrypt hashing fails. Previously these conditions caused the whole
+// process to panic, which made the server refuse to start in containers
+// with limited entropy and made unit tests flaky when a weak test
+// password was supplied by mistake.
+func NewLocalAuthenticator(sessionPath, adminEmail, adminPassword string) (*LocalAuthenticator, error) {
 	// Hash the password if it's not already hashed
 	var passwordHash string
 	if adminPassword != "" {
@@ -74,13 +83,15 @@ func NewLocalAuthenticator(sessionPath, adminEmail, adminPassword string) *Local
 		} else {
 			// MED-12: Enforce minimum password policy before hashing
 			if err := validatePassword(adminPassword); err != nil {
-				panic("admin password policy violation: " + err.Error())
+				return nil, fmt.Errorf("admin password policy violation: %w", err)
 			}
-			// Hash the plaintext password
+			// Hash the plaintext password. bcrypt at cost 12 takes
+			// ~250ms on modern hardware; a hash failure is a real
+			// problem (out of memory, bcrypt module panic) but should
+			// be surfaced to the caller, not crash the process.
 			hash, err := bcrypt.GenerateFromPassword([]byte(adminPassword), bcryptCost)
 			if err != nil {
-				// If hashing fails, we can't continue securely
-				panic("failed to hash admin password: " + err.Error())
+				return nil, fmt.Errorf("failed to hash admin password: %w", err)
 			}
 			passwordHash = string(hash)
 		}
@@ -100,8 +111,12 @@ func NewLocalAuthenticator(sessionPath, adminEmail, adminPassword string) *Local
 
 	// Create admin user if credentials provided
 	if adminEmail != "" && adminPassword != "" {
+		adminID, err := generateID()
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate admin user ID: %w", err)
+		}
 		adminUser := &api.User{
-			ID:        generateID(),
+			ID:        adminID,
 			Email:     adminEmail,
 			Name:      "Administrator",
 			Role:      "admin",
@@ -119,7 +134,7 @@ func NewLocalAuthenticator(sessionPath, adminEmail, adminPassword string) *Local
 	// Start background cleanup goroutine
 	go a.cleanupExpiredSessions()
 
-	return a
+	return a, nil
 }
 
 // loadSessions loads sessions and users from disk
@@ -213,7 +228,7 @@ func (a *LocalAuthenticator) saveSessionsLocked() {
 
 	// Ensure directory exists
 	dir := filepath.Dir(a.sessionPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0750); err != nil {
 		return
 	}
 
@@ -263,16 +278,14 @@ func (a *LocalAuthenticator) cleanupExpiredSessions() {
 	}
 }
 
-// Shutdown gracefully stops the authenticator
+// Shutdown gracefully stops the authenticator. Idempotent — t.Cleanup
+// hooks plus deferred Shutdown() calls in tests can both fire safely.
+// Mirrors the LDAP and OIDC shutdown discipline.
 func (a *LocalAuthenticator) Shutdown() {
-	select {
-	case <-a.stopCleanup:
-		// Already shutting down
-		return
-	default:
+	a.stopOnce.Do(func() {
 		close(a.stopCleanup)
-	}
-	<-a.cleanupDone
+		<-a.cleanupDone
+	})
 }
 
 // Authenticate validates a token and returns the user
@@ -345,8 +358,12 @@ func (a *LocalAuthenticator) Login(email, password string) (*api.User, string, e
 
 	// Create admin user if not found
 	if user == nil {
+		newID, err := generateID()
+		if err != nil {
+			return nil, "", err
+		}
 		user = &api.User{
-			ID:        generateID(),
+			ID:        newID,
 			Email:     email,
 			Name:      "Administrator",
 			Role:      "admin",
@@ -357,7 +374,10 @@ func (a *LocalAuthenticator) Login(email, password string) (*api.User, string, e
 	}
 
 	// Generate token
-	token := generateToken()
+	token, err := generateToken()
+	if err != nil {
+		return nil, "", err
+	}
 	a.tokens[token] = &session{
 		UserID:    user.ID,
 		ExpiresAt: time.Now().Add(24 * time.Hour),
@@ -409,24 +429,28 @@ func (a *LocalAuthenticator) SwitchWorkspace(token, workspace string) (*api.User
 	return user, nil
 }
 
-func generateToken() string {
+// generateToken returns a 256-bit hex-encoded random token, or an error
+// if the system CSPRNG is unavailable. Previously this panicked; callers
+// now receive an error and can decide whether to fail closed (refuse to
+// issue a token) or fall back. In practice CSPRNG failure means /dev/urandom
+// is unreachable, which is unrecoverable, but a graceful error is easier
+// to diagnose and doesn't crash the test binary.
+func generateToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		// Fail closed: panic rather than return a predictable token.
-		// A CSPRNG failure is a critical system failure and must never
-		// result in a token that an attacker could guess.
-		panic("CSPRNG failure: cannot generate secure token: " + err.Error())
+		return "", fmt.Errorf("CSPRNG failure: cannot generate secure token: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
-func generateID() string {
+// generateID returns a 128-bit hex-encoded random ID, or an error if the
+// system CSPRNG is unavailable. See generateToken for the rationale.
+func generateID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		// Fail closed: panic rather than return a predictable ID.
-		panic("CSPRNG failure: cannot generate secure ID: " + err.Error())
+		return "", fmt.Errorf("CSPRNG failure: cannot generate secure ID: %w", err)
 	}
-	return hex.EncodeToString(b)
+	return hex.EncodeToString(b), nil
 }
 
 // Brute force protection functions
@@ -610,7 +634,10 @@ func (a *LocalAuthenticator) RequestPasswordReset(email string) (string, error) 
 	}
 
 	// Generate reset token
-	token := generateToken()
+	token, err := generateToken()
+	if err != nil {
+		return "", err
+	}
 	a.resetTokens[token] = &resetToken{
 		Email:     email,
 		ExpiresAt: time.Now().Add(1 * time.Hour),

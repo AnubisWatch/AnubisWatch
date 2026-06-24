@@ -11,8 +11,12 @@ import (
 // Journey NoCtx wrappers
 
 func (db *CobaltDB) GetJourneyNoCtx(id string) (*core.JourneyConfig, error) {
-	// O(1) lookup via secondary index
+	// O(1) lookup via secondary index. db.mu.RLock pairs with
+	// the writer in SaveJourney (storage.go) and rebuildSecondaryIndexes
+	// (engine.go) — both take db.mu.Lock when mutating the map.
+	db.mu.RLock()
 	workspaceID, ok := db.journeyIndex[id]
+	db.mu.RUnlock()
 	if !ok {
 		return nil, &core.NotFoundError{Entity: "journey", ID: id}
 	}

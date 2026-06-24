@@ -166,7 +166,7 @@ storage:
 | `region` | string | `"default"` | No | Geographic region for routing |
 | `bind_addr` | string | `"0.0.0.0:7946"` | No | Address to bind Raft/gossip |
 | `advertise_addr` | string | Auto-detected | No | Address advertised to peers |
-| `cluster_secret` | string | - | Conditional | Shared secret for cluster auth |
+| `cluster_secret` | string | - | Conditional | Shared HMAC secret for gossip authentication. Leave empty in single-node mode (`anubis serve --single`); the Helm chart enforces presence when `config.necropolis.enabled=true` |
 | `discovery` | object | - | No | Node discovery configuration |
 | `raft` | object | - | No | Raft consensus tuning |
 
