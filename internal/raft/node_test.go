@@ -65,7 +65,7 @@ func TestNode_NewNode(t *testing.T) {
 		t.Errorf("Expected node ID %s, got %s", cfg.NodeID, node.nodeID)
 	}
 
-	if node.state != core.StateFollower {
+	if node.state.Load().(core.RaftState) != core.StateFollower {
 		t.Errorf("Expected initial state Follower, got %s", node.state)
 	}
 
@@ -672,13 +672,13 @@ func TestNode_BecomeFollower(t *testing.T) {
 	node, _ := NewNode(cfg, storage, snapshot, fsm, newTestRaftLogger())
 
 	// Manually become leader first
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.currentTerm = 1
 
 	// Then become follower
 	node.becomeFollower(2)
 
-	if node.state != core.StateFollower {
+	if node.state.Load().(core.RaftState) != core.StateFollower {
 		t.Errorf("Expected state Follower, got %s", node.state)
 	}
 
@@ -1468,7 +1468,7 @@ func TestNode_Apply_ZeroTimeout(t *testing.T) {
 	node.running.Store(true)
 	// Set state to leader so it passes the IsLeader() check
 	node.mu.Lock()
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.mu.Unlock()
 
 	cmd := core.FSMCommand{
@@ -1535,7 +1535,7 @@ func TestNode_HandleAppendEntries_WithEntries(t *testing.T) {
 func TestNode_HandleAppendEntries_HigherTerm(t *testing.T) {
 	node := createTestNode(t)
 	node.currentTerm = 5
-	node.state = core.StateCandidate
+	node.state.Store(core.StateCandidate)
 
 	req := &core.AppendEntriesRequest{
 		Term:     10, // Higher than currentTerm
@@ -2046,7 +2046,7 @@ func TestNode_BecomeLeader(t *testing.T) {
 
 	node.becomeLeader()
 
-	if node.state != core.StateLeader {
+	if node.state.Load().(core.RaftState) != core.StateLeader {
 		t.Errorf("Expected StateLeader, got %s", node.state)
 	}
 	if node.leaderID != cfg.NodeID {
@@ -2175,7 +2175,7 @@ func TestNode_HandleApply_AsLeader(t *testing.T) {
 	node.running.Store(true)
 
 	node.mu.Lock()
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.currentTerm = 1
 	node.log = []core.RaftLogEntry{{}} // sentinel
 	node.mu.Unlock()
@@ -2246,7 +2246,7 @@ func TestNode_HandleAppendEntriesResponse_Success(t *testing.T) {
 
 	node, _ := NewNode(cfg, storage, snapshot, fsm, newTestRaftLogger())
 	node.SetTransport(&mockTransport{})
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.currentTerm = 1
 	node.log = []core.RaftLogEntry{
 		{}, // sentinel
@@ -2303,7 +2303,7 @@ func TestNode_HandleAppendEntriesResponse_Conflict(t *testing.T) {
 	fsm := NewStorageFSM(NewInMemoryStorage())
 
 	node, _ := NewNode(cfg, storage, snapshot, fsm, newTestRaftLogger())
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.currentTerm = 1
 	node.nextIndex["node-2"] = 5
 	node.matchIndex["node-2"] = 0
@@ -2345,7 +2345,7 @@ func TestNode_HandleAppendEntriesResponse_HigherTerm(t *testing.T) {
 	fsm := NewStorageFSM(NewInMemoryStorage())
 
 	node, _ := NewNode(cfg, storage, snapshot, fsm, newTestRaftLogger())
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.currentTerm = 1
 
 	peer := &Peer{ID: "node-2", nextIndex: 1, matchIndex: 0}
@@ -2358,7 +2358,7 @@ func TestNode_HandleAppendEntriesResponse_HigherTerm(t *testing.T) {
 
 	node.handleAppendEntriesResponse(peer, req, resp)
 
-	if node.state != core.StateFollower {
+	if node.state.Load().(core.RaftState) != core.StateFollower {
 		t.Errorf("Expected StateFollower after higher term, got %s", node.state)
 	}
 	if node.currentTerm != 5 {
@@ -2377,7 +2377,7 @@ func TestNode_CheckCommit(t *testing.T) {
 	fsm := NewStorageFSM(NewInMemoryStorage())
 
 	node, _ := NewNode(cfg, storage, snapshot, fsm, newTestRaftLogger())
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.currentTerm = 1
 	node.log = []core.RaftLogEntry{
 		{}, // sentinel
@@ -2592,7 +2592,7 @@ func TestNode_StartElection_NoPeers(t *testing.T) {
 
 	// Single node with 0 peers: votesNeeded = (0+1)/2 + 1 = 1
 	// Self vote = 1, so wins election
-	if node.state != core.StateLeader {
+	if node.state.Load().(core.RaftState) != core.StateFollower {
 		t.Logf("State after election: %s (term: %d)", node.state, node.currentTerm)
 	}
 }
@@ -2609,14 +2609,14 @@ func TestNode_SendHeartbeats(t *testing.T) {
 
 	node, _ := NewNode(cfg, storage, snapshot, fsm, newTestRaftLogger())
 	node.SetTransport(&mockTransport{})
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.currentTerm = 1
 	node.log = []core.RaftLogEntry{{}} // sentinel
 	node.nextIndex["node-2"] = 1
 	node.matchIndex["node-2"] = 0
 
 	// Should not panic
-	node.sendHeartbeats()
+	node.sendHeartbeats(0)
 
 	// Give goroutines time to complete
 	time.Sleep(50 * time.Millisecond)
@@ -2876,7 +2876,7 @@ func TestNode_maybeTakeSnapshot_NotLeader(t *testing.T) {
 	defer node.Stop()
 
 	node.mu.Lock()
-	node.state = core.StateFollower
+	node.state.Store(core.StateFollower)
 	node.mu.Unlock()
 
 	node.config.SnapshotThreshold = 10
@@ -2904,7 +2904,7 @@ func TestNode_maybeTakeSnapshot_Threshold(t *testing.T) {
 	defer node.Stop()
 
 	node.mu.Lock()
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.mu.Unlock()
 
 	node.config.SnapshotThreshold = 100
@@ -2933,7 +2933,7 @@ func TestNode_transitionToFinalConfig_NotLeader(t *testing.T) {
 
 	// Ensure not leader
 	node.mu.Lock()
-	node.state = core.StateFollower
+	node.state.Store(core.StateFollower)
 	node.mu.Unlock()
 
 	change := core.MembershipChange{
@@ -2953,7 +2953,7 @@ func TestNode_transitionToFinalConfig_AsLeader(t *testing.T) {
 
 	// Set as leader
 	node.mu.Lock()
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.currentTerm = 1
 	node.mu.Unlock()
 
@@ -2973,7 +2973,7 @@ func TestNode_maybeTakeSnapshot_AsLeader(t *testing.T) {
 	defer node.Stop()
 
 	node.mu.Lock()
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.config.SnapshotThreshold = 5
 	// Pre-populate log with entries
 	for i := 0; i <= 10; i++ {
@@ -3004,7 +3004,7 @@ func TestNode_maybeTakeSnapshot_FullPath(t *testing.T) {
 
 	// Set as leader without starting (to avoid run loop interference)
 	node.mu.Lock()
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.snapshotThreshold = 5
 	// Pre-populate log (index 0 is placeholder, entries start at 1)
 	for i := 1; i <= 10; i++ {
@@ -3045,7 +3045,7 @@ func TestNode_StartElection_NoPeers_Candidate(t *testing.T) {
 	defer node.Stop()
 
 	node.mu.Lock()
-	node.state = core.StateCandidate
+	node.state.Store(core.StateCandidate)
 	node.currentTerm = 10
 	node.mu.Unlock()
 
@@ -3060,7 +3060,7 @@ func TestNode_proposeMembershipChange_Committed(t *testing.T) {
 	defer node.Stop()
 
 	node.mu.Lock()
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.currentTerm = 1
 	node.commitIndex = 100 // High enough to satisfy commit check immediately
 	node.mu.Unlock()
@@ -3146,7 +3146,7 @@ func TestNode_AddPeer_NotLeader(t *testing.T) {
 func TestNode_AddPeer_SelfAsPeer(t *testing.T) {
 	node := createTestNode(t)
 	node.mu.Lock()
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.mu.Unlock()
 
 	err := node.AddPeer(core.RaftPeer{ID: "test-node-1", Address: "127.0.0.1:7001"})
@@ -3162,7 +3162,7 @@ func TestNode_AddPeer_SelfAsPeer(t *testing.T) {
 func TestNode_AddPeer_DuplicatePeer(t *testing.T) {
 	node := createTestNode(t)
 	node.mu.Lock()
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.mu.Unlock()
 
 	// Add a peer directly to the peers map
@@ -3203,7 +3203,7 @@ func TestNode_RemovePeer_NotLeader(t *testing.T) {
 func TestNode_RemovePeer_SelfAsLeader(t *testing.T) {
 	node := createTestNode(t)
 	node.mu.Lock()
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.mu.Unlock()
 
 	err := node.RemovePeer("test-node-1")
@@ -3219,7 +3219,7 @@ func TestNode_RemovePeer_SelfAsLeader(t *testing.T) {
 func TestNode_RemovePeer_NotFoundAsLeader(t *testing.T) {
 	node := createTestNode(t)
 	node.mu.Lock()
-	node.state = core.StateLeader
+	node.state.Store(core.StateLeader)
 	node.mu.Unlock()
 
 	err := node.RemovePeer("non-existent-peer")
@@ -3333,7 +3333,7 @@ func TestNode_RequestPreVotes_HigherTerm(t *testing.T) {
 	if node.currentTerm < 15 {
 		t.Errorf("Expected currentTerm to be updated to at least 15, got %d", node.currentTerm)
 	}
-	if node.state != core.StateFollower {
+	if node.state.Load().(core.RaftState) != core.StateFollower {
 		t.Errorf("Expected state to become Follower after higher term, got %s", node.state)
 	}
 	node.mu.RUnlock()
@@ -3395,7 +3395,7 @@ func TestNode_RequestVotes_HigherTerm(t *testing.T) {
 	if node.currentTerm < 15 {
 		t.Errorf("Expected currentTerm to be updated to at least 15, got %d", node.currentTerm)
 	}
-	if node.state != core.StateFollower {
+	if node.state.Load().(core.RaftState) != core.StateFollower {
 		t.Errorf("Expected state to become Follower after higher term, got %s", node.state)
 	}
 	node.mu.RUnlock()
@@ -3417,7 +3417,7 @@ func TestNode_StartElection_PreVoteFails(t *testing.T) {
 	node.log = []core.RaftLogEntry{{}} // sentinel
 
 	node.mu.Lock()
-	node.state = core.StateFollower
+	node.state.Store(core.StateFollower)
 	node.currentTerm = 1
 	node.mu.Unlock()
 
@@ -3426,7 +3426,7 @@ func TestNode_StartElection_PreVoteFails(t *testing.T) {
 	// Pre-vote should have failed (only 1 vote out of 2 needed)
 	// Node should have transitioned back to Follower
 	node.mu.RLock()
-	if node.state != core.StateFollower {
+	if node.state.Load().(core.RaftState) != core.StateFollower {
 		t.Errorf("Expected state to be Follower after failed pre-vote, got %s", node.state)
 	}
 	node.mu.RUnlock()
@@ -3447,7 +3447,7 @@ func TestNode_StartElection_VoteFails(t *testing.T) {
 	node.log = []core.RaftLogEntry{{}} // sentinel
 
 	node.mu.Lock()
-	node.state = core.StateFollower
+	node.state.Store(core.StateFollower)
 	node.currentTerm = 1
 	node.mu.Unlock()
 
@@ -3457,7 +3457,7 @@ func TestNode_StartElection_VoteFails(t *testing.T) {
 	// votesNeeded = (1+1)/2+1 = 2, only 1 vote -> pre-vote fails
 	// Node should be Follower
 	node.mu.RLock()
-	if node.state != core.StateFollower {
+	if node.state.Load().(core.RaftState) != core.StateFollower {
 		t.Errorf("Expected state to be Follower after failed pre-vote, got %s", node.state)
 	}
 	node.mu.RUnlock()

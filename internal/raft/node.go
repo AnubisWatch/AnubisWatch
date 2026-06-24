@@ -12,6 +12,13 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
+// newAtomicState creates an atomic.Value initialized with the given RaftState
+func newAtomicState(s core.RaftState) atomic.Value {
+	var v atomic.Value
+	v.Store(s)
+	return v
+}
+
 // Node represents a Raft consensus node
 // The Pharaoh's throne in the Necropolis
 type Node struct {
@@ -22,9 +29,9 @@ type Node struct {
 	advertiseAddr string
 	region        string
 
-	// State machine (protected by mu)
-	mu          sync.RWMutex
-	state       core.RaftState
+	// State machine (state is atomic for lock-free reads in run())
+	mu    sync.RWMutex
+	state atomic.Value // stores core.RaftState
 	currentTerm uint64
 	votedFor    string
 	log         []core.RaftLogEntry
@@ -188,7 +195,7 @@ func NewNode(config core.RaftConfig, storage LogStore, snapshot SnapshotStore, f
 		bindAddr:          config.BindAddr,
 		advertiseAddr:     config.AdvertiseAddr,
 		region:            "default",
-		state:             core.StateFollower,
+		state:             newAtomicState(core.StateFollower),
 		currentTerm:       0,
 		votedFor:          "",
 		log:               make([]core.RaftLogEntry, 1), // Index 0 is unused
@@ -311,14 +318,12 @@ func (n *Node) Stop() error {
 
 // State returns the current state
 func (n *Node) State() core.RaftState {
-	n.mu.RLock()
-	defer n.mu.RUnlock()
-	return n.state
+	return n.state.Load().(core.RaftState)
 }
 
 // IsLeader returns true if this node is the leader
 func (n *Node) IsLeader() bool {
-	return n.State() == core.StateLeader
+	return n.state.Load().(core.RaftState) == core.StateLeader
 }
 
 // Leader returns the current leader ID
@@ -412,7 +417,7 @@ func (n *Node) Apply(cmd core.FSMCommand, timeout time.Duration) (uint64, uint64
 // This is safe for production use and prevents split-brain scenarios
 func (n *Node) AddPeer(peer core.RaftPeer) error {
 	n.mu.RLock()
-	if n.state != core.StateLeader {
+	if n.state.Load().(core.RaftState) != core.StateLeader {
 		n.mu.RUnlock()
 		return &core.RaftError{Code: core.ErrNotLeader, Message: "only leader can add peers"}
 	}
@@ -464,7 +469,7 @@ func (n *Node) AddPeer(peer core.RaftPeer) error {
 // This is safe for production use and prevents quorum loss
 func (n *Node) RemovePeer(peerID string) error {
 	n.mu.RLock()
-	if n.state != core.StateLeader {
+	if n.state.Load().(core.RaftState) != core.StateLeader {
 		n.mu.RUnlock()
 		return &core.RaftError{Code: core.ErrNotLeader, Message: "only leader can remove peers"}
 	}
@@ -632,7 +637,7 @@ func (n *Node) transitionToFinalConfig(change core.MembershipChange, jointIndex 
 	}
 
 	n.mu.RLock()
-	if n.state != core.StateLeader {
+	if n.state.Load().(core.RaftState) != core.StateLeader {
 		n.mu.RUnlock()
 		return
 	}
@@ -746,7 +751,7 @@ func (n *Node) GetState() core.ClusterState {
 
 	return core.ClusterState{
 		NodeID:       n.nodeID,
-		State:        n.state,
+		State:        n.state.Load().(core.RaftState),
 		Term:         n.currentTerm,
 		LastLogIndex: uint64(len(n.log) - 1),
 		LastLogTerm:  n.getLogTerm(uint64(len(n.log) - 1)),
@@ -774,14 +779,16 @@ func (n *Node) run() {
 			return
 
 		case <-electionTimer.C:
-			if n.state != core.StateLeader {
+			if n.state.Load().(core.RaftState) != core.StateLeader {
 				n.startElection()
 			}
 			electionTimer = n.newElectionTimer()
 
 		case <-commitTimer.C:
-			if n.state == core.StateLeader {
+			if n.state.Load().(core.RaftState) == core.StateLeader {
+				n.mu.Lock()
 				n.checkCommit()
+				n.mu.Unlock()
 			}
 			commitTimer.Reset(n.commitTimeout)
 
@@ -794,8 +801,11 @@ func (n *Node) run() {
 		}
 
 		// Send heartbeats if leader
-		if n.state == core.StateLeader {
-			n.sendHeartbeats()
+		if n.state.Load().(core.RaftState) == core.StateLeader {
+			n.mu.RLock()
+			commitIndex := n.commitIndex
+			n.mu.RUnlock()
+			n.sendHeartbeats(commitIndex)
 		}
 	}
 }
@@ -830,7 +840,7 @@ func (n *Node) startElection() {
 	// This allows a standalone node to function without requiring network consensus
 	if len(peers) == 0 {
 		n.logger.Info("Single-node mode: no peers, becoming leader immediately")
-		n.state = core.StateCandidate
+		n.state.Store(core.StateCandidate)
 		n.currentTerm++
 		n.votedFor = n.nodeID
 		n.leaderID = ""
@@ -842,7 +852,7 @@ func (n *Node) startElection() {
 	}
 
 	// Multi-node: proceed with full election process
-	n.state = core.StateCandidate
+	n.state.Store(core.StateCandidate)
 	preVoteTerm := n.currentTerm + 1
 	lastLogIndex := uint64(len(n.log) - 1)
 	lastLogTerm := n.getLogTerm(lastLogIndex)
@@ -863,12 +873,12 @@ func (n *Node) startElection() {
 
 	if !preVotes {
 		n.logger.Info("Pre-vote failed, not starting election")
-		n.state = core.StateFollower
+		n.state.Store(core.StateFollower)
 		return
 	}
 
 	// Pre-vote succeeded, start real election
-	n.state = core.StateCandidate
+	n.state.Store(core.StateCandidate)
 	n.currentTerm++
 	n.votedFor = n.nodeID
 	n.leaderID = ""
@@ -897,7 +907,7 @@ func (n *Node) startElection() {
 			"term", term,
 			"votes", votesGranted,
 			"needed", votesNeeded)
-		n.state = core.StateFollower
+		n.state.Store(core.StateFollower)
 	}
 }
 
@@ -942,7 +952,7 @@ func (n *Node) requestPreVotes(term, lastLogIndex, lastLogTerm uint64, peers []*
 				n.mu.Lock()
 				if resp.Term > n.currentTerm {
 					n.currentTerm = resp.Term
-					n.state = core.StateFollower
+					n.state.Store(core.StateFollower)
 					n.votedFor = ""
 				}
 				n.mu.Unlock()
@@ -1016,7 +1026,7 @@ func (n *Node) requestVotes(term, lastLogIndex, lastLogTerm uint64, peers []*Pee
 				n.mu.Lock()
 				if resp.Term > n.currentTerm {
 					n.currentTerm = resp.Term
-					n.state = core.StateFollower
+					n.state.Store(core.StateFollower)
 					n.votedFor = ""
 				}
 				n.mu.Unlock()
@@ -1050,7 +1060,7 @@ func (n *Node) becomeLeader() {
 
 	n.logger.Info("Became leader", "term", n.currentTerm)
 
-	n.state = core.StateLeader
+	n.state.Store(core.StateLeader)
 	n.leaderID = n.nodeID
 	n.stats.ElectionsWon++
 	n.stats.LeaderChanges++
@@ -1070,14 +1080,14 @@ func (n *Node) becomeLeader() {
 		Type: core.LogNoOp,
 	})
 
-	// Send immediate heartbeats
-	n.sendHeartbeats()
+	// Send immediate heartbeats (n.mu is still held)
+	n.sendHeartbeats(n.commitIndex)
 }
 
 // becomeFollower transitions to follower state
 func (n *Node) becomeFollower(term uint64) {
-	wasLeader := n.state == core.StateLeader
-	n.state = core.StateFollower
+	wasLeader := n.state.Load().(core.RaftState) == core.StateLeader
+	n.state.Store(core.StateFollower)
 	n.currentTerm = term
 	n.votedFor = ""
 	n.lastContact = time.Now()
@@ -1089,7 +1099,8 @@ func (n *Node) becomeFollower(term uint64) {
 }
 
 // sendHeartbeats sends heartbeats to all peers
-func (n *Node) sendHeartbeats() {
+// commitIndex must be captured under lock by the caller to avoid race with checkCommit
+func (n *Node) sendHeartbeats(commitIndex uint64) {
 	// Guard against nil transport in test scenarios
 	if n.transport == nil {
 		return
@@ -1110,7 +1121,7 @@ func (n *Node) sendHeartbeats() {
 				PrevLogIndex: p.matchIndex,
 				PrevLogTerm:  n.getLogTerm(p.matchIndex),
 				Entries:      n.getEntriesAfter(p.nextIndex, n.config.MaxAppendEntries),
-				LeaderCommit: n.commitIndex,
+				LeaderCommit: commitIndex,
 			}
 
 			resp, err := n.transport.SendAppendEntries(p.ID, req)
@@ -1277,7 +1288,7 @@ func (n *Node) handleRequestVote(req *core.RequestVoteRequest) *core.RequestVote
 	// If term > currentTerm, update term and become follower
 	if req.Term > n.currentTerm {
 		n.currentTerm = req.Term
-		n.state = core.StateFollower
+		n.state.Store(core.StateFollower)
 		n.votedFor = ""
 	}
 
@@ -1410,7 +1421,7 @@ func (n *Node) handleHeartbeat(req *core.HeartbeatRequest) *core.HeartbeatRespon
 		n.lastContact = time.Now()
 		n.leaderID = req.LeaderID
 
-		if n.state != core.StateFollower {
+		if n.state.Load().(core.RaftState) != core.StateFollower {
 			n.becomeFollower(req.Term)
 		}
 	}
@@ -1420,7 +1431,7 @@ func (n *Node) handleHeartbeat(req *core.HeartbeatRequest) *core.HeartbeatRespon
 	return &core.HeartbeatResponse{
 		NodeID:    n.nodeID,
 		Term:      n.currentTerm,
-		IsLeader:  n.state == core.StateLeader,
+		IsLeader:  n.state.Load().(core.RaftState) == core.StateLeader,
 		LeaderID:  n.leaderID,
 		Timestamp: time.Now().UnixMilli(),
 	}
@@ -1431,7 +1442,7 @@ func (n *Node) handleAppendEntriesResponse(peer *Peer, req *core.AppendEntriesRe
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.state != core.StateLeader {
+	if n.state.Load().(core.RaftState) != core.StateLeader {
 		return
 	}
 
@@ -1464,8 +1475,9 @@ func (n *Node) handleAppendEntriesResponse(peer *Peer, req *core.AppendEntriesRe
 }
 
 // checkCommit updates commitIndex if majority has replicated
+// Caller must hold n.mu.Lock()
 func (n *Node) checkCommit() {
-	if n.state != core.StateLeader {
+	if n.state.Load().(core.RaftState) != core.StateLeader {
 		return
 	}
 
@@ -1608,7 +1620,7 @@ func (n *Node) handleApply(future *applyFuture) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if n.state != core.StateLeader {
+	if n.state.Load().(core.RaftState) != core.StateLeader {
 		future.err = &core.RaftError{Code: core.ErrNotLeader, Message: "not leader"}
 		close(future.done)
 		return
@@ -1663,8 +1675,11 @@ func (n *Node) appendEntry(entry core.RaftLogEntry) {
 }
 
 func (n *Node) newElectionTimer() *time.Timer {
-	// Randomize timeout between 1x and 2x election timeout
-	d := n.electionTimeout + time.Duration(rand.Int64N(int64(n.electionTimeout)))
+	// Randomize timeout between 1x and 2x election timeout. G404
+	// suppress: this is for thundering-herd avoidance, not for
+	// security — math/rand/v2 is thread-safe, lock-free, and the
+	// best source of monotonic-clock-aligned jitter.
+	d := n.electionTimeout + time.Duration(rand.Int64N(int64(n.electionTimeout))) // #nosec G404 -- see comment
 	return time.NewTimer(d)
 }
 
