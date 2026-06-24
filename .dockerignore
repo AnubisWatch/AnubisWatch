@@ -1,59 +1,113 @@
 # AnubisWatch .dockerignore
+# Optimised so that `COPY . .` in the builder stage only pulls what
+# go build / pnpm install actually need. Anything omitted here
+# shaves bytes off the build context AND off the final image
+# (because intermediate layers can still cache the COPY result).
 
-# Version control
+# ───── Version control ─────
 .git
 .gitignore
 .gitattributes
+.gitkeep
 
-# Secrets and environment
+# ───── Secrets and environment ─────
+# K7/K9 — these files often contain real admin passwords, encryption
+# keys, or cluster secrets. A leaked Dockerfile layer is forever.
 .env
 .env.*
 *.env
 *.pem
 *.key
+*.crt
+*.p12
+anubis.json         # local config with secrets
+configs/anubis.yaml
+configs/anubis.json
+configs/*.local.*
+secrets/
 
-# Build output
+# ───── Local build output ─────
 bin/
 dist/
-anubis
+anubis              # dev binary, ~27 MB
 anubis.exe
+*.test              # go test -c output
 
-# Node modules (built inside container)
+# ───── Node / frontend artifacts ─────
+# (re-installed inside the builder — pulling them from the host
+# would use a stale or wrong arch)
 web/node_modules/
 web/dist/
+web/build/
+web/.vite/
+web/.next/
+web/test-results/
+web/playwright-report/
+web/coverage/
+web/.eslintcache
 
-# IDE and editor files
+# ───── IDE and editor scratch files ─────
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
+*.swn
 *~
+*\#*
 
-# OS files
+# ───── OS files ─────
 .DS_Store
 Thumbs.db
+desktop.ini
 
-# Test and coverage artifacts
+# ───── Test and coverage artifacts ─────
 coverage.out
 coverage.html
 *.cover
 security-report/
 *.prof
+*.test
+*.out
+.gocache/
+.gotest/
+testdata/secret*.txt
 
-# Documentation (not needed in build)
+# ───── Documentation (not needed in build) ─────
 .docs/
+docs/
 *.md
 LICENSE
 SECURITY-REPORT.md
+CHANGELOG.md
+ARCHITECTURE.md
+CONTRIBUTING.md
+README.md
+CODE_OF_CONDUCT.md
 
-# CI/CD
+# ───── CI/CD and project-meta ─────
 .github/
 .claude/
+.wrongstack/         # project-local agent mailbox
 CLAUDE.md
+AGENTS.md
 .goreleaser.yml
+.releaserc
+codecov.yml
+buf.gen.yaml
+buf.yaml
 
-# Misc
+# ───── Misc ─────
 Dockerfile
 .dockerignore
 Makefile
+run.sh
+install.sh
+install.ps1
 tmp/
+scratch/
+*.log
+nohup.out
+*.bak
+*.orig
+*.rej
