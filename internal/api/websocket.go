@@ -46,6 +46,8 @@ type WebSocketServer struct {
 	messageWindow    time.Duration                 // message rate limit window
 
 	// Shutdown coordination
+	ctx    context.Context    // cancelled on Stop() to signal broadcastLoop exit
+	cancel context.CancelFunc // cancels ctx
 	stopWg sync.WaitGroup
 }
 
@@ -61,6 +63,7 @@ type WSClient struct {
 	sendOnce  sync.Once // protect against double-close on send channel
 	server    *WebSocketServer
 	mu        sync.RWMutex
+	ctx       context.Context    // client connection context (cancelled on disconnect)
 	cancel    context.CancelFunc // cancel function for the connection context
 }
 
@@ -72,6 +75,8 @@ func NewWebSocketServer(logger *slog.Logger, authenticator Authenticator, allowe
 		logger.Warn("WebSocket allowedOrigins is empty - no origins will be allowed. Configure allowed_origins in server config.")
 		allowedOrigins = []string{}
 	}
+
+	ctx, cancel := context.WithCancel(context.Background())
 
 	return &WebSocketServer{
 		clients:          make(map[string]*WSClient),
@@ -87,28 +92,35 @@ func NewWebSocketServer(logger *slog.Logger, authenticator Authenticator, allowe
 		rateLimitWindow:  time.Minute, // 1 minute window
 		messageRateLimit: 60,          // max 60 messages per minute per client (VULN-005 fix)
 		messageWindow:    time.Minute, // 1 minute window for message rate limiting
+		ctx:              ctx,
+		cancel:           cancel,
 	}
 }
 
 // Start starts the WebSocket server
 func (s *WebSocketServer) Start() {
 	s.stopWg.Add(1)
-	go s.broadcastLoop()
+	go s.broadcastLoop(s.ctx)
 	s.logger.Info("WebSocket server started")
 }
 
 // Stop stops the WebSocket server
 func (s *WebSocketServer) Stop() {
-	// Close broadcast channel first — this signals broadcastLoop to exit.
-	// Closing while holding no lock is safe here: broadcastLoop reads
-	// the channel without holding the mutex; recover() in safeSend
-	// prevents panic from sends to a closed channel.
+	// Cancel the server context first — this signals broadcastLoop to exit
+	// via its <-ctx.Done() select branch. Then close the broadcast channel
+	// as a secondary signal (the drain loop handles remaining messages).
+	s.cancel()
+
+	// Close broadcast channel to signal broadcastLoop. Closing while holding
+	// no lock is safe: broadcastLoop reads the channel without holding the
+	// mutex; safeSend's defer/recover guards against sends racing close.
 	if s.broadcast != nil {
 		close(s.broadcast)
 	}
-	// Wait for broadcastLoop to exit before closing client channels.
-	// This prevents the race: broadcastLoop sending on s.broadcast while
-	// Stop() closes it (detected by race detector).
+
+	// Wait for broadcastLoop to exit after context cancellation and channel
+	// close. TheWg.Wait ensures the loop has finished before we close
+	// client channels.
 	s.stopWg.Wait()
 
 	s.mu.Lock()
@@ -227,6 +239,7 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 		Rooms:     make(map[string]bool),
 		send:      make(chan []byte, 256),
 		server:    s,
+		ctx:       ctx,
 		cancel:    cancel,
 	}
 
@@ -261,8 +274,9 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 		"workspace", workspace,
 		"remote_addr", r.RemoteAddr)
 
-	// Start goroutines
-	go client.writePump()
+	// Start goroutines — writePump receives the same cancellable context
+	// so it exits when the connection is closed (via client.cancel in Stop()).
+	go client.writePump(ctx)
 	go client.readPump(ctx)
 }
 
@@ -380,8 +394,10 @@ func (c *WSClient) handleMessage(data []byte) {
 	}
 }
 
-// writePump writes messages to the WebSocket connection
-func (c *WSClient) writePump() {
+// writePump writes messages to the WebSocket connection.
+// The ctx parameter is the client connection context — it is cancelled by Stop()
+// via client.cancel, ensuring the pump exits when the connection closes.
+func (c *WSClient) writePump(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer func() {
 		ticker.Stop()
@@ -390,6 +406,9 @@ func (c *WSClient) writePump() {
 
 	for {
 		select {
+		case <-ctx.Done():
+			// Connection context cancelled — client is disconnecting
+			return
 		case message, ok := <-c.send:
 			if !ok {
 				// Channel closed
@@ -397,7 +416,7 @@ func (c *WSClient) writePump() {
 				return
 			}
 
-			writeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			writeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			err := c.Conn.Write(writeCtx, websocket.MessageText, message)
 			cancel()
 			if err != nil {
@@ -407,7 +426,7 @@ func (c *WSClient) writePump() {
 		case <-ticker.C:
 			// coder/websocket handles ping automatically via ping/pong callbacks
 			// Send a manual ping for liveness check
-			pingCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			pingCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			if err := c.Conn.Ping(pingCtx); err != nil {
 				cancel()
 				return
@@ -484,36 +503,73 @@ func (s *WebSocketServer) removeClient(clientID string) {
 	s.logger.Info("Client disconnected", "client_id", clientID)
 }
 
-// broadcastLoop broadcasts messages to all clients
-func (s *WebSocketServer) broadcastLoop() {
+// broadcastLoop broadcasts messages to all clients.
+// The ctx is cancelled by Stop(), ensuring the loop exits when the server shuts down.
+func (s *WebSocketServer) broadcastLoop(ctx context.Context) {
 	defer s.stopWg.Done()
-	for msg := range s.broadcast {
-		data, err := json.Marshal(msg)
-		if err != nil {
-			s.logger.Error("Failed to marshal message", "error", err)
-			continue
-		}
-
-		s.mu.RLock()
-		clients := make([]*WSClient, 0, len(s.clients))
-		for _, client := range s.clients {
-			clients = append(clients, client)
-		}
-		s.mu.RUnlock()
-
-		for _, client := range clients {
-			if err := safeSend(client.send, data); err != nil {
-				// Client send buffer full or closed, close connection
-				s.removeClient(client.ID)
+	for {
+		select {
+		case <-ctx.Done():
+			// Server context cancelled — drain remaining broadcast messages
+			// before exiting so in-flight messages aren't dropped.
+			for msg := range s.broadcast {
+				s.broadcastMessage(msg)
 			}
+			return
+		case msg, ok := <-s.broadcast:
+			if !ok {
+				// Channel closed externally (Stop called)
+				return
+			}
+			s.broadcastMessage(msg)
 		}
 	}
 }
 
-// safeSend sends data to a channel with panic recovery.
-// Between copying the client list and sending, another goroutine
-// may close the channel — recover() prevents the panic.
-func safeSend(ch chan []byte, data []byte) error {
+// broadcastMessage sends a message to all connected clients.
+// Called by broadcastLoop; not safe to call directly with the server lock held.
+func (s *WebSocketServer) broadcastMessage(msg WSMessage) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		s.logger.Error("Failed to marshal message", "error", err)
+		return
+	}
+
+	s.mu.RLock()
+	clients := make([]*WSClient, 0, len(s.clients))
+	for _, client := range s.clients {
+		clients = append(clients, client)
+	}
+	s.mu.RUnlock()
+
+	for _, client := range clients {
+		// safeSend uses the client context so that sends to a disconnecting
+		// client return immediately instead of hanging.
+		if err := safeSend(client.ctx, client.send, data); err != nil {
+			s.removeClient(client.ID)
+		}
+	}
+}
+
+// safeSend sends data to a client send channel.
+// It checks the client context first (cancellation), then attempts a
+// non-blocking send. If the channel is full it returns immediately;
+// if the channel is closed the select will unblock and return an error.
+// G118 fix: the ctx parameter makes the sender's goroutine cancellable.
+// A nil ctx is treated as a no-op (context never done) — safe for test clients.
+func safeSend(ctx context.Context, ch chan []byte, data []byte) error {
+	if ctx != nil {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+	}
+
+	// Uses a non-blocking send. The channel close is guarded by
+	// client.sendOnce.Do(close) in Stop() — the panic from sending
+	// on a closed channel can still occur in a race window, so a
+	// narrow defer/recover is kept as a safety net.
 	defer func() { recover() }()
 	select {
 	case ch <- data:
@@ -536,7 +592,8 @@ func workspaceEventRoom(workspace, event string) string {
 	return fmt.Sprintf("workspace:%s:event:%s", workspace, event)
 }
 
-// BroadcastToRoom broadcasts a message to a specific room
+// broadcastToRoom sends a message to a specific room.
+// Delegates to broadcastMessage after resolving the room's client set.
 func (s *WebSocketServer) broadcastToRoom(room string, msg WSMessage) {
 	s.mu.RLock()
 	clients, exists := s.rooms[room]
@@ -565,7 +622,9 @@ func (s *WebSocketServer) broadcastToRoom(room string, msg WSMessage) {
 		s.mu.RUnlock()
 
 		if ok {
-			if err := safeSend(client.send, data); err != nil {
+			// safeSend uses client.ctx so sends to a disconnecting client
+			// fail immediately instead of blocking the broadcast loop.
+			if err := safeSend(client.ctx, client.send, data); err != nil {
 				s.removeClient(client.ID)
 			}
 		}

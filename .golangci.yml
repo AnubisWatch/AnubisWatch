@@ -55,9 +55,11 @@ linters-settings:
       # G703: XSS. No hits today; if added in the future it
       # belongs as a per-line nosec, not a project-wide exclusion.
       - G703
-      # G118: goroutine with non-cancellable context. Single hit in
-      # internal/api/websocket.go; tracked as follow-up.
-      - G118
+      # G118: was fixed — writePump now receives the client connection context
+      # so its write/ping operations are cancellable. The broadcastLoop
+      # now uses a server-scoped cancellable context, making it fully
+      # shut-down-able without relying on the broadcast channel close.
+      # Removed — keeping as documentation for future readers.
       # G401: weak hash (MD5/SHA1). Same as G505 rationale above.
       - G401
       # G404: weak RNG. The only hit is the election-timer jitter in
