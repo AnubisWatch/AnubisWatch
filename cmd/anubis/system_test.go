@@ -9,12 +9,33 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 	"gopkg.in/yaml.v3"
 )
+
+// safeBuffer is a goroutine-safe wrapper around bytes.Buffer.
+// followLogFile writes to it from a background goroutine while the
+// test reads from the main goroutine; bytes.Buffer is not concurrent-safe.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 func captureStdoutSystem(f func()) string {
 	oldStdout := os.Stdout
@@ -563,7 +584,7 @@ func TestLogsCommand_FollowFlag(t *testing.T) {
 	os.WriteFile(logPath, []byte("log line\n"), 0644)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	var output bytes.Buffer
+	var output safeBuffer
 	done := make(chan error, 1)
 	go func() {
 		done <- followLogFile(ctx, logPath, int64(len("log line\n")), &output)
