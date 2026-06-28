@@ -207,11 +207,9 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Get workspace from query params or use user's workspace
-	workspace := r.URL.Query().Get("workspace")
-	if workspace == "" {
-		workspace = user.Workspace
-	}
+	// Use authenticated user's workspace only — never trust client-supplied
+	// workspace query parameter (was a tenant isolation bypass).
+	workspace := user.Workspace
 	if workspace == "" {
 		workspace = "default"
 	}
@@ -693,10 +691,10 @@ func (s *WebSocketServer) BroadcastSoulUpdate(soul *core.Soul) {
 }
 
 func (s *WebSocketServer) broadcastTenantEvent(workspace, event string, msg WSMessage) {
+	// Never broadcast globally — even if workspace is empty, scope to the
+	// "default" room only. The previous global broadcast was a cross-tenant leak.
 	if workspace == "" {
-		s.broadcastToRoom(workspaceEventRoom("", event), msg)
-		s.broadcast <- msg
-		return
+		workspace = "default"
 	}
 	s.broadcastToRoom(workspaceEventRoom(workspace, event), msg)
 }

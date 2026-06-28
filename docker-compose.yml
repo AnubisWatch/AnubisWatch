@@ -2,7 +2,7 @@
 # ═══════════════════════════════════════════════════════════
 #
 # Quick start:
-#   export ANUBIS_ADMIN_PASSWORD='change-me-to-a-strong-password'
+#   export ANUBIS_ADMIN_PASSWORD=<your-secure-password>
 #   docker-compose up -d
 #
 # Scale to 3 nodes:
@@ -147,7 +147,7 @@ services:
     ports:
       - "9091:9090"
     volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -172,7 +172,7 @@ services:
       - ./config/grafana:/etc/grafana/provisioning:ro
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=anubis
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?must set GRAFANA_ADMIN_PASSWORD}
       - GF_USERS_ALLOW_SIGN_UP=false
     networks:
       - anubis-net

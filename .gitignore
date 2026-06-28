@@ -121,5 +121,9 @@ __debug_bin
 /testdata/*.db
 /testdata/*.log
 
+# Admin password files (generated at runtime)
+.admin_password
+**/.admin_password
+
 *.out
 .dfmt/

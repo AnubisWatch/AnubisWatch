@@ -579,6 +579,20 @@ func (m *Manager) dispatch(event *core.AlertEvent) {
 	sem := make(chan struct{}, 10) // Limit concurrent dispatchers
 
 	for _, channel := range channels {
+		// Workspace isolation: only dispatch to channels in the same workspace
+		// as the event. Both empty → "default" for backwards compat.
+		eventWs := event.WorkspaceID
+		if eventWs == "" {
+			eventWs = "default"
+		}
+		channelWs := channel.WorkspaceID
+		if channelWs == "" {
+			channelWs = "default"
+		}
+		if channelWs != eventWs {
+			continue
+		}
+
 		if !channel.ShouldNotify(event) {
 			m.mu.Lock()
 			m.stats.filteredAlerts++
@@ -1260,7 +1274,16 @@ func (m *Manager) AcknowledgeIncident(incidentID, userID, workspace string) erro
 	if !ok {
 		return fmt.Errorf("incident not found: %s", incidentID)
 	}
-	if workspace != "" && incident.WorkspaceID != workspace {
+	// Fail-closed: require workspace match (never skip when empty)
+	incidentWs := incident.WorkspaceID
+	if incidentWs == "" {
+		incidentWs = "default"
+	}
+	reqWs := workspace
+	if reqWs == "" {
+		reqWs = "default"
+	}
+	if incidentWs != reqWs {
 		return fmt.Errorf("access denied: incident belongs to another workspace")
 	}
 
@@ -1289,7 +1312,16 @@ func (m *Manager) ResolveIncident(incidentID, userID, workspace string) error {
 	if !ok {
 		return fmt.Errorf("incident not found: %s", incidentID)
 	}
-	if workspace != "" && incident.WorkspaceID != workspace {
+	// Fail-closed: require workspace match (never skip when empty)
+	incidentWs := incident.WorkspaceID
+	if incidentWs == "" {
+		incidentWs = "default"
+	}
+	reqWs := workspace
+	if reqWs == "" {
+		reqWs = "default"
+	}
+	if incidentWs != reqWs {
 		return fmt.Errorf("access denied: incident belongs to another workspace")
 	}
 
@@ -1533,11 +1565,11 @@ func (m *Manager) escalateIncident(incident *core.Incident, rule *core.AlertRule
 	event := &core.AlertEvent{
 		ID:          generateAlertID(),
 		SoulID:      incident.SoulID,
-		SoulName:    incident.SoulID,
+		SoulName:    incident.SoulName,
 		WorkspaceID: incident.WorkspaceID,
 		Status:      core.SoulDead, // Escalations are for critical incidents
 		PrevStatus:  core.SoulDead,
-		Message:     fmt.Sprintf("[ESCALATED Level %d] %s", incident.EscalationLevel+1, incident.SoulID),
+		Message:     fmt.Sprintf("[ESCALATED Level %d] %s", incident.EscalationLevel+1, incident.SoulName),
 		Severity:    core.SeverityCritical,
 		Timestamp:   now,
 	}

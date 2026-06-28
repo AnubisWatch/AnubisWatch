@@ -72,10 +72,10 @@ func TestCobaltDBLogStore_GetLog(t *testing.T) {
 	if retrieved.Term != 1 {
 		t.Errorf("Expected term 1, got %d", retrieved.Term)
 	}
-	// Note: GetLog has a bug where data doesn't unmarshal correctly from JSON
-	// The implementation checks for []byte type but JSON unmarshals to []interface{}
-	// This test verifies index and term at minimum
-	_ = retrieved // Verify retrieval works
+	// Verify Data field survives the round-trip (was previously a known bug)
+	if !bytes.Equal(retrieved.Data, []byte("test log data")) {
+		t.Errorf("Expected data 'test log data', got %q", retrieved.Data)
+	}
 }
 
 func TestCobaltDBLogStore_GetLog_NonExistent(t *testing.T) {

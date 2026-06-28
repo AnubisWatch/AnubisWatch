@@ -173,6 +173,7 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		tlsConfig := &tls.Config{
 			InsecureSkipVerify: cfg.InsecureSkipVerify, // Default: false (secure)
 			ServerName:         ehloDomain,
+			MinVersion:         tls.VersionTLS12,
 		}
 		tlsConn := tls.Client(conn, tlsConfig)
 		if err := tlsConn.Handshake(); err != nil {
@@ -370,6 +371,7 @@ func (c *IMAPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		// applySecurityGate at the engine level.
 		conn, err = tls.DialWithDialer(dialer, "tcp", soul.Target, &tls.Config{
 			InsecureSkipVerify: cfg.InsecureSkipVerify, // #nosec G402 -- see K7 gate
+			MinVersion:         tls.VersionTLS12,
 		})
 	} else {
 		conn, err = dialer.DialContext(ctx, "tcp", soul.Target)

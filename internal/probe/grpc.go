@@ -74,6 +74,7 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	// applySecurityGate at the engine level.
 	transport := &http2.Transport{
 		TLSClientConfig: &tls.Config{
+			MinVersion:         tls.VersionTLS12,
 			InsecureSkipVerify: cfg.InsecureSkipVerify, // #nosec G402 -- see K7 gate
 			ServerName:         soul.Target,
 		},

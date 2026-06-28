@@ -83,7 +83,7 @@ func (l *LDAPAuthenticator) ldapLogin(email, password string) (*api.User, error)
 	// Start TLS if not already using ldaps
 	if !strings.HasPrefix(l.cfg.URL, "ldaps://") {
 		hostname := extractHostnameFromURL(l.cfg.URL)
-		if err := conn.StartTLS(&tls.Config{ServerName: hostname}); err != nil {
+		if err := conn.StartTLS(&tls.Config{ServerName: hostname, MinVersion: tls.VersionTLS12}); err != nil {
 			return nil, fmt.Errorf("failed to start TLS: %w", err)
 		}
 	}

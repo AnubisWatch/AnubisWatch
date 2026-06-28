@@ -35,7 +35,7 @@ cat > "$CONFIG_FILE" << EOF
     "type": "local",
     "local": {
       "admin_email": "admin@anubis.watch",
-      "admin_password": "admin123"
+      "admin_password": "DemoPass123!"
     }
   },
   "necropolis": {

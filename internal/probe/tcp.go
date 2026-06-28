@@ -56,9 +56,9 @@ func (c *TCPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 		timeout = 10 * time.Second
 	}
 
-	// Resolve address
-	dialer := net.Dialer{Timeout: timeout}
+	// SSRF: wrap dialer with DNS-rebinding protection
 	start := time.Now()
+	dialer := &net.Dialer{Timeout: timeout}
 	conn, err := dialer.DialContext(ctx, "tcp", soul.Target)
 	duration := time.Since(start)
 

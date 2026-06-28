@@ -217,6 +217,12 @@ func (t *TCPTransport) handleConnection(conn net.Conn) {
 			return
 		}
 
+		// Prevent OOM: cap payload size at 16MB
+		if length <= 0 || length > 16<<20 {
+			t.logger.Debug("Invalid payload length", "length", length)
+			return
+		}
+
 		// Read payload
 		payload := make([]byte, length)
 		_, err = io.ReadFull(reader, payload)

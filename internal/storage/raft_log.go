@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -97,8 +98,12 @@ func (s *CobaltDBLogStore) GetLog(index uint64, log *core.RaftLogEntry) error {
 	if term, ok := entry["term"].(float64); ok {
 		log.Term = uint64(term)
 	}
-	if dataBytes, ok := entry["data"].([]byte); ok {
-		log.Data = dataBytes
+	// Fix: Go's json.Unmarshal decodes []byte fields as base64-encoded strings,
+	// not []byte. We must type-assert to string and base64-decode.
+	if dataStr, ok := entry["data"].(string); ok {
+		if decoded, err := base64.StdEncoding.DecodeString(dataStr); err == nil {
+			log.Data = decoded
+		}
 	}
 
 	return nil

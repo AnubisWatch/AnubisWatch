@@ -109,12 +109,15 @@ func (c *HTTPChecker) getTransport(cfg *core.HTTPConfig, timeout time.Duration) 
 			// applySecurityGate at the engine level. The flag is
 			// only honoured when the process was started with
 			// --insecure-skip-verify (or ANUBIS_ALLOW_INSECURE_TLS=1).
+			MinVersion:         tls.VersionTLS12,
 			InsecureSkipVerify: cfg.InsecureSkipVerify, // #nosec G402 -- see K7 gate
 		},
-		DialContext: (&net.Dialer{
+		// SSRF: wrap DialContext with DNS-rebinding protection so the
+		// blocklist is enforced at connection time, not just at config time.
+		DialContext: DefaultValidator.WrapDialerContext((&net.Dialer{
 			Timeout:   10 * time.Second,
 			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		}).DialContext),
 		MaxIdleConns:        100,
 		MaxIdleConnsPerHost: idlePerHost,
 		MaxConnsPerHost:     idlePerHost * 2,

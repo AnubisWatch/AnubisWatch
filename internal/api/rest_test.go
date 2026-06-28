@@ -4169,13 +4169,17 @@ func TestWebSocketServer_BroadcastWithClients(t *testing.T) {
 		ID:        "test-client",
 		Workspace: "default",
 		send:      make(chan []byte, 10),
+		server:    server,
+		Rooms:     make(map[string]bool),
 	}
-	server.SubscribeClient(client.ID, []string{"alert", "judgment"})
 
-	// Manually add client to the server's clients map
+	// Manually add client to the server's clients map FIRST
 	server.mu.Lock()
 	server.clients[client.ID] = client
 	server.mu.Unlock()
+
+	// Then subscribe (requires client to exist in the map)
+	server.SubscribeClient(client.ID, []string{"alert", "judgment"})
 
 	// Broadcast a message
 	server.BroadcastJudgment(&core.Judgment{SoulID: "test-soul"})

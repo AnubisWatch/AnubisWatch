@@ -625,9 +625,13 @@ func mcpScopedWorkspace(ctx context.Context, requested string) string {
 func mcpCanAccessWorkspace(ctx context.Context, resourceWorkspace string) bool {
 	requestWorkspace := core.WorkspaceIDFromContext(ctx)
 	if requestWorkspace == "" {
-		return true
+		requestWorkspace = "default"
 	}
-	return sameWorkspace(resourceWorkspace, requestWorkspace)
+	resourceWs := resourceWorkspace
+	if resourceWs == "" {
+		resourceWs = "default"
+	}
+	return sameWorkspace(resourceWs, requestWorkspace)
 }
 
 // Resource handlers

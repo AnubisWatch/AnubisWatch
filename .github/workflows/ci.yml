@@ -48,8 +48,8 @@ jobs:
           mkdir -p /tmp/anubis-data
           chmod 700 /tmp/anubis-data
 
-      - name: Run tests with coverage
-        run: go test -coverprofile=coverage.out -covermode=atomic ./...
+      - name: Run tests with coverage and race detector
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
         env:
           ANUBIS_DATA_DIR: /tmp/anubis-data
           ANUBIS_CONFIG: /tmp/anubis-test.json
