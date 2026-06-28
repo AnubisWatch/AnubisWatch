@@ -1469,7 +1469,7 @@ github.com/AnubisWatch/anubiswatch/internal/probe/engine.go:484:				GetStatus			
 github.com/AnubisWatch/anubiswatch/internal/probe/engine.go:500:				GetSoulStatus					100.0%
 github.com/AnubisWatch/anubiswatch/internal/probe/engine.go:514:				ListActiveSouls					100.0%
 github.com/AnubisWatch/anubiswatch/internal/probe/engine.go:526:				Stop						100.0%
-github.com/AnubisWatch/anubiswatch/internal/probe/engine.go:536:				SetOnJudgment					50.0%
+github.com/AnubisWatch/anubiswatch/internal/probe/engine.go:536:				SetOnJudgment					100.0%
 github.com/AnubisWatch/anubiswatch/internal/probe/engine.go:545:				Stats						100.0%
 github.com/AnubisWatch/anubiswatch/internal/probe/engine.go:562:				Config						100.0%
 github.com/AnubisWatch/anubiswatch/internal/probe/engine.go:579:				applySecurityGate				100.0%
@@ -1797,7 +1797,7 @@ github.com/AnubisWatch/anubiswatch/internal/storage/engine.go:1178:				SaveDashb
 github.com/AnubisWatch/anubiswatch/internal/storage/engine.go:1182:				GetDashboardNoCtx				100.0%
 github.com/AnubisWatch/anubiswatch/internal/storage/engine.go:1186:				ListDashboardsNoCtx				100.0%
 github.com/AnubisWatch/anubiswatch/internal/storage/engine.go:1190:				DeleteDashboardNoCtx				100.0%
-github.com/AnubisWatch/anubiswatch/internal/storage/engine.go:1196:				rebuildSecondaryIndexes				23.1%
+github.com/AnubisWatch/anubiswatch/internal/storage/engine.go:1196:				rebuildSecondaryIndexes				41.0%
 github.com/AnubisWatch/anubiswatch/internal/storage/engine.go:1283:				recordWorkspaceLocked				83.3%
 github.com/AnubisWatch/anubiswatch/internal/storage/engine.go:1299:				ListWorkspaceIDs				100.0%
 github.com/AnubisWatch/anubiswatch/internal/storage/engine_journey.go:13:			GetJourneyNoCtx					84.6%
