@@ -218,7 +218,7 @@ github.com/AnubisWatch/anubiswatch/internal/alert/dispatchers.go:1113:				hmacSh
 github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:88:				NewManager					100.0%
 github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:110:				Start						82.8%
 github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:172:				Stop						100.0%
-github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:190:				RegisterChannel					83.3%
+github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:190:				RegisterChannel					91.7%
 github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:216:				validateChannelConfig				100.0%
 github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:228:				DeleteChannelWithWorkspace			100.0%
 github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:244:				DeleteChannel					92.3%
@@ -255,8 +255,8 @@ github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:1232:				generateIn
 github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:1236:				generateShortID					100.0%
 github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:1241:				GetStats					100.0%
 github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:1260:				copyVerdictsBySeverity				100.0%
-github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:1269:				AcknowledgeIncident				77.3%
-github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:1307:				ResolveIncident					77.3%
+github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:1269:				AcknowledgeIncident				86.4%
+github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:1307:				ResolveIncident					81.8%
 github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:1347:				ListActiveIncidents				100.0%
 github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:1364:				ListIncidents					100.0%
 github.com/AnubisWatch/anubiswatch/internal/alert/manager.go:1376:				ListChannelsByWorkspace				100.0%
@@ -480,7 +480,7 @@ github.com/AnubisWatch/anubiswatch/internal/api/websocket.go:282:				JoinRoom			
 github.com/AnubisWatch/anubiswatch/internal/api/websocket.go:298:				LeaveRoom					100.0%
 github.com/AnubisWatch/anubiswatch/internal/api/websocket.go:316:				readPump					80.0%
 github.com/AnubisWatch/anubiswatch/internal/api/websocket.go:346:				handleMessage					83.3%
-github.com/AnubisWatch/anubiswatch/internal/api/websocket.go:398:				writePump					70.0%
+github.com/AnubisWatch/anubiswatch/internal/api/websocket.go:398:				writePump					60.0%
 github.com/AnubisWatch/anubiswatch/internal/api/websocket.go:438:				createMessage					100.0%
 github.com/AnubisWatch/anubiswatch/internal/api/websocket.go:449:				createSuccessMessage				100.0%
 github.com/AnubisWatch/anubiswatch/internal/api/websocket.go:457:				createErrorMessage				100.0%
@@ -1645,7 +1645,7 @@ github.com/AnubisWatch/anubiswatch/internal/raft/node.go:354:					CommitIndex			
 github.com/AnubisWatch/anubiswatch/internal/raft/node.go:361:					Peers						100.0%
 github.com/AnubisWatch/anubiswatch/internal/raft/node.go:372:					Done						100.0%
 github.com/AnubisWatch/anubiswatch/internal/raft/node.go:377:					Shutdown					100.0%
-github.com/AnubisWatch/anubiswatch/internal/raft/node.go:382:					Apply						80.0%
+github.com/AnubisWatch/anubiswatch/internal/raft/node.go:382:					Apply						70.0%
 github.com/AnubisWatch/anubiswatch/internal/raft/node.go:418:					AddPeer						44.0%
 github.com/AnubisWatch/anubiswatch/internal/raft/node.go:470:					RemovePeer					42.9%
 github.com/AnubisWatch/anubiswatch/internal/raft/node.go:526:					proposeMembershipChange				90.9%
