@@ -421,7 +421,7 @@ export function SoulDetail() {
                 error={judgmentsError}
                 getStatusIcon={getStatusIcon}
                 getStatusTextColor={getStatusTextColor}
-                emptyHint="Click &quot;Test Now&quot; to run the first check"
+                emptyHint={`Click "Test Now" to run the first check`}
               />
             </div>
           </div>
@@ -599,7 +599,7 @@ export function SoulDetail() {
               error={judgmentsError}
               getStatusIcon={getStatusIcon}
               getStatusTextColor={getStatusTextColor}
-              emptyHint="Click &quot;Test Now&quot; to run the first check"
+              emptyHint={`Click "Test Now" to run the first check`}
             />
           </div>
         </div>
@@ -824,7 +824,7 @@ function JudgmentsList({ judgments, loading, error, getStatusIcon, getStatusText
       <div className="text-center py-8">
         <Activity className="w-12 h-12 text-gray-600 mx-auto mb-3" />
         <p className="text-gray-400">No judgments yet</p>
-        <p className="text-sm text-gray-500 mt-1" dangerouslySetInnerHTML={{ __html: emptyHint }} />
+        <p className="text-sm text-gray-500 mt-1">{emptyHint}</p>
       </div>
     )
   }
