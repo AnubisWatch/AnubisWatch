@@ -234,9 +234,10 @@ func TestLoad_1000Souls_Real(t *testing.T) {
 		t.Skip("Skipping load test in short mode")
 	}
 
-	// Skip in CI environments - this test requires significant resources
-	if os.Getenv("CI") == "true" {
-		t.Skip("Skipping load test in CI environment")
+	// Skip unless explicitly requested; this production-scale load test
+	// starts 1000 background runners and is too heavy for default package tests.
+	if os.Getenv("ANUBIS_RUN_LOAD_TESTS") != "true" {
+		t.Skip("Skipping production-scale load test; set ANUBIS_RUN_LOAD_TESTS=true to run")
 	}
 
 	server := createMockLoadServer(2 * time.Millisecond)

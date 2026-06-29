@@ -455,12 +455,14 @@ func generateID() (string, error) {
 
 // Brute force protection functions
 const (
-	bcryptCost         = 12
+	defaultBcryptCost  = 12
 	maxLoginAttempts   = 5
 	lockoutDuration    = 15 * time.Minute
 	attemptResetWindow = 30 * time.Minute
 	minPasswordLength  = 12
 )
+
+var bcryptCost = defaultBcryptCost
 
 // validatePassword enforces minimum password policy (MED-12)
 func validatePassword(password string) error {

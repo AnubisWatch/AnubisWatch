@@ -219,7 +219,7 @@ func TestLDAPAuthenticator_AddUser(t *testing.T) {
 
 func TestLDAPAuthenticator_TokenExpiration(t *testing.T) {
 	cfg := core.LDAPAuth{
-		URL:    "ldap://example.com",
+		URL:    "ldap://nonexistent.invalid",
 		BaseDN: "dc=example,dc=com",
 	}
 

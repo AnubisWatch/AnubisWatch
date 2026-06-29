@@ -10,6 +10,11 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/api"
 )
 
+func TestMain(m *testing.M) {
+	bcryptCost = 4
+	os.Exit(m.Run())
+}
+
 // newTestLocalAuth wraps NewLocalAuthenticator for tests so the (auth, err)
 // return shape doesn't litter every test body. Tests that want to exercise
 // the error path call NewLocalAuthenticator directly.
@@ -169,8 +174,8 @@ func TestSessionPersistence(t *testing.T) {
 	t.Logf("Saved session file: %s", tmpFile)
 
 	// Stop the cleanup goroutine to prevent resource leak
-	auth1.stopCleanup <- struct{}{}
-	<-auth1.cleanupDone
+	// Stop cleanup goroutine before simulating restart.
+	auth1.Shutdown()
 
 	// Read back and verify
 	fileData, _ := os.ReadFile(tmpFile)
@@ -178,10 +183,7 @@ func TestSessionPersistence(t *testing.T) {
 
 	// Create new authenticator (simulating restart)
 	auth2 := newTestLocalAuth(t, tmpFile, "admin@anubis.watch", "TestPass1234!")
-	defer func() {
-		auth2.stopCleanup <- struct{}{}
-		<-auth2.cleanupDone
-	}()
+	defer auth2.Shutdown()
 
 	t.Logf("auth2 tokens: %d, users: %d", len(auth2.tokens), len(auth2.users))
 
