@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { Header } from '../components/Header'
 
@@ -30,65 +30,77 @@ vi.mock('../stores/themeStore', () => ({
 }))
 
 describe('Header', () => {
-  it('renders search input', () => {
-    render(
-      <MemoryRouter>
-        <Header />
-      </MemoryRouter>
-    )
+  it('renders search input', async () => {
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <Header />
+        </MemoryRouter>
+      )
+    })
 
     expect(screen.getByPlaceholderText('Search the archives...')).toBeInTheDocument()
   })
 
-  it('renders Hall of Ma\'at badge', () => {
-    render(
-      <MemoryRouter>
-        <Header />
-      </MemoryRouter>
-    )
+  it('renders Hall of Ma\'at badge', async () => {
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <Header />
+        </MemoryRouter>
+      )
+    })
 
     expect(screen.getByText("Hall of Ma'at")).toBeInTheDocument()
   })
 
-  it('renders user info', () => {
-    render(
-      <MemoryRouter>
-        <Header />
-      </MemoryRouter>
-    )
+  it('renders user info', async () => {
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <Header />
+        </MemoryRouter>
+      )
+    })
 
     expect(screen.getByText('Test User')).toBeInTheDocument()
     expect(screen.getByText('test@anubis.watch')).toBeInTheDocument()
   })
 
-  it('renders notification button', () => {
-    render(
-      <MemoryRouter>
-        <Header />
-      </MemoryRouter>
-    )
+  it('renders notification button', async () => {
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <Header />
+        </MemoryRouter>
+      )
+    })
 
     const buttons = screen.getAllByRole('button')
     expect(buttons.length).toBeGreaterThanOrEqual(3)
   })
 
-  it('renders theme toggle button', () => {
-    render(
-      <MemoryRouter>
-        <Header />
-      </MemoryRouter>
-    )
+  it('renders theme toggle button', async () => {
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <Header />
+        </MemoryRouter>
+      )
+    })
 
     const buttons = screen.getAllByRole('button')
     expect(buttons.length).toBeGreaterThan(0)
   })
 
-  it('renders logout button', () => {
-    render(
-      <MemoryRouter>
-        <Header />
-      </MemoryRouter>
-    )
+  it('renders logout button', async () => {
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <Header />
+        </MemoryRouter>
+      )
+    })
 
     expect(screen.getByTitle('Log out')).toBeInTheDocument()
   })
@@ -97,16 +109,20 @@ describe('Header', () => {
     mockSetTheme.mockClear()
     mockApplyTheme.mockClear()
 
-    render(
-      <MemoryRouter>
-        <Header />
-      </MemoryRouter>
-    )
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <Header />
+        </MemoryRouter>
+      )
+    })
 
     const themeButton = screen.getByLabelText('Switch to light mode')
     expect(themeButton).toBeInTheDocument()
 
-    fireEvent.click(themeButton)
+    await act(async () => {
+      fireEvent.click(themeButton)
+    })
 
     await waitFor(() => {
       expect(mockSetTheme).toHaveBeenCalledWith('light')
@@ -114,17 +130,23 @@ describe('Header', () => {
     expect(mockApplyTheme).toHaveBeenCalledWith('light')
   })
 
-  it('toggles notifications when clicking notification button', () => {
-    render(
-      <MemoryRouter>
-        <Header />
-      </MemoryRouter>
-    )
+  it('toggles notifications when clicking notification button', async () => {
+    await act(async () => {
+      render(
+        <MemoryRouter>
+          <Header />
+        </MemoryRouter>
+      )
+    })
 
     const notificationButton = screen.getByLabelText('Toggle notifications')
     expect(notificationButton).toBeInTheDocument()
 
-    fireEvent.click(notificationButton)
-    fireEvent.click(notificationButton)
+    await act(async () => {
+      fireEvent.click(notificationButton)
+    })
+    await act(async () => {
+      fireEvent.click(notificationButton)
+    })
   })
 })
