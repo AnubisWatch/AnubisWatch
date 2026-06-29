@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, waitFor } from '@testing-library/react'
+import { act, render, waitFor } from '@testing-library/react'
 import { WebSocketProvider } from './useWebSocket'
 import { api } from '../api/client'
 
@@ -58,7 +58,9 @@ describe('WebSocketProvider', () => {
 
     expect(MockWebSocket.instances).toHaveLength(0)
 
-    api.setToken('test-token')
+    act(() => {
+      api.setToken('test-token')
+    })
 
     await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1))
     const ws = MockWebSocket.instances[0]
@@ -80,11 +82,15 @@ describe('WebSocketProvider', () => {
       </WebSocketProvider>
     )
 
-    api.setToken('test-token')
+    act(() => {
+      api.setToken('test-token')
+    })
     await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1))
     const ws = MockWebSocket.instances[0]
 
-    api.clearToken()
+    act(() => {
+      api.clearToken()
+    })
 
     await waitFor(() => expect(ws.closed).toBe(true))
   })
@@ -97,13 +103,23 @@ describe('WebSocketProvider', () => {
       </WebSocketProvider>
     )
 
-    api.setToken('test-token')
-    await vi.runOnlyPendingTimersAsync()
+    act(() => {
+      api.setToken('test-token')
+    })
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync()
+    })
     expect(MockWebSocket.instances).toHaveLength(1)
 
-    api.clearToken()
-    await vi.runOnlyPendingTimersAsync()
-    await vi.advanceTimersByTimeAsync(30_000)
+    act(() => {
+      api.clearToken()
+    })
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync()
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000)
+    })
 
     expect(MockWebSocket.instances).toHaveLength(1)
   })
