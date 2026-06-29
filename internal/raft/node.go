@@ -30,8 +30,8 @@ type Node struct {
 	region        string
 
 	// State machine (state is atomic for lock-free reads in run())
-	mu    sync.RWMutex
-	state atomic.Value // stores core.RaftState
+	mu          sync.RWMutex
+	state       atomic.Value // stores core.RaftState
 	currentTerm uint64
 	votedFor    string
 	log         []core.RaftLogEntry

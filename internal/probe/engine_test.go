@@ -2060,9 +2060,9 @@ func TestEngine_ApplySecurityGate_DefaultDeny(t *testing.T) {
 	// Build a soul that requests insecure on every nested config.
 	insecure := true
 	soul := &core.Soul{
-		ID:   "k7-default-deny",
-		Name: "K7 default-deny",
-		Type: "http",
+		ID:        "k7-default-deny",
+		Name:      "K7 default-deny",
+		Type:      "http",
 		HTTP:      &core.HTTPConfig{InsecureSkipVerify: insecure},
 		SMTP:      &core.SMTPConfig{InsecureSkipVerify: insecure},
 		IMAP:      &core.IMAPConfig{InsecureSkipVerify: insecure},
@@ -2180,10 +2180,10 @@ func TestEngine_JudgeSoul_K7Strict_NoFalsePositiveWarning(t *testing.T) {
 	// config errors before reaching the warn, so target
 	// validity only matters for the warn path.
 	soul := &core.Soul{
-		ID:     "k7-no-warn",
-		Name:   "K7 no-warn",
-		Type:   "http",
-		Target: "https://example.com",
+		ID:        "k7-no-warn",
+		Name:      "K7 no-warn",
+		Type:      "http",
+		Target:    "https://example.com",
 		HTTP:      &core.HTTPConfig{InsecureSkipVerify: true},
 		SMTP:      &core.SMTPConfig{InsecureSkipVerify: true},
 		IMAP:      &core.IMAPConfig{InsecureSkipVerify: true},
@@ -2234,7 +2234,7 @@ func TestEngine_JudgeSoul_K7Strict_NoFalsePositiveWarning(t *testing.T) {
 // recordingChecker is a minimal Checker that records the last soul it
 // received so tests can assert the post-gate values.
 type recordingChecker struct {
-	typeName  core.CheckType
+	typeName core.CheckType
 	lastSoul *core.Soul
 }
 

@@ -937,4 +937,3 @@ func verifyGossip(msg *GossipMessage, secret []byte, freshness time.Duration, no
 	}
 	return nil
 }
-

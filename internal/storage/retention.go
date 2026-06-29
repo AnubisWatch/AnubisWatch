@@ -229,7 +229,7 @@ func (rm *RetentionManager) GetStorageStats(ctx context.Context) (*StorageStats,
 	// every value once, but skips the workspace/<...> keys directly
 	// and keeps the working set bounded per iteration.
 	prefixes := []string{
-		"workspaces/",   // shared keyspace (not workspace-scoped)
+		"workspaces/", // shared keyspace (not workspace-scoped)
 		"system/",
 		"raft/",
 	}
