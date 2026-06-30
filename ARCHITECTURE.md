@@ -2,796 +2,597 @@
 
 ## Table of Contents
 
-1. [Overview](#overview)
-2. [Egyptian Mythology Naming](#egyptian-mythology-naming)
-3. [System Architecture](#system-architecture)
-4. [Core Domain Objects](#core-domain-objects)
-5. [Storage Engine (Feather/CobaltDB)](#storage-engine-feathercobaltdb)
-6. [Probe Engine & Checkers](#probe-engine--checkers)
-7. [Alert System (Ma'at)](#alert-system-maat)
-8. [Cluster & Distribution (Necropolis)](#cluster--distribution-necropolis)
-9. [Journey (Synthetic Monitoring)](#journey-synthetic-monitoring)
-10. [Authentication](#authentication)
-11. [API Layer](#api-layer)
-12. [Dashboard (React)](#dashboard-react)
-13. [Data Flow](#data-flow)
-14. [Deployment Patterns](#deployment-patterns)
-15. [Technology Stack](#technology-stack)
-16. [Directory Structure](#directory-structure)
+1. [Purpose and Product Scope](#purpose-and-product-scope)
+2. [Architectural Goals](#architectural-goals)
+3. [Domain Language](#domain-language)
+4. [High-Level System View](#high-level-system-view)
+5. [Runtime Composition](#runtime-composition)
+6. [Core Domain Model](#core-domain-model)
+7. [Configuration Model](#configuration-model)
+8. [Storage Architecture](#storage-architecture)
+9. [Probe Engine](#probe-engine)
+10. [Alerting Architecture](#alerting-architecture)
+11. [Journey Synthetic Monitoring](#journey-synthetic-monitoring)
+12. [API Layer](#api-layer)
+13. [Authentication and Authorization](#authentication-and-authorization)
+14. [Real-Time Delivery](#real-time-delivery)
+15. [Dashboard Architecture](#dashboard-architecture)
+16. [Status Pages](#status-pages)
+17. [Clustering and Replication](#clustering-and-replication)
+18. [gRPC and MCP Interfaces](#grpc-and-mcp-interfaces)
+19. [Observability](#observability)
+20. [Security Architecture](#security-architecture)
+21. [Backup, Retention, and Maintenance](#backup-retention-and-maintenance)
+22. [Deployment Topologies](#deployment-topologies)
+23. [Repository Layout](#repository-layout)
+24. [End-to-End Data Flows](#end-to-end-data-flows)
+25. [Architectural Decisions](#architectural-decisions)
 
 ---
 
-## Overview
+## Purpose and Product Scope
 
-AnubisWatch is a **zero-dependency, single-binary uptime and synthetic monitoring platform** written in Go. It ships as a single `anubis` binary with:
+AnubisWatch is a self-hosted uptime, synthetic monitoring, alerting, and status-page platform implemented primarily as a Go single binary named `anubis`. It monitors external and internal targets, stores check results, evaluates alert rules, exposes APIs, serves an embedded React dashboard, and can optionally run as a Raft-backed cluster.
 
-- An embedded B+Tree storage engine (**CobaltDB**) with WAL and optional AES-256-GCM encryption
-- An embedded React 19 dashboard (Tailwind 4 + Zustand 5)
-- REST, WebSocket/SSE, gRPC, Prometheus metrics, OpenAPI, and MCP endpoints
-- Raft-backed clustering for distributed probe coordination
-- Multi-step synthetic monitoring (Journeys)
-- Local, OIDC, and LDAP authentication with workspace-aware APIs
-
-**Core purpose:** Monitor services (Souls), store results (Judgments), make alert decisions (Verdicts), and serve a real-time dashboard.
+The platform is designed around embedded operation: the server, storage engine, API layer, probe scheduler, alert manager, dashboard assets, and operational endpoints are assembled in-process rather than requiring a separate database or application server.
 
 ---
 
-## Egyptian Mythology Naming
+## Architectural Goals
 
-The codebase uses Egyptian mythology terminology as domain language:
-
-| Term | Mythology | Real-World Meaning |
-|------|-----------|-------------------|
-| **Soul** | Ka – the life force | Monitored target (HTTP, TCP, DNS, TLS, etc.) |
-| **Judgment** | Ma'at's feather | Single health check execution result |
-| **Verdict** | Trial outcome | Alert decision based on judgment patterns |
-| **Jackal** | Anubis's companion | Probe node that executes health checks |
-| **Pharaoh** | Ra – the sun god | Raft leader in a cluster |
-| **Necropolis** | City of the dead | Distributed cluster network |
-| **Feather** | Ma'at's feather | CobaltDB B+Tree storage engine |
-| **Ma'at** | Goddess of truth | Alert engine |
-| **Duat** | Egyptian underworld | Real-time WebSocket/SSE event layer |
-| **Journey** | Travel of the soul | Multi-step synthetic monitoring scenario |
-| **Aaru** | Paradise | Passed health check (alive) |
-| **Ammit** | Devourer | Failed health check (dead) |
+- **Single-binary operation:** distribute and run AnubisWatch as one executable with embedded storage and dashboard assets.
+- **Self-hosted control:** keep monitoring data, alert state, and configuration under the operator's control.
+- **Protocol breadth:** support HTTP, TCP, DNS, SMTP, ICMP, TLS, gRPC, and WebSocket checks through a common probe engine.
+- **Synthetic workflows:** execute multi-step journeys for user-flow and API-flow monitoring.
+- **Workspace isolation:** isolate user-facing resources by workspace/tenant.
+- **Real-time visibility:** stream judgments, verdicts, incidents, and dashboard updates over WebSocket/SSE-style channels.
+- **Optional high availability:** run as a standalone node by default or as a Raft cluster when configured.
+- **Security-by-default:** require authentication for privileged APIs, enforce role checks, validate inputs, and keep insecure TLS behavior behind an explicit process-wide gate.
+- **Operational transparency:** expose health, readiness, metrics, OpenAPI, logs, and tracing hooks.
 
 ---
 
-## System Architecture
+## Domain Language
 
-```
-┌────────────────────────────────────────────────────────────────────────────────┐
-│                              AnubisWatch Binary                                 │
-├────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  ┌─────────────────────────────────────────────────────────────────────────┐  │
-│  │                         Web Layer (Embedded)                             │  │
-│  │            React 19 + Tailwind 4 + Zustand 5 + Vite 6                   │  │
-│  └─────────────────────────────────────────────────────────────────────────┘  │
-│                                                                                 │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌───────────────────┐  │
-│  │   REST API   │  │  WebSocket   │  │   gRPC API   │  │      MCP          │  │
-│  │   :8443      │  │   (Duat)     │  │   :9090      │  │   Server          │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘  └─────────┬─────────┘  │
-│         │                 │                  │                   │             │
-│  ┌──────┴─────────────────┴──────────────────┴───────────────────┴──────────┐  │
-│  │                         Middleware Layer                                  │  │
-│  │  Logging → Security Headers → CORS → Recovery → JSON Validation → Rate   │  │
-│  └────────────────────────────────┬──────────────────────────────────────────┘  │
-│                                   │                                            │
-│  ┌────────────────────────────────┴──────────────────────────────────────────┐  │
-│  │                        Service Layer (Dependency Injection)                │  │
-│  │                                                                          │  │
-│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────────────┐   │  │
-│  │  │   Auth     │  │   Alert    │  │   Probe    │  │     Journey       │   │  │
-│  │  │  Manager   │  │   Ma'at    │  │  Engine    │  │     Executor      │   │  │
-│  │  └────────────┘  └────────────┘  └────────────┘  └────────────────────┘   │  │
-│  │                                                                          │  │
-│  │  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────────────┐   │  │
-│  │  │  Cluster   │  │  Dashboard │  │   Status  │  │       gRPC         │   │  │
-│  │  │  Manager   │  │   Embed    │  │   Page    │  │      Server       │   │  │
-│  │  └────────────┘  └────────────┘  └────────────┘  └────────────────────┘   │  │
-│  └────────────────────────────────┬──────────────────────────────────────────┘  │
-│                                   │                                            │
-│  ┌────────────────────────────────┴──────────────────────────────────────────┐  │
-│  │                    Storage Layer (Feather/CobaltDB)                        │  │
-│  │                                                                          │  │
-│  │   ┌─────────────────────────────────────────────────────────────────┐    │  │
-│  │   │              B+Tree Index (configurable order 4–256)            │    │  │
-│  │   │                    Leaf node chaining                            │    │  │
-│  │   └─────────────────────────────────────────────────────────────────┘    │  │
-│  │   ┌─────────────────────────────────────────────────────────────────┐    │  │
-│  │   │              WAL (Write-Ahead Log) + AES-256-GCM                │    │  │
-│  │   └─────────────────────────────────────────────────────────────────┘    │  │
-│  └───────────────────────────────────────────────────────────────────────────┘  │
-│                                                                                 │
-│  ┌───────────────────────────────────────────────────────────────────────────┐  │
-│  │                    Cluster Layer (Necropolis/Raft)                        │  │
-│  │                                                                          │  │
-│  │  ┌──────────┐    ┌──────────┐    ┌──────────┐    ┌────────────────────┐   │  │
-│  │  │   Raft   │    │   Gossip │    │  Probe   │    │   Raft Consensus   │   │  │
-│  │  │   Log    │    │ Protocol │    │  Coord.   │    │   (Pharaoh Node)   │   │  │
-│  │  └──────────┘    └──────────┘    └──────────┘    └────────────────────┘   │  │
-│  └───────────────────────────────────────────────────────────────────────────┘  │
-│                                                                                 │
-└────────────────────────────────────────────────────────────────────────────────┘
-```
+The codebase uses Egyptian mythology terms as the product vocabulary.
+
+| Term | Meaning | Primary Code Area |
+| --- | --- | --- |
+| **Soul** | A monitored target, such as an HTTP endpoint, TCP service, DNS name, or gRPC service. | `internal/core/soul.go` |
+| **Judgment** | The result of one probe execution against a soul. | `internal/core/judgment.go` |
+| **Verdict** | An alert decision produced from one or more judgments. | `internal/core/verdict.go` |
+| **Ma'at** | The alerting/rule-evaluation subsystem. | `internal/alert/` |
+| **Feather** | The storage abstraction backed by CobaltDB. | `internal/storage/` |
+| **CobaltDB** | Embedded B+Tree storage engine with WAL, secondary indexes, and optional encryption. | `internal/storage/engine.go` |
+| **Jackal** | A probe node/worker that executes checks. | `internal/probe/` |
+| **Necropolis** | Cluster/distribution layer. | `internal/cluster/`, `internal/raft/` |
+| **Journey** | Multi-step synthetic monitoring workflow. | `internal/journey/` |
+| **Duat** | Real-time WebSocket layer for live events. | `internal/api/websocket.go` |
 
 ---
 
-## Core Domain Objects
+## High-Level System View
 
-### Soul (`internal/core/soul.go`)
+```text
++--------------------------+        HTTPS / WebSocket        +----------------------+
+| React Dashboard / Users  | <-----------------------------> | REST API + WS Server |
++--------------------------+                                  +----------+-----------+
+                                                                         |
+                                                                         |
+                       +----------------+   judgments   +----------------v---------+
+                       | Probe Engine   | ------------> | Storage / CobaltDB      |
+                       | protocol checks|               | B+Tree + WAL + indexes  |
+                       +-------+--------+               +-------------+------------+
+                               |                                      |
+                               | results                              | queries/events
+                               v                                      v
+                       +----------------+                    +---------------------+
+                       | Alert Manager  | ---- verdicts ---> | Dashboard / Status  |
+                       | rules/channels |                    | Pages / APIs        |
+                       +----------------+                    +---------------------+
 
-A **Soul** is a monitored target — the entity whose heart is weighed on Ma'at's scale.
+Optional cluster mode:
 
-```go
-type Soul struct {
-    ID          string           // unique identifier
-    WorkspaceID string           // multi-tenant workspace
-    Name        string           // human-readable name
-    Type        CheckType        // http, tcp, dns, icmp, smtp, imap, grpc, websocket, tls
-    Target      string           // host:port or URL
-    Weight      Duration         // check interval (e.g. "30s")
-    Timeout     Duration         // check timeout
-    Enabled     bool             // active or paused
-    Tags        []string         // optional labels
-    Regions     []string         // restrict to specific regions
-    Region      string           // assigned region
-    // Type-specific config
-    HTTP        *HTTPConfig      `json:"http,omitempty"`
-    TCP         *TCPConfig       `json:"tcp,omitempty"`
-    TLS         *TLSConfig       `json:"tls,omitempty"`
-    // ... SMTP, IMAP, DNS, ICMP, gRPC, WebSocket
-}
++-----------+       Raft log / peer transport       +-----------+       +-----------+
+| Node A    | <-----------------------------------> | Node B    | <---> | Node C    |
+| leader or |                                      | follower  |       | follower  |
+| follower  |                                      |           |       |           |
++-----------+                                      +-----------+       +-----------+
 ```
 
-**CheckType values:** `http`, `tcp`, `udp`, `dns`, `icmp`, `smtp`, `imap`, `grpc`, `websocket`, `tls`
-
-**SoulStatus values:** `alive` (passed to Aaru), `dead` (devoured by Ammit), `degraded` (heart is heavy), `unknown` (not yet judged), `embalmed` (maintenance window)
-
-### Judgment (`internal/core/judgment.go`)
-
-A **Judgment** is the result of a single check execution — the weighed heart of a soul.
-
-```go
-type Judgment struct {
-    ID          string           // unique identifier
-    SoulID      string           // which soul
-    WorkspaceID string           // for WebSocket routing
-    JackalID    string           // which probe node executed it
-    Region      string
-    Timestamp   time.Time
-    Duration    time.Duration    // check latency
-    Status      SoulStatus       // alive, dead, degraded
-    StatusCode  int              // protocol-specific status code
-    Message     string           // human-readable result
-    Details     *JudgmentDetails  // protocol-specific data (headers, body, etc.)
-    TLSInfo     *TLSInfo         // TLS certificate info
-}
-```
-
-### Verdict (`internal/core/verdict.go`)
-
-A **Verdict** is the alerting decision made by Ma'at when a Soul's status changes or a rule condition is met.
+At runtime, `cmd/anubis/server.go` composes the main subsystems: configuration, storage, authentication, probe engine, journey executor, alert manager, cluster manager, REST server, gRPC server, dashboard handler, status page handler, MCP server, and telemetry provider.
 
 ---
 
-## Storage Engine (Feather/CobaltDB)
+## Runtime Composition
 
-Located at `internal/storage/engine.go` — a custom embedded B+Tree storage engine with zero external dependencies.
+The `anubis` CLI exposes operational commands from `cmd/anubis/`, including server startup, initialization, monitoring shortcuts, status/judgment commands, backup handling, cluster commands, and system utilities.
 
-**Key characteristics:**
-- Configurable B+Tree order (default: 32, range: 4–256)
-- Write-Ahead Log (WAL) for crash recovery
-- Optional AES-256-GCM encryption at rest
-- Leaf node chaining for efficient range scans
-- MVCC support for concurrent readers
-- Snapshot and time-series optimized judgment queries
+The server process is composed in layers:
 
-**Key format:** `{workspaceID}/souls/{soulID}`, `{workspaceID}/judgments/{soulID}/{timestamp}`
-
-**WAL recovery:** On startup, the WAL is replayed to restore the B+Tree to the last consistent state. Typical recovery takes under 1 second.
-
-**Storage sub-packages:**
-
-| File | Purpose |
-|------|---------|
-| `engine.go` | CobaltDB core (B+Tree + WAL) |
-| `storage.go` | High-level storage API (souls, journeys, dashboards, etc.) |
-| `encryption.go` | AES-256-GCM encryptor |
-| `retention.go` | Time-based data expiration |
-| `timeseries.go` | Time-series optimized queries |
-| `judgments.go` | Judgment CRUD operations |
-| `engine_journey.go` | Journey persistence |
-| `raft_log.go` | Raft log store adapter |
+1. **Configuration loading** from YAML/JSON and environment/CLI overrides.
+2. **Storage initialization** through CobaltDB and repository adapters.
+3. **Authentication setup** for local, OIDC, or LDAP-backed identity.
+4. **Probe engine startup** with protocol checkers, concurrency limits, and circuit breakers.
+5. **Alert manager startup** with rule evaluation and notification dispatchers.
+6. **Journey executor startup** for multi-step synthetic checks.
+7. **Cluster manager startup** if Necropolis/Raft mode is enabled.
+8. **HTTP REST/WebSocket server startup** for API, dashboard, status pages, metrics, OpenAPI, and MCP.
+9. **gRPC server startup** where configured.
+10. **Graceful shutdown** for HTTP, gRPC, probe execution, storage, cluster, and telemetry resources.
 
 ---
 
-## Probe Engine & Checkers
+## Core Domain Model
 
-Located at `internal/probe/engine.go` and `internal/probe/*.go`.
+### Soul
 
-The **Jackal** probe engine schedules and executes health checks across all protocol types.
+A `Soul` is the central monitored resource. It contains identity, workspace ownership, check type, target, interval (`Weight`), timeout, tags, region restrictions, and protocol-specific configuration blocks.
 
-```
-Scheduler (cron-like) ──▶ CheckerRegistry ──▶ Checker (per soul type)
-                                     │
-          ┌──────────────────────────┼──────────────────────────┐
-          ▼                          ▼                          ▼
-    ┌─────────┐               ┌─────────┐               ┌──────────┐
-    │  HTTP   │               │   TCP   │               │   DNS    │
-    └─────────┘               └─────────┘               └──────────┘
-          │                          │                          │
-          ▼                          ▼                          ▼
-    ┌─────────┐               ┌─────────┐               ┌──────────┐
-    │   TLS   │               │  SMTP   │               │   ICMP   │
-    └─────────┘               └─────────┘               └──────────┘
-          │                          │                          │
-          ▼                          ▼                          ▼
-    ┌─────────┐               ┌─────────┐               ┌──────────┐
-    │  gRPC   │               │  IMAP   │               │WebSocket │
-    └─────────┘               └─────────┘               └──────────┘
-```
+Supported check families include:
 
-**Engine features:**
-- Worker pool with semaphore limiting (default: 100 concurrent checks)
-- Circuit breaker pattern for failing targets
-- SSRF protection: blocks private IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, etc.)
-- Connection pooling for HTTP/HTTPS checks
-- Exponential backoff for retries
-- Region-aware probe distribution
+- HTTP/HTTPS
+- TCP
+- UDP data model support
+- DNS
+- SMTP
+- IMAP data model support
+- ICMP
+- gRPC
+- WebSocket
+- TLS certificate checks
 
-**Checker implementations (`internal/probe/`):**
+### Judgment
 
-| File | Protocol | Key Features |
-|------|---------|-------------|
-| `http.go` | HTTP/HTTPS | Method, headers, body, JSON path, redirects, SSRF block |
-| `tcp.go` | TCP | Banner matching, send/expect regex |
-| `dns.go` | DNS | A/AAAA/CNAME/MX/TXT/NS/SOA/PTR/SRV, DNSSEC, propagation |
-| `icmp.go` | ICMP | Packet count, interval, loss%, latency thresholds |
-| `smtp.go` | SMTP | EHLO, STARTTLS, auth, banner match |
-| `imap.go` | IMAP | TLS, auth, mailbox check |
-| `grpc.go` | gRPC | TLS, metadata, service name |
-| `websocket.go` | WebSocket | Headers, subprotocols, ping/pong |
-| `tls.go` | TLS | Expiry, issuer, OCSP, cipher strength, key bits |
-| `ssrf.go` | — | SSRF protection layer |
+A `Judgment` records one probe execution. It includes:
+
+- soul and workspace identifiers
+- jackal/node identifier and region
+- timestamp and duration
+- final status
+- protocol-specific status code
+- human-readable message
+- protocol-specific details such as response headers, DNS answers, packet-loss metrics, TLS metadata, or redirect chains
+
+Judgments are the append-heavy time-series data feeding charts, incident detection, and alert rules.
+
+### Verdict
+
+A `Verdict` is an alert decision. It binds a workspace, soul, alert rule, severity, status, message, timestamps, and the judgments that caused it. Verdicts move through active, acknowledged, and resolved states.
+
+### Workspace
+
+Workspace IDs are carried through souls, judgments, verdicts, dashboards, status pages, channels, rules, journeys, and indexes. This gives the API and storage layers a consistent tenant boundary.
 
 ---
 
-## Alert System (Ma'at)
+## Configuration Model
 
-Located at `internal/alert/manager.go` and `internal/alert/dispatchers.go`.
+`internal/core/config.go` defines the root configuration. Major sections include:
 
-**Ma'at** — the goddess of truth — evaluates judgment results and dispatches notifications.
+- `server`: HTTP/gRPC host, ports, TLS, CORS, proxy, and API behavior.
+- `storage`: embedded storage path, encryption, retention, and engine configuration.
+- `necropolis`: clustering and peer/raft settings.
+- `tenants`: workspace defaults and multi-tenancy behavior.
+- `auth`: local, OIDC, and LDAP authentication settings.
+- `dashboard`: embedded dashboard behavior.
+- `souls`: declarative monitored targets.
+- `channels`: notification destinations.
+- `verdicts`: alert rules and escalation policy.
+- `journeys`: declarative synthetic monitoring workflows.
+- `logging`: log level/format/output settings.
+- `telemetry`: OpenTelemetry trace exporter settings.
+- `security`: process-wide security gates.
+- `environment`: runtime environment label.
 
-```go
-type AlertRule struct {
-    Name      string
-    SoulIDs   []string          // target souls
-    Condition string            // e.g. "status == dead", "response_time > 500ms"
-    Severity  string            // critical, warning, info
-    Channels  []string          // channel IDs
-    Cooldown  Duration          // minimum time between alerts
-}
-
-type AlertChannel struct {
-    ID     string
-    Type   AlertChannelType     // email, slack, discord, webhook, pagerduty, opsgenie, twilio, ntfy
-    Config map[string]any       // channel-specific settings
-}
-```
-
-**Dispatcher implementations:**
-
-| Dispatcher | Description |
-|------------|-------------|
-| `email` | SMTP with TLS |
-| `slack` | Slack incoming webhooks |
-| `discord` | Discord webhooks |
-| `webhook` | Generic HTTP POST |
-| `pagerduty` | PagerDuty Events API v2 |
-| `opsgenie` | OpsGenie API |
-| `twilio` | Twilio SMS |
-| `ntfy` | ntfy.sh push notifications |
-
-**Features:**
-- Rule-based alert triggers with cooldown periods
-- Incident management (acknowledge, resolve)
-- Alert deduplication and rate limiting
-- Per-channel retry with exponential backoff
+A key security setting is `security.allow_insecure_skip_verify`. Individual soul configurations may request insecure TLS behavior, but the probe engine only honors that if the process-wide master switch is enabled.
 
 ---
 
-## Cluster & Distribution (Necropolis)
+## Storage Architecture
 
-Located at `internal/cluster/manager.go`, `internal/cluster/distribution.go`, and `internal/raft/node.go`.
+The storage subsystem lives under `internal/storage/` and provides the embedded persistence layer used by API handlers, probe results, alerts, status pages, dashboards, journeys, and Raft log storage.
 
-**Necropolis** is the distributed cluster layer built on Raft consensus.
+### CobaltDB
 
-### Raft Node (`internal/raft/node.go`)
+`CobaltDB` is the embedded storage engine. Its implementation is optimized for monitoring workloads:
 
-```go
-type Node struct {
-    config        core.RaftConfig
-    nodeID        string
-    state         core.RaftState   // follower, candidate, leader
-    currentTerm   uint64
-    votedFor      string
-    log           []core.RaftLogEntry
-    commitIndex   uint64
-    lastApplied   uint64
-    nextIndex     map[string]uint64   // for leaders
-    matchIndex    map[string]uint64    // for leaders
-    peers         map[string]*Peer
-    membership                   // joint consensus tracking
-    storage       LogStore
-    snapshot      SnapshotStore
-    fsm           FSM
-    transport     Transport
-}
-```
+- B+Tree-backed key/value storage.
+- Write-ahead logging for durability.
+- MVCC-oriented design elements.
+- Optional AES-256-GCM encryption.
+- Secondary indexes for O(1) lookup by resource ID to workspace ID.
+- Workspace index for cross-workspace administrative operations and retention scans.
+- Dedicated storage files/modules for judgments, time-series data, dashboards, status pages, journeys, retention, encryption, and Raft logs.
 
-**Key Raft features:**
-- Leader election with pre-vote optimization
-- Log replication with majority acknowledgment
-- Snapshotting for log compaction
-- Joint consensus for safe membership changes (add/remove/replace peers)
-- TCP transport with optional TLS/mTLS
+### Indexing Strategy
 
-### StorageFSM (`internal/raft/fsm.go`)
+The engine maintains in-memory secondary indexes such as:
 
-```go
-type StorageFSM struct {
-    mu    sync.RWMutex
-    store Storage
-    index uint64
-}
-```
+- soul ID to workspace ID
+- judgment ID to workspace ID
+- channel/rule/journey/incident/status-page/dashboard IDs to workspace ID
+- ordered workspace index for deterministic listing and retention operations
 
-Applies Raft log entries to CobaltDB. All cluster state changes (souls, journeys, rules, channels) go through the FSM.
+This avoids scanning all B+Tree keys for common API and background-maintenance operations.
 
-### Distributor (`internal/raft/distributor.go`)
+### Retention and Time Series
 
-Assigns souls to probe nodes based on configurable strategies.
-
-### Cluster Manager (`internal/cluster/manager.go`)
-
-```go
-type Manager struct {
-    necroConfig   core.NecropolisConfig
-    node          *raft.Node
-    db            *storage.CobaltDB
-    logStore      *storage.CobaltDBLogStore
-    snapshotStore *storage.CobaltDBSnapshotStore
-    fsm           *raft.StorageFSM
-    isClustered   bool
-}
-```
-
-**Discovery modes:** `manual`, `gossip`, `mdns`
-
-**Distribution strategies:**
-
-| Strategy | Behavior |
-|----------|---------|
-| `round_robin` | Evenly distribute souls across nodes |
-| `region_aware` | Prefer same-region probes |
-| `redundant` | Assign soul to multiple nodes |
-| `weighted` | By node capacity |
-| `latency_optimal` | By probe latency |
-
-**Cluster commands:**
-
-```bash
-anubis necropolis              # show cluster status
-anubis summon 10.0.0.2:7946   # add node
-anubis banish jackal-02       # remove node
-```
-
-**State transitions:**
-
-```
-Follower ──(election timeout)──▶ Candidate
-Candidate ──(votes majority)────▶ Leader
-Leader ────(higher term)────────▶ Follower
-```
+Retention logic is separated into `internal/storage/retention.go`, while time-series compaction and metric-oriented data handling live in `internal/storage/timeseries.go`. The architecture treats raw judgments and aggregated time-series data as related but distinct storage concerns.
 
 ---
 
-## Journey (Synthetic Monitoring)
+## Probe Engine
 
-Located at `internal/journey/executor.go`.
+The probe engine in `internal/probe/` schedules and executes checks for assigned souls. It is responsible for:
 
-A **Journey** is a multi-step synthetic monitoring scenario — a sequence of checks with assertions that mimic real user flows.
+- maintaining the lifecycle of active monitored targets
+- dispatching protocol-specific checkers
+- enforcing maximum concurrent checks
+- applying per-soul circuit breakers
+- attaching node/region metadata
+- producing judgments
+- storing results
+- notifying the alert manager
 
-```go
-type Journey struct {
-    ID       string
-    Name     string
-    Steps    []JourneyStep
-    Interval Duration
-    Enabled  bool
-}
+`EngineConfig` includes defaults such as 100 concurrent checks and a circuit breaker with failure and success thresholds. The engine is intentionally protocol-agnostic: protocol-specific behavior is implemented in checker files such as `http.go`, `tcp.go`, `dns.go`, `smtp.go`, `icmp.go`, `grpc.go`, `tls.go`, and `websocket.go`.
 
-type JourneyStep struct {
-    Name       string
-    Type       CheckType   // http, tcp, dns, grpc, websocket
-    Target     string
-    Config     interface{} // type-specific config
-    Assertions []Assertion // pass/fail conditions
-}
-```
+### Circuit Breaker Behavior
 
-**Step types:** HTTP, TCP, DNS, gRPC, WebSocket
+Circuit breakers prevent repeatedly failing targets from consuming excessive resources. A soul can transition into an open state after repeated failures, then later attempt recovery after a timeout and close after sufficient successes.
 
-**Assertion types:** `status` (HTTP status code), `body` (contains/matches), `header` (response header), `latency` (response time threshold), `json` (JSON path)
+### SSRF and TLS Controls
 
-**Execution flow:**
-1. Journey scheduled at configured interval
-2. Each step executed in sequence
-3. Assertions evaluated after each step
-4. Results stored as Judgments with step context
-5. Failure aborts the journey (unless configured to continue)
+The probe package contains SSRF protection and checker-level security tests. TLS verification bypasses require both a per-check configuration and the global `AllowInsecureSkipVerify` gate.
 
 ---
 
-## Authentication
+## Alerting Architecture
 
-Located at `internal/auth/`.
+The alert manager in `internal/alert/` evaluates judgments against configured rules and manages alert delivery. Its responsibilities include:
 
-Three authentication backends with a common interface:
+- evaluating rule conditions and scopes
+- tracking failure streaks for consecutive-failure conditions
+- creating and updating verdicts/incidents
+- deduplicating repeated alerts
+- routing notifications to channels
+- supporting acknowledgements and resolutions
+- tracking sent/failed alert metrics
 
-```go
-type Authenticator interface {
-    Authenticate(ctx context.Context, email, password string) (*User, error)
-    UserInfo(ctx context.Context, userID string) (*User, error)
-}
-```
+Alert channels are represented in core models and persisted through the storage interface. Dispatchers implement channel-specific delivery behavior. The codebase includes support for common notification classes such as email, Slack, Discord, Telegram, PagerDuty, generic webhooks, SMS, and Opsgenie-style integrations.
 
-### Local (`internal/auth/local.go`)
+Alert rules are workspace-aware and can be scoped to selected souls, tags, workspaces, regions, or global criteria depending on the rule configuration.
 
-- bcrypt cost 12 password hashing
-- Brute-force protection: 5 attempts → 15-minute lockout
-- Password policy: 12+ characters, 3 of 4 character classes
-- Session tokens stored to disk with `0600` permissions
-- Timing-attack resistant user enumeration
+---
 
-### OIDC (`internal/auth/oidc.go`)
+## Journey Synthetic Monitoring
 
-- OpenID Connect protocol
-- JWK key caching (24h TTL)
-- RSA and EC algorithm support
-- HMAC state parameter for CSRF protection
-- Automatic user creation on first login
+Journeys are multi-step synthetic monitoring workflows implemented under `internal/journey/`. A journey can represent a user flow or API transaction that requires ordered steps rather than a single target check.
 
-### LDAP (`internal/auth/ldap.go`)
+The executor provides:
 
-- StartTLS for encrypted binds
-- DN escaping to prevent injection
-- User search with configurable base DN
-- Fallback to direct bind if search fails
+- scheduled journey execution
+- per-journey HTTP client state
+- cookie jar support across steps
+- variable extraction and substitution
+- assertions against responses
+- result persistence
+- failure reporting into the same observability and alerting ecosystem as normal checks
 
-**Security features across all backends:**
-- Constant-time comparison for secrets
-- CSPRNG for all random generation (tokens, IDs)
-- `httpOnly, secure, sameSite=strict` session cookies
-- Security headers on all responses
+Journeys complement souls: a soul asks "is this endpoint/service healthy?" while a journey asks "does this workflow still work end to end?"
 
 ---
 
 ## API Layer
 
-Located at `internal/api/rest.go` — 80+ routes served by the `RESTServer` struct.
+The REST API lives primarily in `internal/api/rest.go`. It uses a custom router and middleware stack rather than relying on a large external web framework.
 
-```
-Middleware chain:
-Logging → Security Headers → CORS → Recovery →
-JSON Validation → Depth Limit (max 32) → Rate Limiting
+### Middleware Stack
 
-Route prefix: /api/v1/{resource}/:id/:action
-```
+Route setup applies middleware in this order:
 
-**Core REST endpoints:**
+1. request/response logging
+2. security headers
+3. CORS
+4. panic recovery
+5. JSON depth and request-size validation
+6. path-parameter validation
+7. rate limiting
 
-| Resource | Methods | Description |
-|----------|---------|-------------|
-| `/api/v1/souls` | GET, POST | List/create souls |
-| `/api/v1/souls/:id` | GET, PUT, DELETE | Single soul CRUD |
-| `/api/v1/souls/:id/judgments` | GET | Soul's judgment history |
-| `/api/v1/souls/:id/verdicts` | GET | Soul's verdict history |
-| `/api/v1/journeys` | GET, POST | List/create journeys |
-| `/api/v1/journeys/:id/run` | POST | Trigger journey execution |
-| `/api/v1/rules` | GET, POST | Alert rules |
-| `/api/v1/channels` | GET, POST | Alert channels |
-| `/api/v1/config` | GET, PUT | Server config |
-| `/api/v1/status-pages` | GET | Status page data |
-| `/api/v1/audit` | GET | Audit log |
-| `/api/v1/metrics` | GET | Prometheus metrics |
+### Public and Operational Endpoints
 
-**Real-time endpoints:**
+Unauthenticated operational/public endpoints include:
 
-| Path | Protocol | Purpose |
-|------|----------|---------|
-| `/ws` | WebSocket | Duat real-time event stream |
-| `/api/v1/events` | SSE | Server-sent events |
+- `GET /health`
+- `GET /ready`
+- `GET /metrics`
+- `GET /api/openapi.json`
+- `GET /api/docs`
+- public status-page endpoints such as `/status`, `/status.html`, and `/public/status`
 
-**Public endpoints:**
+### Authenticated API Resources
 
-| Path | Purpose |
-|------|---------|
-| `/` | Embedded React dashboard |
-| `/login` | Dashboard login |
-| `/health` | Liveness check |
-| `/ready` | Readiness check |
-| `/metrics` | Prometheus metrics |
-| `/api/docs` | OpenAPI documentation UI |
-| `/api/openapi.json` | OpenAPI JSON spec |
-| `/api/v1/mcp` | MCP JSON-RPC endpoint |
-| `/api/v1/mcp/tools` | MCP tool listing |
-| `/status`, `/status.html`, `/public/status` | Public status pages |
+The versioned API namespace is `/api/v1`. Major resource groups include:
+
+- `auth`: login, logout, current user, workspace switching, password management, OIDC login/callback
+- `souls`: CRUD, force checks, per-soul judgments
+- `judgments`: direct judgment retrieval and listing
+- `channels`: alert channel CRUD and test delivery
+- `rules`: alert-rule CRUD
+- `workspaces`: workspace CRUD
+- `stats`: overview and dashboard statistics
+- `cluster`: cluster status and peer data
+- `config`: runtime configuration inspection/update
+- `incidents`: list, acknowledge, resolve
+- `status-pages`: status-page CRUD
+- `mcp`: Model Context Protocol endpoint
+- `alerts/*`: frontend-compatible aliases for channels and rules
+
+The API layer depends on interfaces for storage, probe execution, alert management, authentication, clustering, and journey execution, keeping HTTP request handling separated from subsystem implementations.
 
 ---
 
-## Dashboard (React)
+## Authentication and Authorization
 
-Located at `web/` and built into `internal/dashboard/src/` for embedding.
+Authentication code lives in `internal/auth/` and supports:
 
-**Tech stack:**
-- React 19 (concurrent features)
-- React Router DOM 7
+- local username/password authentication
+- OIDC login and callback handling
+- LDAP-backed authentication
+
+The REST server protects most `/api/v1` resources with authentication and applies role/permission checks for mutating operations. Examples include permissions such as `souls:*`, `channels:*`, `rules:*`, `settings:write`, and `members:*`.
+
+Workspace switching is modeled as an authenticated operation, allowing the same user session to work against a selected tenant context.
+
+---
+
+## Real-Time Delivery
+
+Real-time event delivery is handled by `internal/api/websocket.go`. The WebSocket server maintains connected clients, rooms, and broadcast channels. It supports:
+
+- authenticated WebSocket clients
+- allowed-origin checks for CSRF protection
+- per-IP and per-user connection limits
+- connection-attempt rate limiting
+- message rate limiting
+- room-based broadcasts
+- structured WebSocket message types
+
+This layer is used by the dashboard to show live monitoring data without polling every resource continuously.
+
+---
+
+## Dashboard Architecture
+
+The dashboard lives under `web/` and is embedded into the Go binary for production serving.
+
+Technology stack:
+
+- React 19
+- React Router 7
+- Zustand 5 for client state
+- Recharts for charts
 - Tailwind CSS 4
-- Zustand 5 (state management)
-- Recharts (visualizations)
-- Lucide React (icons)
-- Vitest 4 + Playwright (testing)
+- Vite 8
+- TypeScript 6
+- Vitest and Testing Library for tests
+- Playwright for end-to-end tests
 
-**Theme:** Egyptian mythology, dark mode default with gold accents.
+The web app is organized around API clients, hooks, reusable components, dashboard pages, widgets, stores, styles, and utilities. A build/embed script produces dashboard assets that the Go server can serve through the dashboard handler.
 
-**Zustand stores:**
-
-| Store | Purpose |
-|-------|---------|
-| `useSoulStore` | Soul list, CRUD |
-| `useThemeStore` | Theme (dark/light/system) |
-
-**Pages:** Dashboard (/) · Souls (/souls) · Soul Detail (/souls/:id) · Journeys (/journeys) · Alerts (/alerts) · Incidents (/incidents) · Maintenance (/maintenance) · Cluster (/cluster) · Status Pages (/status-pages) · Settings (/settings)
-
-**Dashboard widgets (`web/src/components/widgets/`):**
-
-| Widget | Purpose |
-|--------|---------|
-| `StatWidget` | Single KPI value display |
-| `LineChartWidget` | Time-series line chart |
-| `BarChartWidget` | Bar chart visualization |
-| `GaugeWidget` | Radial gauge for percentage metrics |
-| `TableWidget` | Tabular data display |
-
-**Build:** `npm run build:embed` writes the built dashboard into `internal/dashboard/src/` so the Go binary embeds and serves it.
+The dashboard consumes REST endpoints for resource operations and WebSocket events for live updates.
 
 ---
 
-## Data Flow
+## Status Pages
 
-```
-1. Soul Registration
-   Client → POST /api/v1/souls → REST API → CobaltDB (Put)
+Status page support spans:
 
-2. Health Check Execution
-   Scheduler → Probe Engine → Checker (HTTP/TCP/DNS/...)
-       │
-       ├──▶ Judgment (core) ──▶ CobaltDB (Put)
-       ├──▶ Soul Status Update
-       └──▶ Alert Engine ──▶ Dispatchers (Slack/Email/...)
+- core status-page models in `internal/core/statuspage.go`
+- storage persistence in `internal/storage/statuspage.go`
+- API handlers in `internal/api/statuspage.go`
+- runtime handlers in `cmd/anubis/server.go`
+- public endpoints under `/status`, `/status.html`, and `/public/status`
 
-3. Real-time Updates
-   Judgment Created → WebSocket Server → Dashboard Store (Zustand) → React UI
-
-4. Cluster Replication
-   Pharaoh (Leader) ──▶ Raft Log ──▶ StorageFSM ──▶ CobaltDB
-```
+Status pages provide a public, unauthenticated view of selected service health while keeping administrative operations behind authenticated API routes.
 
 ---
 
-## Deployment Patterns
+## Clustering and Replication
 
-### Single Node (default)
+Clustering is implemented through `internal/cluster/` and `internal/raft/`. The system can run standalone or in a distributed Necropolis mode.
 
-```
-┌─────────────────────────────────────┐
-│           Single Node                │
-│  ┌─────────┐ ┌─────────┐ ┌───────┐│
-│  │   API   │ │  Probe  │ │Storage││
-│  └─────────┘ └─────────┘ └───────┘│
-└─────────────────────────────────────┘
-```
+Major responsibilities:
 
-### Multi-Node Cluster (Necropolis)
+- node lifecycle management
+- Raft consensus and leader/follower state
+- peer discovery
+- Raft transport
+- replicated log storage
+- cluster status reporting
+- optional peer TLS and mutual TLS
 
-```
-┌─────────────┐       ┌─────────────┐       ┌─────────────┐
-│   Node 1    │◀─────▶│   Node 2    │◀─────▶│   Node 3    │
-│  (Pharaoh)  │       │  (Jackal)   │       │  (Jackal)   │
-│   :7946     │       │   :7946     │       │   :7946     │
-└──────┬──────┘       └─────────────┘       └─────────────┘
-       │
-       │              Load Balancer
-       └──────────────┼────────────────┘
-                      │
-                 ┌────┴────┐
-                 │ Clients │
-                 └─────────┘
-```
+Peer TLS configuration supports certificate/key loading, custom CA pools, and optional client-certificate verification. When clustering is disabled, the same application stack runs against local embedded storage only.
 
 ---
 
-## Technology Stack
+## gRPC and MCP Interfaces
 
-### Backend (Go)
+### gRPC
 
-| Package | Purpose |
-|---------|---------|
-| Go 1.25+ | Language |
-| `github.com/coder/websocket` v1.8.14 | WebSocket |
-| `github.com/go-ldap/ldap/v3` v3.4.13 | LDAP auth |
-| `golang.org/x/crypto` | bcrypt, Argon2 |
-| `golang.org/x/net` | Networking |
-| `google.golang.org/grpc` v1.80.0 | gRPC |
-| `google.golang.org/protobuf` v1.36.11 | Protobuf |
-| `gopkg.in/yaml.v3` | YAML config |
-| `go.opentelemetry.io/otel` | Distributed tracing |
+The gRPC server lives under `internal/grpcapi/`, with generated protocol files in `internal/grpcapi/v1/`. It provides an additional typed API surface for integrations that prefer gRPC over REST.
 
-### Frontend (React)
+### MCP
 
-| Package | Purpose |
-|---------|---------|
-| React 19 | UI framework |
-| react-router-dom 7 | Routing |
-| Tailwind CSS 4 | Styling |
-| Zustand 5 | State management |
-| Recharts | Charts |
-| Lucide React | Icons |
-| Vitest 4 + Playwright | Testing |
+The MCP server lives in `internal/api/mcp.go` and is exposed through `POST /api/v1/mcp`. It registers built-in tools, resources, and prompts so model-driven clients can inspect and operate against AnubisWatch through a structured protocol.
 
 ---
 
-## Directory Structure
+## Observability
 
+AnubisWatch exposes several observability surfaces:
+
+- `GET /health` for liveness
+- `GET /ready` for readiness
+- `GET /metrics` for Prometheus-style metrics
+- structured logs through Go's `slog`
+- OpenAPI JSON and docs for API discovery
+- OpenTelemetry tracing through `internal/telemetry/tracer.go`
+
+Telemetry configuration supports enabling tracing, configuring an OTLP endpoint, and controlling sampling rate. The server owns shutdown of telemetry providers during graceful termination.
+
+---
+
+## Security Architecture
+
+Security is enforced at multiple layers:
+
+- **Transport:** HTTP TLS and optional peer TLS/mTLS for cluster traffic.
+- **Authentication:** local, OIDC, and LDAP providers.
+- **Authorization:** route-level role and permission checks.
+- **Tenant isolation:** workspace IDs on domain resources and storage indexes.
+- **Input validation:** JSON depth/size limits and path parameter validation in API middleware.
+- **Rate limiting:** REST and WebSocket rate limits.
+- **CORS and WebSocket origins:** explicit allowed-origin handling.
+- **Security headers:** HTTP response hardening middleware.
+- **Probe safety:** SSRF protections and global gates for insecure TLS behavior.
+- **Storage confidentiality:** optional AES-256-GCM encryption for embedded storage.
+- **Panic recovery:** API middleware prevents panics from crashing request handling.
+
+The most important design pattern is defense in depth: individual subsystems validate their own inputs, while the API and configuration layers provide process-wide constraints.
+
+---
+
+## Backup, Retention, and Maintenance
+
+Backup logic lives under `internal/backup/` and is exposed through CLI/server code in `cmd/anubis/backup.go`. Storage retention and compaction are handled inside the storage package.
+
+Operational maintenance concerns include:
+
+- creating and restoring backups
+- pruning old judgments/time-series data according to retention policy
+- compacting time-series data
+- preserving Raft logs where clustering is enabled
+- clean shutdown of background workers
+
+---
+
+## Deployment Topologies
+
+### Single-Node Embedded Deployment
+
+The default topology runs one `anubis` process with embedded CobaltDB storage and an embedded dashboard. This is the simplest deployment and requires the fewest moving parts.
+
+```text
+operator/users -> anubis server -> local CobaltDB files
 ```
-AnubisWatch/
-├── cmd/anubis/              # CLI entry point + DI wiring
-│   ├── main.go              # main(), flag parsing
-│   ├── server.go             # Server struct, Start(), Stop()
-│   ├── init.go              # init command (config scaffold)
-│   ├── soul.go              # soul CRUD commands
-│   ├── judge.go             # judge command (manual check trigger)
-│   ├── cluster.go           # necropolis/summon/banish commands
-│   ├── backup.go            # backup/restore commands
-│   └── config.go            # config validation/show/set
-│
-├── internal/
-│   ├── core/                # Domain models
-│   │   ├── soul.go          # Soul, CheckType, SoulStatus
-│   │   ├── judgment.go      # Judgment, JudgmentDetails, TLSInfo
-│   │   ├── verdict.go       # Verdict, AlertRule, AlertChannel
-│   │   ├── config.go        # Config, ServerConfig, StorageConfig
-│   │   ├── errors.go        # ConfigError, RaftError
-│   │   ├── journey.go       # Journey, JourneyStep, Assertion
-│   │   ├── workspace.go     # Workspace model
-│   │   ├── feather.go       # Feather metrics definitions
-│   │   ├── dashboard.go     # Dashboard and widget models
-│   │   ├── statuspage.go    # StatusPage model
-│   │   ├── id.go            # ID generation utilities
-│   │   ├── context.go       # Context helpers
-│   │   └── raft_rpc.go      # Raft RPC types
-│   │
-│   ├── storage/             # CobaltDB engine
-│   │   ├── engine.go        # B+Tree + WAL core (CobaltDB)
-│   │   ├── storage.go       # High-level storage API wrapper
-│   │   ├── encryption.go    # AES-256-GCM
-│   │   ├── retention.go     # Time-based expiration
-│   │   ├── timeseries.go    # Time-series queries
-│   │   ├── judgments.go     # Judgment CRUD
-│   │   ├── engine_journey.go # Journey persistence
-│   │   ├── statuspage.go    # Status page storage
-│   │   └── raft_log.go      # Raft log store adapter
-│   │
-│   ├── probe/                # Probe engine + checkers
-│   │   ├── engine.go        # Scheduler, worker pool, circuit breaker
-│   │   ├── checker.go       # CheckerRegistry
-│   │   ├── http.go          # HTTP/HTTPS checker
-│   │   ├── tcp.go           # TCP checker
-│   │   ├── dns.go           # DNS checker
-│   │   ├── icmp.go          # ICMP ping checker
-│   │   ├── smtp.go          # SMTP checker
-│   │   ├── imap.go          # IMAP checker
-│   │   ├── grpc.go          # gRPC health checker
-│   │   ├── tls.go           # TLS certificate checker
-│   │   ├── websocket.go     # WebSocket checker
-│   │   └── ssrf.go          # SSRF protection layer
-│   │
-│   ├── alert/                # Ma'at alert engine
-│   │   ├── manager.go        # Alert routing, incident management
-│   │   └── dispatchers.go   # Email, Slack, Discord, Webhook, PagerDuty, etc.
-│   │
-│   ├── journey/              # Synthetic monitoring
-│   │   └── executor.go      # Multi-step journey runner
-│   │
-│   ├── raft/                 # Raft consensus
-│   │   ├── node.go          # Raft state machine (Pharaoh/Jackal)
-│   │   ├── fsm.go           # StorageFSM — applies log entries to CobaltDB
-│   │   ├── transport.go     # TCP transport with TLS
-│   │   ├── discovery.go     # Node discovery (gossip/mdns/manual)
-│   │   └── distributor.go   # Probe work distribution (soul → node assignment)
-│   │
-│   ├── cluster/              # Cluster management
-│   │   ├── manager.go       # Necropolis controller
-│   │   └── distribution.go   # Distribution strategies
-│   │
-│   ├── api/                  # HTTP API layer
-│   │   ├── rest.go          # RESTServer (80+ routes)
-│   │   ├── websocket.go     # Duat real-time layer
-│   │   ├── metrics.go       # Prometheus metrics
-│   │   ├── audit.go         # Audit log
-│   │   ├── mcp.go           # MCP server (AI integration)
-│   │   ├── statuspage.go    # Status page API
-│   │   └── handlers_extra.go # Extended handler utilities
-│   │
-│   ├── auth/                 # Authentication
-│   │   ├── local.go         # bcrypt + sessions
-│   │   ├── oidc.go          # OpenID Connect
-│   │   └── ldap.go          # LDAP/Active Directory
-│   │
-│   ├── backup/               # Backup & restore
-│   │   └── manager.go
-│   │
-│   ├── statuspage/           # Public status page
-│   │   └── handler.go
-│   │
-│   ├── dashboard/            # Embedded dashboard assets
-│   │   └── embed.go
-│   │
-│   ├── grpcapi/              # gRPC API server
-│   │   └── server.go
-│   │
-│   └── telemetry/            # Observability
-│       └── tracer.go          # OpenTelemetry setup
-│
-├── web/                      # React dashboard source
-│   ├── src/
-│   │   ├── components/
-│   │   │   └── widgets/     # StatWidget, LineChartWidget, BarChartWidget,
-│   │   │                    # GaugeWidget, TableWidget
-│   │   ├── pages/           # Route pages
-│   │   ├── stores/          # Zustand stores (soulStore, themeStore)
-│   │   ├── api/             # API client
-│   │   └── hooks/           # React hooks
-│   └── package.json
-│
-├── configs/                  # Config examples (JSON/YAML)
-├── deploy/                   # Kubernetes, Helm, Docker
-│   ├── k8s/                  # K8s manifests
-│   ├── helm/anubiswatch/     # Helm chart
-│   └── docker/               # Docker compose
-├── docs/                     # Documentation
-│   ├── adr/                  # Architecture Decision Records
-│   └── api/                  # OpenAPI spec
-├── scripts/                  # Helper scripts
-├── proto/v1/                 # Protocol Buffer definitions
-├── Makefile
-└── Dockerfile
+
+### Reverse-Proxy Deployment
+
+A common production topology places AnubisWatch behind Nginx, Caddy, Traefik, or a cloud load balancer for TLS termination, request filtering, and access control.
+
+```text
+users -> reverse proxy / load balancer -> anubis server -> local storage
+```
+
+### Clustered Deployment
+
+For high availability or distributed probe coordination, multiple AnubisWatch nodes can participate in a Raft cluster. One node acts as leader while followers replicate state and can take over after failure.
+
+```text
+users -> load balancer -> anubis nodes -> Raft replication + local stores
+```
+
+### Container/Kubernetes Deployment
+
+The repository includes deployment documentation for production operation. In containers, persistent volumes should back the storage directory and configuration directory. Probes that need network visibility must run in a network context that can reach monitored targets.
+
+---
+
+## Repository Layout
+
+```text
+.
+├── cmd/anubis/              # CLI commands and server composition
+├── internal/alert/          # Alert manager, rule evaluation, dispatchers
+├── internal/api/            # REST API, WebSocket server, MCP, metrics, status handlers
+├── internal/auth/           # Local, OIDC, and LDAP authentication providers
+├── internal/backup/         # Backup management
+├── internal/cluster/        # Cluster manager and peer TLS setup
+├── internal/core/           # Domain models and configuration types
+├── internal/dashboard/      # Embedded dashboard serving support
+├── internal/grpcapi/        # gRPC server and generated protobuf bindings
+├── internal/journey/        # Synthetic journey executor
+├── internal/probe/          # Probe scheduler and protocol checkers
+├── internal/raft/           # Raft consensus, discovery, and transport
+├── internal/statuspage/     # Status page support
+├── internal/storage/        # CobaltDB, repositories, WAL, retention, indexes
+├── internal/telemetry/      # OpenTelemetry tracing support
+├── web/                     # React dashboard source, tests, and build scripts
+├── docs/                    # User, deployment, API, ADR, and architecture docs
+├── assets/                  # Static assets such as the project banner
+└── bin/                     # Local binary/output helpers
 ```
 
 ---
 
-## Performance Characteristics
+## End-to-End Data Flows
 
-| Metric | Value |
-|--------|-------|
-| Binary size | ~18 MB (with embedded dashboard) |
-| Memory (idle) | ~50 MB |
-| Memory (active) | ~150 MB (100 souls, 60s interval) |
-| Check latency | <10ms for local network targets |
-| WAL recovery | <1s typical |
-| B+Tree operations | O(log n) with configurable order |
-| Concurrent checks | 100+ (configurable worker pool) |
+### Creating a Monitor
+
+1. A user creates a soul through the dashboard or `POST /api/v1/souls`.
+2. The REST API authenticates the request and checks permissions.
+3. The soul is validated and persisted to CobaltDB under the active workspace.
+4. The probe engine receives or reloads the soul assignment.
+5. Future checks produce judgments for that soul.
+
+### Running a Probe
+
+1. The probe engine scheduler selects a due soul.
+2. A protocol checker executes with timeout, SSRF, TLS, and circuit-breaker controls.
+3. The checker returns status, duration, protocol metadata, and error context.
+4. The engine creates a judgment and persists it.
+5. The alert manager evaluates the judgment against rules.
+6. WebSocket subscribers and dashboard views receive updated state.
+
+### Alert Evaluation
+
+1. A new judgment reaches the alert manager.
+2. Enabled rules matching the soul/workspace/scope are evaluated.
+3. Failure streaks and thresholds are updated.
+4. A verdict/incident is created, updated, deduplicated, or resolved.
+5. Notification dispatchers send alerts to configured channels.
+6. API and WebSocket clients observe the changed alert state.
+
+### Journey Execution
+
+1. A journey schedule becomes due.
+2. The journey executor builds a stateful HTTP client and variable context.
+3. Steps execute in order with assertions and extraction.
+4. The result is persisted and surfaced through APIs/dashboard.
+5. Failures can feed alerting and incident workflows.
+
+### Clustered Write Path
+
+1. A mutating operation is accepted by the active node.
+2. In cluster mode, changes are coordinated through Raft semantics.
+3. The log is replicated to peers.
+4. Committed state is applied to local embedded storage.
+5. Cluster status APIs expose peer and leadership state.
+
+---
+
+## Architectural Decisions
+
+The repository contains Architecture Decision Records in `docs/adr/`. Current ADR topics include:
+
+- Go language choice
+- CobaltDB as the custom embedded storage engine
+- Raft as the consensus algorithm
+- probe architecture with per-soul circuit breakers
+- alert deduplication strategy
+- workspace-based multi-tenancy
+- MCP integration
+- zero-external-dependencies policy
+
+These ADRs provide historical context for the major design choices and should be updated when a future change alters a core architectural constraint.
