@@ -362,30 +362,52 @@ func (db *CobaltDB) List(prefix string) ([]string, error) {
 	defer db.data.mu.RUnlock()
 
 	var keys []string
-
-	// Find leftmost leaf node
-	node := db.data.root
-	for !node.isLeaf {
-		if len(node.children) == 0 {
-			return keys, nil
-		}
-		node = node.children[0]
+	if db.data.root == nil {
+		return keys, nil
 	}
 
-	// Scan through leaf nodes
+	// Traverse down to find the leaf node where the prefix could exist
+	node := db.data.root
+	for !node.isLeaf {
+		idx := findChildIndex(node.keys, prefix)
+		if idx >= len(node.children) {
+			if len(node.children) > 0 {
+				node = node.children[len(node.children)-1]
+			} else {
+				return keys, nil
+			}
+		} else {
+			node = node.children[idx]
+		}
+	}
+
+	// Scan through leaf nodes starting from this node
+	startIdx := findKeyIndex(node.keys, prefix)
+	isFirstNode := true
 	for node != nil {
-		for i, key := range node.keys {
-			if strings.HasPrefix(key, prefix) && node.values[i] != nil {
-				keys = append(keys, key)
+		keysToScan := node.keys
+		valuesToScan := node.values
+		if isFirstNode {
+			keysToScan = node.keys[startIdx:]
+			valuesToScan = node.values[startIdx:]
+			isFirstNode = false
+		}
+		for i, key := range keysToScan {
+			if strings.HasPrefix(key, prefix) {
+				if valuesToScan[i] != nil {
+					keys = append(keys, key)
+				}
+			} else if key > prefix {
+				// Since keys are sorted, once we see a key > prefix that doesn't start with prefix,
+				// there can be no more matches.
+				return keys, nil
 			}
 		}
 		node = node.next
 	}
-
 	return keys, nil
 }
 
-// PrefixScan returns all key-value pairs with the given prefix
 func (db *CobaltDB) PrefixScan(prefix string) (map[string][]byte, error) {
 	db.closedMu.Lock()
 	if db.closed {
@@ -399,20 +421,45 @@ func (db *CobaltDB) PrefixScan(prefix string) (map[string][]byte, error) {
 
 	result := make(map[string][]byte)
 
-	// Find leftmost leaf node
-	node := db.data.root
-	for !node.isLeaf {
-		if len(node.children) == 0 {
-			return result, nil
-		}
-		node = node.children[0]
+	if db.data.root == nil {
+		return result, nil
 	}
 
-	// Scan through leaf nodes
+	// Traverse down to find the leaf node where the prefix could exist
+	node := db.data.root
+	for !node.isLeaf {
+		idx := findChildIndex(node.keys, prefix)
+		if idx >= len(node.children) {
+			if len(node.children) > 0 {
+				node = node.children[len(node.children)-1]
+			} else {
+				return result, nil
+			}
+		} else {
+			node = node.children[idx]
+		}
+	}
+
+	// Scan through leaf nodes starting from this node
+	startIdx := findKeyIndex(node.keys, prefix)
+	isFirstNode := true
 	for node != nil {
-		for i, key := range node.keys {
-			if strings.HasPrefix(key, prefix) && node.values[i] != nil {
-				result[key] = node.values[i]
+		keysToScan := node.keys
+		valuesToScan := node.values
+		if isFirstNode {
+			keysToScan = node.keys[startIdx:]
+			valuesToScan = node.values[startIdx:]
+			isFirstNode = false
+		}
+		for i, key := range keysToScan {
+			if strings.HasPrefix(key, prefix) {
+				if valuesToScan[i] != nil {
+					result[key] = valuesToScan[i]
+				}
+			} else if key > prefix {
+				// Since keys are sorted, once we see a key > prefix that doesn't start with prefix,
+				// there can be no more matches.
+				return result, nil
 			}
 		}
 		node = node.next
@@ -435,20 +482,35 @@ func (db *CobaltDB) RangeScan(start, end string) (map[string][]byte, error) {
 
 	result := make(map[string][]byte)
 
-	// Find leftmost leaf node
-	node := db.data.root
-	for !node.isLeaf {
-		if len(node.children) == 0 {
-			return result, nil
-		}
-		node = node.children[0]
+	if db.data.root == nil {
+		return result, nil
 	}
 
-	// Scan through leaf nodes
+	// Traverse down to find the leaf node where start could exist
+	node := db.data.root
+	for !node.isLeaf {
+		idx := findChildIndex(node.keys, start)
+		if idx >= len(node.children) {
+			if len(node.children) > 0 {
+				node = node.children[len(node.children)-1]
+			} else {
+				return result, nil
+			}
+		} else {
+			node = node.children[idx]
+		}
+	}
+
+	// Scan through leaf nodes starting from this node
 	for node != nil {
 		for i, key := range node.keys {
-			if key >= start && key < end && node.values[i] != nil {
-				result[key] = node.values[i]
+			if key >= start {
+				if key >= end {
+					return result, nil
+				}
+				if node.values[i] != nil {
+					result[key] = node.values[i]
+				}
 			}
 		}
 		node = node.next
@@ -540,21 +602,15 @@ func (n *btreeNode) insertNonFull(key string, value []byte, order int) {
 // Helper functions
 
 func findKeyIndex(keys []string, key string) int {
-	for i, k := range keys {
-		if k >= key {
-			return i
-		}
-	}
-	return len(keys)
+	return sort.Search(len(keys), func(i int) bool {
+		return keys[i] >= key
+	})
 }
 
 func findChildIndex(keys []string, key string) int {
-	for i, k := range keys {
-		if key < k {
-			return i
-		}
-	}
-	return len(keys)
+	return sort.Search(len(keys), func(i int) bool {
+		return key < keys[i]
+	})
 }
 
 func insertString(slice []string, idx int, val string) []string {
