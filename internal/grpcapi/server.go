@@ -1044,20 +1044,21 @@ func (s *Server) CreateSoul(ctx context.Context, req *v1.CreateSoulRequest) (*v1
 	if soulData["workspace_id"] == "" {
 		soulData["workspace_id"] = "default"
 	}
+	// Generate ID in the handler to prevent concurrent race conditions (logic bug fix)
+	id := core.GenerateID()
+	soulData["id"] = id
+
 	if err := s.store.SaveSoulNoCtx(soulData); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create soul: %v", err)
 	}
 
-	// Return the created soul by its name (unique within workspace)
-	// List souls sorted by creation time descending and return the first one
-	// This is a workaround since SaveSoulNoCtx doesn't return the ID
-	souls, err := s.store.ListSoulsNoCtx(user.Workspace, 0, 1)
-	if err != nil || len(souls) == 0 {
-		return nil, status.Errorf(codes.Internal, "soul created but could not be retrieved")
+	// Retrieve the created soul directly using the generated ID
+	ch, err := s.store.GetSoulNoCtx(id)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "soul created but could not be retrieved: %v", err)
 	}
 
-	// Get the first soul returned - it should be the most recently created
-	if pb := soulToPB(souls[0]); pb != nil {
+	if pb := soulToPB(ch); pb != nil {
 		return pb, nil
 	}
 	return nil, status.Errorf(codes.Internal, "failed to convert created soul")
@@ -1428,17 +1429,23 @@ func (s *Server) CreateChannel(ctx context.Context, req *v1.CreateChannelRequest
 
 	channelData := pbToChannelConfig(req)
 	channelData["workspace_id"] = workspace
+	// Generate ID in the handler to prevent concurrent race conditions (logic bug fix)
+	id := core.GenerateID()
+	channelData["id"] = id
+
 	if err := s.store.SaveChannelNoCtx(channelData); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create channel: %v", err)
 	}
 
-	channels, _ := s.store.ListChannelsNoCtx(workspace)
-	if len(channels) > 0 {
-		if pb := channelToPB(channels[len(channels)-1]); pb != nil {
-			return pb, nil
-		}
+	ch, err := s.store.GetChannelNoCtx(id, workspace)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "channel created but could not be retrieved: %v", err)
 	}
-	return nil, status.Errorf(codes.Internal, "channel created but could not be retrieved")
+
+	if pb := channelToPB(ch); pb != nil {
+		return pb, nil
+	}
+	return nil, status.Errorf(codes.Internal, "failed to convert channel")
 }
 
 func (s *Server) UpdateChannel(ctx context.Context, req *v1.UpdateChannelRequest) (*v1.Channel, error) {
@@ -1570,17 +1577,23 @@ func (s *Server) CreateRule(ctx context.Context, req *v1.CreateRuleRequest) (*v1
 
 	ruleData := pbToRuleConfig(req)
 	ruleData["workspace_id"] = workspace
+	// Generate ID in the handler to prevent concurrent race conditions (logic bug fix)
+	id := core.GenerateID()
+	ruleData["id"] = id
+
 	if err := s.store.SaveRuleNoCtx(ruleData); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create rule: %v", err)
 	}
 
-	rules, _ := s.store.ListRulesNoCtx(workspace)
-	if len(rules) > 0 {
-		if pb := ruleToPB(rules[len(rules)-1]); pb != nil {
-			return pb, nil
-		}
+	r, err := s.store.GetRuleNoCtx(id, workspace)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "rule created but could not be retrieved: %v", err)
 	}
-	return nil, status.Errorf(codes.Internal, "rule created but could not be retrieved")
+
+	if pb := ruleToPB(r); pb != nil {
+		return pb, nil
+	}
+	return nil, status.Errorf(codes.Internal, "failed to convert rule")
 }
 
 func (s *Server) UpdateRule(ctx context.Context, req *v1.UpdateRuleRequest) (*v1.Rule, error) {
