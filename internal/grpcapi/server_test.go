@@ -9,18 +9,21 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/AnubisWatch/anubiswatch/internal/api"
+	"github.com/AnubisWatch/anubiswatch/internal/core"
 	v1 "github.com/AnubisWatch/anubiswatch/internal/grpcapi/v1"
 )
 
 // testUserContext returns a context with an authenticated test user
 func testUserContext() context.Context {
-	user := &api.User{ID: "user-1", Email: "test@example.com", Workspace: "default"}
+	user := &api.User{ID: "user-1", Email: "test@example.com", Role: "owner", Workspace: "default"}
 	return context.WithValue(context.Background(), userContextKey, user)
 }
 
@@ -29,7 +32,7 @@ type mockAuthenticator struct{}
 
 func (m *mockAuthenticator) Authenticate(token string) (*api.User, error) {
 	if token == "valid-token" {
-		return &api.User{ID: "user-1", Email: "test@example.com", Workspace: "default"}, nil
+		return &api.User{ID: "user-1", Email: "test@example.com", Role: "owner", Workspace: "default"}, nil
 	}
 	return nil, fmt.Errorf("invalid token")
 }
@@ -1048,5 +1051,43 @@ func TestServer_StreamVerdicts(t *testing.T) {
 	err := srv.StreamVerdicts(&v1.StreamRequest{SoulId: &soulID}, stream)
 	if err != nil {
 		t.Fatalf("StreamVerdicts failed: %v", err)
+	}
+}
+
+func TestServer_RBAC_Enforcement(t *testing.T) {
+	store := newMockGRPCStore()
+	store.souls = map[string]interface{}{
+		"soul_1": &core.Soul{ID: "soul_1", WorkspaceID: "default"},
+	}
+	srv := NewServer("0:0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
+
+	// Create a user context with 'viewer' role (which should fail soul mutations)
+	viewerUser := &api.User{ID: "user-viewer", Email: "viewer@example.com", Role: "viewer", Workspace: "default"}
+	viewerCtx := context.WithValue(context.Background(), userContextKey, viewerUser)
+
+	// Test GetSoul (which viewers are allowed to access)
+	_, err := srv.GetSoul(viewerCtx, &v1.GetSoulRequest{Id: "soul_1"})
+	if err != nil {
+		t.Fatalf("GetSoul should allow viewer access, got: %v", err)
+	}
+
+	// Test CreateSoul (which viewers are NOT allowed to access)
+	_, err = srv.CreateSoul(viewerCtx, &v1.CreateSoulRequest{
+		Name: "New Soul",
+	})
+	if err == nil {
+		t.Fatal("CreateSoul should have failed for viewer but succeeded")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("CreateSoul expected PermissionDenied, got: %v", err)
+	}
+
+	// Test DeleteSoul (which viewers are NOT allowed to access)
+	_, err = srv.DeleteSoul(viewerCtx, &v1.DeleteSoulRequest{Id: "soul_1"})
+	if err == nil {
+		t.Fatal("DeleteSoul should have failed for viewer but succeeded")
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("DeleteSoul expected PermissionDenied, got: %v", err)
 	}
 }

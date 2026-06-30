@@ -765,6 +765,18 @@ func ensureResourceWorkspace(resource interface{}, workspace, name string) error
 	return nil
 }
 
+func (s *Server) checkPermission(ctx context.Context, permission string) (*api.User, error) {
+	user, ok := GetUserFromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	}
+	role := core.MemberRole(user.Role)
+	if !role.Can(permission) {
+		return nil, status.Errorf(codes.PermissionDenied, "role %q lacks permission %q", user.Role, permission)
+	}
+	return user, nil
+}
+
 func (s *Server) ensureSoulAccess(soulID, workspace string) error {
 	if soulID == "" {
 		return nil
@@ -961,10 +973,9 @@ func (s *Server) ListSouls(ctx context.Context, req *v1.ListSoulsRequest) (*v1.L
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Use authenticated user's workspace, not client-supplied
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	user, err := s.checkPermission(ctx, "souls:read")
+	if err != nil {
+		return nil, err
 	}
 	workspace := user.Workspace
 	if workspace == "" {
@@ -1010,10 +1021,9 @@ func (s *Server) GetSoul(ctx context.Context, req *v1.GetSoulRequest) (*v1.Soul,
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Verify authenticated user has access to this soul's workspace
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	user, err := s.checkPermission(ctx, "souls:read")
+	if err != nil {
+		return nil, err
 	}
 
 	soul, err := s.store.GetSoulNoCtx(req.Id)
@@ -1033,10 +1043,9 @@ func (s *Server) CreateSoul(ctx context.Context, req *v1.CreateSoulRequest) (*v1
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Use authenticated user's workspace
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	user, err := s.checkPermission(ctx, "souls:*")
+	if err != nil {
+		return nil, err
 	}
 
 	soulData := pbToSoulConfig(req)
@@ -1068,10 +1077,9 @@ func (s *Server) UpdateSoul(ctx context.Context, req *v1.UpdateSoulRequest) (*v1
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Verify authenticated user has access to this soul's workspace
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	user, err := s.checkPermission(ctx, "souls:*")
+	if err != nil {
+		return nil, err
 	}
 
 	// Get existing soul first
@@ -1110,10 +1118,9 @@ func (s *Server) DeleteSoul(ctx context.Context, req *v1.DeleteSoulRequest) (*em
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Verify authenticated user has access to this soul's workspace
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	user, err := s.checkPermission(ctx, "souls:*")
+	if err != nil {
+		return nil, err
 	}
 	existing, err := s.store.GetSoulNoCtx(req.Id)
 	if err != nil {
@@ -1134,9 +1141,9 @@ func (s *Server) ListJudgments(ctx context.Context, req *v1.ListJudgmentsRequest
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	user, err := s.checkPermission(ctx, "judgments:read")
+	if err != nil {
+		return nil, err
 	}
 
 	offset, limit := normalizedListWindow(req.Offset, req.Limit)
@@ -1230,9 +1237,13 @@ func (s *Server) JudgeSoul(ctx context.Context, req *v1.JudgeSoulRequest) (*v1.J
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "souls:*")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 	soul, err := s.store.GetSoulNoCtx(req.SoulId)
 	if err != nil || soul == nil {
@@ -1258,9 +1269,13 @@ func (s *Server) ListVerdicts(ctx context.Context, req *v1.ListVerdictsRequest) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "souls:read")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 
 	// Verdicts come from alert events. List recent events.
@@ -1374,9 +1389,13 @@ func (s *Server) ListChannels(ctx context.Context, req *v1.ListChannelsRequest) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "channels:read")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
@@ -1403,9 +1422,9 @@ func (s *Server) GetChannel(ctx context.Context, req *v1.GetChannelRequest) (*v1
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	user, err := s.checkPermission(ctx, "channels:read")
+	if err != nil {
+		return nil, err
 	}
 
 	ch, err := s.store.GetChannelNoCtx(req.Id, user.Workspace)
@@ -1422,9 +1441,13 @@ func (s *Server) CreateChannel(ctx context.Context, req *v1.CreateChannelRequest
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "channels:*")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 
 	channelData := pbToChannelConfig(req)
@@ -1452,9 +1475,13 @@ func (s *Server) UpdateChannel(ctx context.Context, req *v1.UpdateChannelRequest
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "channels:*")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 
 	existing, err := s.store.GetChannelNoCtx(req.Id, workspace)
@@ -1496,9 +1523,13 @@ func (s *Server) UpdateChannel(ctx context.Context, req *v1.UpdateChannelRequest
 func (s *Server) DeleteChannel(ctx context.Context, req *v1.DeleteChannelRequest) (*emptypb.Empty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "channels:*")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 	if _, err := s.store.GetChannelNoCtx(req.Id, workspace); err != nil {
 		return nil, status.Errorf(codes.NotFound, "channel not found: %s", req.Id)
@@ -1515,9 +1546,13 @@ func (s *Server) ListRules(ctx context.Context, req *v1.ListRulesRequest) (*v1.L
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "rules:read")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
@@ -1544,9 +1579,9 @@ func (s *Server) GetRule(ctx context.Context, req *v1.GetRuleRequest) (*v1.Rule,
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	user, err := s.checkPermission(ctx, "rules:read")
+	if err != nil {
+		return nil, err
 	}
 
 	r, err := s.store.GetRuleNoCtx(req.Id, user.Workspace)
@@ -1570,9 +1605,13 @@ func (s *Server) CreateRule(ctx context.Context, req *v1.CreateRuleRequest) (*v1
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "rules:*")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 
 	ruleData := pbToRuleConfig(req)
@@ -1600,9 +1639,9 @@ func (s *Server) UpdateRule(ctx context.Context, req *v1.UpdateRuleRequest) (*v1
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return nil, status.Error(codes.Unauthenticated, "unauthenticated")
+	user, err := s.checkPermission(ctx, "rules:*")
+	if err != nil {
+		return nil, err
 	}
 
 	existing, err := s.store.GetRuleNoCtx(req.Id, user.Workspace)
@@ -1645,9 +1684,13 @@ func (s *Server) UpdateRule(ctx context.Context, req *v1.UpdateRuleRequest) (*v1
 func (s *Server) DeleteRule(ctx context.Context, req *v1.DeleteRuleRequest) (*emptypb.Empty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "rules:*")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 	if _, err := s.store.GetRuleNoCtx(req.Id, workspace); err != nil {
 		return nil, status.Errorf(codes.NotFound, "rule not found: %s", req.Id)
@@ -1664,9 +1707,13 @@ func (s *Server) ListJourneys(ctx context.Context, req *v1.ListJourneysRequest) 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "souls:read")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
@@ -1693,9 +1740,13 @@ func (s *Server) GetJourney(ctx context.Context, req *v1.GetJourneyRequest) (*v1
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "souls:read")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 
 	j, err := s.store.GetJourneyNoCtx(req.Id)
@@ -1715,9 +1766,13 @@ func (s *Server) CreateJourney(ctx context.Context, req *v1.CreateJourneyRequest
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "souls:*")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 
 	journeyData := pbToJourneyConfig(req)
@@ -1739,9 +1794,13 @@ func (s *Server) UpdateJourney(ctx context.Context, req *v1.UpdateJourneyRequest
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "souls:*")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 
 	existing, err := s.store.GetJourneyNoCtx(req.Id)
@@ -1775,9 +1834,13 @@ func (s *Server) UpdateJourney(ctx context.Context, req *v1.UpdateJourneyRequest
 func (s *Server) DeleteJourney(ctx context.Context, req *v1.DeleteJourneyRequest) (*emptypb.Empty, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "souls:*")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 	existing, err := s.store.GetJourneyNoCtx(req.Id)
 	if err != nil {
@@ -1793,9 +1856,13 @@ func (s *Server) DeleteJourney(ctx context.Context, req *v1.DeleteJourneyRequest
 }
 
 func (s *Server) RunJourney(ctx context.Context, req *v1.RunJourneyRequest) (*v1.RunJourneyResponse, error) {
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "souls:*")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 
 	journey, err := s.store.GetJourneyNoCtx(req.Id)
@@ -1823,9 +1890,13 @@ func (s *Server) RunJourney(ctx context.Context, req *v1.RunJourneyRequest) (*v1
 }
 
 func (s *Server) ListJourneyRuns(ctx context.Context, req *v1.ListJourneyRunsRequest) (*v1.ListJourneyRunsResponse, error) {
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "souls:read")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 
 	limit := int(req.Limit)
@@ -1852,9 +1923,13 @@ func (s *Server) ListJourneyRuns(ctx context.Context, req *v1.ListJourneyRunsReq
 }
 
 func (s *Server) GetJourneyRun(ctx context.Context, req *v1.GetJourneyRunRequest) (*v1.JourneyRun, error) {
-	workspace, err := workspaceFromContext(ctx)
+	user, err := s.checkPermission(ctx, "souls:read")
 	if err != nil {
 		return nil, err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 
 	run, err := s.store.GetJourneyRunNoCtx(workspace, req.JourneyId, req.RunId)
@@ -1871,6 +1946,9 @@ func (s *Server) GetJourneyRun(ctx context.Context, req *v1.GetJourneyRunRequest
 // --- Cluster RPCs ---
 
 func (s *Server) GetClusterStatus(ctx context.Context, req *emptypb.Empty) (*v1.ClusterStatus, error) {
+	if _, err := s.checkPermission(ctx, "souls:read"); err != nil {
+		return nil, err
+	}
 	return &v1.ClusterStatus{
 		Clustered: false,
 		IsLeader:  true,
@@ -1882,7 +1960,14 @@ func (s *Server) GetClusterStatus(ctx context.Context, req *emptypb.Empty) (*v1.
 // --- Streaming RPCs ---
 
 func (s *Server) StreamJudgments(req *v1.StreamRequest, stream v1.AnubisWatchService_StreamJudgmentsServer) error {
-	workspace, err := workspaceFromContext(stream.Context())
+	user, err := s.checkPermission(stream.Context(), "judgments:read")
+	if err != nil {
+		return err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
+	}
 	if err != nil {
 		return err
 	}
