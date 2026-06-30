@@ -26,7 +26,8 @@ data:
     storage:
       path: /data
       encryption:
-        enabled: false
+        enabled: true
+        key: ${ANUBIS_ENCRYPTION_KEY}
 
     necropolis:
       enabled: false

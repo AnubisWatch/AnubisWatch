@@ -29,9 +29,14 @@ Access the UI at http://localhost:8080
 
 ```bash
 # Using raw manifests
-# First edit deploy/k8s/secret.yaml and replace admin-password: "CHANGE_ME"
-# with a strong password that satisfies the local auth policy.
-kubectl apply -f deploy/k8s/base.yaml
+kubectl apply -f deploy/k8s/namespace.yaml
+kubectl apply -f deploy/k8s/configmap.yaml
+kubectl create secret generic anubiswatch-secrets \
+  --namespace anubiswatch \
+  --from-literal=admin-password="$ANUBIS_ADMIN_PASSWORD" \
+  --from-literal=encryption-key="$ANUBIS_ENCRYPTION_KEY" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f deploy/k8s/pvc.yaml -f deploy/k8s/service.yaml -f deploy/k8s/deployment.yaml
 
 # Using Helm
 helm install anubiswatch deploy/helm/anubiswatch \

@@ -36,18 +36,41 @@ const (
 // It counts [, { as +1 and ], } as -1, rejecting reads when
 // depth exceeds maxJSONDepth.
 type maxDepthReader struct {
-	r     io.Reader
-	depth int
+	r        io.Reader
+	depth    int
+	inString bool
+	escaped  bool
+	err      error
 }
 
 func (m *maxDepthReader) Read(p []byte) (int, error) {
+	if m.err != nil {
+		return 0, m.err
+	}
 	n, err := m.r.Read(p)
-	for _, b := range p[:n] {
+	for i, b := range p[:n] {
+		if m.inString {
+			if m.escaped {
+				m.escaped = false
+				continue
+			}
+			switch b {
+			case '\\':
+				m.escaped = true
+			case '"':
+				m.inString = false
+			}
+			continue
+		}
+
 		switch b {
+		case '"':
+			m.inString = true
 		case '[', '{':
 			m.depth++
 			if m.depth > maxJSONDepth {
-				return n, fmt.Errorf("JSON depth limit exceeded (max %d)", maxJSONDepth)
+				m.err = fmt.Errorf("JSON depth limit exceeded (max %d)", maxJSONDepth)
+				return i, m.err
 			}
 		case ']', '}':
 			m.depth--

@@ -6928,3 +6928,36 @@ func (m *failingDeleteStorage) GetMaintenanceWindowNoCtx(id string) (*core.Maint
 		EndTime:   time.Now().Add(time.Hour),
 	}, nil
 }
+
+func TestContextBindIgnoresBracketsInsideJSONString(t *testing.T) {
+	body := strings.Repeat("[", maxJSONDepth+1) + strings.Repeat("{\"nested\":", maxJSONDepth+1)
+	jsonBody, err := json.Marshal(map[string]string{"value": body})
+	if err != nil {
+		t.Fatalf("failed to marshal test payload: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(jsonBody))
+	rec := httptest.NewRecorder()
+	ctx := &Context{Request: req, Response: rec}
+
+	var payload struct {
+		Value string `json:"value"`
+	}
+	if err := ctx.Bind(&payload); err != nil {
+		t.Fatalf("Bind rejected brackets inside JSON string: %v", err)
+	}
+	if payload.Value != body {
+		t.Fatalf("decoded value mismatch: got %q want %q", payload.Value, body)
+	}
+}
+
+func TestContextBindRejectsExcessiveJSONDepth(t *testing.T) {
+	body := strings.Repeat("{\"v\":", maxJSONDepth+1) + `null` + strings.Repeat("}", maxJSONDepth+1)
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	ctx := &Context{Request: req, Response: rec}
+
+	var payload map[string]interface{}
+	if err := ctx.Bind(&payload); err == nil {
+		t.Fatal("Bind accepted JSON deeper than maxJSONDepth")
+	}
+}

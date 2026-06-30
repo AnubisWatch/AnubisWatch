@@ -3,13 +3,18 @@
     "host": "0.0.0.0",
     "port": 8081,
     "tls": {
-      "enabled": false
+      "enabled": true,
+      "cert": "${ANUBIS_TLS_CERT}",
+      "key": "${ANUBIS_TLS_KEY}",
+      "min_version": 3,
+      "prefer_server": true
     }
   },
   "storage": {
     "path": "./data/prod",
     "encryption": {
-      "enabled": false
+      "enabled": true,
+      "key": "${ANUBIS_ENCRYPTION_KEY}"
     }
   },
   "auth": {

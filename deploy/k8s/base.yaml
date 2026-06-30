@@ -21,6 +21,9 @@ data:
         enabled: false
     storage:
       path: /data
+      encryption:
+        enabled: true
+        key: ${ANUBIS_ENCRYPTION_KEY}
     necropolis:
       enabled: true
       bind_addr: 0.0.0.0:7946
@@ -34,6 +37,17 @@ data:
       level: info
       format: json
       output: stdout
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: anubiswatch-secrets
+  namespace: anubiswatch
+  labels:
+    app.kubernetes.io/name: anubiswatch
+type: Opaque
+# Populate admin-password and encryption-key from a secret manager before use.
 
 ---
 apiVersion: v1
@@ -109,7 +123,7 @@ spec:
             capabilities:
               drop:
                 - ALL
-          image: ghcr.io/anubiswatch/anubiswatch:latest
+          image: ghcr.io/anubiswatch/anubiswatch:v0.1.0
           imagePullPolicy: IfNotPresent
           command:
             - /bin/anubis
@@ -155,6 +169,16 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            - name: ANUBIS_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: anubiswatch-secrets
+                  key: admin-password
+            - name: ANUBIS_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: anubiswatch-secrets
+                  key: encryption-key
       volumes:
         - name: config
           configMap:

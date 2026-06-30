@@ -29,7 +29,7 @@ spec:
             capabilities:
               drop:
                 - ALL
-          image: ghcr.io/anubiswatch/anubiswatch:latest
+          image: ghcr.io/anubiswatch/anubiswatch:v0.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -50,6 +50,11 @@ spec:
                 secretKeyRef:
                   name: anubiswatch-secrets
                   key: admin-password
+            - name: ANUBIS_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: anubiswatch-secrets
+                  key: encryption-key
           volumeMounts:
             - name: config
               mountPath: /etc/anubis
