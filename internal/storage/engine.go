@@ -29,6 +29,21 @@ type CobaltDB struct {
 	btreeOrder int        // Configurable B+Tree order
 	encryptor  *encryptor // AES-256-GCM encryption (nil if disabled)
 
+	// writeMu makes a Put/Delete's WAL append and B+Tree apply a single atomic
+	// step (so the durable log order always matches the in-memory apply order)
+	// and lets checkpointing snapshot a consistent live state with no write in
+	// flight.
+	writeMu sync.Mutex
+
+	// Background checkpoint (WAL compaction) lifecycle. checkpointBaseline is
+	// the WAL size just after the last checkpoint; the next checkpoint fires
+	// once the WAL grows past max(minWALCheckpointBytes, 2*baseline).
+	stopCh           chan struct{}
+	stopOnce         sync.Once
+	bgWG             sync.WaitGroup
+	checkpointBaseMu sync.Mutex
+	checkpointBaseSz int64
+
 	// Secondary indexes for O(1) lookups by ID (replaces O(n) PrefixScan)
 	soulIndex        map[string]string // soulID -> workspaceID
 	judgmentIndex    map[string]string // judgmentID -> workspaceID
@@ -103,6 +118,14 @@ const (
 
 	// Maximum B+Tree order
 	maxBTreeOrder = 256
+
+	// minWALCheckpointBytes is the floor below which the WAL is never
+	// compacted — avoids churning on tiny datasets.
+	minWALCheckpointBytes = 8 * 1024 * 1024 // 8 MiB
+
+	// walCheckpointInterval is how often the background loop evaluates whether
+	// the WAL has grown enough to warrant a checkpoint.
+	walCheckpointInterval = 30 * time.Second
 )
 
 // writeAheadLog provides crash recovery
@@ -110,6 +133,10 @@ type writeAheadLog struct {
 	path string
 	file *os.File
 	mu   sync.Mutex
+	// size tracks bytes written to the current WAL generation. It resets on
+	// recovery/rewrite and drives checkpoint (compaction) decisions so the WAL
+	// cannot grow without bound at runtime.
+	size int64
 }
 
 // NewEngine creates a new CobaltDB storage engine
@@ -184,6 +211,7 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 		alertEventIndex:  make(map[string]string),
 		workspaceIndex:   make(map[string]struct{}),
 		workspaceOrder:   nil,
+		stopCh:           make(chan struct{}),
 	}
 
 	// Recover from WAL
@@ -195,6 +223,18 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 	if err := db.rebuildSecondaryIndexes(); err != nil {
 		logger.Warn("Secondary index rebuild failed", "err", err)
 	}
+
+	// Remove any stale compaction temp file left by a crash mid-checkpoint;
+	// recovery only ever reads wal.log, so a leftover .compact is safe to drop.
+	_ = os.Remove(walPath + ".compact")
+
+	// Baseline the checkpoint size to the WAL's post-recovery size.
+	db.checkpointBaseSz = db.wal.currentSize()
+
+	// Start the background checkpoint loop that compacts the WAL when it grows
+	// past its live-data footprint, bounding on-disk (and replay) growth.
+	db.bgWG.Add(1)
+	go db.checkpointLoop()
 
 	logger.Info("CobaltDB initialized", "path", config.Path, "btree_order", btreeOrder)
 	return db, nil
@@ -210,6 +250,13 @@ func (db *CobaltDB) Close() error {
 	db.closed = true
 	db.closedMu.Unlock()
 
+	// Stop the background checkpoint loop and wait for any in-flight checkpoint
+	// to finish before closing the WAL file it operates on.
+	if db.stopCh != nil {
+		db.stopOnce.Do(func() { close(db.stopCh) })
+		db.bgWG.Wait()
+	}
+
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
@@ -219,6 +266,26 @@ func (db *CobaltDB) Close() error {
 	}
 
 	db.logger.Info("CobaltDB closed")
+	return nil
+}
+
+// Ping reports whether the store is usable. It is consumed by the REST
+// readiness probe (/ready) so that a closed/wedged store is reflected as
+// not-ready rather than always reporting healthy. It verifies the engine is
+// open and that the B+Tree root is reachable under the data lock.
+func (db *CobaltDB) Ping() error {
+	db.closedMu.Lock()
+	closed := db.closed
+	db.closedMu.Unlock()
+	if closed {
+		return fmt.Errorf("database is closed")
+	}
+
+	db.data.mu.RLock()
+	defer db.data.mu.RUnlock()
+	if db.data.root == nil {
+		return fmt.Errorf("storage engine not initialized")
+	}
 	return nil
 }
 
@@ -249,6 +316,12 @@ func (db *CobaltDB) Get(key string) ([]byte, error) {
 	}
 
 	value := node.values[idx]
+	// A nil value is a tombstone written by Delete; treat it as absent so
+	// callers get a clean NotFound rather than a nil slice they attempt to
+	// unmarshal (which surfaces as spurious "unexpected end of JSON input").
+	if value == nil {
+		return nil, &core.NotFoundError{Entity: "key", ID: key}
+	}
 
 	// Decrypt value if encryption is enabled
 	if db.encryptor != nil {
@@ -281,6 +354,12 @@ func (db *CobaltDB) Put(key string, value []byte) error {
 		storeValue = encrypted
 	}
 
+	// writeMu makes the WAL append and the tree apply a single atomic step so
+	// the durable order matches the in-memory order, and so a concurrent
+	// checkpoint sees a consistent live state.
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
 	// Write to WAL first
 	if err := db.wal.Append(key, storeValue); err != nil {
 		return fmt.Errorf("WAL append failed: %w", err)
@@ -307,6 +386,9 @@ func (db *CobaltDB) Delete(key string) error {
 	}
 	db.closedMu.Unlock()
 
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
 	// Write delete marker to WAL
 	if err := db.wal.AppendDelete(key); err != nil {
 		return fmt.Errorf("WAL append failed: %w", err)
@@ -322,6 +404,99 @@ func (db *CobaltDB) Delete(key string) error {
 // Set stores a key-value pair (alias for Put to satisfy raft.Storage interface)
 func (db *CobaltDB) Set(key string, value []byte) error {
 	return db.Put(key, value)
+}
+
+// Checkpoint compacts the WAL: it rewrites the log to contain only the current
+// live key/values, discarding superseded writes and delete tombstones. This
+// bounds the on-disk WAL (the sole durable store for the in-memory B+Tree) to
+// the live dataset instead of letting it grow unbounded at runtime. Reads run
+// concurrently; writes are briefly blocked while the consistent snapshot is
+// captured.
+func (db *CobaltDB) Checkpoint() error {
+	db.closedMu.Lock()
+	if db.closed {
+		db.closedMu.Unlock()
+		return fmt.Errorf("database is closed")
+	}
+	db.closedMu.Unlock()
+
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+
+	// Snapshot live entries with no write in flight. Tree values are stored
+	// exactly as Append writes them (encrypted when encryption is on), so they
+	// can be re-logged verbatim.
+	db.data.mu.RLock()
+	entries := make([]walEntry, 0)
+	now := time.Now().UnixNano()
+	node := db.data.root
+	for node != nil && !node.isLeaf {
+		if len(node.children) == 0 {
+			node = nil
+			break
+		}
+		node = node.children[0]
+	}
+	for node != nil {
+		for i, key := range node.keys {
+			if node.values[i] != nil {
+				entries = append(entries, walEntry{Op: "PUT", Key: key, Value: node.values[i], Time: now})
+			}
+		}
+		node = node.next
+	}
+	db.data.mu.RUnlock()
+
+	if err := db.wal.rewrite(entries); err != nil {
+		return err
+	}
+
+	db.checkpointBaseMu.Lock()
+	db.checkpointBaseSz = db.wal.currentSize()
+	db.checkpointBaseMu.Unlock()
+	return nil
+}
+
+// checkpointLoop periodically compacts the WAL once it has grown well past its
+// live-data footprint. It exits when stopCh is closed (on Close).
+func (db *CobaltDB) checkpointLoop() {
+	defer db.bgWG.Done()
+	ticker := time.NewTicker(walCheckpointInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-db.stopCh:
+			return
+		case <-ticker.C:
+			db.maybeCheckpoint()
+		}
+	}
+}
+
+// maybeCheckpoint runs a checkpoint when the WAL has grown beyond
+// max(minWALCheckpointBytes, 2*baseline), keeping amortized compaction cost
+// bounded while capping WAL size at roughly twice the live dataset.
+func (db *CobaltDB) maybeCheckpoint() {
+	size := db.wal.currentSize()
+
+	db.checkpointBaseMu.Lock()
+	base := db.checkpointBaseSz
+	db.checkpointBaseMu.Unlock()
+
+	threshold := int64(minWALCheckpointBytes)
+	if 2*base > threshold {
+		threshold = 2 * base
+	}
+	if size <= threshold {
+		return
+	}
+
+	if err := db.Checkpoint(); err != nil {
+		db.logger.Warn("WAL checkpoint failed", "err", err)
+		return
+	}
+	db.logger.Info("WAL checkpoint complete",
+		"wal_bytes_before", size, "wal_bytes_after", db.wal.currentSize())
 }
 
 // DeletePrefix removes all key-value pairs with the given prefix
@@ -546,29 +721,40 @@ func (n *btreeNode) splitChild(idx int, order int) {
 		values: make([][]byte, 0, order-1),
 	}
 
-	if !child.isLeaf {
-		newNode.children = make([]*btreeNode, 0, order)
-	}
-
-	// Move second half to new node
 	mid := (order - 1) / 2
-	newNode.keys = append(newNode.keys, child.keys[mid+1:]...)
 
 	if child.isLeaf {
+		// Leaf split: the separator key is COPIED up to the parent and every
+		// key remains present in a leaf. The right leaf takes keys[mid+1:] and
+		// the left leaf retains keys[:mid+1]. The separator is the smallest key
+		// of the right leaf (keys[mid+1]), which matches findChildIndex's
+		// routing (key >= separator descends right). Previously the middle key
+		// was removed from the leaf entirely, silently losing one key on every
+		// leaf split.
+		separator := child.keys[mid+1]
+		newNode.keys = append(newNode.keys, child.keys[mid+1:]...)
 		newNode.values = append(newNode.values, child.values[mid+1:]...)
+		child.keys = child.keys[:mid+1]
 		child.values = child.values[:mid+1]
 		newNode.next = child.next
 		child.next = newNode
-	} else {
-		newNode.children = append(newNode.children, child.children[mid+1:]...)
-		child.children = child.children[:mid+1]
+
+		n.keys = insertString(n.keys, idx, separator)
+		n.children = insertNode(n.children, idx+1, newNode)
+		return
 	}
 
-	// Move middle key to parent
-	n.keys = insertString(n.keys, idx, child.keys[mid])
+	// Internal split: the middle key is MOVED up (it separates the two child
+	// subtrees and does not remain in either), and the children are
+	// partitioned around it.
+	newNode.children = make([]*btreeNode, 0, order)
+	separator := child.keys[mid]
+	newNode.keys = append(newNode.keys, child.keys[mid+1:]...)
+	newNode.children = append(newNode.children, child.children[mid+1:]...)
 	child.keys = child.keys[:mid]
+	child.children = child.children[:mid+1]
 
-	// Insert new node as sibling
+	n.keys = insertString(n.keys, idx, separator)
 	n.children = insertNode(n.children, idx+1, newNode)
 }
 
@@ -590,7 +776,11 @@ func (n *btreeNode) insertNonFull(key string, value []byte, order int) {
 		// Split child if full
 		if len(n.children[idx].keys) >= order-1 {
 			n.splitChild(idx, order)
-			if key > n.keys[idx] {
+			// After the split, n.keys[idx] is the separator (smallest key of
+			// the right sibling). Route right when key >= separator, matching
+			// findChildIndex so an update to a key equal to the separator lands
+			// in the right leaf rather than creating a duplicate on the left.
+			if key >= n.keys[idx] {
 				idx++
 			}
 		}
@@ -654,68 +844,136 @@ func newWAL(path string) (*writeAheadLog, error) {
 	}, nil
 }
 
+// writeEntryLocked marshals and appends one length-prefixed entry to the given
+// file. The caller must hold w.mu. It returns the number of bytes written so
+// callers can maintain the size counter.
+func writeEntryLocked(f *os.File, entry walEntry) (int, error) {
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return 0, err
+	}
+
+	length := []byte{
+		byte(len(data) >> 24 & 0xff),
+		byte(len(data) >> 16 & 0xff),
+		byte(len(data) >> 8 & 0xff),
+		byte(len(data) & 0xff),
+	}
+	if _, err := f.Write(length); err != nil {
+		return 0, err
+	}
+	if _, err := f.Write(data); err != nil {
+		return 0, err
+	}
+	return len(length) + len(data), nil
+}
+
 func (w *writeAheadLog) Append(key string, value []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	entry := walEntry{
+	n, err := writeEntryLocked(w.file, walEntry{
 		Op:    "PUT",
 		Key:   key,
 		Value: value,
 		Time:  time.Now().UnixNano(),
-	}
-
-	data, err := json.Marshal(entry)
+	})
 	if err != nil {
 		return err
 	}
-
-	// Write length-prefixed entry
-	length := make([]byte, 4)
-	length[0] = byte(len(data) >> 24 & 0xff)
-	length[1] = byte(len(data) >> 16 & 0xff)
-	length[2] = byte(len(data) >> 8 & 0xff)
-	length[3] = byte(len(data) & 0xff)
-
-	if _, err := w.file.Write(length); err != nil {
+	if err := w.file.Sync(); err != nil {
 		return err
 	}
-	if _, err := w.file.Write(data); err != nil {
-		return err
-	}
-
-	return w.file.Sync()
+	w.size += int64(n)
+	return nil
 }
 
 func (w *writeAheadLog) AppendDelete(key string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	entry := walEntry{
+	n, err := writeEntryLocked(w.file, walEntry{
 		Op:   "DELETE",
 		Key:  key,
 		Time: time.Now().UnixNano(),
+	})
+	if err != nil {
+		return err
 	}
+	if err := w.file.Sync(); err != nil {
+		return err
+	}
+	w.size += int64(n)
+	return nil
+}
 
-	data, err := json.Marshal(entry)
+// currentSize returns the number of bytes in the current WAL generation.
+func (w *writeAheadLog) currentSize() int64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.size
+}
+
+// rewrite atomically replaces the WAL with a fresh generation containing only
+// the supplied live entries (all PUTs), discarding superseded values and
+// tombstones. It writes a temp file, fsyncs it, then renames it over the WAL
+// (atomic on POSIX) and reopens the handle in append mode. A crash before the
+// rename leaves the old WAL intact; a crash after it leaves the complete new
+// WAL — recovery is consistent either way. The caller must ensure no writes
+// are in flight (CobaltDB holds writeMu).
+func (w *writeAheadLog) rewrite(entries []walEntry) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	tmpPath := w.path + ".compact"
+	// G302: same 0600 rationale as the primary WAL.
+	tmp, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	if err != nil {
 		return err
 	}
 
-	length := make([]byte, 4)
-	length[0] = byte(len(data) >> 24 & 0xff)
-	length[1] = byte(len(data) >> 16 & 0xff)
-	length[2] = byte(len(data) >> 8 & 0xff)
-	length[3] = byte(len(data) & 0xff)
-
-	if _, err := w.file.Write(length); err != nil {
+	var total int64
+	for i := range entries {
+		n, werr := writeEntryLocked(tmp, entries[i])
+		if werr != nil {
+			tmp.Close()
+			os.Remove(tmpPath)
+			return werr
+		}
+		total += int64(n)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
 		return err
 	}
-	if _, err := w.file.Write(data); err != nil {
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
 
-	return w.file.Sync()
+	// Close the current handle before replacing it (required on Windows; safe
+	// on POSIX). If anything below fails we try to reopen the original file so
+	// the WAL remains writable.
+	if err := w.file.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, w.path); err != nil {
+		// Rename failed: reopen the original WAL so writes can continue.
+		if f, rerr := os.OpenFile(w.path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0600); rerr == nil {
+			w.file = f
+		}
+		return err
+	}
+
+	f, err := os.OpenFile(w.path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	w.file = f
+	w.size = total
+	return nil
 }
 
 func (w *writeAheadLog) Close() error {
@@ -731,8 +989,11 @@ func (w *writeAheadLog) Truncate() error {
 	if err := w.file.Truncate(0); err != nil {
 		return err
 	}
-	_, err := w.file.Seek(0, io.SeekStart)
-	return err
+	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	w.size = 0
+	return nil
 }
 
 type walEntry struct {
@@ -740,6 +1001,16 @@ type walEntry struct {
 	Key   string `json:"key"`
 	Value []byte `json:"value,omitempty"`
 	Time  int64  `json:"time"`
+}
+
+// logWALTornTail records that WAL replay stopped early at a malformed tail
+// entry. This is expected after a crash mid-write; entries before this point
+// were recovered and the WAL is reset afterwards.
+func (db *CobaltDB) logWALTornTail(where string, err error) {
+	if db.logger != nil {
+		db.logger.Warn("WAL torn tail detected, stopping replay at last good entry",
+			"at", where, "err", err)
+	}
 }
 
 func (db *CobaltDB) recoverFromWAL() error {
@@ -756,7 +1027,15 @@ func (db *CobaltDB) recoverFromWAL() error {
 		return fmt.Errorf("failed to seek WAL: %w", err)
 	}
 
-	// Read entries
+	// Read entries. A crash can leave a torn tail (a partial length prefix,
+	// a truncated body, or an entry whose fsync did not complete). That is a
+	// normal recovery scenario, not corruption of the whole log: every entry
+	// read cleanly before the torn tail has already been applied to memory,
+	// and the WAL is reset to empty at the end of recovery regardless. So we
+	// treat any malformed tail as end-of-log (break + warn) instead of
+	// aborting the entire replay, which previously discarded every entry that
+	// preceded the torn one and left the un-truncated WAL to fail again on the
+	// next restart.
 	buf := make([]byte, 4)
 	for {
 		// Read length prefix — use io.ReadFull to ensure we get all 4 bytes
@@ -764,23 +1043,28 @@ func (db *CobaltDB) recoverFromWAL() error {
 			if err == io.EOF {
 				break // Normal end of WAL
 			}
-			return fmt.Errorf("failed to read WAL entry length: %w", err)
+			// A partial length prefix (ErrUnexpectedEOF) is a torn tail.
+			db.logWALTornTail("length prefix", err)
+			break
 		}
 
 		length := int(buf[0])<<24 | int(buf[1])<<16 | int(buf[2])<<8 | int(buf[3])
 		if length <= 0 || length > 1024*1024 {
-			return fmt.Errorf("invalid WAL entry length: %d", length)
+			db.logWALTornTail("entry length out of range", fmt.Errorf("length=%d", length))
+			break
 		}
 
 		// Read entry data
 		entryBuf := make([]byte, length)
 		if _, err := io.ReadFull(db.wal.file, entryBuf); err != nil {
-			return fmt.Errorf("failed to read WAL entry body: %w", err)
+			db.logWALTornTail("entry body", err)
+			break
 		}
 
 		var entry walEntry
 		if err := json.Unmarshal(entryBuf, &entry); err != nil {
-			return err
+			db.logWALTornTail("entry decode", err)
+			break
 		}
 
 		// Replay operation

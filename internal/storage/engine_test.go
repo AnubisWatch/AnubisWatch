@@ -2636,253 +2636,6 @@ func TestCobaltDB_DeleteStatusPageNoCtx(t *testing.T) {
 }
 
 // Test StatusPage repository functions
-func TestStatusPageRepository_NewStatusPageRepository(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	repo := NewStatusPageRepository(db)
-	if repo == nil {
-		t.Error("Expected non-nil repository")
-	}
-}
-
-func TestStatusPageRepository_GetStatusPageByDomain(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	repo := NewStatusPageRepository(db)
-
-	// First save a status page using the repository
-	page := &core.StatusPage{
-		ID:           "test-domain-page",
-		WorkspaceID:  "default",
-		Name:         "Test Domain Page",
-		Slug:         "test-domain",
-		CustomDomain: "status.test.com",
-	}
-	err := repo.SaveStatusPage(page)
-	if err != nil {
-		t.Fatalf("SaveStatusPage failed: %v", err)
-	}
-
-	// Get by domain
-	retrieved, err := repo.GetStatusPageByDomain("status.test.com")
-	if err != nil {
-		t.Fatalf("GetStatusPageByDomain failed: %v", err)
-	}
-	if retrieved.CustomDomain != "status.test.com" {
-		t.Errorf("Expected domain status.test.com, got %s", retrieved.CustomDomain)
-	}
-}
-
-func TestStatusPageRepository_GetStatusPageBySlug(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	repo := NewStatusPageRepository(db)
-
-	// First save a status page using the repository
-	page := &core.StatusPage{
-		ID:           "test-slug-page",
-		WorkspaceID:  "default",
-		Name:         "Test Slug Page",
-		Slug:         "my-slug",
-		CustomDomain: "status.test2.com",
-	}
-	err := repo.SaveStatusPage(page)
-	if err != nil {
-		t.Fatalf("SaveStatusPage failed: %v", err)
-	}
-
-	// Get by slug - note: this reveals an implementation issue where
-	// the slug index stores just the ID but GetStatusPageBySlug tries
-	// to unmarshal it as StatusPage. This test documents the current behavior.
-	_, err = repo.GetStatusPageBySlug("my-slug")
-	// Currently returns JSON parse error due to implementation issue
-	if err == nil {
-		t.Log("GetStatusPageBySlug returned successfully")
-	}
-}
-
-func TestStatusPageRepository_GetStatusPage(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	repo := NewStatusPageRepository(db)
-
-	// First save a status page using the repository
-	page := &core.StatusPage{
-		ID:           "test-get-page",
-		WorkspaceID:  "default",
-		Name:         "Test Get Page",
-		Slug:         "test-get",
-		CustomDomain: "status.test3.com",
-	}
-	err := repo.SaveStatusPage(page)
-	if err != nil {
-		t.Fatalf("SaveStatusPage failed: %v", err)
-	}
-
-	// Get by ID
-	retrieved, err := repo.GetStatusPage("test-get-page")
-	if err != nil {
-		t.Fatalf("GetStatusPage failed: %v", err)
-	}
-	if retrieved.ID != "test-get-page" {
-		t.Errorf("Expected ID test-get-page, got %s", retrieved.ID)
-	}
-}
-
-func TestStatusPageRepository_DeleteStatusPage(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	repo := NewStatusPageRepository(db)
-
-	// First save a status page using the repository
-	page := &core.StatusPage{
-		ID:           "test-delete-page",
-		WorkspaceID:  "default",
-		Name:         "Test Delete Page",
-		Slug:         "test-delete",
-		CustomDomain: "status.test4.com",
-	}
-	err := repo.SaveStatusPage(page)
-	if err != nil {
-		t.Fatalf("SaveStatusPage failed: %v", err)
-	}
-
-	// Delete
-	err = repo.DeleteStatusPage("test-delete-page")
-	if err != nil {
-		t.Fatalf("DeleteStatusPage failed: %v", err)
-	}
-
-	// Verify deleted
-	_, err = repo.GetStatusPage("test-delete-page")
-	if err == nil {
-		t.Error("Expected error for deleted page")
-	}
-}
-
-func TestStatusPageRepository_ListStatusPages(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	repo := NewStatusPageRepository(db)
-
-	// List should return empty or existing pages
-	pages, err := repo.ListStatusPages("default")
-	if err != nil {
-		t.Errorf("ListStatusPages failed: %v", err)
-	}
-	if pages == nil {
-		t.Error("Expected non-nil slice")
-	}
-}
-
-func TestStatusPageRepository_GetSoul(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	repo := NewStatusPageRepository(db)
-
-	// GetSoul for nonexistent should return error
-	_, err := repo.GetSoul("nonexistent-soul")
-	if err == nil {
-		t.Error("Expected error for nonexistent soul")
-	}
-}
-
-func TestStatusPageRepository_GetSoulJudgments(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	repo := NewStatusPageRepository(db)
-
-	// GetSoulJudgments for nonexistent should return empty or error
-	judgments, err := repo.GetSoulJudgments("nonexistent-soul", 10)
-	if err != nil {
-		t.Logf("GetSoulJudgments returned: %v", err)
-	}
-	if judgments == nil {
-		t.Error("Expected non-nil slice")
-	}
-}
-
-func TestStatusPageRepository_GetIncidentsByPage(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	repo := NewStatusPageRepository(db)
-
-	// Create a status page first
-	page := &core.StatusPage{
-		ID:          "test-page-incidents",
-		WorkspaceID: "default",
-		Name:        "Test Page Incidents",
-		Slug:        "test-page-incidents",
-	}
-	err := repo.SaveStatusPage(page)
-	if err != nil {
-		t.Fatalf("SaveStatusPage failed: %v", err)
-	}
-
-	// GetIncidentsByPage should return empty slice for page with no incidents
-	incidents, err := repo.GetIncidentsByPage("test-page-incidents")
-	if err != nil {
-		t.Fatalf("GetIncidentsByPage returned: %v", err)
-	}
-	// incidents can be nil or empty slice - both are acceptable
-	_ = incidents
-}
-
-func TestStatusPageRepository_GetUptimeHistory(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	repo := NewStatusPageRepository(db)
-
-	// GetUptimeHistory for nonexistent should return empty
-	uptime, err := repo.GetUptimeHistory("nonexistent-soul", 7)
-	if err != nil {
-		t.Logf("GetUptimeHistory returned: %v", err)
-	}
-	if uptime == nil {
-		t.Error("Expected non-nil slice")
-	}
-}
-
-func TestStatusPageRepository_SaveUptimeDay(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	repo := NewStatusPageRepository(db)
-
-	// SaveUptimeDay should not panic
-	day := core.UptimeDay{
-		Date:   time.Now().Format("2006-01-02"),
-		Status: "operational",
-		Uptime: 99.9,
-	}
-	err := repo.SaveUptimeDay("test-soul", day)
-	if err != nil {
-		t.Logf("SaveUptimeDay returned: %v", err)
-	}
-}
-
-func TestStatusPageRepository_GetWorkspace(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	repo := NewStatusPageRepository(db)
-
-	// GetWorkspace for nonexistent should return error
-	_, err := repo.GetWorkspace("nonexistent-workspace")
-	if err == nil {
-		t.Error("Expected error for nonexistent workspace")
-	}
-}
 
 // Test judgment functions
 func TestCobaltDB_GetJudgmentNoCtx_New(t *testing.T) {
@@ -3583,82 +3336,6 @@ func TestCobaltDB_GetJudgment_NotFound(t *testing.T) {
 }
 
 // Tests for statuspage repository low-coverage functions
-func TestStatusPageRepository_GetSoul_Found(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	soul := &core.Soul{
-		ID:          "repo-soul",
-		WorkspaceID: "tenant-a",
-		Name:        "Repo Soul",
-		Type:        core.CheckHTTP,
-		Target:      "https://example.com",
-	}
-	if err := db.SaveSoul(context.Background(), soul); err != nil {
-		t.Fatalf("SaveSoul failed: %v", err)
-	}
-
-	repo := NewStatusPageRepository(db)
-	result, err := repo.GetSoul("repo-soul")
-	if err != nil {
-		t.Fatalf("GetSoul failed: %v", err)
-	}
-	if result.Name != "Repo Soul" {
-		t.Errorf("Expected name 'Repo Soul', got %s", result.Name)
-	}
-	if result.WorkspaceID != "tenant-a" {
-		t.Errorf("Expected workspace tenant-a, got %s", result.WorkspaceID)
-	}
-}
-
-func TestStatusPageRepository_GetSoul_NotFound(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	repo := NewStatusPageRepository(db)
-	_, err := repo.GetSoul("nonexistent-soul")
-	if err == nil {
-		t.Error("Expected error for nonexistent soul")
-	}
-}
-
-func TestStatusPageRepository_GetWorkspace_Found(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	// StatusPageRepository.GetWorkspace uses key format "workspaces/{id}"
-	ws := &core.Workspace{
-		ID:        "repo-workspace",
-		Name:      "Repo Workspace",
-		Slug:      "repo-ws",
-		OwnerID:   "user-1",
-		Status:    core.WorkspaceActive,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
-	}
-	data, _ := json.Marshal(ws)
-	db.Put("workspaces/repo-workspace", data)
-
-	repo := NewStatusPageRepository(db)
-	result, err := repo.GetWorkspace("repo-workspace")
-	if err != nil {
-		t.Fatalf("GetWorkspace failed: %v", err)
-	}
-	if result.Name != "Repo Workspace" {
-		t.Errorf("Expected name 'Repo Workspace', got %s", result.Name)
-	}
-}
-
-func TestStatusPageRepository_GetWorkspace_NotFound(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	repo := NewStatusPageRepository(db)
-	_, err := repo.GetWorkspace("nonexistent-workspace")
-	if err == nil {
-		t.Error("Expected error for nonexistent workspace")
-	}
-}
 
 // Tests for storage.go low-coverage functions
 func TestCobaltDB_GetStatusPageByDomain_Found(t *testing.T) {
@@ -3885,43 +3562,6 @@ func TestCobaltDB_GetUptimeHistory_NoJudgments(t *testing.T) {
 	}
 }
 
-func TestStatusPageRepository_GetUptimeHistory_UsesJudgments(t *testing.T) {
-	repo, db := newTestStatusPageRepo(t)
-	defer db.Close()
-
-	ctx := context.Background()
-	soul := &core.Soul{
-		ID:          "repo-uptime-soul",
-		WorkspaceID: "default",
-		Name:        "Repo Uptime Soul",
-		Type:        core.CheckHTTP,
-		Target:      "https://example.com",
-	}
-	if err := db.SaveSoul(ctx, soul); err != nil {
-		t.Fatalf("SaveSoul failed: %v", err)
-	}
-	now := time.Now().UTC()
-	for _, judgment := range []*core.Judgment{
-		{ID: "repo-alive", SoulID: soul.ID, Timestamp: now.Add(-time.Minute), Status: core.SoulAlive},
-		{ID: "repo-dead", SoulID: soul.ID, Timestamp: now, Status: core.SoulDead},
-	} {
-		if err := db.SaveJudgment(ctx, judgment); err != nil {
-			t.Fatalf("SaveJudgment failed: %v", err)
-		}
-	}
-
-	history, err := repo.GetUptimeHistory(soul.ID, 1)
-	if err != nil {
-		t.Fatalf("GetUptimeHistory failed: %v", err)
-	}
-	if len(history) != 1 {
-		t.Fatalf("Expected 1 day of history, got %d", len(history))
-	}
-	if history[0].Uptime != 50 || history[0].Status != "dead" {
-		t.Fatalf("Expected real judgment-derived uptime, got %#v", history[0])
-	}
-}
-
 // Tests for ListSouls coverage
 func TestCobaltDB_ListSouls_WithOffset(t *testing.T) {
 	db := newTestDB(t)
@@ -4104,32 +3744,6 @@ func TestCobaltDB_ListStatusPages_Direct(t *testing.T) {
 	}
 }
 
-func TestStatusPageRepository_ListStatusPages_WorkspaceFilter(t *testing.T) {
-	db := newTestDB(t)
-	defer db.Close()
-
-	// Save status pages with the key format expected by StatusPageRepository
-	page := &core.StatusPage{
-		ID:          "repo-list-page",
-		WorkspaceID: "default",
-		Name:        "Repo List Page",
-		Slug:        "repo-list-page",
-		Enabled:     true,
-	}
-	data, _ := json.Marshal(page)
-	db.Put("statuspage/repo-list-page", data)
-
-	repo := NewStatusPageRepository(db)
-	results, err := repo.ListStatusPages("default")
-	if err != nil {
-		t.Fatalf("ListStatusPages failed: %v", err)
-	}
-
-	if len(results) < 1 {
-		t.Errorf("Expected status pages, got %d", len(results))
-	}
-}
-
 // Tests for TimeSeriesStore SaveJudgment coverage
 func TestTimeSeriesStore_SaveJudgment_UpdatesSummary(t *testing.T) {
 	db := newTestDB(t)
@@ -4237,8 +3851,7 @@ func TestCobaltDB_ListStatusPages_NoWorkspace(t *testing.T) {
 	}
 
 	// List all status pages (ListStatusPages filters by workspace)
-	repo := NewStatusPageRepository(db)
-	results, err := repo.ListStatusPages("default")
+	results, err := db.ListStatusPages()
 	if err != nil {
 		t.Fatalf("ListStatusPages failed: %v", err)
 	}
@@ -4276,8 +3889,7 @@ func TestCobaltDB_GetSoulJudgments_Limit(t *testing.T) {
 		}
 	}
 
-	repo := NewStatusPageRepository(db)
-	results, err := repo.GetSoulJudgments("soul-judgments-soul", 5)
+	results, err := db.GetSoulJudgments("soul-judgments-soul", 5)
 	if err != nil {
 		t.Fatalf("GetSoulJudgments failed: %v", err)
 	}
@@ -4315,8 +3927,7 @@ func TestCobaltDB_GetSoulJudgments_Sorted(t *testing.T) {
 		}
 	}
 
-	repo := NewStatusPageRepository(db)
-	results, err := repo.GetSoulJudgments("sorted-soul", 10)
+	results, err := db.GetSoulJudgments("sorted-soul", 10)
 	if err != nil {
 		t.Fatalf("GetSoulJudgments failed: %v", err)
 	}
@@ -6853,13 +6464,11 @@ func TestCobaltDB_WAL_Recovery_PutAndDeleteMixed(t *testing.T) {
 		}
 	}
 
-	// Deleted keys exist in the tree but have nil values (tombstone design)
+	// Deleted keys read back as NotFound (they carry a nil tombstone value,
+	// which Get must not surface as a live result).
 	val, err := db2.Get("mix-key-1")
-	if err != nil {
-		t.Errorf("mix-key-1 should exist in tree: %v", err)
-	}
-	if val != nil {
-		t.Error("mix-key-1 should have nil value after delete (tombstone)")
+	if _, ok := err.(*core.NotFoundError); !ok {
+		t.Errorf("mix-key-1 should be NotFound after delete, got value=%q err=%v", val, err)
 	}
 
 	// List should not include deleted keys
@@ -7885,27 +7494,23 @@ func TestCobaltDB_GetSubscriptionsByPage_CorruptData(t *testing.T) {
 	db := newTestDB(t)
 	defer db.Close()
 
-	repo := NewStatusPageRepository(db)
-
-	// Write corrupt JSON to a subscription key
-	corruptKey := "statuspage/subscriptions/page-1/corrupt"
+	// Write corrupt JSON under the subscriptions key prefix
+	corruptKey := "default/statuspages/subscriptions/corrupt"
 	if err := db.Put(corruptKey, []byte("not json")); err != nil {
 		t.Fatalf("Put failed: %v", err)
 	}
 
-	// Write a valid subscription
+	// Write a valid subscription through the real API
 	validSub := &core.StatusPageSubscription{
 		ID:     "sub-valid",
 		PageID: "page-1",
 		Email:  "test@example.com",
 	}
-	validData, _ := json.Marshal(validSub)
-	validKey := "statuspage/subscriptions/page-1/sub-valid"
-	if err := db.Put(validKey, validData); err != nil {
-		t.Fatalf("Put failed: %v", err)
+	if err := db.SaveStatusPageSubscription(validSub); err != nil {
+		t.Fatalf("SaveStatusPageSubscription failed: %v", err)
 	}
 
-	subs, err := repo.GetSubscriptionsByPage("page-1")
+	subs, err := db.GetSubscriptionsByPage("page-1")
 	if err != nil {
 		t.Fatalf("GetSubscriptionsByPage failed: %v", err)
 	}

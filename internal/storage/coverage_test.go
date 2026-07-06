@@ -92,13 +92,11 @@ func TestRecoverFromWAL_PreservesData(t *testing.T) {
 		t.Errorf("Expected value1, got %s", v1)
 	}
 
-	// key-2 should be deleted (nil value in simplified B+Tree)
+	// key-2 was deleted; a deleted key must read back as NotFound (its
+	// tombstone is not a live value).
 	v2, err := db2.Get("test-key-2")
-	if err != nil {
-		t.Errorf("Get returned error for deleted key: %v", err)
-	}
-	if v2 != nil {
-		t.Errorf("Expected nil value for deleted key-2, got %q", v2)
+	if _, ok := err.(*core.NotFoundError); !ok {
+		t.Errorf("Expected NotFound for deleted key-2, got value=%q err=%v", v2, err)
 	}
 
 	// key-3 should survive
