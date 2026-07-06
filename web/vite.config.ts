@@ -1,45 +1,58 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-import tailwindcss, { type Config } from '@tailwindcss/vite'
-import path from 'path'
+import path from "node:path";
+import tailwindcss, { type Config } from "@tailwindcss/vite";
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
 
 const config: Config = {
-  darkMode: 'class',
-}
+	darkMode: "class",
+};
 
 export default defineConfig({
-  plugins: [react(), tailwindcss(config)],
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, './src'),
-    },
-  },
-  build: {
-    outDir: 'dist',
-    emptyOutDir: true,
-    rollupOptions: {
-      output: {
-        manualChunks(id) {
-          if (id.includes('node_modules')) {
-            if (id.includes('react') || id.includes('react-dom') || id.includes('react-router-dom')) return 'vendor'
-            if (id.includes('recharts')) return 'charts'
-            if (id.includes('lucide-react')) return 'icons'
-          }
-        },
-      },
-    },
-  },
-  server: {
-    port: 3000,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-      },
-      '/ws': {
-        target: 'ws://localhost:8080',
-        ws: true,
-      },
-    },
-  },
-})
+	plugins: [react(), tailwindcss(config)],
+	resolve: {
+		alias: {
+			"@": path.resolve(__dirname, "./src"),
+		},
+	},
+	build: {
+		outDir: "dist",
+		emptyOutDir: true,
+		rolldownOptions: {
+			output: {
+				codeSplitting: {
+					groups: [
+						{
+							name: "react-core",
+							test: /node_modules\/(react|react-dom)\//,
+						},
+						{
+							name: "router-state",
+							test: /node_modules\/(react-router|react-router-dom|zustand)\//,
+						},
+						{
+							name: "charts",
+							test: /node_modules\/recharts\//,
+						},
+						{
+							name: "icons",
+							test: /node_modules\/lucide-react\//,
+						},
+					],
+				},
+			},
+		},
+	},
+	server: {
+		port: 3000,
+		proxy: {
+			"/api": {
+				target: "http://localhost:8080",
+				changeOrigin: true,
+			},
+			"/ws": {
+				target: "ws://localhost:8080",
+				ws: true,
+			},
+		},
+	},
+});
