@@ -1008,6 +1008,7 @@ func TestOIDCAuthenticator_ParseIDToken_AudienceList(t *testing.T) {
 		"email":          "test@example.com",
 		"iss":            "https://test.example.com",
 		"aud":            []interface{}{"other-client", "test-client-id"},
+		"azp":            "test-client-id", // required by OIDC when aud is multi-valued
 		"exp":            time.Now().Add(time.Hour).Unix(),
 		"email_verified": true,
 	}
@@ -1983,7 +1984,7 @@ func TestParseIDToken_AudienceInList(t *testing.T) {
 	auth := newTestOIDCAuth(t, cfg, "", "admin@test.com", "TestPass1234!")
 
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT","kid":"test-key"}`))
-	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"` + server.URL + `","sub":"123","aud":["other-client","test-client-id"],"exp":9999999999}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":"` + server.URL + `","sub":"123","aud":["other-client","test-client-id"],"azp":"test-client-id","exp":9999999999}`))
 	signingInput := header + "." + payload
 	hash := sha256.Sum256([]byte(signingInput))
 	sig, _ := rsa.SignPKCS1v15(rand.Reader, privKey, crypto.SHA256, hash[:])

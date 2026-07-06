@@ -659,6 +659,7 @@ func (o *OIDCAuthenticator) parseIDToken(idToken string, expectedNonce string) (
 	}
 
 	// Validate required audience claim
+	multipleAudiences := false
 	if aud, ok := claims["aud"].(string); ok && aud != "" {
 		if aud != o.config.ClientID {
 			return nil, fmt.Errorf("audience mismatch: expected %s, got %s", o.config.ClientID, aud)
@@ -674,8 +675,21 @@ func (o *OIDCAuthenticator) parseIDToken(idToken string, expectedNonce string) (
 		if !found {
 			return nil, fmt.Errorf("audience not in list: expected %s", o.config.ClientID)
 		}
+		multipleAudiences = len(audList) > 1
 	} else {
 		return nil, fmt.Errorf("missing audience claim")
+	}
+
+	// Validate the authorized party (azp). Per OIDC Core §3.1.3.7, azp MUST be
+	// present when the ID token has multiple audiences, and when present it MUST
+	// equal the client ID. Without this, a token minted for a different client
+	// that merely lists our client ID in its aud array would be accepted.
+	azp, hasAZP := claims["azp"].(string)
+	if hasAZP && azp != o.config.ClientID {
+		return nil, fmt.Errorf("azp mismatch: expected %s, got %s", o.config.ClientID, azp)
+	}
+	if multipleAudiences && !hasAZP {
+		return nil, fmt.Errorf("azp claim required when ID token has multiple audiences")
 	}
 
 	// Validate required subject claim
@@ -708,14 +722,22 @@ func (o *OIDCAuthenticator) parseIDToken(idToken string, expectedNonce string) (
 	userInfo := &userInfoResponse{
 		Sub: sub, // Already validated above
 	}
-	if email, ok := claims["email"].(string); ok {
+	if verified, ok := claims["email_verified"].(bool); ok {
+		userInfo.EmailVerified = verified
+	}
+	if email, ok := claims["email"].(string); ok && email != "" {
+		// The account is provisioned/looked up by email, so an unverified
+		// email must not establish identity: an IdP that permits unverified
+		// addresses could otherwise let a user assert a victim's email. Reject
+		// only when the provider explicitly marks it unverified (absent claim
+		// is left to the provider's policy to avoid breaking IdPs that omit it).
+		if v, present := claims["email_verified"].(bool); present && !v {
+			return nil, fmt.Errorf("email is not verified by the identity provider")
+		}
 		userInfo.Email = email
 	}
 	if name, ok := claims["name"].(string); ok {
 		userInfo.Name = name
-	}
-	if verified, ok := claims["email_verified"].(bool); ok {
-		userInfo.EmailVerified = verified
 	}
 
 	return userInfo, nil

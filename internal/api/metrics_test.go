@@ -75,6 +75,23 @@ func TestMetricsRoute_PublicWithoutAuth(t *testing.T) {
 	}
 }
 
+// TestMetricsRoute_RequiresAuthWhenEnabled verifies server.metrics_auth gates
+// /metrics behind authentication so cross-tenant monitor names/latencies are
+// not exposed to unauthenticated scrapers in exposed/multi-tenant deployments.
+func TestMetricsRoute_RequiresAuthWhenEnabled(t *testing.T) {
+	config := core.ServerConfig{Port: 8080, MetricsAuth: true}
+	logger := newTestLogger()
+	server := NewRESTServer(config, core.AuthConfig{Enabled: core.BoolPtr(true)}, newMockStorage(), &mockProbeEngine{}, &mockAlertManager{}, &mockAuthenticator{}, &mockClusterManager{}, nil, nil, nil, nil, logger)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/metrics", nil)
+	server.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected metrics to require auth (%d) when metrics_auth=true, got %d", http.StatusUnauthorized, rec.Code)
+	}
+}
+
 // TestHandleMetrics_Content checks that metrics contains expected Prometheus format
 func TestHandleMetrics_Content(t *testing.T) {
 	config := core.ServerConfig{Port: 8080}

@@ -34,6 +34,11 @@ type MCPTool struct {
 	InputSchema    json.RawMessage `json:"inputSchema"`
 	Handler        func(args json.RawMessage) (interface{}, error)
 	ContextHandler func(ctx context.Context, args json.RawMessage) (interface{}, error) `json:"-"`
+	// RequiredPermission, when non-empty, gates the tool behind the caller's
+	// workspace role at dispatch time (handleCallTool). Read-only tools leave
+	// it empty; mutating tools set the same permission as their REST route so
+	// the MCP endpoint cannot be used to bypass RBAC.
+	RequiredPermission string `json:"-"`
 }
 
 // MCPResource represents an MCP resource
@@ -153,18 +158,20 @@ func (s *MCPServer) registerBuiltinTools() {
 
 	// Tool: acknowledge_incident
 	s.tools["acknowledge_incident"] = MCPTool{
-		Name:           "acknowledge_incident",
-		Description:    "Acknowledge an alert incident",
-		InputSchema:    json.RawMessage(`{"type":"object","properties":{"incident_id":{"type":"string","description":"The incident ID"}},"required":["incident_id"]}`),
-		ContextHandler: s.handleAcknowledgeIncident,
+		Name:               "acknowledge_incident",
+		Description:        "Acknowledge an alert incident",
+		InputSchema:        json.RawMessage(`{"type":"object","properties":{"incident_id":{"type":"string","description":"The incident ID"}},"required":["incident_id"]}`),
+		ContextHandler:     s.handleAcknowledgeIncident,
+		RequiredPermission: "rules:*", // mirrors REST POST /api/v1/incidents/:id/acknowledge
 	}
 
 	// Tool: create_soul
 	s.tools["create_soul"] = MCPTool{
-		Name:           "create_soul",
-		Description:    "Create a new monitoring soul",
-		InputSchema:    json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"Soul name"},"type":{"type":"string","description":"Check type (http, tcp, etc.)"},"target":{"type":"string","description":"Target URL/address"},"interval":{"type":"string","description":"Check interval (e.g., 30s, 1m)"}},"required":["name","type","target"]}`),
-		ContextHandler: s.handleCreateSoul,
+		Name:               "create_soul",
+		Description:        "Create a new monitoring soul",
+		InputSchema:        json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"Soul name"},"type":{"type":"string","description":"Check type (http, tcp, etc.)"},"target":{"type":"string","description":"Target URL/address"},"interval":{"type":"string","description":"Check interval (e.g., 30s, 1m)"}},"required":["name","type","target"]}`),
+		ContextHandler:     s.handleCreateSoul,
+		RequiredPermission: "souls:*", // mirrors REST POST /api/v1/souls
 	}
 }
 
@@ -324,6 +331,16 @@ func (s *MCPServer) handleCallTool(ctx context.Context, req *MCPRequest) *MCPRes
 
 	if !ok {
 		return s.errorResponse(req.ID, -32601, "Tool not found")
+	}
+
+	// Enforce RBAC for mutating tools using the caller's role, which handleMCP
+	// propagates via the request context. Without this, a read-only user could
+	// invoke mutating tools (create_soul, acknowledge_incident) through the MCP
+	// endpoint and bypass the RBAC enforced on the equivalent REST routes.
+	if tool.RequiredPermission != "" {
+		if err := mcpRequirePermission(ctx, tool.RequiredPermission); err != nil {
+			return s.errorResponse(req.ID, -32603, err.Error())
+		}
 	}
 
 	var result interface{}
@@ -572,6 +589,17 @@ func (s *MCPServer) handleGetStats(ctx context.Context, args json.RawMessage) (i
 	end := time.Now()
 	start := end.Add(-24 * time.Hour)
 	return s.store.GetStatsNoCtx(workspace, start, end)
+}
+
+// mcpRequirePermission reports whether the caller's workspace role (propagated
+// by handleMCP via the request context) satisfies the given permission. It is
+// invoked from handleCallTool for any tool declaring a RequiredPermission.
+func mcpRequirePermission(ctx context.Context, permission string) error {
+	role := core.MemberRole(core.UserRoleFromContext(ctx))
+	if role == "" || !role.Can(permission) {
+		return fmt.Errorf("permission denied: role %q lacks %q", role, permission)
+	}
+	return nil
 }
 
 func (s *MCPServer) handleAcknowledgeIncident(ctx context.Context, args json.RawMessage) (interface{}, error) {

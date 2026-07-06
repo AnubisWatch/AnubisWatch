@@ -153,10 +153,30 @@ func (s *Server) Start() error {
 	return nil
 }
 
-// Stop gracefully stops the gRPC server
+// Stop gracefully stops the gRPC server, blocking until in-flight RPCs finish.
 func (s *Server) Stop() {
 	if s.grpc != nil {
 		s.grpc.GracefulStop()
+	}
+}
+
+// StopWithContext gracefully stops the server but bounds the drain by ctx: if
+// the deadline elapses (e.g. a long-lived streaming RPC won't return), it force
+// stops so shutdown cannot hang past the process's SIGTERM grace period.
+func (s *Server) StopWithContext(ctx context.Context) {
+	if s.grpc == nil {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		s.grpc.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		s.grpc.Stop() // force-close connections; unblocks GracefulStop goroutine
+		<-done
 	}
 }
 
@@ -2018,9 +2038,16 @@ func (s *Server) StreamJudgments(req *v1.StreamRequest, stream v1.AnubisWatchSer
 }
 
 func (s *Server) StreamVerdicts(req *v1.StreamRequest, stream v1.AnubisWatchService_StreamVerdictsServer) error {
-	workspace, err := workspaceFromContext(stream.Context())
+	// Enforce the same RBAC as ListVerdicts (souls:read); previously this
+	// stream only authenticated the caller, letting any authenticated principal
+	// stream verdicts regardless of role.
+	user, err := s.checkPermission(stream.Context(), "souls:read")
 	if err != nil {
 		return err
+	}
+	workspace := user.Workspace
+	if workspace == "" {
+		workspace = "default"
 	}
 
 	// Poll-based streaming: check for new alert events every second
