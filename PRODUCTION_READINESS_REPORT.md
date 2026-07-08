@@ -39,8 +39,10 @@ The initial combined Go test slice timed out, so verification was retried in sma
 | `go test ./cmd/anubis -run 'Test.*Config|Test.*Serve|TestMain' -count=1` | PASS |
 | `cd web && npm run lint` | PASS |
 | `cd web && npm run build` | PASS |
+| `go run golang.org/x/vuln/cmd/govulncheck@latest ./...` | PASS — no vulnerabilities found |
+| `cd web && pnpm audit --audit-level moderate` | PASS — 0 vulnerabilities |
 
-Not run in this pass: full `go test ./...`, race suite, full web coverage, Playwright E2E, Docker image build, Helm render/preflight, live smoke test, dependency audit. Existing CI and peer-status evidence indicate those are covered elsewhere, but this report only claims the checks above as directly rerun here.
+Not run in this pass: full `go test ./...`, race suite, full web coverage, Playwright E2E, Docker image build, Helm render/preflight, and live smoke test. Existing CI and peer-status evidence indicate those are covered elsewhere, but this report only claims the checks above as directly rerun here.
 
 ## Readiness assessment by domain
 
@@ -67,10 +69,11 @@ Evidence:
 - gRPC create handlers generate IDs before saving and retrieve by generated ID, avoiding prior race-prone list-after-create behavior.
 - REST security headers include nosniff, frame denial, referrer policy, CSP, and HSTS only when TLS is enabled.
 - CI includes `gosec` and `govulncheck` gates.
+- Local Go vulnerability scan passed with no vulnerabilities found.
+- Local frontend package audit passed with 0 vulnerabilities at moderate-or-higher threshold.
 
 Caveats:
 
-- No dependency/vulnerability audit was rerun in this pass.
 - No external penetration test or ASVS control-by-control signoff is recorded.
 - Metrics are public by default unless `server.metrics_auth` is enabled; acceptable for Prometheus-only private networks, but should be explicitly configured for internet-exposed deployments.
 
@@ -164,8 +167,8 @@ Caveats:
 3. **Cluster mode not production-cleared**  
    Update docs/release notes to explicitly scope the production claim to single-node/proxied mode unless a separate cluster readiness package is completed.
 
-4. **Final supply-chain/security checks not rerun in this pass**  
-   Run `govulncheck ./...`, frontend package audit, Docker image scan, and image digest promotion on the release candidate.
+4. **Final artifact security evidence still required**  
+   Rerun `govulncheck ./...`, frontend package audit, Docker image scan, and image digest promotion on the final release candidate commit/image.
 
 ## Recommended release checklist
 
