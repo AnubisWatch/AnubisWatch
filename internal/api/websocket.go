@@ -35,6 +35,7 @@ type WebSocketServer struct {
 	broadcast      chan WSMessage
 	authenticator  Authenticator // Added for token validation - uses Authenticator from rest.go
 	allowedOrigins []string      // Allowed origins for WebSocket connections (CSRF protection)
+	trustedProxies []string      // proxies whose X-Forwarded-For may be trusted for client IP
 
 	// Rate limiting
 	ipLimits         map[string]*connectionLimiter // IP -> limiter state
@@ -141,32 +142,47 @@ func (s *WebSocketServer) Stop() {
 	s.logger.Info("WebSocket server stopped")
 }
 
+// realIP returns the client IP used for rate/connection limiting. It honours
+// X-Forwarded-For only when the connection originates from a configured trusted
+// proxy; otherwise it uses RemoteAddr. This prevents an attacker from spoofing
+// X-Forwarded-For to bypass the per-IP DoS limits (matching the REST path).
+func (s *WebSocketServer) realIP(r *http.Request) string {
+	if len(s.trustedProxies) > 0 {
+		if remoteHost, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+			for _, proxy := range s.trustedProxies {
+				if remoteHost == proxy {
+					if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+						return strings.TrimSpace(strings.Split(fwd, ",")[0])
+					}
+					break
+				}
+			}
+		}
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
 // HandleConnection handles new WebSocket connections
 func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Request) {
-	// Get client IP for rate limiting
-	clientIP := r.RemoteAddr
-	if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-		clientIP = strings.Split(forwarded, ",")[0]
-	}
+	// Get client IP for rate limiting (spoof-resistant: trusts X-Forwarded-For
+	// only from configured proxies).
+	clientIP := s.realIP(r)
 	// Strip port from IP address if present (e.g., "192.168.1.1:1234" -> "192.168.1.1")
 	// This prevents rate limit bypass via ephemeral port changes
 	if host, _, err := net.SplitHostPort(clientIP); err == nil {
 		clientIP = host
 	}
 
-	// SECURITY: Rate limiting check - prevent DoS via connection exhaustion
-	if !s.checkRateLimit(clientIP) {
-		s.logger.Warn("WebSocket connection rejected: rate limit exceeded",
+	// SECURITY: Atomically check rate-limit and reserve a connection slot
+	// under the write lock, closing the TOCTOU window between check and
+	// increment. The slot is released by removeClient via decrementConnectionCount.
+	if !s.reserveConnection(clientIP) {
+		s.logger.Warn("WebSocket connection rejected: rate limit or connection limit exceeded",
 			"remote_addr", clientIP)
-		http.Error(w, "Too Many Requests: rate limit exceeded", http.StatusTooManyRequests)
-		return
-	}
-
-	// SECURITY: Check concurrent connection limit per IP
-	if !s.checkConnectionLimit(clientIP) {
-		s.logger.Warn("WebSocket connection rejected: too many concurrent connections",
-			"remote_addr", clientIP)
-		http.Error(w, "Too Many Requests: too many connections from this IP", http.StatusTooManyRequests)
+		http.Error(w, "Too Many Requests: rate limit or connection limit exceeded", http.StatusTooManyRequests)
 		return
 	}
 
@@ -245,9 +261,6 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 	s.mu.Lock()
 	s.clients[client.ID] = client
 	s.mu.Unlock()
-
-	// Increment connection count for rate limiting
-	s.incrementConnectionCount(clientIP)
 
 	// Subscribe to workspace room
 	client.JoinRoom(fmt.Sprintf("workspace:%s", workspace))
@@ -595,18 +608,20 @@ func workspaceEventRoom(workspace, event string) string {
 func (s *WebSocketServer) broadcastToRoom(room string, msg WSMessage) {
 	s.mu.RLock()
 	clients, exists := s.rooms[room]
-	s.mu.RUnlock()
-
 	if !exists {
+		s.mu.RUnlock()
 		return
 	}
 
-	// Snapshot client IDs before iterating — prevents racing with removeClient
-	// which may delete entries from the room map
+	// Snapshot client IDs while holding the read lock. Iterating the map
+	// after releasing the lock races with JoinRoom/LeaveRoom/removeClient
+	// which mutate s.rooms under the write lock, causing a fatal concurrent
+	// map read/write panic.
 	clientIDs := make([]string, 0, len(clients))
 	for id := range clients {
 		clientIDs = append(clientIDs, id)
 	}
+	s.mu.RUnlock()
 
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -893,33 +908,50 @@ func (s *WebSocketServer) checkRateLimit(ip string) bool {
 	return true
 }
 
-// checkConnectionLimit checks if the IP has exceeded the concurrent connection limit
-// Returns true if connection is allowed, false if limit exceeded
-func (s *WebSocketServer) checkConnectionLimit(ip string) bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	limiter, exists := s.ipLimits[ip]
-	if !exists {
-		return true // No existing connections
-	}
-
-	return limiter.connections < s.maxConnsPerIP
-}
-
-// incrementConnectionCount increments the connection counter for an IP
-func (s *WebSocketServer) incrementConnectionCount(ip string) {
+// reserveConnection atomically checks and reserves a connection slot for an IP
+// under the write lock, closing the TOCTOU window between check and increment.
+// Returns true if the slot was reserved; the caller must eventually call
+// decrementConnectionCount to release it (via removeClient).
+func (s *WebSocketServer) reserveConnection(ip string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.ipLimits == nil {
+		s.ipLimits = make(map[string]*connectionLimiter)
+	}
 
 	limiter, exists := s.ipLimits[ip]
 	if !exists {
 		limiter = &connectionLimiter{
+			lastConnect:  time.Now(),
+			connectCount: 1,
+			windowReset:  time.Now().Add(s.rateLimitWindow),
 			messageReset: time.Now().Add(s.messageWindow),
 		}
 		s.ipLimits[ip] = limiter
+		return true
 	}
+
+	// Reset rate-limit window if expired
+	if time.Now().After(limiter.windowReset) {
+		limiter.connectCount = 0
+		limiter.windowReset = time.Now().Add(s.rateLimitWindow)
+	}
+
+	// Check rate limit
+	if limiter.connectCount >= s.connRateLimit {
+		return false
+	}
+
+	// Check concurrent connection limit
+	if limiter.connections >= s.maxConnsPerIP {
+		return false
+	}
+
+	limiter.connectCount++
 	limiter.connections++
+	limiter.lastConnect = time.Now()
+	return true
 }
 
 // decrementConnectionCount decrements the connection counter for an IP

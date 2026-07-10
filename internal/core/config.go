@@ -350,12 +350,15 @@ func (c *Config) validate() error {
 
 	// CRITICAL-2 follow-up: when environment=production, plaintext serving
 	// is never acceptable. Reject configs that try to deploy without TLS.
-	// Operators who terminate TLS at a reverse proxy can still mark this
-	// instance as a non-production environment (e.g. "behind-lb") or omit
-	// the field entirely; the gate is opt-in via environment="production".
+	// Operators who terminate TLS at a reverse proxy / ingress can set
+	// environment="production-proxied" (the value shipped in the container
+	// image, which listens on plain HTTP behind a TLS-terminating proxy) or
+	// any other non-"production" value; the gate is opt-in via the exact
+	// value "production". Do NOT broaden this to a prefix match, or
+	// "production-proxied" would be caught and the container would crash-loop.
 	if strings.EqualFold(strings.TrimSpace(c.Environment), "production") {
 		if !c.Server.TLS.Enabled {
-			return fmt.Errorf("config error: server.tls.enabled must be true when environment is \"production\"")
+			return fmt.Errorf("config error: server.tls.enabled must be true when environment is \"production\" (use environment=\"production-proxied\" when TLS is terminated upstream)")
 		}
 	}
 
@@ -406,7 +409,7 @@ func GenerateDefaultConfig() *Config {
 		},
 		Auth: AuthConfig{
 			Type:    "local",
-			Enabled: new(bool),
+			Enabled: BoolPtr(true),
 		},
 		Dashboard: DashboardConfig{
 			Enabled: true,

@@ -463,37 +463,38 @@ export function useAuth() {
   // valid token, they're authenticated until the server explicitly says
   // otherwise.
   const [user, setUser] = useState<User | null>(() => {
-    return localStorage.getItem('auth_token') ? readCachedUser() : null
+    return readCachedUser()
   })
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    const token = localStorage.getItem('auth_token')
-    if (token) {
-      api.get<User>('/auth/me')
-        .then((u) => {
-          setUser(u)
-          writeCachedUser(u)
-        })
-        .catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err)
-          if (msg.startsWith('HTTP 401') || msg.toLowerCase().includes('unauthorized')) {
-            api.clearToken()
-            writeCachedUser(null)
-            setUser(null)
-          }
-          // Other failures: keep the cached user we already loaded from
-          // localStorage. The api client redirects on real 401 already.
-        })
-        .finally(() => setLoading(false))
-    } else {
-      setLoading(false)
-    }
+    // Probe /auth/me to validate the session. The HttpOnly cookie set by
+    // the server on login is sent automatically with credentials: 'include'.
+    // If it exists and is valid, we get the user back. If not, the server
+    // returns 401 and we clear the cached user.
+    api.get<User>('/auth/me')
+      .then((u) => {
+        setUser(u)
+        writeCachedUser(u)
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (msg.startsWith('HTTP 401') || msg.toLowerCase().includes('unauthorized')) {
+          api.clearToken()
+          writeCachedUser(null)
+          setUser(null)
+        }
+        // Other failures: keep the cached user. They were authenticated
+        // before this transient failure; don't flicker to /login.
+      })
+      .finally(() => setLoading(false))
   }, [])
 
   const login = async (email: string, password: string) => {
-    const result = await api.post<{ user: User; token: string }>('/auth/login', { email, password })
-    api.setToken(result.token)
+    const result = await api.post<{ user: User }>('/auth/login', { email, password })
+    // The server set an HttpOnly auth_token cookie. The api client sends
+    // credentials: 'include' with every request, so subsequent API calls
+    // are authenticated via the cookie. No need to store a token in JS.
     setUser(result.user)
     writeCachedUser(result.user)
     return result

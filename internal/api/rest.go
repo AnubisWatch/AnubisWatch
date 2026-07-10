@@ -321,6 +321,7 @@ type User struct {
 // NewRESTServer creates a new REST server
 func NewRESTServer(config core.ServerConfig, authConfig core.AuthConfig, store Storage, probe ProbeEngine, alert AlertManager, auth Authenticator, cluster ClusterManager, journey JourneyExecutor, dashboard http.Handler, statusPage http.Handler, mcp *MCPServer, logger *slog.Logger) *RESTServer {
 	wsServer := NewWebSocketServer(logger, auth, config.AllowedOrigins) // Wire config origins to WebSocket
+	wsServer.trustedProxies = config.TrustedProxies                     // spoof-resistant client IP for WS rate limits
 
 	s := &RESTServer{
 		config:     config,
@@ -366,7 +367,15 @@ func (s *RESTServer) setupRoutes() {
 	// Health
 	s.router.Handle("GET", "/health", s.handleHealth)
 	s.router.Handle("GET", "/ready", s.handleReady)
-	s.router.Handle("GET", "/metrics", s.handleMetrics)
+	// /metrics is unauthenticated by default for Prometheus scraping. Because
+	// it exposes monitor names/latencies across all workspaces, operators in
+	// multi-tenant or internet-exposed deployments can set server.metrics_auth
+	// to require a bearer token.
+	if s.config.MetricsAuth {
+		s.router.Handle("GET", "/metrics", s.requireAuth(s.handleMetrics))
+	} else {
+		s.router.Handle("GET", "/metrics", s.handleMetrics)
+	}
 
 	// OpenAPI / Swagger (no auth required)
 	s.router.Handle("GET", "/api/openapi.json", s.handleOpenAPIJSON)
@@ -792,8 +801,6 @@ func (s *RESTServer) handleLogin(ctx *Context) error {
 
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
 		"user": user,
-		// Token still returned for WebSocket connections and backward compatibility
-		"token": token,
 	})
 }
 
@@ -2261,7 +2268,13 @@ func (s *RESTServer) handleMCP(ctx *Context) error {
 		return ctx.Error(http.StatusUnauthorized, "authentication required")
 	}
 
-	req := ctx.Request.WithContext(core.ContextWithWorkspaceID(ctx.Request.Context(), contextWorkspace(ctx)))
+	// Propagate both the workspace and the caller's role so MCP tool handlers
+	// can enforce RBAC — the MCP endpoint mixes read tools with mutating ones
+	// (create_soul, acknowledge_incident), and without the role a read-only
+	// user could invoke the mutating tools and bypass the REST RBAC model.
+	reqCtx := core.ContextWithWorkspaceID(ctx.Request.Context(), contextWorkspace(ctx))
+	reqCtx = core.ContextWithUserRole(reqCtx, ctx.User.Role)
+	req := ctx.Request.WithContext(reqCtx)
 	s.mcp.ServeHTTP(ctx.Response, req)
 	return nil
 }
@@ -2505,25 +2518,37 @@ func (s *RESTServer) recoveryMiddleware(handler Handler) Handler {
 func (s *RESTServer) validateJSONMiddleware(handler Handler) Handler {
 	return func(ctx *Context) error {
 		if ctx.Request.Method == "POST" || ctx.Request.Method == "PUT" || ctx.Request.Method == "PATCH" {
-			contentType := ctx.Request.Header.Get("Content-Type")
-			if !strings.HasPrefix(contentType, "application/json") {
-				return ctx.Error(http.StatusBadRequest, "Content-Type must be application/json")
+			// Only enforce Content-Type when a body is present: bodyless POST
+			// operations (logout, force-check, acknowledge) should not require
+			// clients to send a fake Content-Type header.
+			hasBody := ctx.Request.ContentLength > 0 || ctx.Request.TransferEncoding != nil
+			if hasBody {
+				contentType := ctx.Request.Header.Get("Content-Type")
+				if !strings.HasPrefix(contentType, "application/json") {
+					return ctx.Error(http.StatusBadRequest, "Content-Type must be application/json")
+				}
 			}
 
-			// Check Content-Length
-			if ctx.Request.ContentLength > 1<<20 { // 1MB limit
+			// Check Content-Length for pre-negotiated-size check
+			if ctx.Request.ContentLength > maxRequestBodySize {
 				return ctx.Error(http.StatusRequestEntityTooLarge, "Request body too large (max 1MB)")
 			}
 
-			// Validate JSON body structure to prevent attacks (only if body exists and has content)
-			if ctx.Request.Body != nil && ctx.Request.ContentLength > 0 {
-				bodyBytes, err := io.ReadAll(io.LimitReader(ctx.Request.Body, 1<<20))
+			// Validate JSON body structure to prevent attacks
+			if hasBody && ctx.Request.Body != nil {
+				// Read maxRequestBodySize+1 to distinguish "exactly at limit"
+				// from "oversized" — io.LimitReader truncates silently.
+				limited := io.LimitReader(ctx.Request.Body, maxRequestBodySize+1)
+				bodyBytes, err := io.ReadAll(limited)
 				if err != nil {
 					return ctx.Error(http.StatusBadRequest, "Invalid request body")
 				}
+				if len(bodyBytes) > maxRequestBodySize {
+					return ctx.Error(http.StatusRequestEntityTooLarge, "Request body too large (max 1MB)")
+				}
 
 				// Restore body for later handlers
-				ctx.Request.Body = io.NopCloser(strings.NewReader(string(bodyBytes)))
+				ctx.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 				// Only validate non-empty bodies
 				if len(bodyBytes) > 0 {

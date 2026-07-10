@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, ReactNode, useCallback } from 'react'
-import { AUTH_TOKEN_CHANGED_EVENT } from '../api/authEvents'
 import { WebSocketContext, type WebSocketMessage } from './webSocketContext'
 
 interface WebSocketProviderProps {
@@ -17,11 +16,10 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   const maxReconnectAttempts = 5
 
   const connect = useCallback(() => {
-    const token = localStorage.getItem('auth_token')
-    if (!token) {
-      shouldReconnectRef.current = false
-      return
-    }
+    // Authenticate via the HttpOnly auth_token cookie (set by server on login).
+    // The browser sends cookies automatically with the WebSocket upgrade request.
+    // If there's no valid session, the server rejects the connection — the
+    // onclose handler will fire and we stop reconnecting.
     shouldReconnectRef.current = true
     if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) {
       return
@@ -110,36 +108,34 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     }
   }, [])
 
-  // Auto-connect when auth token is available
+  // Auto-connect on mount. The HttpOnly cookie (set by server on login) is
+  // sent with the WebSocket upgrade request automatically. If the user has
+  // a valid session cookie, the connection succeeds; if not, the server
+  // rejects it and the onclose handler stops reconnecting.
   useEffect(() => {
-    const token = localStorage.getItem('auth_token')
-    if (token) {
-      connect()
-    }
+    connect()
 
     return () => {
       disconnect()
     }
   }, [connect, disconnect])
 
-  // Listen for auth changes in this tab and cross-tab storage changes.
+  // Listen for cross-tab storage changes (legacy backward compat).
+  // New sessions use HttpOnly cookies, so AUTH_TOKEN_CHANGED_EVENT no longer fires.
   useEffect(() => {
-    const syncConnection = () => {
-      if (localStorage.getItem('auth_token')) {
-        connect()
-      } else {
-        disconnect()
-      }
-    }
     const handleStorage = (e: StorageEvent) => {
-      if (e.key === 'auth_token') syncConnection()
+      if (e.key === 'auth_token') {
+        if (e.newValue) {
+          connect()
+        } else {
+          disconnect()
+        }
+      }
     }
 
     window.addEventListener('storage', handleStorage)
-    window.addEventListener(AUTH_TOKEN_CHANGED_EVENT, syncConnection)
     return () => {
       window.removeEventListener('storage', handleStorage)
-      window.removeEventListener(AUTH_TOKEN_CHANGED_EVENT, syncConnection)
     }
   }, [connect, disconnect])
 

@@ -61,7 +61,7 @@ describe('Login', () => {
   })
 
   it('submits form and navigates on success', async () => {
-    mockPost.mockResolvedValue({ user: { id: '1', email: 'test@example.com', name: 'Test' }, token: 'abc123' })
+    mockPost.mockResolvedValue({ user: { id: '1', email: 'test@example.com', name: 'Test' } })
 
     render(
       <MemoryRouter>
@@ -80,9 +80,6 @@ describe('Login', () => {
 
     await waitFor(() => {
       expect(mockPost).toHaveBeenCalledWith('/auth/login', { email: 'test@example.com', password: 'password' })
-    })
-    await waitFor(() => {
-      expect(mockSetToken).toHaveBeenCalledWith('abc123')
     })
     await waitFor(() => {
       expect(mockNavigate).toHaveBeenCalledWith('/')

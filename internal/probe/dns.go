@@ -36,6 +36,17 @@ func (c *DNSChecker) Validate(soul *core.Soul) error {
 		return configError("target", fmt.Sprintf("SSRF validation failed: %v", err))
 	}
 
+	// SSRF protection - validate configured nameservers so a user who can
+	// create/update DNS probes cannot force the service to send UDP traffic
+	// to internal/private/link-local addresses.
+	if soul.DNS != nil {
+		for _, ns := range soul.DNS.Nameservers {
+			if err := ValidateAddress(ns); err != nil {
+				return configError("dns.nameservers", fmt.Sprintf("SSRF validation failed for nameserver %q: %v", ns, err))
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -528,8 +539,19 @@ func skipDNSName(msg []byte, offset int) (int, int) {
 	return start, offset
 }
 
+// maxDNSPointerDepth caps compression-pointer indirection to prevent a
+// malicious/spoofed response with a pointer loop from exhausting the stack.
+const maxDNSPointerDepth = 32
+
 // decodeDNSName decodes a DNS name from msg[start:end] into a human-readable string
 func decodeDNSName(msg []byte, start, end int) string {
+	return decodeDNSNameDepth(msg, start, end, 0)
+}
+
+func decodeDNSNameDepth(msg []byte, start, end, depth int) string {
+	if depth > maxDNSPointerDepth {
+		return ""
+	}
 	var parts []string
 	offset := start
 	for offset < end {
@@ -541,9 +563,12 @@ func decodeDNSName(msg []byte, start, end int) string {
 		}
 		if msg[offset]&0xC0 == 0xC0 {
 			// Follow compression pointer
+			if offset+2 > len(msg) {
+				break
+			}
 			ptr := int(binary.BigEndian.Uint16(msg[offset:offset+2])) & 0x3FFF
 			if ptr < len(msg) {
-				part := decodeDNSName(msg, ptr, findNameEnd(msg, ptr))
+				part := decodeDNSNameDepth(msg, ptr, findNameEnd(msg, ptr), depth+1)
 				if part != "" {
 					parts = append(parts, part)
 				}
