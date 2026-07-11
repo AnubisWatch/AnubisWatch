@@ -72,15 +72,19 @@ describe("Cluster", () => {
     expect(document.querySelector(".animate-spin")).toBeInTheDocument();
   });
 
-  it("shows error state with try again button", () => {
-    mockCluster({ loading: false, error: "Cluster unreachable" });
-    mockPeers();
+  it("shows error state and retries both cluster resources", async () => {
+    const refetchCluster = vi.fn().mockResolvedValue(undefined);
+    const refetchPeers = vi.fn().mockResolvedValue(undefined);
+    mockCluster({ loading: false, error: "Cluster unreachable", refetch: refetchCluster });
+    mockPeers({ refetch: refetchPeers });
     mockStats();
     render(<Cluster />);
     expect(screen.getByText("Cluster unreachable")).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /try again/i }),
-    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+    await waitFor(() => {
+      expect(refetchCluster).toHaveBeenCalledOnce();
+      expect(refetchPeers).toHaveBeenCalledOnce();
+    });
   });
 
   it("renders standalone mode", () => {
@@ -170,6 +174,19 @@ describe("Cluster", () => {
     expect(screen.getByText("Add Node")).toBeInTheDocument();
     // follower appears in status cell (label + badge), role cell (label + badge) = 4 times
     expect(screen.getAllByText("follower")).toHaveLength(4);
+  });
+
+  it("renders default unknown node values and pluralizes multiple peers", () => {
+    mockCluster({ data: null });
+    mockPeers({ data: [
+      { id: "mystery", name: "mystery", address: "", state: "candidate", last_contact: "later" },
+      { id: "known", name: "known", address: "10.0.0.2", state: "follower", last_contact: "now" },
+    ] });
+    mockStats();
+    render(<Cluster />);
+    expect(screen.getByText("2 nodes")).toBeInTheDocument();
+    expect(screen.getAllByText("candidate")).toHaveLength(2);
+    expect(screen.getByText("standalone")).toBeInTheDocument();
   });
 
   it("refreshes cluster and stats on button click", async () => {

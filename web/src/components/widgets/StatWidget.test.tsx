@@ -27,6 +27,36 @@ describe('StatWidget', () => {
     expect(spinner).toBeInTheDocument()
   })
 
+  it('ignores settled requests after unmount', async () => {
+    let resolve!: (value: Record<string, number>) => void
+    mocks.post.mockReturnValueOnce(new Promise((done) => { resolve = done }))
+    const view = render(<StatWidget widget={makeWidget()} dashboardId="d1" />)
+    view.unmount(); resolve({ cpu_usage: 1 }); await Promise.resolve()
+    let reject!: (reason: unknown) => void
+    mocks.post.mockReturnValueOnce(new Promise((_, fail) => { reject = fail }))
+    const second = render(<StatWidget widget={makeWidget()} dashboardId="d1" />)
+    second.unmount(); reject('bad'); await Promise.resolve()
+  })
+
+  it('falls back when both configured and first values are undefined', async () => {
+    mocks.post.mockResolvedValue({ cpu_usage: undefined })
+    const view = render(<StatWidget widget={makeWidget()} dashboardId="d1" />)
+    expect(await screen.findByText('—')).toBeInTheDocument()
+    view.unmount()
+    mocks.post.mockResolvedValue(null)
+    render(<StatWidget widget={makeWidget()} dashboardId="d1" />)
+    expect(await screen.findByText('—')).toBeInTheDocument()
+  })
+
+  it('uses the first response value and non-Error fallback', async () => {
+    mocks.post.mockResolvedValueOnce({ other: 12 })
+    const view = render(<StatWidget widget={makeWidget()} dashboardId="d1" />)
+    await screen.findByText('12'); view.unmount()
+    mocks.post.mockRejectedValueOnce('bad')
+    render(<StatWidget widget={makeWidget()} dashboardId="d1" />)
+    expect(await screen.findByText('Failed to load')).toBeInTheDocument()
+  })
+
   it('displays numeric value with locale formatting', async () => {
     mocks.post.mockResolvedValue({ cpu_usage: 1234567 })
     render(<StatWidget widget={makeWidget()} dashboardId="d1" />)

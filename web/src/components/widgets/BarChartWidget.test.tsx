@@ -25,6 +25,21 @@ describe('BarChartWidget', () => {
     expect(spinner).toBeInTheDocument()
   })
 
+  it('ignores a response that settles after unmount', async () => {
+    let resolve!: (value: Array<Record<string, unknown>>) => void
+    mocks.post.mockReturnValue(new Promise((done) => { resolve = done }))
+    const view = render(<BarChartWidget widget={makeWidget()} dashboardId="d1" />)
+    view.unmount()
+    resolve([{ passed: 1 }])
+    await Promise.resolve()
+  })
+
+  it('renders pass/fail chart data', async () => {
+    mocks.post.mockResolvedValue([{ time: '10:00', passed: 5, failed: 1 }])
+    render(<BarChartWidget widget={makeWidget()} dashboardId="d1" />)
+    await waitFor(() => expect(document.querySelector('.recharts-wrapper')).toBeInTheDocument())
+  })
+
   it('renders chart with data', async () => {
     mocks.post.mockResolvedValue([
       { time: '10:00', count: 5, avg_latency: 120 },
@@ -55,6 +70,22 @@ describe('BarChartWidget', () => {
       />
     )
     await waitFor(() => expect(document.querySelector('.recharts-wrapper')).toBeInTheDocument())
+  })
+
+  it('handles an entry that disappears before key-value extraction', async () => {
+    const changing: Array<Record<string, unknown>> = []
+    changing.length = 1
+    let reads = 0
+    Object.defineProperty(changing, 0, { get: () => (++reads % 3 === 0 ? undefined : {}) })
+    mocks.post.mockResolvedValue(changing)
+    render(<BarChartWidget widget={makeWidget()} dashboardId="d1" />)
+    await waitFor(() => expect(document.querySelector('.recharts-wrapper')).toBeInTheDocument())
+  })
+
+  it('handles a null object response as no data', async () => {
+    mocks.post.mockResolvedValue(null)
+    render(<BarChartWidget widget={makeWidget()} dashboardId="d1" />)
+    expect(await screen.findByText('No data')).toBeInTheDocument()
   })
 
   it('renders key-value object responses such as status distribution', async () => {

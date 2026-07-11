@@ -25,6 +25,29 @@ describe('LineChartWidget', () => {
     expect(spinner).toBeInTheDocument()
   })
 
+  it('ignores success and failure after unmount', async () => {
+    let resolve!: (value: Array<Record<string, unknown>>) => void
+    mocks.post.mockReturnValueOnce(new Promise((done) => { resolve = done }))
+    const view = render(<LineChartWidget widget={makeWidget()} dashboardId="d1" />)
+    view.unmount(); resolve([]); await Promise.resolve()
+    let reject!: (reason: unknown) => void
+    mocks.post.mockReturnValueOnce(new Promise((_, fail) => { reject = fail }))
+    const second = render(<LineChartWidget widget={makeWidget()} dashboardId="d1" />)
+    second.unmount(); reject('bad'); await Promise.resolve()
+  })
+
+  it('uses the fallback for a non-Error rejection', async () => {
+    mocks.post.mockRejectedValue('bad')
+    render(<LineChartWidget widget={makeWidget()} dashboardId="d1" />)
+    expect(await screen.findByText('Failed to load')).toBeInTheDocument()
+  })
+
+  it('handles a null response as empty data', async () => {
+    mocks.post.mockResolvedValue(null)
+    render(<LineChartWidget widget={makeWidget()} dashboardId="d1" />)
+    expect(await screen.findByText('No data')).toBeInTheDocument()
+  })
+
   it('renders chart with data', async () => {
     mocks.post.mockResolvedValue([
       { time: '10:00', count: 5, avg_latency: 120 },

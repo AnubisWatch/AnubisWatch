@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Dashboard } from "./Dashboard";
 
 const dashboardMocks = vi.hoisted(() => ({
@@ -82,6 +82,10 @@ describe("Dashboard", () => {
 		});
 	});
 
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
 	it("renders stats, charts, system status, recent souls, and quick actions", () => {
 		render(
 			<MemoryRouter>
@@ -152,6 +156,35 @@ describe("Dashboard", () => {
 			expect(refetchSouls).toHaveBeenCalled();
 			expect(refetchStats).toHaveBeenCalled();
 		});
+	});
+
+	it("handles invalid soul data, absent stats, and completes the refresh timer", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const refetchSouls = vi.fn().mockResolvedValue(undefined);
+		const refetchStats = vi.fn().mockResolvedValue(undefined);
+		dashboardMocks.useSouls.mockReturnValue({ souls: { slice: () => [] }, refetch: refetchSouls });
+		dashboardMocks.useStats.mockReturnValue({ data: undefined, refetch: refetchStats });
+		dashboardMocks.useClusterStatus.mockReturnValue({ data: undefined });
+		dashboardMocks.useJudgments.mockReturnValue({ data: undefined });
+		render(<MemoryRouter><Dashboard /></MemoryRouter>);
+		expect(screen.getByText("Start Monitoring")).toBeInTheDocument();
+		fireEvent.click(screen.getByLabelText("Refresh dashboard"));
+		await waitFor(() => expect(refetchSouls).toHaveBeenCalledOnce());
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(500);
+		});
+		await waitFor(() => expect(screen.getByLabelText("Refresh dashboard")).not.toHaveClass("animate-spin"));
+	});
+
+	it("aggregates judgments inside and outside the current hour", () => {
+		vi.setSystemTime(new Date("2026-07-06T10:30:00Z"));
+		dashboardMocks.useJudgments.mockReturnValue({ data: [
+			{ id: "j1", status: "passed", latency: 100, timestamp: "2026-07-06T10:05:00Z" },
+			{ id: "j2", status: "failed", latency: 300, timestamp: "2026-07-06T10:20:00Z" },
+			{ id: "j3", status: "passed", latency: 50, timestamp: "2026-07-05T00:00:00Z" },
+		] });
+		render(<MemoryRouter><Dashboard /></MemoryRouter>);
+		expect(screen.getByText("Activity Overview")).toBeInTheDocument();
 	});
 
 	it("shows the empty state when no souls exist", () => {

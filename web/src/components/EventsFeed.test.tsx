@@ -121,4 +121,39 @@ describe('EventsFeed', () => {
 
     expect(screen.getByText('No recent events')).toBeInTheDocument()
   })
+
+  it('maps every supported payload shape and ignores unsupported messages', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-04T12:00:00Z'))
+    const messages = [
+      { type: 'judgment', data: { status: 'failed', soul_id: 'judgment-soul' } },
+      { type: 'judgment', data: { status: 'healthy', soul_name: '' }, timestamp: 'healthy-time' },
+      { type: 'judgment', data: { status: 'passed' }, timestamp: 'passed-time' },
+      { type: 'judgment', data: {}, timestamp: 'empty-judgment' },
+      { type: 'alert', data: { severity: 'critical', soul_id: 'alert-soul' }, timestamp: 'alert-time' },
+      { type: 'alert', data: { severity: 'other', message: '' }, timestamp: 'info-time' },
+      { type: 'incident', data: {}, timestamp: 'empty-incident' },
+      { type: 'soul_update', data: { id: 'updated-soul' }, timestamp: 'update-time' },
+      { type: 'soul_update', data: null, timestamp: 'empty-update' },
+      { type: 'unknown', data: [], timestamp: 'ignored-time' },
+    ] as unknown as WebSocketMessage[]
+    vi.mocked(useWebSocket).mockReturnValue({
+      connected: true,
+      messages,
+      send: vi.fn(),
+      lastMessage: messages.at(-1) ?? null,
+      connect: vi.fn(),
+      disconnect: vi.fn()
+    })
+
+    render(<EventsFeed maxEvents={20} />)
+
+    expect(screen.getAllByText('Health check failed')).toHaveLength(2)
+    expect(screen.getAllByText('Health check passed')).toHaveLength(2)
+    expect(screen.getByText('Incident updated')).toBeInTheDocument()
+    expect(screen.getAllByText('Alert triggered')).toHaveLength(2)
+    expect(screen.getAllByText('Soul updated')).toHaveLength(2)
+    expect(screen.queryByText('ignored-time')).not.toBeInTheDocument()
+    vi.useRealTimers()
+  })
 })

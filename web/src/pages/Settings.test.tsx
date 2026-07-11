@@ -138,6 +138,47 @@ describe("Settings", () => {
 		expect(applyTheme).toHaveBeenCalledWith("light");
 	});
 
+	it("changes every general and security control, refreshes, and hides the API key", async () => {
+		render(<MemoryRouter><Settings /></MemoryRouter>);
+		await screen.findByDisplayValue("AnubisWatch");
+		fireEvent.change(screen.getByDisplayValue("UTC"), { target: { value: "Europe/Istanbul" } });
+		fireEvent.change(screen.getByDisplayValue("English"), { target: { value: "tr" } });
+		fireEvent.click(screen.getByRole("button", { name: "System" }));
+		fireEvent.click(screen.getByRole("tab", { name: /security/i }));
+		for (const toggle of screen.getAllByRole("switch")) fireEvent.click(toggle);
+		fireEvent.click(screen.getByRole("tab", { name: /storage/i }));
+		fireEvent.change(screen.getByDisplayValue("30"), { target: { value: "45" } });
+		fireEvent.click(screen.getByRole("tab", { name: /integrations/i }));
+		fireEvent.click(screen.getByLabelText("Show API key"));
+		fireEvent.click(screen.getByLabelText("Hide API key"));
+		fireEvent.click(screen.getByLabelText("Refresh configuration"));
+		await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2));
+	});
+
+	it("handles anonymous users and non-Error load/save failures", async () => {
+		settingsMocks.useAuth.mockReturnValue({ user: null });
+		mockGet.mockRejectedValueOnce("offline");
+		const { unmount } = render(<MemoryRouter><Settings /></MemoryRouter>);
+		expect(await screen.findByText("Failed to load configuration")).toBeInTheDocument();
+		unmount();
+
+		mockGet.mockResolvedValue(config);
+		mockPut.mockRejectedValueOnce("nope");
+		render(<MemoryRouter><Settings /></MemoryRouter>);
+		await screen.findByDisplayValue("AnubisWatch");
+		fireEvent.click(screen.getByRole("tab", { name: /security/i }));
+		expect(screen.getByText("Not logged in")).toBeInTheDocument();
+		expect(screen.getByText("Unknown")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("tab", { name: /integrations/i }));
+		expect(screen.getByDisplayValue("Not available")).toBeInTheDocument();
+		fireEvent.click(screen.getByLabelText("Copy API key"));
+		expect(writeText).not.toHaveBeenCalled();
+		fireEvent.click(screen.getByRole("tab", { name: /general/i }));
+		fireEvent.change(screen.getByDisplayValue("AnubisWatch"), { target: { value: "Changed" } });
+		fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
+		expect(await screen.findByText("Failed to save configuration")).toBeInTheDocument();
+	});
+
 	it("shows save errors and keeps changes retryable", async () => {
 		mockPut.mockRejectedValueOnce(new Error("save failed"));
 		render(

@@ -49,6 +49,21 @@ describe("SoulProtocolFields", () => {
 		});
 
 		cleanup();
+		const udp = renderFields("udp");
+		fireEvent.change(screen.getByLabelText("UDP Send Hex"), {
+			target: { value: "deadbeef" },
+		});
+		fireEvent.change(screen.getByLabelText("Expected Response Text"), {
+			target: { value: "pong" },
+		});
+		expect(udp.setFormData).toHaveBeenCalledWith({
+			...udp.formData,
+			udpSendHex: "deadbeef",
+		});
+		expect(udp.setFormData).toHaveBeenCalledWith({
+			...udp.formData,
+			udpExpectContains: "pong",
+		});
 	});
 
 	it("renders DNS, ICMP, SMTP, gRPC, WebSocket, and TLS fields", () => {
@@ -71,13 +86,17 @@ describe("SoulProtocolFields", () => {
 		document.body.innerHTML = "";
 		const icmp = renderFields("icmp");
 		fireEvent.change(screen.getByLabelText("ICMP Count"), {
-			target: { value: "4" },
+			target: { value: "5" },
 		});
 		fireEvent.change(screen.getByLabelText("Interval Seconds"), {
 			target: { value: "2" },
 		});
 		fireEvent.change(screen.getByLabelText("Max Loss Percent"), {
 			target: { value: "25" },
+		});
+		expect(icmp.setFormData).toHaveBeenCalledWith({
+			...icmp.formData,
+			icmpCount: 5,
 		});
 		expect(icmp.setFormData).toHaveBeenCalledWith({
 			...icmp.formData,
@@ -141,11 +160,20 @@ describe("SoulProtocolFields", () => {
 			target: { value: "21" },
 		});
 		fireEvent.change(screen.getByLabelText("Expiry Critical Days"), {
-			target: { value: "7" },
+			target: { value: "8" },
 		});
 		expect(tls.setFormData).toHaveBeenCalledWith({
 			...tls.formData,
 			tlsExpiryWarnDays: 21,
 		});
+		expect(tls.setFormData).toHaveBeenCalledWith({
+			...tls.formData,
+			tlsExpiryCriticalDays: 8,
+		});
+	});
+
+	it("uses an uppercase fallback label for an unknown type", () => {
+		renderFields("custom" as SoulFormData["type"]);
+		expect(screen.getByText("CUSTOM Settings")).toBeInTheDocument();
 	});
 });

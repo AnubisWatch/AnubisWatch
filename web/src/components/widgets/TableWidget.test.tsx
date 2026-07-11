@@ -25,6 +25,45 @@ describe('TableWidget', () => {
     expect(spinner).toBeInTheDocument()
   })
 
+  it('ignores settled requests after unmount', async () => {
+    let resolve!: (value: Array<Record<string, unknown>>) => void
+    mocks.post.mockReturnValueOnce(new Promise((done) => { resolve = done }))
+    const view = render(<TableWidget widget={makeWidget()} dashboardId="d1" />)
+    view.unmount(); resolve([]); await Promise.resolve()
+    let reject!: (reason: unknown) => void
+    mocks.post.mockReturnValueOnce(new Promise((_, fail) => { reject = fail }))
+    const second = render(<TableWidget widget={makeWidget()} dashboardId="d1" />)
+    second.unmount(); reject('bad'); await Promise.resolve()
+  })
+
+  it('uses non-Error fallback and null response handling', async () => {
+    mocks.post.mockRejectedValueOnce('bad')
+    const view = render(<TableWidget widget={makeWidget()} dashboardId="d1" />)
+    expect(await screen.findByText('Failed to load')).toBeInTheDocument(); view.unmount()
+    mocks.post.mockResolvedValueOnce(null)
+    render(<TableWidget widget={makeWidget()} dashboardId="d1" />)
+    expect(await screen.findByText('No data')).toBeInTheDocument()
+  })
+
+  it('handles an entry that disappears before column extraction', async () => {
+    const changing: Array<Record<string, unknown>> = []
+    changing.length = 1
+    Object.defineProperty(changing, 0, { get: () => undefined })
+    mocks.post.mockResolvedValue(changing)
+    render(<TableWidget widget={makeWidget()} dashboardId="d1" />)
+    await screen.findByRole('table')
+    expect(screen.queryAllByRole('columnheader')).toHaveLength(0)
+  })
+
+  it('limits columns and rows and renders null cells', async () => {
+    mocks.post.mockResolvedValue(Array.from({ length: 21 }, (_, i) => ({ one: i, two: null, three: 3, four: 4, five: 5, six: 6 })))
+    render(<TableWidget widget={makeWidget()} dashboardId="d1" />)
+    await screen.findByRole('table')
+    expect(screen.getAllByRole('columnheader')).toHaveLength(5)
+    expect(screen.getAllByRole('row')).toHaveLength(21)
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0)
+  })
+
   it('renders table with data rows', async () => {
     mocks.post.mockResolvedValue([
       { name: 'Service A', status: true, latency: 45 },

@@ -133,6 +133,29 @@ describe("Incidents", () => {
 		expect(mockGet).toHaveBeenCalledTimes(3);
 	});
 
+	it("handles null payloads and non-Error failures", async () => {
+		mockGet.mockResolvedValueOnce(null);
+		render(<Incidents />);
+		expect(await screen.findByText("No incidents found")).toBeInTheDocument();
+
+		mockGet.mockRejectedValueOnce("offline");
+		render(<Incidents />);
+		expect(await screen.findByText("Failed to load incidents")).toBeInTheDocument();
+	});
+
+	it("reports acknowledge failures and searches by incident and soul ids", async () => {
+		mockPost.mockRejectedValueOnce("nope");
+		render(<Incidents />);
+		await screen.findByText("Payments API");
+		fireEvent.change(screen.getByPlaceholderText("Search incidents..."), { target: { value: "inc-1" } });
+		expect(screen.getByText("Payments API")).toBeInTheDocument();
+		fireEvent.change(screen.getByPlaceholderText("Search incidents..."), { target: { value: "soul-2" } });
+		expect(screen.getByText("Billing Worker")).toBeInTheDocument();
+		fireEvent.change(screen.getByPlaceholderText("Search incidents..."), { target: { value: "" } });
+		fireEvent.click(screen.getByRole("button", { name: "Acknowledge" }));
+		expect(await screen.findByText("Failed to acknowledge incident")).toBeInTheDocument();
+	});
+
 	it("shows fetch and action errors", async () => {
 		mockGet.mockRejectedValueOnce(new Error("incidents unavailable"));
 		render(<Incidents />);

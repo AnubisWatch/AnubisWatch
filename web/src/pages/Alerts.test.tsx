@@ -1,4 +1,6 @@
 import {
+	act,
+	cleanup,
 	fireEvent,
 	render,
 	screen,
@@ -291,6 +293,9 @@ describe("Alerts", () => {
 			);
 		});
 
+		(globalThis.confirm as ReturnType<typeof vi.fn>).mockReturnValueOnce(false);
+		fireEvent.click(screen.getByLabelText(/delete rule/i));
+		expect(mockDeleteRule).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByLabelText(/delete rule/i));
 		await waitFor(() => expect(mockDeleteRule).toHaveBeenCalledWith("rule-1"));
 
@@ -334,5 +339,147 @@ describe("Alerts", () => {
 		await waitFor(() =>
 			expect(mockAcknowledgeIncident).toHaveBeenCalledWith("incident-1"),
 		);
+	});
+
+	it("routes refresh actions and filters rules by search and severity", async () => {
+		mockUseRules.mockReturnValue({ rules: [
+			{ id: "r1", name: "Warning Rule", condition: "error_rate", threshold: 2, severity: "warning", enabled: false, channels: ["missing"] },
+			{ id: "r2", name: "Info Rule", condition: "downtime", threshold: 1, severity: "info", enabled: true, channels: [] },
+		], loading: true, error: null, refetch: mockRefetchRules, createRule: mockCreateRule, updateRule: mockUpdateRule, deleteRule: mockDeleteRule });
+		render(<Alerts />);
+		fireEvent.click(screen.getByLabelText("Refresh"));
+		await waitFor(() => expect(mockRefetchRules).toHaveBeenCalled());
+		fireEvent.change(screen.getByPlaceholderText("Search alert rules..."), { target: { value: "warning" } });
+		fireEvent.change(screen.getByDisplayValue("All Severities"), { target: { value: "warning" } });
+		expect(screen.getByText("Warning Rule")).toBeInTheDocument();
+		expect(screen.queryByText("Info Rule")).not.toBeInTheDocument();
+		fireEvent.click(screen.getByRole("tab", { name: /channels/i }));
+		fireEvent.click(screen.getByLabelText("Refresh"));
+		await waitFor(() => expect(mockRefetchChannels).toHaveBeenCalled());
+		fireEvent.click(screen.getByRole("tab", { name: /history/i }));
+		fireEvent.click(screen.getByLabelText("Refresh"));
+		await waitFor(() => expect(mockRefetchIncidents).toHaveBeenCalled());
+	});
+
+	it("creates webhook, Slack, and PagerDuty channels and exercises modal controls", async () => {
+		render(<Alerts />);
+		fireEvent.click(screen.getByRole("tab", { name: /channels/i }));
+		for (const [type, placeholder, value, config] of [
+			["Webhook", "https://example.com/webhook", "https://example.com/hook", { url: "https://example.com/hook" }],
+			["Slack", "https://hooks.slack.com/services/...", "https://hooks.slack/x", { webhook_url: "https://hooks.slack/x" }],
+			["PagerDuty", "PagerDuty Events API key", "key", { integration_key: "key" }],
+		] as const) {
+			fireEvent.click(screen.getAllByRole("button", { name: /add channel/i })[0]);
+			fireEvent.change(screen.getByPlaceholderText("e.g., Ops Slack"), { target: { value: `${type} Ops` } });
+			fireEvent.click(screen.getByRole("button", { name: type }));
+			fireEvent.change(screen.getByPlaceholderText(placeholder), { target: { value } });
+			fireEvent.click(screen.getByLabelText("Enabled"));
+			fireEvent.click(screen.getAllByRole("button", { name: "Add Channel" }).at(-1)!);
+			await waitFor(() => expect(mockCreateChannel).toHaveBeenLastCalledWith(expect.objectContaining({ type: type.toLowerCase() === "pagerduty" ? "pagerduty" : type.toLowerCase(), config, enabled: false })));
+		}
+		fireEvent.click(screen.getAllByRole("button", { name: /add channel/i })[0]);
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Enter" });
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+	});
+
+	it("validates every channel type and displays save failures", async () => {
+		render(<Alerts />);
+		fireEvent.click(screen.getByRole("tab", { name: /channels/i }));
+		fireEvent.click(screen.getAllByRole("button", { name: /add channel/i })[0]);
+		const name = screen.getByPlaceholderText("e.g., Ops Slack");
+		for (const type of ["Slack", "Discord", "PagerDuty", "Email"]) {
+			fireEvent.change(name, { target: { value: "Channel" } });
+			fireEvent.click(screen.getByRole("button", { name: type }));
+			expect(screen.getAllByRole("button", { name: "Add Channel" }).at(-1)).toBeDisabled();
+		}
+		fireEvent.change(screen.getByPlaceholderText("smtp.example.com"), { target: { value: "smtp" } });
+		fireEvent.change(screen.getByPlaceholderText("alerts@example.com"), { target: { value: "from@example.com" } });
+		expect(screen.getAllByRole("button", { name: "Add Channel" }).at(-1)).toBeDisabled();
+		fireEvent.change(screen.getByPlaceholderText("ops@example.com, oncall@example.com"), { target: { value: "to@example.com" } });
+		mockCreateChannel.mockRejectedValueOnce(new Error("save failed"));
+		fireEvent.click(screen.getAllByRole("button", { name: "Add Channel" }).at(-1)!);
+		expect(await screen.findByText("save failed")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+	});
+
+	it("covers channel edit config fallbacks, test outcomes, and delete cancellation", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const channels = [
+			{ id: "c1", name: "Email", type: "email", enabled: false, config: { to: ["one@example.com", 42], smtp_port: "2525", smtp_host: "smtp", from: "from" } },
+			{ id: "c2", name: "Unknown", type: "unknown", enabled: false, config: {} },
+		];
+		mockUseChannels.mockReturnValue({ channels, loading: false, error: "channels unavailable", refetch: mockRefetchChannels, createChannel: mockCreateChannel, updateChannel: mockUpdateChannel, deleteChannel: mockDeleteChannel, testChannel: mockTestChannel });
+		mockTestChannel.mockResolvedValueOnce({ status: "rejected" }).mockRejectedValueOnce("bad test");
+		render(<Alerts />);
+		fireEvent.click(screen.getByRole("tab", { name: /channels/i }));
+		fireEvent.click(screen.getByRole("button", { name: "Try Again" }));
+		fireEvent.click(screen.getByLabelText(/test channel email/i));
+		expect(await screen.findByText("Test failed: rejected")).toBeInTheDocument();
+		fireEvent.click(screen.getByLabelText(/test channel unknown/i));
+		expect(await screen.findByText("Test failed")).toBeInTheDocument();
+		fireEvent.click(screen.getByLabelText(/edit channel email/i));
+		expect(screen.getByDisplayValue("2525")).toBeInTheDocument();
+		fireEvent.click(screen.getByLabelText("Close dialog"));
+		(globalThis.confirm as ReturnType<typeof vi.fn>).mockReturnValueOnce(false);
+		fireEvent.click(screen.getByLabelText(/delete channel email/i));
+		expect(mockDeleteChannel).not.toHaveBeenCalled();
+		await act(async () => { await vi.runAllTimersAsync(); });
+		vi.useRealTimers();
+	});
+
+	it("creates rules, rejects missing channels, handles save failure, and closes with Escape", async () => {
+		render(<Alerts />);
+		fireEvent.click(screen.getByRole("button", { name: /add rule/i }));
+		expect(screen.getAllByRole("button", { name: "Add Rule" }).at(-1)!).toBeDisabled();
+		fireEvent.change(screen.getByPlaceholderText("e.g., High Latency"), { target: { value: "Rule" } });
+		expect(screen.getAllByRole("button", { name: "Add Rule" }).at(-1)!).toBeDisabled();
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		cleanup();
+		mockUseChannels.mockReturnValue({ channels: [{ id: "c1", name: "Ops", type: "webhook", enabled: true, config: {} }], loading: false, error: null, refetch: mockRefetchChannels, createChannel: mockCreateChannel, updateChannel: mockUpdateChannel, deleteChannel: mockDeleteChannel, testChannel: mockTestChannel });
+		mockCreateRule.mockRejectedValueOnce("rule failed");
+		render(<Alerts />);
+		fireEvent.click(screen.getByRole("button", { name: /add rule/i }));
+		fireEvent.change(screen.getByPlaceholderText("e.g., High Latency"), { target: { value: "Rule" } });
+		fireEvent.change(screen.getByDisplayValue("Response Time > threshold"), { target: { value: "downtime" } });
+		for (const label of ["Warning", "Info"]) fireEvent.click(screen.getByRole("button", { name: label }));
+		const numbers = screen.getByRole("dialog").querySelectorAll<HTMLInputElement>('input[type="number"]');
+		for (const input of numbers) fireEvent.change(input, { target: { value: "" } });
+		fireEvent.click(screen.getByLabelText("Enabled"));
+		fireEvent.click(screen.getAllByRole("button", { name: "Add Rule" }).at(-1)!);
+		expect(await screen.findByText("Failed to save rule")).toBeInTheDocument();
+		fireEvent.click(screen.getByLabelText("Close dialog"));
+	});
+
+	it("opens modals from empty and card actions and updates SMTP port", () => {
+		render(<Alerts />);
+		fireEvent.click(screen.getByRole("button", { name: "Create Rule" }));
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		fireEvent.click(screen.getByRole("tab", { name: /channels/i }));
+		fireEvent.click(screen.getAllByRole("button", { name: /add channel/i }).at(-1)!);
+		fireEvent.change(screen.getByPlaceholderText("e.g., Ops Slack"), { target: { value: "Email" } });
+		fireEvent.click(screen.getByRole("button", { name: "Email" }));
+		const port = screen.getByRole("dialog").querySelector<HTMLInputElement>('input[type="number"]')!;
+		fireEvent.change(port, { target: { value: "2525" } });
+		expect(port).toHaveValue(2525);
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+	});
+
+	it("renders history loading, error, empty, resolved, and acknowledged states", () => {
+		for (const state of [
+			{ incidents: [], loading: true, error: null },
+			{ incidents: [], loading: false, error: "history failed" },
+			{ incidents: [], loading: false, error: null },
+			{ incidents: [
+				{ id: "resolved", rule_id: "r", soul_id: "s", severity: "warning", status: "resolved", started_at: "2026-01-01" },
+				{ id: "ack", rule_id: "r", soul_id: "s2", severity: "info", status: "acknowledged", started_at: "2026-01-01" },
+			], loading: false, error: null },
+		]) {
+			mockUseIncidents.mockReturnValue({ ...state, refetch: mockRefetchIncidents, acknowledgeIncident: mockAcknowledgeIncident });
+			render(<Alerts />);
+			fireEvent.click(screen.getAllByRole("tab", { name: /history/i }).at(-1)!);
+		}
+		expect(screen.getByText("Incident resolved")).toBeInTheDocument();
+		expect(screen.getByText("Incident ack")).toBeInTheDocument();
 	});
 });

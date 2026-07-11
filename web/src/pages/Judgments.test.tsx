@@ -1,6 +1,6 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Judgments } from "./Judgments";
 
 const judgmentsMocks = vi.hoisted(() => ({
@@ -59,6 +59,10 @@ describe("Judgments", () => {
 			value: clickMock,
 			configurable: true,
 		});
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
 	});
 
 	it("renders loading and error states", () => {
@@ -144,6 +148,41 @@ describe("Judgments", () => {
 		expect(createObjectURL).toHaveBeenCalled();
 		expect(clickMock).toHaveBeenCalled();
 		expect(revokeObjectURL).toHaveBeenCalledWith("blob:test-url");
+	});
+
+	it("covers every time range, purity band, CSV escaping, and refresh completion", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		vi.setSystemTime(new Date("2026-07-06T12:00:00Z"));
+		const refetch = vi.fn().mockResolvedValue(undefined);
+		judgmentsMocks.useJudgments.mockReturnValue({
+			data: [
+				{ ...sampleJudgments[0], id: "high", timestamp: "2026-07-06T11:30:00Z", soul_name: 'Quoted "Name"', purity: 95 },
+				{ ...sampleJudgments[0], id: "mid", timestamp: "2026-07-05T12:00:00Z", soul_name: "", region: undefined, error: undefined, purity: 75 },
+				{ ...sampleJudgments[1], id: "low", timestamp: "2026-06-10T12:00:00Z", purity: 10 },
+			], loading: false, error: null, refetch,
+		});
+		render(<MemoryRouter><Judgments /></MemoryRouter>);
+		const range = screen.getByDisplayValue("Last 24 Hours");
+		fireEvent.change(range, { target: { value: "1h" } });
+		expect(screen.getByText('Quoted "Name"')).toBeInTheDocument();
+		fireEvent.change(range, { target: { value: "7d" } });
+		expect(screen.getByText("soul-1")).toBeInTheDocument();
+		fireEvent.change(range, { target: { value: "30d" } });
+		expect(screen.getByText("Billing Worker")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: /export/i }));
+		expect(createObjectURL).toHaveBeenCalled();
+		fireEvent.click(screen.getByLabelText("Refresh judgments"));
+		await waitFor(() => expect(refetch).toHaveBeenCalled());
+		await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+		expect(screen.getByLabelText("Refresh judgments")).not.toHaveClass("animate-spin");
+	});
+
+	it("retries from the error state", async () => {
+		const refetch = vi.fn().mockResolvedValue(undefined);
+		judgmentsMocks.useJudgments.mockReturnValue({ data: [], loading: false, error: "offline", refetch });
+		render(<MemoryRouter><Judgments /></MemoryRouter>);
+		fireEvent.click(screen.getByRole("button", { name: "Try Again" }));
+		await waitFor(() => expect(refetch).toHaveBeenCalledOnce());
 	});
 
 	it("excludes judgments with invalid timestamps", () => {

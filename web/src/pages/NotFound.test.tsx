@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { describe, it, expect, vi } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { NotFound } from './NotFound'
 
@@ -21,9 +21,12 @@ describe('NotFound', () => {
     expect(homeLink).toHaveAttribute('href', '/')
   })
 
-  it('renders go back button', () => {
+  it('navigates back when go back is clicked', () => {
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => undefined)
     render(<MemoryRouter><NotFound /></MemoryRouter>)
-    expect(screen.getByRole('button', { name: /go back/i })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /go back/i }))
+    expect(back).toHaveBeenCalledOnce()
+    back.mockRestore()
   })
 
   it('renders 404 decorative emoji', () => {

@@ -161,4 +161,49 @@ describe('SoulEdit', () => {
 
     expect(mockNavigate).toHaveBeenCalledWith('/souls/test-soul-id')
   })
+
+  it('handles the missing-soul fallback and its back action', () => {
+    mockUseSoul.mockReturnValue({ soul: null, loading: false, error: null, updateSoul: mockUpdateSoul })
+    render(<MemoryRouter><SoulEdit /></MemoryRouter>)
+    expect(screen.getByText('Soul not found')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Back to Souls' }))
+    expect(mockNavigate).toHaveBeenCalledWith('/souls')
+  })
+
+  it('updates all general fields, uses numeric fallbacks, and supports the header back action', () => {
+    mockUseSoul.mockReturnValue({
+      soul: { id: 'test-soul-id', name: 'Test Soul', type: 'http', target: 'https://example.com', enabled: true, weight: 60, timeout: 10, tags: [] },
+      loading: false, error: null, updateSoul: mockUpdateSoul
+    })
+    const { container } = render(<MemoryRouter><SoulEdit /></MemoryRouter>)
+    const form = container.querySelector('form')!
+    const textInputs = form.querySelectorAll<HTMLInputElement>('input[type="text"]')
+    const numberInputs = form.querySelectorAll<HTMLInputElement>('input[type="number"]')
+    fireEvent.change(textInputs[0], { target: { value: 'Renamed Soul' } })
+    fireEvent.change(screen.getByLabelText('Soul type'), { target: { value: 'tcp' } })
+    fireEvent.change(container.querySelector('#edit-soul-target')!, { target: { value: 'host:443' } })
+    fireEvent.change(numberInputs[numberInputs.length - 2], { target: { value: '' } })
+    fireEvent.change(numberInputs[numberInputs.length - 1], { target: { value: '' } })
+    fireEvent.click(screen.getByLabelText('Enable monitoring'))
+    fireEvent.click(container.querySelector('button')!)
+    expect(screen.getByDisplayValue('Renamed Soul')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('60')).toBeInTheDocument()
+    expect(screen.getByDisplayValue('10')).toBeInTheDocument()
+    expect(mockNavigate).toHaveBeenCalledWith('/souls/test-soul-id')
+  })
+
+  it.each([
+    [new Error('save exploded'), 'save exploded'],
+    ['not an error', 'Failed to save'],
+  ])('shows save failures without navigating', async (reason, message) => {
+    mockUpdateSoul.mockRejectedValueOnce(reason)
+    mockUseSoul.mockReturnValue({
+      soul: { id: 'test-soul-id', name: 'Test Soul', type: 'http', target: 'https://example.com', enabled: true, weight: 60, timeout: 10, tags: [] },
+      loading: false, error: null, updateSoul: mockUpdateSoul
+    })
+    render(<MemoryRouter><SoulEdit /></MemoryRouter>)
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }))
+    expect(await screen.findByText(message)).toBeInTheDocument()
+    expect(mockNavigate).not.toHaveBeenCalled()
+  })
 })

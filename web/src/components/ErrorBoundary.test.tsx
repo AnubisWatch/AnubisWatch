@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, act } from '@testing-library/react'
+import { render, screen, act, fireEvent } from '@testing-library/react'
 import { ErrorBoundary } from './ErrorBoundary'
 
 // Helper to throw during render inside act()
@@ -62,6 +62,20 @@ describe('ErrorBoundary', () => {
     })
 
     expect(screen.getByRole('button', { name: /reload page/i })).toBeInTheDocument()
+    consoleSpy.mockRestore()
+  })
+
+  it('reloads the page from the recovery action', async () => {
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const original = window.location
+    const reload = vi.fn()
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...original, reload } })
+    await act(async () => {
+      render(<ErrorBoundary><ThrowOnRender message="Reload" /></ErrorBoundary>)
+    })
+    fireEvent.click(screen.getByRole('button', { name: /reload page/i }))
+    expect(reload).toHaveBeenCalledOnce()
+    Object.defineProperty(window, 'location', { configurable: true, value: original })
     consoleSpy.mockRestore()
   })
 

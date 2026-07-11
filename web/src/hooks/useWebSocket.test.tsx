@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, render, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { WebSocketProvider } from './useWebSocket'
+import { useWebSocket } from './webSocketContext'
 import { dispatchAuthSessionChanged } from '../api/authEvents'
 import type { User } from '../api/client'
 
@@ -10,6 +11,17 @@ const user: User = {
   name: 'Admin',
   role: 'admin',
   workspace: 'default',
+}
+
+function Consumer() {
+  const socket = useWebSocket()
+  return <>
+    <span data-testid="count">{socket.messages.length}</span>
+    <span data-testid="last">{socket.lastMessage?.type ?? 'none'}</span>
+    <button onClick={() => socket.send({ hello: 'world' })}>send</button>
+    <button onClick={socket.connect}>connect</button>
+    <button onClick={socket.disconnect}>disconnect</button>
+  </>
 }
 
 class MockWebSocket {
@@ -100,6 +112,70 @@ describe('WebSocketProvider', () => {
 
     await vi.advanceTimersByTimeAsync(60_000)
     expect(MockWebSocket.instances).toHaveLength(1)
+  })
+
+  it('exposes harmless context defaults without a provider', () => {
+    render(<Consumer />)
+    fireEvent.click(screen.getByText('send'))
+    fireEvent.click(screen.getByText('connect'))
+    fireEvent.click(screen.getByText('disconnect'))
+    expect(screen.getByTestId('count')).toHaveTextContent('0')
+  })
+
+  it('normalizes messages, responds to pings, sends data, and reports parse/socket errors', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    render(<WebSocketProvider><Consumer /></WebSocketProvider>)
+    fireEvent.click(screen.getByText('send'))
+    expect(warn).toHaveBeenCalledWith('WebSocket not connected')
+    act(() => dispatchAuthSessionChanged({ state: 'authenticated', user }))
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1))
+    const ws = MockWebSocket.instances[0]
+    await waitFor(() => expect(ws.readyState).toBe(MockWebSocket.OPEN))
+    act(() => ws.onmessage?.({ data: JSON.stringify({ type: 'ping', payload: { ok: true }, timestamp: 1 }) } as MessageEvent))
+    expect(screen.getByTestId('last')).toHaveTextContent('ping')
+    expect(ws.sent.some((message) => JSON.parse(message).type === 'pong')).toBe(true)
+    fireEvent.click(screen.getByText('send'))
+    expect(ws.sent.some((message) => JSON.parse(message).hello === 'world')).toBe(true)
+    act(() => ws.onmessage?.({ data: '{' } as MessageEvent))
+    act(() => ws.onerror?.(new Event('error')))
+    expect(error).toHaveBeenCalledTimes(2)
+    fireEvent.click(screen.getByText('disconnect'))
+  })
+
+  it('does not create duplicate sockets while connecting and ignores connect before auth', async () => {
+    render(<WebSocketProvider><Consumer /></WebSocketProvider>)
+    fireEvent.click(screen.getByText('connect'))
+    expect(MockWebSocket.instances).toHaveLength(0)
+    act(() => dispatchAuthSessionChanged({ state: 'authenticated', user }))
+    fireEvent.click(screen.getByText('connect'))
+    expect(MockWebSocket.instances).toHaveLength(1)
+  })
+
+  it('uses wss on HTTPS and defaults missing data to undefined', async () => {
+    const original = window.location
+    Object.defineProperty(window, 'location', { configurable: true, value: { ...original, protocol: 'https:', host: 'secure.test' } })
+    render(<WebSocketProvider><Consumer /></WebSocketProvider>)
+    act(() => dispatchAuthSessionChanged({ state: 'authenticated', user }))
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1))
+    expect(MockWebSocket.instances[0].url).toBe('wss://secure.test/ws')
+    act(() => MockWebSocket.instances[0].onmessage?.({ data: JSON.stringify({ type: 'status', timestamp: 'now' }) } as MessageEvent))
+    expect(screen.getByTestId('last')).toHaveTextContent('status')
+    Object.defineProperty(window, 'location', { configurable: true, value: original })
+  })
+
+  it('ignores unknown session events', () => {
+    render(<WebSocketProvider><Consumer /></WebSocketProvider>)
+    act(() => window.dispatchEvent(new CustomEvent('anubis:auth-session-changed', { detail: { state: 'other' } })))
+    expect(MockWebSocket.instances).toHaveLength(0)
+  })
+
+  it('handles constructor failures and secure websocket URLs', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubGlobal('WebSocket', class { static OPEN = 1; static CONNECTING = 0; constructor() { throw new Error('boom') } })
+    render(<WebSocketProvider><Consumer /></WebSocketProvider>)
+    act(() => dispatchAuthSessionChanged({ state: 'authenticated', user }))
+    expect(error).toHaveBeenCalledWith('Failed to create WebSocket:', expect.any(Error))
   })
 
   it('reconnects after an unexpected close only while the session is active', async () => {

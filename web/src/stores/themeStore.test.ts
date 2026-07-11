@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { applyTheme, getEffectiveTheme } from './themeStore'
+import { applyTheme, getEffectiveTheme, useThemeStore } from './themeStore'
 
 describe('themeStore', () => {
   const originalMatchMedia = window.matchMedia
@@ -26,7 +26,17 @@ describe('themeStore', () => {
     expect(document.documentElement.style.colorScheme).toBe('dark')
   })
 
-  it('resolves system theme without assuming matchMedia is always available', () => {
+  it('updates the persisted theme store', () => {
+    useThemeStore.getState().setTheme('system')
+    expect(useThemeStore.getState().theme).toBe('system')
+  })
+
+  it('uses dark when system media queries are unavailable', () => {
+    Object.defineProperty(window, 'matchMedia', { configurable: true, writable: true, value: undefined })
+    expect(getEffectiveTheme('system')).toBe('dark')
+  })
+
+  it('resolves both system media preferences', () => {
     Object.defineProperty(window, 'matchMedia', {
       configurable: true,
       writable: true,
@@ -45,5 +55,17 @@ describe('themeStore', () => {
     expect(getEffectiveTheme('system')).toBe('light')
     applyTheme('system')
     expect(document.documentElement.classList.contains('light')).toBe(true)
+
+    vi.mocked(window.matchMedia).mockReturnValueOnce({
+      matches: true,
+      media: '(prefers-color-scheme: dark)',
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })
+    expect(getEffectiveTheme('system')).toBe('dark')
   })
 })

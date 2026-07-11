@@ -96,6 +96,15 @@ describe("Maintenance", () => {
 		});
 	});
 
+	it("requires name and times before saving", async () => {
+		render(<Maintenance />);
+		await screen.findByText("No maintenance windows");
+		fireEvent.click(screen.getByRole("button", { name: /add window/i }));
+		const dialog = screen.getByRole("dialog");
+		fireEvent.click(within(dialog).getByRole("button", { name: /create window/i }));
+		expect(await within(dialog).findByText("Name, start time, and end time are required")).toBeInTheDocument();
+	});
+
 	it("requires an explicit service, tag, or all-services scope", async () => {
 		render(<Maintenance />);
 
@@ -184,6 +193,39 @@ describe("Maintenance", () => {
 			await within(dialog).findByText("End time must be after start time"),
 		).toBeInTheDocument();
 		expect(mocks.post).not.toHaveBeenCalled();
+	});
+
+	it("handles null data, non-Error fetch/save failures, empty souls, close controls, and canceled deletion", async () => {
+		mocks.get.mockImplementation((endpoint: string) => endpoint === "/souls" ? Promise.resolve({ data: [] }) : Promise.resolve(null));
+		render(<Maintenance />);
+		await screen.findByText("No maintenance windows");
+		fireEvent.click(screen.getByRole("button", { name: /create maintenance window/i }));
+		expect(screen.getByText("No souls configured.")).toBeInTheDocument();
+		fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+		fireEvent.click(screen.getByRole("button", { name: /add window/i }));
+		fireEvent.click(screen.getByLabelText("Close dialog"));
+		fireEvent.click(screen.getByRole("button", { name: /add window/i }));
+		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+		mocks.get.mockRejectedValueOnce("offline");
+		fireEvent.click(screen.getByLabelText("Refresh maintenance windows"));
+		expect(await screen.findByText("Failed to load maintenance windows")).toBeInTheDocument();
+	});
+
+	it("reports a non-Error save failure and supports disabled form state", async () => {
+		mocks.post.mockRejectedValueOnce("failed");
+		render(<Maintenance />);
+		await screen.findByText("No maintenance windows");
+		fireEvent.click(screen.getByRole("button", { name: /add window/i }));
+		const dialog = screen.getByRole("dialog");
+		fireEvent.change(within(dialog).getByPlaceholderText(/database migration/i), { target: { value: "Failure" } });
+		const times = dialog.querySelectorAll('input[type="datetime-local"]');
+		fireEvent.change(times[0], { target: { value: "2030-01-01T10:00" } });
+		fireEvent.change(times[1], { target: { value: "2030-01-01T12:00" } });
+		fireEvent.click(within(dialog).getByLabelText("All services"));
+		fireEvent.click(within(dialog).getByLabelText("Enabled"));
+		fireEvent.click(within(dialog).getByRole("button", { name: /create window/i }));
+		expect(await within(dialog).findByText("Failed to save")).toBeInTheDocument();
 	});
 
 	it("renders existing windows, filters them, toggles enabled state, edits, deletes, and shows API errors", async () => {
@@ -283,6 +325,10 @@ describe("Maintenance", () => {
 			);
 		});
 
+		Object.defineProperty(window, "confirm", { value: vi.fn(() => false), configurable: true });
+		fireEvent.click(screen.getByLabelText(/delete maintenance window active window/i));
+		expect(mocks.delete).not.toHaveBeenCalled();
+		Object.defineProperty(window, "confirm", { value: vi.fn(() => true), configurable: true });
 		fireEvent.click(
 			screen.getByLabelText(/delete maintenance window active window/i),
 		);

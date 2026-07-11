@@ -64,6 +64,51 @@ describe("soulForm helpers", () => {
 		expect(form.tlsExpiryCriticalDays).toBe(3);
 	});
 
+	it("hydrates defaults when optional soul fields and configs are absent", () => {
+		const form = soulFormDataFromSoul({
+			id: "minimal",
+			name: undefined as unknown as string,
+			type: undefined as unknown as "http",
+			target: undefined as unknown as string,
+			created_at: "",
+			updated_at: "",
+		});
+
+		expect(form).toMatchObject(defaultSoulFormData);
+	});
+
+	it("hydrates modern configs and falls back from invalid numeric fields", () => {
+		const form = soulFormDataFromSoul({
+			id: "modern",
+			name: "Modern",
+			type: "tcp",
+			target: "host:1",
+			enabled: false,
+			weight: 0,
+			timeout: 0,
+			tags: [],
+			http: { method: "PUT", valid_status: [201] },
+			tcp: { send: "x", expect_regex: "y" },
+			dns: { record_type: "MX", expected: ["mail"] },
+			icmp: { interval: "invalid" },
+			created_at: "",
+			updated_at: "",
+		});
+
+		expect(form).toMatchObject({
+			enabled: false,
+			weight: 0,
+			timeout: 0,
+			httpMethod: "PUT",
+			httpValidStatus: "201",
+			tcpSend: "x",
+			tcpExpectRegex: "y",
+			dnsRecordType: "MX",
+			dnsExpected: "mail",
+			icmpInterval: 1,
+		});
+	});
+
 	it("builds protocol-specific payloads for all supported soul types", () => {
 		expect(
 			buildSoulPayload({
@@ -191,5 +236,17 @@ describe("soulForm helpers", () => {
 		).toMatchObject({
 			tls: { expiry_warn_days: 21, expiry_critical_days: 5 },
 		});
+	});
+
+	it("uses payload fallbacks for invalid numbers, lists, and empty protocol options", () => {
+		const invalid = { ...defaultSoulFormData, weight: Number.NaN, timeout: Number.NaN };
+		expect(buildSoulPayload({ ...invalid, type: "http", httpValidStatus: "0, no" })).toMatchObject({ weight: 60, timeout: 10, http: { valid_status: [200] } });
+		expect(buildSoulPayload({ ...invalid, type: "tcp" }).tcp).toEqual({ send: undefined, expect_regex: undefined });
+		expect(buildSoulPayload({ ...invalid, type: "udp" }).udp).toEqual({ send_hex: undefined, expect_contains: undefined });
+		expect(buildSoulPayload({ ...invalid, type: "smtp" }).smtp).toEqual({ starttls: true, banner_contains: undefined });
+		expect(buildSoulPayload({ ...invalid, type: "grpc" }).grpc).toEqual({ service: undefined, metadata: {} });
+		expect(buildSoulPayload({ ...invalid, type: "websocket" }).websocket).toEqual({ headers: {}, ping_check: true, send: undefined, expect_contains: undefined });
+		expect(buildSoulPayload({ ...invalid, type: "icmp", icmpCount: Number.NaN, icmpInterval: Number.NaN, icmpMaxLossPercent: Number.NaN }).icmp).toEqual({ count: 4, interval: "1s", max_loss_percent: 100 });
+		expect(buildSoulPayload({ ...invalid, type: "tls", tlsExpiryWarnDays: Number.NaN, tlsExpiryCriticalDays: Number.NaN }, "ops")).toMatchObject({ workspace_id: "ops", tls: { expiry_warn_days: 30, expiry_critical_days: 7 } });
 	});
 });

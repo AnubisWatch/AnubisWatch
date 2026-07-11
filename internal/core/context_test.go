@@ -74,6 +74,24 @@ func TestWorkspaceIDFromContext_NilContext(t *testing.T) {
 	}
 }
 
+func TestUserRoleContext(t *testing.T) {
+	ctx := ContextWithUserRole(context.Background(), "admin")
+	if got := UserRoleFromContext(ctx); got != "admin" {
+		t.Fatalf("UserRoleFromContext() = %q, want admin", got)
+	}
+	if got := UserRoleFromContext(context.Background()); got != "" {
+		t.Fatalf("missing role = %q, want empty", got)
+	}
+	wrongType := context.WithValue(context.Background(), UserRoleKey, 42)
+	if got := UserRoleFromContext(wrongType); got != "" {
+		t.Fatalf("wrong-type role = %q, want empty", got)
+	}
+	missing := context.WithValue(context.Background(), UserRoleKey, nil)
+	if got := UserRoleFromContext(missing); got != "" {
+		t.Fatalf("nil role = %q, want empty", got)
+	}
+}
+
 func TestContextKey_Constants(t *testing.T) {
 	// Verify WorkspaceIDKey constant
 	if WorkspaceIDKey != "workspace_id" {

@@ -47,6 +47,12 @@ describe('useSoulStore', () => {
     expect(state.pagination).toEqual({ total: 2, has_more: false })
   })
 
+  it('fetchSouls accepts a response without pagination', async () => {
+    mockGet.mockResolvedValue({ data: [] })
+    await useSoulStore.getState().fetchSouls()
+    expect(useSoulStore.getState().pagination).toBeNull()
+  })
+
   it('fetchSouls sets error on failure', async () => {
     mockGet.mockRejectedValue(new Error('Network error'))
 
@@ -210,6 +216,16 @@ describe('useSoulStore', () => {
     expect(useSoulStore.getState().souls[0].name).toBe('Soul 1 Updated')
   })
 
+  it('updateSoul preserves unrelated souls', async () => {
+    useSoulStore.setState({ souls: [
+      { id: '1', name: 'One', type: 'http', target: '', enabled: true, weight: 1, timeout: 1 },
+      { id: '2', name: 'Two', type: 'http', target: '', enabled: true, weight: 1, timeout: 1 },
+    ] })
+    mockPut.mockResolvedValue({ id: '1', name: 'Changed', type: 'http', target: '', enabled: true, weight: 1, timeout: 1 })
+    await useSoulStore.getState().updateSoul('1', { name: 'Changed' })
+    expect(useSoulStore.getState().souls[1].name).toBe('Two')
+  })
+
   it('updateSoul returns null on failure', async () => {
     mockPut.mockRejectedValue(new Error('Update failed'))
 
@@ -241,5 +257,45 @@ describe('useSoulStore', () => {
     await useSoulStore.getState().deleteSoul('1')
 
     expect(useSoulStore.getState().error).toBe('Delete failed')
+  })
+
+  it('covers empty API results and disabled creation', async () => {
+    mockGet.mockResolvedValueOnce(null)
+    await useSoulStore.getState().fetchSouls()
+    expect(useSoulStore.getState().loading).toBe(true)
+
+    const disabled = { id: 'd', name: 'Disabled', type: 'http', target: '', enabled: false, weight: 1, timeout: 1 }
+    mockPost.mockResolvedValueOnce(disabled)
+    await expect(useSoulStore.getState().createSoul(disabled)).resolves.toEqual(disabled)
+    expect(mockPost).toHaveBeenCalledTimes(1)
+
+    mockPost.mockResolvedValueOnce(null)
+    await expect(useSoulStore.getState().createSoul(disabled)).resolves.toBeNull()
+  })
+
+  it('covers unknown judgment status and keeps unrelated souls unchanged', async () => {
+    useSoulStore.setState({ souls: [
+      { id: 'x', name: 'X', type: 'http', target: '', enabled: true, weight: 1, timeout: 1 },
+      { id: 'y', name: 'Y', type: 'http', target: '', enabled: true, weight: 1, timeout: 1 },
+    ] })
+    mockPost.mockResolvedValueOnce({ status: 'other', latency: 0, timestamp: 'now' })
+    await useSoulStore.getState().retryInitialCheck('x')
+    expect(useSoulStore.getState().souls).toMatchObject([{ id: 'x', status: 'unknown' }, { id: 'y' }])
+  })
+
+  it('covers update without an existing soul, null result, and non-Error failures', async () => {
+    mockPut.mockResolvedValueOnce(null)
+    await expect(useSoulStore.getState().updateSoul('missing', { name: 'X' })).resolves.toBeNull()
+    expect(mockPut).toHaveBeenCalledWith('/souls/missing', { name: 'X' })
+
+    mockPost.mockRejectedValueOnce('create')
+    await useSoulStore.getState().createSoul({ name: 'X', type: 'http', target: '', enabled: false, weight: 1, timeout: 1 })
+    expect(useSoulStore.getState().error).toBe('Unknown error')
+    mockPut.mockRejectedValueOnce('update')
+    await useSoulStore.getState().updateSoul('x', {})
+    expect(useSoulStore.getState().error).toBe('Unknown error')
+    mockDelete.mockRejectedValueOnce('delete')
+    await useSoulStore.getState().deleteSoul('x')
+    expect(useSoulStore.getState().error).toBe('Unknown error')
   })
 })
