@@ -22,14 +22,18 @@ import (
 
 // Executor handles multi-step synthetic monitoring journeys
 // Named after Duat, the Egyptian realm of the afterlife through which souls journey
+type journeyRun struct {
+	cancel context.CancelFunc
+}
+
 type Executor struct {
 	db       *storage.CobaltDB
 	logger   *slog.Logger
 	mu       sync.RWMutex
-	running  map[string]context.CancelFunc // journey ID -> cancel function
-	nodeID   string                        // identifier of this jackal node
-	region   string                        // region of this jackal node
-	lastHash map[string]string             // journey ID -> last dedup hash
+	running  map[string]*journeyRun // journey ID -> current run token
+	nodeID   string                 // identifier of this jackal node
+	region   string                 // region of this jackal node
+	lastHash map[string]string      // journey ID -> last dedup hash
 }
 
 // NewExecutor creates a new Journey executor
@@ -48,7 +52,7 @@ func NewExecutorWithNodeID(db *storage.CobaltDB, logger *slog.Logger, nodeID, re
 	return &Executor{
 		db:       db,
 		logger:   logger.With("component", "duat"),
-		running:  make(map[string]context.CancelFunc),
+		running:  make(map[string]*journeyRun),
 		lastHash: make(map[string]string),
 		nodeID:   nodeID,
 		region:   region,
@@ -72,10 +76,11 @@ func (e *Executor) Start(ctx context.Context, journey *core.JourneyConfig) error
 
 	// Create context for this journey
 	journeyCtx, cancel := context.WithCancel(ctx)
-	e.running[journey.ID] = cancel
+	run := &journeyRun{cancel: cancel}
+	e.running[journey.ID] = run
 
 	// Start journey execution goroutine
-	go e.runJourneyLoop(journeyCtx, journey)
+	go e.runJourneyLoop(journeyCtx, journey, run)
 
 	e.logger.Info("started journey executor", "journey_id", journey.ID, "name", journey.Name)
 	return nil
@@ -86,8 +91,8 @@ func (e *Executor) Stop(journeyID string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	if cancel, exists := e.running[journeyID]; exists {
-		cancel()
+	if run, exists := e.running[journeyID]; exists {
+		run.cancel()
 		delete(e.running, journeyID)
 		e.logger.Info("stopped journey executor", "journey_id", journeyID)
 	}
@@ -98,17 +103,27 @@ func (e *Executor) StopAll() {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	for journeyID, cancel := range e.running {
-		cancel()
+	for journeyID, run := range e.running {
+		run.cancel()
 		delete(e.running, journeyID)
 	}
 	e.logger.Info("stopped all journey executors")
 }
 
+func (e *Executor) removeRun(journeyID string, run *journeyRun) {
+	e.mu.Lock()
+	// An older cancelled loop must not remove a newer run with the same ID.
+	if e.running[journeyID] == run {
+		delete(e.running, journeyID)
+	}
+	e.mu.Unlock()
+}
+
 // runJourneyLoop executes a journey repeatedly based on its weight (interval)
-func (e *Executor) runJourneyLoop(ctx context.Context, journey *core.JourneyConfig) {
+func (e *Executor) runJourneyLoop(ctx context.Context, journey *core.JourneyConfig, run *journeyRun) {
 	ticker := time.NewTicker(journey.Weight.Duration)
 	defer ticker.Stop()
+	defer e.removeRun(journey.ID, run)
 
 	// Run immediately on start
 	e.executeJourney(ctx, journey)

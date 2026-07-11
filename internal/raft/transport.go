@@ -10,9 +10,15 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
+)
+
+const (
+	transportRPCDeadline = 5 * time.Second
+	maxTransportPayload  = 16 << 20
 )
 
 // TCPTransport implements Transport over TCP with optional TLS
@@ -28,10 +34,11 @@ type TCPTransport struct {
 	// Connection pool with peer addresses
 	connections map[string]net.Conn
 	peerAddrs   map[string]string // peerID -> address mapping
+	peerRPCMu   map[string]*sync.Mutex
 	connMu      sync.Mutex
 
 	logger   *slog.Logger
-	shutdown bool
+	shutdown atomic.Bool
 	doneCh   chan struct{}
 	stopOnce sync.Once
 }
@@ -52,6 +59,7 @@ func NewTCPTransport(bindAddr, advertiseAddr string, tlsConfig *tls.Config, logg
 		handlers:      make(map[string]RPCHandler),
 		connections:   make(map[string]net.Conn),
 		peerAddrs:     make(map[string]string),
+		peerRPCMu:     make(map[string]*sync.Mutex),
 		logger:        logger.With("component", "raft_transport"),
 		doneCh:        make(chan struct{}),
 	}
@@ -90,7 +98,7 @@ func (t *TCPTransport) Start() error {
 // Stop stops the transport
 func (t *TCPTransport) Stop() error {
 	t.stopOnce.Do(func() {
-		t.shutdown = true
+		t.shutdown.Store(true)
 		if t.listener != nil {
 			t.listener.Close()
 		}
@@ -169,7 +177,7 @@ func (t *TCPTransport) acceptLoop() {
 	for {
 		conn, err := t.listener.Accept()
 		if err != nil {
-			if t.shutdown {
+			if t.shutdown.Load() {
 				return
 			}
 			t.logger.Error("Accept error", "error", err)
@@ -217,8 +225,8 @@ func (t *TCPTransport) handleConnection(conn net.Conn) {
 			return
 		}
 
-		// Prevent OOM: cap payload size at 16MB
-		if length <= 0 || length > 16<<20 {
+		// Prevent OOM: cap payload size at 16MB.
+		if length <= 0 || length > maxTransportPayload {
 			t.logger.Debug("Invalid payload length", "length", length)
 			return
 		}
@@ -245,8 +253,18 @@ func (t *TCPTransport) handleConnection(conn net.Conn) {
 			continue
 		}
 
-		fmt.Fprintf(writer, "%d\n%s\n", len(respData), respData)
-		writer.Flush()
+		if _, err := fmt.Fprintf(writer, "%d\n", len(respData)); err != nil {
+			t.logger.Debug("Write response header error", "error", err)
+			return
+		}
+		if _, err := writer.Write(respData); err != nil {
+			t.logger.Debug("Write response payload error", "error", err)
+			return
+		}
+		if err := writer.Flush(); err != nil {
+			t.logger.Debug("Flush response error", "error", err)
+			return
+		}
 	}
 }
 
@@ -291,13 +309,22 @@ func (t *TCPTransport) handleRPC(method string, payload []byte) (interface{}, er
 	}
 }
 
-// sendRPC sends an RPC to a peer
+// sendRPC sends an RPC to a peer. A peer's complete request/response exchange
+// is serialized because pooled TCP connections are ordered byte streams.
 func (t *TCPTransport) sendRPC(peerID string, method string, req interface{}) (interface{}, error) {
-	// Get connection from pool or create new
+	rpcMu := t.peerLock(peerID)
+	rpcMu.Lock()
+	defer rpcMu.Unlock()
+
 	conn, err := t.getConnection(peerID)
 	if err != nil {
 		return nil, err
 	}
+	if err := conn.SetDeadline(time.Now().Add(transportRPCDeadline)); err != nil {
+		t.removeConnectionIfMatch(peerID, conn)
+		return nil, fmt.Errorf("set RPC deadline: %w", err)
+	}
+	defer t.releaseConnection(peerID, conn)
 
 	// Send request
 	reqData, err := json.Marshal(req)
@@ -306,34 +333,43 @@ func (t *TCPTransport) sendRPC(peerID string, method string, req interface{}) (i
 	}
 
 	writer := bufio.NewWriter(conn)
-	fmt.Fprintf(writer, "%s\n%d\n%s\n", method, len(reqData), reqData)
+	if _, err := fmt.Fprintf(writer, "%s\n%d\n", method, len(reqData)); err != nil {
+		t.removeConnectionIfMatch(peerID, conn)
+		return nil, fmt.Errorf("write header error: %w", err)
+	}
+	if _, err := writer.Write(reqData); err != nil {
+		t.removeConnectionIfMatch(peerID, conn)
+		return nil, fmt.Errorf("write payload error: %w", err)
+	}
 	if err := writer.Flush(); err != nil {
-		// Write failed - remove from pool (which also closes the connection)
-		t.removeConnection(peerID)
+		// Write failed - remove from pool (which also closes the connection).
+		t.removeConnectionIfMatch(peerID, conn)
 		return nil, fmt.Errorf("write error: %w", err)
 	}
-
-	// Connection is still valid - return to pool via releaseConnection
-	defer t.releaseConnection(peerID, conn)
 
 	// Read response
 	reader := bufio.NewReader(conn)
 	line, err := reader.ReadString('\n')
 	if err != nil {
-		t.removeConnection(peerID)
+		t.removeConnectionIfMatch(peerID, conn)
 		return nil, fmt.Errorf("read error: %w", err)
 	}
 
 	lengthStr := strings.TrimSpace(line)
 	var length int
 	if _, err := fmt.Sscanf(lengthStr, "%d", &length); err != nil {
+		t.removeConnectionIfMatch(peerID, conn)
 		return nil, fmt.Errorf("invalid response length: %w", err)
+	}
+	if length <= 0 || length > maxTransportPayload {
+		t.removeConnectionIfMatch(peerID, conn)
+		return nil, fmt.Errorf("invalid response length: %d", length)
 	}
 
 	respData := make([]byte, length)
 	_, err = io.ReadFull(reader, respData)
 	if err != nil {
-		t.removeConnection(peerID)
+		t.removeConnectionIfMatch(peerID, conn)
 		return nil, fmt.Errorf("read payload error: %w", err)
 	}
 
@@ -341,35 +377,22 @@ func (t *TCPTransport) sendRPC(peerID string, method string, req interface{}) (i
 	var resp interface{}
 	switch method {
 	case "AppendEntries":
-		r := &core.AppendEntriesResponse{}
-		if err := json.Unmarshal(respData, r); err != nil {
-			return nil, err
-		}
-		resp = r
+		resp = &core.AppendEntriesResponse{}
 	case "RequestVote":
-		r := &core.RequestVoteResponse{}
-		if err := json.Unmarshal(respData, r); err != nil {
-			return nil, err
-		}
-		resp = r
+		resp = &core.RequestVoteResponse{}
 	case "PreVote":
-		r := &core.PreVoteResponse{}
-		if err := json.Unmarshal(respData, r); err != nil {
-			return nil, err
-		}
-		resp = r
+		resp = &core.PreVoteResponse{}
 	case "InstallSnapshot":
-		r := &core.InstallSnapshotResponse{}
-		if err := json.Unmarshal(respData, r); err != nil {
-			return nil, err
-		}
-		resp = r
+		resp = &core.InstallSnapshotResponse{}
 	case "Heartbeat":
-		r := &core.HeartbeatResponse{}
-		if err := json.Unmarshal(respData, r); err != nil {
-			return nil, err
-		}
-		resp = r
+		resp = &core.HeartbeatResponse{}
+	default:
+		t.removeConnectionIfMatch(peerID, conn)
+		return nil, fmt.Errorf("unknown method: %s", method)
+	}
+	if err := json.Unmarshal(respData, resp); err != nil {
+		t.removeConnectionIfMatch(peerID, conn)
+		return nil, fmt.Errorf("unmarshal response: %w", err)
 	}
 
 	return resp, nil
@@ -414,11 +437,23 @@ func (t *TCPTransport) getConnection(peerID string) (net.Conn, error) {
 	return conn, nil
 }
 
-// releaseConnection returns a connection to the pool (keeps it open for reuse)
+// peerLock returns the mutex that serializes one peer's connection stream.
+func (t *TCPTransport) peerLock(peerID string) *sync.Mutex {
+	t.connMu.Lock()
+	defer t.connMu.Unlock()
+	if mu, ok := t.peerRPCMu[peerID]; ok {
+		return mu
+	}
+	mu := &sync.Mutex{}
+	t.peerRPCMu[peerID] = mu
+	return mu
+}
+
+// releaseConnection returns a connection to the pool (keeps it open for reuse).
 func (t *TCPTransport) releaseConnection(peerID string, conn net.Conn) {
-	// Clear any deadlines
-	conn.SetDeadline(time.Time{})
-	// Connection stays open in the pool
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		t.removeConnectionIfMatch(peerID, conn)
+	}
 }
 
 // removeConnection removes a connection from the pool
@@ -427,6 +462,17 @@ func (t *TCPTransport) removeConnection(peerID string) {
 	defer t.connMu.Unlock()
 
 	if conn, ok := t.connections[peerID]; ok {
+		conn.Close()
+		delete(t.connections, peerID)
+		t.logger.Debug("Removed connection to peer", "peer_id", peerID)
+	}
+}
+
+// removeConnectionIfMatch avoids a failed old RPC closing a replacement connection.
+func (t *TCPTransport) removeConnectionIfMatch(peerID string, failed net.Conn) {
+	t.connMu.Lock()
+	defer t.connMu.Unlock()
+	if conn, ok := t.connections[peerID]; ok && conn == failed {
 		conn.Close()
 		delete(t.connections, peerID)
 		t.logger.Debug("Removed connection to peer", "peer_id", peerID)

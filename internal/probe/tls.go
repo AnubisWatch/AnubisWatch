@@ -232,8 +232,13 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 
 		// Issuer check
 		if cfg.ExpectedIssuer != "" {
-			issuerMatched := strings.Contains(cert.Issuer.CommonName, cfg.ExpectedIssuer) ||
-				strings.Contains(cert.Issuer.Organization[0], cfg.ExpectedIssuer)
+			issuerMatched := strings.Contains(cert.Issuer.CommonName, cfg.ExpectedIssuer)
+			for _, org := range cert.Issuer.Organization {
+				if strings.Contains(org, cfg.ExpectedIssuer) {
+					issuerMatched = true
+					break
+				}
+			}
 			assertions = append(assertions, core.AssertionResult{
 				Type:     "issuer",
 				Expected: cfg.ExpectedIssuer,

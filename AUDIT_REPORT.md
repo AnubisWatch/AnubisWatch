@@ -122,3 +122,99 @@ The current main branch is in a highly secure, race-clean, and stable state. All
 1.  **Refactor B+Tree prefix scanner range scans:** Implement binary search on B+Tree nodes for prefix searches to reduce scans from $O(N)$ to $O(\log N + M)$ where $M$ is the number of matching keys.
 2.  **Fix gRPC Create Mutations:** Generate IDs before saving or modify `Save` adapter methods to propagate IDs, removing race-prone list lookups.
 3.  **Purge Unused Code:** Remove the legacy `StatusPageRepository` implementation to keep `storage/` package clean and unified.
+
+---
+
+## 7. Second Review Pass (2026-07-03) — Deep Correctness & Security Audit
+
+A second, deeper pass (parallel subsystem audits + empirical reproduction) was
+run over storage, probe, API/auth, cluster/raft and ops. Findings were verified
+against the code before acting; false positives were discarded (e.g. a claimed
+badge-endpoint panic — `CalculateOverallStatus` never returns an empty status).
+
+### 7.1 Fixed in this pass (with regression tests)
+
+*   **CRITICAL — B+Tree leaf split silently dropped a key on every split**
+    (`internal/storage/engine.go` `splitChild`). The separator key was *moved*
+    to the parent instead of *copied*, so it existed in no leaf. Reproduced via
+    the public API: **61/1000 keys lost at the default order 32**; loss scaled
+    with tree size. This corrupted every entity type (souls, judgments, rules,
+    …) once a workspace exceeded one leaf. Fixed to retain all keys in leaves
+    and route consistently with `findChildIndex`. Regression: `TestBTreeSplitNoDataLoss`.
+*   **CRITICAL — Shipped container config crash-looped.** `configs/container.anubis.json`
+    declared `environment: "production"` with TLS disabled, which `validate()`
+    rejects; the Docker image bakes and runs it, so every `docker run` exited on
+    startup. Changed to `environment: "production-proxied"` (TLS terminated
+    upstream) and documented the gate. Regression: `TestContainerConfigValidates`.
+*   **HIGH — MCP endpoint bypassed RBAC.** `/api/v1/mcp` was auth-only, but its
+    `create_soul` / `acknowledge_incident` tools mutate state, letting a viewer
+    bypass REST RBAC. Now gated per-tool at dispatch by the caller's role.
+    Regression: `TestMCPCallToolRBAC`.
+*   **HIGH — SSRF DNS-rebinding.** The HTTP dialer validated a hostname's IPs
+    then re-passed the *hostname* to dial (a second, unvalidated resolution).
+    Now pins the connection to a validated IP (`WrapDialerContext`).
+*   **HIGH — Two unrecovered panics reachable from attacker-influenced input:**
+    SSRF `parseIP` slice bounds on short hosts (operator-precedence bug) and TLS
+    `Issuer.Organization[0]` on issuers with no O field. Both crashed the daemon.
+*   **HIGH — WAL torn-tail aborted recovery.** A partial tail entry (normal after
+    a crash) discarded every preceding entry; now treated as end-of-log.
+    Regression: `TestWALTornTailRecovery`.
+*   **HIGH — WAL grew unbounded at runtime → disk exhaustion.** The in-memory
+    B+Tree's only durable store was an append-only WAL truncated solely at
+    startup, so a long-running node's `wal.log` grew forever. Added a background
+    checkpoint (`CobaltDB.Checkpoint` + `checkpointLoop`) that atomically
+    rewrites the WAL to just the live key/values (dropping superseded writes and
+    tombstones) once it exceeds max(8 MiB, 2× live footprint). The rewrite is
+    crash-safe (temp file + fsync + atomic rename; old WAL intact until the
+    swap). Regressions: `TestWALCheckpointCompactsAndPreserves`,
+    `TestCheckpointConcurrentWithWrites` (race).
+*   **MEDIUM — Non-atomic WAL append vs. tree apply** (concurrent same-key writes
+    could diverge memory from the durable log). Put/Delete now hold a single
+    `writeMu` across the WAL append and the B+Tree apply, so durable order always
+    matches applied order.
+*   **MEDIUM — Data races** on `soulRunner.soul` / `lastStatus` (probe engine)
+    and unbounded DNS name decompression recursion (stack-overflow DoS).
+*   **MEDIUM — `Get` on a deleted key** returned `(nil, nil)` instead of NotFound.
+*   **MEDIUM — gRPC `StreamVerdicts`** lacked the RBAC check its siblings have.
+*   **MEDIUM — Readiness `/ready`** never reflected storage health (no `Ping`
+    method existed for the assertion to find); added `CobaltDB.Ping`.
+*   **MEDIUM — Process exited 0 on REST bind failure**; now exits non-zero.
+*   **MEDIUM — OIDC token-validation hardening.** The `azp` (authorized party)
+    claim is now enforced (required and equal to the client ID when the ID token
+    carries multiple audiences), closing the aud-array acceptance gap, and an
+    ID token whose `email_verified` is explicitly `false` is rejected so an
+    unverified address can't establish identity. Regression: `TestParseIDToken_Hardening`.
+*   **MEDIUM — WebSocket per-IP limits were spoofable** via `X-Forwarded-For`.
+    The WS path now derives the client IP the same way the REST path does —
+    trusting XFF only from configured `trusted_proxies`. Regression:
+    `TestWebSocketRealIP`.
+*   **MEDIUM — gRPC shutdown could hang** past the SIGTERM grace period on a
+    long-lived stream. `StopWithContext` now force-stops when the shutdown
+    deadline elapses.
+*   **MEDIUM — `/metrics` cross-tenant exposure** now has an opt-in guard:
+    setting `server.metrics_auth: true` requires a bearer token on `/metrics`
+    (default stays open for Prometheus). Regression: `TestMetricsRoute_RequiresAuthWhenEnabled`.
+*   **LOW — Dockerfile** now has a `HEALTHCHECK`.
+
+### 7.2 Known remaining work (NOT yet fixed — require dedicated design)
+
+*   **MEDIUM — In-memory tombstones/index maps not reclaimed at runtime.** WAL
+    checkpointing now drops tombstones from the durable log, but the in-memory
+    B+Tree still retains `nil` tombstone slots and the `judgmentIndex` map still
+    accumulates entries for purged judgments until the next process restart
+    (which rebuilds a clean tree from the compacted WAL). A live tree-compaction
+    / index-eviction pass would remove the restart dependency.
+*   **CRITICAL for clustering (N/A to default single-node) — Raft is not
+    production-ready.** Persistent term/vote/log are never written to storage,
+    and `TCPTransport` RPC handlers are never registered, so multi-node
+    consensus cannot function or survive restarts. Clustering ships disabled
+    (`necropolis.enabled=false`, `serve --single`); treat it as experimental.
+*   **LOW — `/api/v1/events` (SSE) is unauthenticated.** It currently streams
+    only heartbeats (no data leak) but holds a goroutine per client bounded
+    solely by the IP rate limiter; adding auth on the SSE upgrade would match
+    the `/ws` path. (`/metrics` now has the `server.metrics_auth` opt-in guard.)
+*   **MEDIUM — Critical subsystem start failures** (alert manager, cluster) are
+    logged as warnings; the process stays "healthy" while blind to alerts.
+    (Note: `AlertManager.Start` currently never returns an error, so the visible
+    risk is limited; a readiness signal reflecting subsystem health is the
+    proper fix.)

@@ -3,15 +3,89 @@ package auth
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
-// TestParseIDToken_Hardening covers the OIDC ID-token validation hardening:
-// azp enforcement for multi-audience tokens and rejection of unverified emails.
+// TestOIDCDiscoveryHardening verifies discovery never expands the configured
+// issuer trust boundary and rejects unbounded provider responses.
+func TestOIDCDiscoveryHardening(t *testing.T) {
+	t.Run("rejects non-loopback HTTP issuer before network access", func(t *testing.T) {
+		auth := &OIDCAuthenticator{config: core.OIDCAuth{Issuer: "http://example.com"}}
+		if _, err := auth.fetchOIDCConfig(); err == nil || !strings.Contains(err.Error(), "HTTPS") {
+			t.Fatalf("expected HTTPS issuer error, got %v", err)
+		}
+	})
+
+	t.Run("rejects issuer mismatch", func(t *testing.T) {
+		var server *httptest.Server
+		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			json.NewEncoder(w).Encode(oidcConfig{
+				Issuer:   "https://attacker.example",
+				AuthURL:  server.URL + "/auth",
+				TokenURL: server.URL + "/token",
+			})
+		}))
+		defer server.Close()
+
+		auth := &OIDCAuthenticator{config: core.OIDCAuth{Issuer: server.URL}}
+		if _, err := auth.fetchOIDCConfig(); err == nil || !strings.Contains(err.Error(), "does not match") {
+			t.Fatalf("expected issuer mismatch, got %v", err)
+		}
+	})
+
+	t.Run("accepts HTTPS endpoints on provider-declared origins", func(t *testing.T) {
+		issuer, normalized, err := normalizedIssuer("https://issuer.example")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if normalized != "https://issuer.example" {
+			t.Fatalf("unexpected normalized issuer %q", normalized)
+		}
+		if _, err := validateOIDCEndpoint("https://tokens.example/token", "token", issuer); err != nil {
+			t.Fatalf("OIDC permits HTTPS endpoints on a different provider origin: %v", err)
+		}
+	})
+
+	t.Run("blocks discovery redirect outside issuer origin", func(t *testing.T) {
+		var escaped atomic.Bool
+		attacker := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { escaped.Store(true) }))
+		defer attacker.Close()
+		issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, attacker.URL+"/discovery", http.StatusFound)
+		}))
+		defer issuer.Close()
+
+		auth := &OIDCAuthenticator{config: core.OIDCAuth{Issuer: issuer.URL}}
+		if _, err := auth.fetchOIDCConfig(); err == nil {
+			t.Fatal("expected cross-origin redirect to fail")
+		}
+		if escaped.Load() {
+			t.Fatal("HTTP client followed redirect to untrusted origin")
+		}
+	})
+
+	t.Run("bounds discovery response", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Write([]byte(strings.Repeat("x", oidcMaxResponseBody+1)))
+		}))
+		defer server.Close()
+		auth := &OIDCAuthenticator{config: core.OIDCAuth{Issuer: server.URL}}
+		if _, err := auth.fetchOIDCConfig(); err == nil || !strings.Contains(err.Error(), "exceeds") {
+			t.Fatalf("expected response size error, got %v", err)
+		}
+	})
+}
+
+// TestParseIDToken_Hardening covers azp enforcement for multi-audience
+// ID tokens and rejection of unverified email claims.
 func TestParseIDToken_Hardening(t *testing.T) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

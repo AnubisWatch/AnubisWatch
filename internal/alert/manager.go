@@ -29,9 +29,11 @@ type Manager struct {
 	dispatchers map[core.AlertChannelType]ChannelDispatcher
 
 	// State
-	running bool
-	stopCh  chan struct{}
-	queue   chan *core.AlertEvent
+	running  bool
+	stopping bool
+	stopCh   chan struct{}
+	stopDone chan struct{}
+	queue    chan *core.AlertEvent
 
 	// Worker tracking
 	wg sync.WaitGroup
@@ -111,11 +113,12 @@ func (m *Manager) Start() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if m.running {
+	if m.running || m.stopping {
 		return nil
 	}
 
 	m.running = true
+	m.stopDone = make(chan struct{})
 
 	// Recreate stopCh if it was closed (allows restart after Stop)
 	select {
@@ -171,18 +174,32 @@ func (m *Manager) Start() error {
 // Stop stops the alert manager
 func (m *Manager) Stop() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
+	if m.stopping {
+		done := m.stopDone
+		m.mu.Unlock()
+		<-done
+		return nil
+	}
 	if !m.running {
+		m.mu.Unlock()
 		return nil
 	}
 
 	m.running = false
-	close(m.stopCh)
+	m.stopping = true
+	stopCh := m.stopCh
+	done := m.stopDone
+	close(stopCh)
+	m.mu.Unlock()
 
-	// Wait for all workers to finish
+	// Workers may need m.mu while finishing a dispatch, so never wait while
+	// holding it. The done channel also makes concurrent Stop calls idempotent.
 	m.wg.Wait()
 
+	m.mu.Lock()
+	m.stopping = false
+	close(done)
+	m.mu.Unlock()
 	return nil
 }
 
@@ -618,9 +635,11 @@ func (m *Manager) dispatch(event *core.AlertEvent) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			// Send notification
+			// Each dispatcher gets private routing fields. Sharing event here lets
+			// concurrent channels race while assigning ChannelID/ChannelType.
+			channelEvent := *event
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			err := m.sendToChannel(ctx, event, ch)
+			err := m.sendToChannel(ctx, &channelEvent, ch)
 			cancel()
 
 			if err != nil {

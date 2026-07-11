@@ -11,9 +11,14 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+    - port: {{ .Values.service.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
   selector:
     {{- include "anubiswatch.selectorLabels" . | nindent 4 }}
 
+{{ if .Values.config.necropolis.enabled }}
 ---
 apiVersion: v1
 kind: Service
@@ -30,9 +35,14 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+    - port: {{ .Values.service.grpcPort }}
+      targetPort: grpc
+      protocol: TCP
+      name: grpc
     - port: {{ .Values.service.clusterPort }}
       targetPort: raft
       protocol: TCP
       name: raft
   selector:
     {{- include "anubiswatch.selectorLabels" . | nindent 4 }}
+{{ end }}

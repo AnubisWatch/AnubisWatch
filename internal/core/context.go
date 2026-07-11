@@ -8,6 +8,8 @@ type contextKey string
 const (
 	// WorkspaceIDKey is the context key for workspace ID
 	WorkspaceIDKey contextKey = "workspace_id"
+	// UserRoleKey is the context key for the authenticated user's workspace role
+	UserRoleKey contextKey = "user_role"
 )
 
 // ContextWithWorkspaceID returns a context with the workspace ID attached
@@ -23,4 +25,20 @@ func WorkspaceIDFromContext(ctx context.Context) string {
 		}
 	}
 	return "default"
+}
+
+// ContextWithUserRole returns a context with the caller's workspace role attached.
+func ContextWithUserRole(ctx context.Context, role string) context.Context {
+	return context.WithValue(ctx, UserRoleKey, role)
+}
+
+// UserRoleFromContext extracts the caller's workspace role from a context.
+// Returns an empty string when no role is present.
+func UserRoleFromContext(ctx context.Context) string {
+	if v := ctx.Value(UserRoleKey); v != nil {
+		if role, ok := v.(string); ok {
+			return role
+		}
+	}
+	return ""
 }

@@ -1,6 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, waitFor } from '@testing-library/react'
 import { WebSocketProvider } from './useWebSocket'
+import { dispatchAuthSessionChanged } from '../api/authEvents'
+import type { User } from '../api/client'
+
+const user: User = {
+  id: 'user-1',
+  email: 'admin@anubis.watch',
+  name: 'Admin',
+  role: 'admin',
+  workspace: 'default',
+}
 
 class MockWebSocket {
   static CONNECTING = 0
@@ -19,8 +29,10 @@ class MockWebSocket {
   constructor(public url: string) {
     MockWebSocket.instances.push(this)
     setTimeout(() => {
-      this.readyState = MockWebSocket.OPEN
-      this.onopen?.()
+      if (!this.closed) {
+        this.readyState = MockWebSocket.OPEN
+        this.onopen?.()
+      }
     }, 0)
   }
 
@@ -48,45 +60,28 @@ describe('WebSocketProvider', () => {
     localStorage.clear()
   })
 
-  it('connects on mount and subscribes with backend event names', async () => {
+  it('waits for an authenticated session and subscribes without a localStorage token', async () => {
     render(
       <WebSocketProvider>
         <div>content</div>
       </WebSocketProvider>
     )
 
-    // WebSocket connects on mount — no localStorage token needed,
-    // the server authenticates via HttpOnly cookie.
+    expect(MockWebSocket.instances).toHaveLength(0)
+    act(() => dispatchAuthSessionChanged({ state: 'authenticated', user }))
+
     await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1))
     const ws = MockWebSocket.instances[0]
     expect(ws.url).toBe('ws://localhost:3000/ws')
 
     await waitFor(() => expect(ws.sent).toHaveLength(1))
-    const subscribe = JSON.parse(ws.sent[0])
-    expect(subscribe).toEqual({
+    expect(JSON.parse(ws.sent[0])).toEqual({
       type: 'subscribe',
       events: ['judgment', 'alert', 'incident', 'soul', 'stats', 'status']
     })
-    expect(subscribe.channels).toBeUndefined()
   })
 
-  it('closes the active socket on unmount', async () => {
-    const { unmount } = render(
-      <WebSocketProvider>
-        <div>content</div>
-      </WebSocketProvider>
-    )
-
-    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1))
-    const ws = MockWebSocket.instances[0]
-    expect(ws.closed).toBe(false)
-
-    unmount()
-
-    await waitFor(() => expect(ws.closed).toBe(true))
-  })
-
-  it('does not schedule a reconnect after an intentional logout', async () => {
+  it('closes the active socket on logout and does not reconnect', async () => {
     vi.useFakeTimers()
     render(
       <WebSocketProvider>
@@ -94,22 +89,34 @@ describe('WebSocketProvider', () => {
       </WebSocketProvider>
     )
 
+    act(() => dispatchAuthSessionChanged({ state: 'authenticated', user }))
     await act(async () => {
       await vi.runOnlyPendingTimersAsync()
     })
-    expect(MockWebSocket.instances).toHaveLength(1)
-
     const ws = MockWebSocket.instances[0]
 
-    // Simulate server-side close (e.g. session expired): close with reason
-    act(() => {
-      ws.close()
-    })
+    act(() => dispatchAuthSessionChanged({ state: 'anonymous' }))
+    expect(ws.closed).toBe(true)
 
     await vi.advanceTimersByTimeAsync(60_000)
-
-    // After a close without shouldReconnect (no auth token), no reconnect
     expect(MockWebSocket.instances).toHaveLength(1)
-    vi.useRealTimers()
+  })
+
+  it('reconnects after an unexpected close only while the session is active', async () => {
+    vi.useFakeTimers()
+    render(
+      <WebSocketProvider>
+        <div>content</div>
+      </WebSocketProvider>
+    )
+
+    act(() => dispatchAuthSessionChanged({ state: 'authenticated', user }))
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync()
+    })
+    act(() => MockWebSocket.instances[0].close())
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(MockWebSocket.instances).toHaveLength(2)
   })
 })

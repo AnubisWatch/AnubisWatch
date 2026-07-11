@@ -95,6 +95,8 @@ export function Settings() {
 
   const handleSave = async () => {
     setSaving(true)
+    setSaved(false)
+    setError(null)
     try {
       await api.put('/config', editedConfig)
       setConfig(editedConfig)

@@ -1,5 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api, ApiResponse, Soul, Judgment, AlertChannel, AlertRule, Incident, Stats, ClusterStatus, StatusPage, User, CustomDashboard } from './client'
+import {
+  AUTH_SESSION_CHANGED_EVENT,
+  dispatchAuthSessionChanged,
+  type AuthSessionChange,
+} from './authEvents'
 
 // Generic hook for API calls
 function useApi<T>(
@@ -431,80 +436,79 @@ export function useDashboards() {
 }
 
 // Auth API hooks
-const CACHED_USER_KEY = 'auth_user'
-
-function readCachedUser(): User | null {
-  try {
-    const raw = localStorage.getItem(CACHED_USER_KEY)
-    if (!raw) return null
-    return JSON.parse(raw) as User
-  } catch {
-    return null
-  }
-}
-
-function writeCachedUser(user: User | null) {
-  try {
-    if (user) {
-      localStorage.setItem(CACHED_USER_KEY, JSON.stringify(user))
-    } else {
-      localStorage.removeItem(CACHED_USER_KEY)
-    }
-  } catch {
-    // localStorage might be disabled; ignore.
-  }
-}
-
 export function useAuth() {
-  // Hydrate from cache so a transient /auth/me failure doesn't flicker the
-  // user back to /login. The /auth/me probe still runs and updates state
-  // when it succeeds; on 401 we clear cache + token. On any other error
-  // (429 rate limit, 5xx, network) we keep the cached user — they have a
-  // valid token, they're authenticated until the server explicitly says
-  // otherwise.
-  const [user, setUser] = useState<User | null>(() => {
-    return readCachedUser()
-  })
+  const [user, setUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
+  const syncSequence = useRef(0)
 
-  useEffect(() => {
-    // Probe /auth/me to validate the session. The HttpOnly cookie set by
-    // the server on login is sent automatically with credentials: 'include'.
-    // If it exists and is valid, we get the user back. If not, the server
-    // returns 401 and we clear the cached user.
-    api.get<User>('/auth/me')
-      .then((u) => {
-        setUser(u)
-        writeCachedUser(u)
-      })
-      .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err)
-        if (msg.startsWith('HTTP 401') || msg.toLowerCase().includes('unauthorized')) {
-          api.clearToken()
-          writeCachedUser(null)
-          setUser(null)
-        }
-        // Other failures: keep the cached user. They were authenticated
-        // before this transient failure; don't flicker to /login.
-      })
-      .finally(() => setLoading(false))
+  const syncSession = useCallback(async () => {
+    const sequence = ++syncSequence.current
+    setLoading(true)
+    try {
+      const currentUser = await api.get<User>('/auth/me')
+      if (sequence === syncSequence.current) {
+        setUser(currentUser)
+        dispatchAuthSessionChanged({ state: 'authenticated', user: currentUser })
+      }
+      return currentUser
+    } catch (error) {
+      // A cached identity is only presentation data; authorization always
+      // comes from a successful server-side session validation.
+      if (sequence === syncSequence.current) {
+        setUser(null)
+        dispatchAuthSessionChanged({ state: 'anonymous' })
+      }
+      throw error
+    } finally {
+      if (sequence === syncSequence.current) {
+        setLoading(false)
+      }
+    }
   }, [])
 
+  useEffect(() => {
+    const sequenceRef = syncSequence
+    const handleSessionChange = (event: Event) => {
+      const change = (event as CustomEvent<AuthSessionChange>).detail
+      if (change?.state === 'anonymous') {
+        ++syncSequence.current
+        setUser(null)
+        setLoading(false)
+        return
+      }
+      if (change?.state === 'authenticated') {
+        ++syncSequence.current
+        setUser(change.user)
+        setLoading(false)
+        return
+      }
+      syncSession().catch(() => {
+        // syncSession clears any identity that the server did not validate.
+      })
+    }
+
+    window.addEventListener(AUTH_SESSION_CHANGED_EVENT, handleSessionChange)
+    syncSession().catch(() => {
+      // Initial anonymous and unavailable-server states are both unauthorized.
+    })
+    return () => {
+      window.removeEventListener(AUTH_SESSION_CHANGED_EVENT, handleSessionChange)
+      ++sequenceRef.current
+    }
+  }, [syncSession])
+
   const login = async (email: string, password: string) => {
-    const result = await api.post<{ user: User }>('/auth/login', { email, password })
-    // The server set an HttpOnly auth_token cookie. The api client sends
-    // credentials: 'include' with every request, so subsequent API calls
-    // are authenticated via the cookie. No need to store a token in JS.
-    setUser(result.user)
-    writeCachedUser(result.user)
+    const result = await api.post('/auth/login', { email, password })
+    dispatchAuthSessionChanged({ state: 'resync' })
     return result
   }
 
   const logout = async () => {
+    // Propagate first so every mounted auth consumer and the socket stop
+    // authorizing immediately, even if the server request is slow or fails.
+    dispatchAuthSessionChanged({ state: 'anonymous' })
+    api.clearToken(false)
     await api.post('/auth/logout')
-    api.clearToken()
-    writeCachedUser(null)
-    setUser(null)
   }
 
   return { user, loading, login, logout, isAuthenticated: !!user }

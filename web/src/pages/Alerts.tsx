@@ -179,8 +179,13 @@ export function Alerts() {
     setTestingChannel(id)
     setTestResult(null)
     try {
-      await testChannel(id)
-      setTestResult({ id, success: true, message: 'Test notification sent successfully!' })
+      const result = await testChannel(id)
+      const success = result.status === 'test sent' || result.status === 'sent' || result.status === 'success'
+      setTestResult({
+        id,
+        success,
+        message: success ? 'Test notification sent successfully!' : `Test failed: ${result.status}`,
+      })
     } catch (err) {
       setTestResult({ id, success: false, message: err instanceof Error ? err.message : 'Test failed' })
     } finally {

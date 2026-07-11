@@ -64,26 +64,22 @@ func (f *StorageFSM) applyCommand(log *core.RaftLogEntry) interface{} {
 		return fmt.Errorf("failed to decode command: %w", err)
 	}
 
-	var result interface{}
 	switch cmd.Op {
 	case core.FSMSet:
 		err = f.store.Set(cmd.Key, cmd.Value)
-		result = err
-
 	case core.FSMDelete:
 		err = f.store.Delete(cmd.Key)
-		result = err
-
 	case core.FSMDeletePrefix:
 		err = f.store.DeletePrefix(cmd.Key)
-		result = err
-
 	default:
 		return fmt.Errorf("unknown command op: %d", cmd.Op)
 	}
+	if err != nil {
+		return err
+	}
 
 	f.index = log.Index
-	return result
+	return nil
 }
 
 // applyConfiguration applies a configuration change
@@ -91,9 +87,11 @@ func (f *StorageFSM) applyConfiguration(log *core.RaftLogEntry) interface{} {
 	// Configuration changes are handled by the Raft layer
 	// We just persist them here
 	key := fmt.Sprintf("raft/config/%d", log.Index)
-	err := f.store.Set(key, log.Data)
+	if err := f.store.Set(key, log.Data); err != nil {
+		return err
+	}
 	f.index = log.Index
-	return err
+	return nil
 }
 
 // decodeCommand decodes a command from bytes

@@ -33,9 +33,12 @@ type Distributor struct {
 	onUnassignSoul func(soulID string) error
 	onRebalance    func(moves []SoulMove)
 
-	logger *slog.Logger
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	logger      *slog.Logger
+	stopCh      chan struct{}
+	wg          sync.WaitGroup
+	lifecycleMu sync.Mutex
+	started     bool
+	stopped     bool
 }
 
 // DistributionStrategy determines how souls are assigned to nodes
@@ -87,19 +90,35 @@ func NewDistributor(nodeID, region string, strategy DistributionStrategy, logger
 	}
 }
 
-// Start starts the distributor
+// Start starts the distributor. Repeated calls and calls after Stop are no-ops.
 func (d *Distributor) Start() {
-	d.logger.Info("Starting distributor",
-		"strategy", d.strategy.String(),
-		"rebalance_interval", d.rebalanceInterval)
-
+	d.lifecycleMu.Lock()
+	if d.started || d.stopped {
+		d.lifecycleMu.Unlock()
+		return
+	}
+	d.started = true
 	d.wg.Add(1)
-	go d.rebalanceLoop()
+	d.lifecycleMu.Unlock()
+
+	d.mu.RLock()
+	strategy := d.strategy
+	interval := d.rebalanceInterval
+	d.mu.RUnlock()
+	d.logger.Info("Starting distributor",
+		"strategy", strategy.String(),
+		"rebalance_interval", interval)
+	go d.rebalanceLoop(interval)
 }
 
-// Stop stops the distributor
+// Stop stops the distributor. It is safe before Start and on repeated calls.
 func (d *Distributor) Stop() {
-	close(d.stopCh)
+	d.lifecycleMu.Lock()
+	if !d.stopped {
+		d.stopped = true
+		close(d.stopCh)
+	}
+	d.lifecycleMu.Unlock()
 	d.wg.Wait()
 }
 
@@ -274,9 +293,10 @@ func (d *Distributor) GetLoadDistribution() map[string]*NodeLoad {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	result := make(map[string]*NodeLoad)
+	result := make(map[string]*NodeLoad, len(d.nodeLoads))
 	for k, v := range d.nodeLoads {
-		result[k] = v
+		load := *v
+		result[k] = &load
 	}
 
 	return result
@@ -381,10 +401,10 @@ func (d *Distributor) selectHashBased(candidates []*NodeLoad, key string) string
 	return candidates[index].NodeID
 }
 
-// rebalanceLoop periodically checks and rebalances load
-func (d *Distributor) rebalanceLoop() {
+// rebalanceLoop periodically checks and rebalances load.
+func (d *Distributor) rebalanceLoop(interval time.Duration) {
 	defer d.wg.Done()
-	ticker := time.NewTicker(d.rebalanceInterval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -500,21 +520,17 @@ func (d *Distributor) checkAndRebalance() {
 			}
 		}
 
-		// Capture soul map state for callback before re-acquiring lock
-		// This ensures callback sees consistent state
-		soulMapCopy := make(map[string]string, len(d.soulMap))
-		for k, v := range d.soulMap {
-			soulMapCopy[k] = v
-		}
 		d.mu.Lock()
+		callback := d.onRebalance
 
-		// Log rebalance completion before calling callback
+		// Log rebalance completion before calling callback.
 		d.logger.Info("Rebalance moves completed",
 			"moves_executed", len(moves))
 
-		if d.onRebalance != nil {
-			// Pass a consistent copy of the soul map state to callback
-			d.onRebalance(moves)
+		if callback != nil {
+			d.mu.Unlock()
+			callback(moves)
+			d.mu.Lock()
 		}
 	}
 }
@@ -540,9 +556,11 @@ func (d *Distributor) SetCallbacks(
 	onUnassign func(soulID string) error,
 	onRebalance func(moves []SoulMove),
 ) {
+	d.mu.Lock()
 	d.onAssignSoul = onAssign
 	d.onUnassignSoul = onUnassign
 	d.onRebalance = onRebalance
+	d.mu.Unlock()
 }
 
 // String returns the string representation of a strategy

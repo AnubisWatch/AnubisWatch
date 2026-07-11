@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -60,6 +61,11 @@ type Server struct {
 	deps   *ServerDependencies
 	logger *slog.Logger
 	stopCh chan struct{}
+
+	// failOnce guards a single close of stopCh; startupErr records why a
+	// critical component tore the server down so the process can exit non-zero.
+	failOnce   sync.Once
+	startupErr error
 }
 
 // NewServer creates a new Server instance
@@ -69,6 +75,22 @@ func NewServer(deps *ServerDependencies) *Server {
 		logger: deps.Logger,
 		stopCh: make(chan struct{}),
 	}
+}
+
+// triggerShutdown records an optional failure reason and unblocks
+// WaitForShutdown exactly once. A nil err denotes an ordinary requested stop.
+func (s *Server) triggerShutdown(err error) {
+	s.failOnce.Do(func() {
+		s.startupErr = err
+		close(s.stopCh)
+	})
+}
+
+// StartupError returns the error that caused a critical component to trigger
+// shutdown, or nil if the server stopped for a normal reason (signal). It is
+// safe to read after WaitForShutdown returns.
+func (s *Server) StartupError() error {
+	return s.startupErr
 }
 
 // Start initializes and starts all server components
@@ -147,9 +169,12 @@ func (s *Server) Start(ctx context.Context) error {
 		go func() {
 			if err := s.deps.RESTServer.Start(); err != nil {
 				logger.Error("REST server failed", "err", err)
-				// Signal shutdown so other components stop gracefully when
-				// REST API becomes unavailable (MEDIUM: REST goroutine orphan).
-				close(s.stopCh)
+				// Signal shutdown so other components stop gracefully when the
+				// REST API becomes unavailable, and record the failure so the
+				// process exits non-zero — a bind failure (port in use, cert
+				// unreadable) must look like a crash to supervisors/K8s, not a
+				// clean exit.
+				s.triggerShutdown(fmt.Errorf("REST server failed: %w", err))
 			}
 		}()
 		logger.Info("REST API server initialized", "addr", fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port))
@@ -186,9 +211,10 @@ func (s *Server) Stop(ctx context.Context) error {
 		s.deps.RESTServer.Stop(ctx)
 	}
 
-	// Stop gRPC server
+	// Stop gRPC server, bounded by the shutdown deadline so a long-lived
+	// streaming RPC cannot hang the process past its SIGTERM grace period.
 	if s.deps.GRPCServer != nil {
-		s.deps.GRPCServer.Stop()
+		s.deps.GRPCServer.StopWithContext(ctx)
 	}
 
 	// Stop journey executors
@@ -893,6 +919,14 @@ func (a *probeStorageAdapter) ListSouls(ctx context.Context, workspaceID string)
 // restStorageAdapter adapts storage.CobaltDB to api.Storage interface
 type restStorageAdapter struct {
 	store *storage.CobaltDB
+}
+
+// Ping forwards to the underlying store so the REST readiness probe (/ready)
+// can detect a closed/wedged storage engine. Without this forwarder the
+// probe's Ping() interface assertion on the adapter would silently fail and
+// readiness would always report storage "ok".
+func (a *restStorageAdapter) Ping() error {
+	return a.store.Ping()
 }
 
 func (a *restStorageAdapter) GetSoulNoCtx(id string) (*core.Soul, error) {

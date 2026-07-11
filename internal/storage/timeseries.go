@@ -20,8 +20,15 @@ type TimeSeriesStore struct {
 	db     *CobaltDB
 	config core.TimeSeriesConfig
 	logger *slog.Logger
-	stopCh chan struct{}
-	stopMu sync.Mutex // protects stopCh
+
+	// summaryMu serializes read-modify-write aggregation for a bucket. A single
+	// mutex is sufficient because summary updates are short and avoids lost
+	// increments when concurrent judgments land in the same bucket.
+	summaryMu sync.Mutex
+
+	stopCh       chan struct{}
+	stopMu       sync.Mutex // protects stopCh and compactionWG lifecycle
+	compactionWG sync.WaitGroup
 }
 
 // TimeResolution represents different time granularities
@@ -80,6 +87,9 @@ func (ts *TimeSeriesStore) SaveJudgment(ctx context.Context, j *core.Judgment) e
 
 // updateSummary updates the aggregated summary for a judgment
 func (ts *TimeSeriesStore) updateSummary(ctx context.Context, j *core.Judgment, resolution TimeResolution) error {
+	ts.summaryMu.Lock()
+	defer ts.summaryMu.Unlock()
+
 	workspaceID := core.WorkspaceIDFromContext(ctx)
 
 	// Calculate bucket time
@@ -217,20 +227,29 @@ func truncateToResolution(t time.Time, resolution TimeResolution) time.Time {
 // StartCompaction starts the background compaction goroutine
 func (ts *TimeSeriesStore) StartCompaction() {
 	ts.stopMu.Lock()
+	defer ts.stopMu.Unlock()
+	if ts.stopCh != nil {
+		return
+	}
+
 	ts.stopCh = make(chan struct{})
-	stopCh := ts.stopCh
-	ts.stopMu.Unlock()
-	go ts.compactionLoop(stopCh)
+	ts.compactionWG.Add(1)
+	go ts.compactionLoop(ts.stopCh)
 }
 
-// StopCompaction gracefully stops the compaction goroutine
+// StopCompaction gracefully stops the compaction goroutine. Holding stopMu
+// through the wait prevents a concurrent Start from adding to the WaitGroup
+// until the previous lifecycle has fully exited.
 func (ts *TimeSeriesStore) StopCompaction() {
 	ts.stopMu.Lock()
-	if ts.stopCh != nil {
-		close(ts.stopCh)
-		ts.stopCh = nil
+	defer ts.stopMu.Unlock()
+	if ts.stopCh == nil {
+		return
 	}
-	ts.stopMu.Unlock()
+
+	close(ts.stopCh)
+	ts.compactionWG.Wait()
+	ts.stopCh = nil
 }
 
 // compactionLoop runs compaction at regular intervals. The stop channel
@@ -239,6 +258,7 @@ func (ts *TimeSeriesStore) StopCompaction() {
 // and reads against it raced with StopCompaction's close+nil under the
 // race detector.
 func (ts *TimeSeriesStore) compactionLoop(stopCh <-chan struct{}) {
+	defer ts.compactionWG.Done()
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
@@ -380,6 +400,9 @@ type weightedLatency struct {
 // aggregateAndSave aggregates multiple source summaries into a target summary
 // Uses weighted percentile algorithm to avoid O(N*M) memory expansion.
 func (ts *TimeSeriesStore) aggregateAndSave(workspaceID, soulID string, resolution TimeResolution, bucketTime time.Time, sources []*JudgmentSummary) error {
+	ts.summaryMu.Lock()
+	defer ts.summaryMu.Unlock()
+
 	key := fmt.Sprintf("%s/ts/%s/%s/%d", workspaceID, soulID, resolution, bucketTime.Unix())
 
 	// Check if target already exists

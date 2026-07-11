@@ -2,6 +2,7 @@ import { ArrowRight, Eye, EyeOff, Lock, Mail } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
+import { dispatchAuthSessionChanged } from "../api/authEvents";
 
 const AnkhIcon = () => (
 	<svg
@@ -28,14 +29,13 @@ export function Login() {
 		setError("");
 
 		try {
-			await api.post<{
-				user: { id: string; email: string; name: string };
-			}>("/auth/login", {
+			await api.post("/auth/login", {
 				email,
 				password,
 			});
-			// The server sets an HttpOnly auth_token cookie. All subsequent
-			// API calls include it via credentials: 'include'.
+			// Same-tab consumers do not receive storage events, so ask every
+			// auth hook to validate the newly set HttpOnly cookie via /auth/me.
+			dispatchAuthSessionChanged({ state: "resync" });
 			navigate("/");
 		} catch (err) {
 			setError(
@@ -94,12 +94,13 @@ export function Login() {
 
 					<form onSubmit={handleSubmit} className="space-y-5">
 						<div>
-							<label className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">
+							<label htmlFor="login-email" className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">
 								Email
 							</label>
 							<div className="relative">
 								<Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
 								<input
+									id="login-email"
 									type="email"
 									value={email}
 									onChange={(e) => setEmail(e.target.value)}
@@ -111,12 +112,13 @@ export function Login() {
 						</div>
 
 						<div>
-							<label className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">
+							<label htmlFor="login-password" className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">
 								Password
 							</label>
 							<div className="relative">
 								<Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-muted)]" />
 								<input
+									id="login-password"
 									type={showPassword ? "text" : "password"}
 									value={password}
 									onChange={(e) => setPassword(e.target.value)}

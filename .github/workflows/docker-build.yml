@@ -51,31 +51,49 @@ jobs:
             type=semver,pattern={{major}}
             type=sha,prefix=sha-
 
-      - name: Build image
+      # Build one native-platform candidate locally so Trivy can block before
+      # any registry mutation. The multi-platform image is published only after
+      # this scan succeeds.
+      - name: Build scan candidate
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: anubiswatch-scan:${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Run blocking Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: anubiswatch-scan:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Upload Trivy scan results
+        if: always() && github.event_name != 'pull_request'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Publish multi-platform image
+        if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           sbom: true
           provenance: true
-
-      - name: Run Trivy vulnerability scanner
-        if: github.event_name != 'pull_request'
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          severity: 'CRITICAL,HIGH'
-
-      - name: Upload Trivy scan results
-        if: github.event_name != 'pull_request'
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: 'trivy-results.sarif'

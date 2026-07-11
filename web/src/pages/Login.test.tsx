@@ -35,8 +35,8 @@ describe('Login', () => {
       </MemoryRouter>
     )
 
-    expect(screen.getByPlaceholderText('priest@anubis.watch')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('••••••••')).toBeInTheDocument()
+    expect(screen.getByLabelText('Email')).toBeInTheDocument()
+    expect(screen.getByLabelText('Password')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /enter the temple/i })).toBeInTheDocument()
     expect(screen.getByText('Use the admin credentials configured for this instance.')).toBeInTheDocument()
   })

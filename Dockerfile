@@ -1,8 +1,8 @@
 # Build stage. Pin both the Go version and the Alpine minor so the
-# build is reproducible — `golang:1.26.4-alpine` would float the
+# build is reproducible — `golang:1.26.5-alpine` would float the
 # underlying musl libc across rebuilds. The Go team publishes
 # `golang:X.Y.Z-alpineN.M` tags for each stable Alpine.
-FROM golang:1.26.4-alpine3.24 AS builder
+FROM golang:1.26.5-alpine3.24 AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git nodejs npm
@@ -64,6 +64,12 @@ USER anubis:anubis
 
 # Expose ports
 EXPOSE 8080 8443 9090 7946
+
+# Liveness probe for `docker run` (compose/K8s define their own). Uses the
+# plaintext HTTP port the baked container config listens on (8080) and busybox
+# wget, which is present in the alpine base.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -qO- http://127.0.0.1:8080/health >/dev/null 2>&1 || exit 1
 
 # Run
 ENTRYPOINT ["/bin/anubis"]

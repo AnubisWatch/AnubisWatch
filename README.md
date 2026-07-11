@@ -143,6 +143,27 @@ make lint           # golangci-lint run ./...
 make docker         # Build anubiswatch/anubis:<version>
 ```
 
+### Full Test Suite and Coverage Commands
+
+```bash
+# Backend: full Go test suite + coverage profile
+go test ./... -coverprofile=coverage.out -covermode=atomic
+
+# Frontend unit/integration suite + HTML/JSON coverage artifacts
+cd web && npm run test:coverage
+# (runs with --sequence.concurrent false for stable module-mock isolation)
+
+# Frontend browser smoke coverage
+cd web && npm run e2e
+```
+
+Coverage artifacts produced by these commands:
+- Go: `coverage.out`
+- Web: `web/coverage/index.html` and `web/coverage/coverage-final.json`
+
+Any remaining uncovered-but-not-yet-practical paths are tracked in
+`TEST_COVERAGE_EXCEPTIONS.md`.
+
 ### Docker Compose
 
 ```bash

@@ -3473,15 +3473,17 @@ func TestHandleOIDCCallback(t *testing.T) {
 		t.Fatalf("failed to decode response: %v", err)
 	}
 
-	if response["token"] != "oidc-token-123" {
-		t.Errorf("expected token in response, got %v", response["token"])
+	if _, ok := response["token"]; ok {
+		t.Errorf("session token must not be exposed in response: %v", response["token"])
 	}
 	if user, ok := response["user"].(map[string]interface{}); !ok || user["email"] != "oidc@example.com" {
 		t.Errorf("expected user with email in response, got %v", response["user"])
 	}
 
-	// Verify cookies are cleared
+	// Verify transient cookies are cleared and the session uses the same
+	// HttpOnly policy as local login.
 	cookies := w.Result().Cookies()
+	var authCookie *http.Cookie
 	for _, c := range cookies {
 		if c.Name == "oidc_nonce" && c.Value != "" {
 			t.Error("expected nonce cookie to be cleared")
@@ -3489,6 +3491,18 @@ func TestHandleOIDCCallback(t *testing.T) {
 		if c.Name == "oidc_state" && c.Value != "" {
 			t.Error("expected state cookie to be cleared")
 		}
+		if c.Name == "auth_token" {
+			authCookie = c
+		}
+	}
+	if authCookie == nil {
+		t.Fatal("expected auth_token cookie")
+	}
+	if authCookie.Value != "oidc-token-123" || !authCookie.HttpOnly || authCookie.Path != "/" || authCookie.SameSite != http.SameSiteStrictMode || authCookie.MaxAge != 86400*7 {
+		t.Fatalf("unexpected auth cookie policy: %#v", authCookie)
+	}
+	if authCookie.Secure {
+		t.Error("plain HTTP callback should match local login's non-Secure development policy")
 	}
 }
 

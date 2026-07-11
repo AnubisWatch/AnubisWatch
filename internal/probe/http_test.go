@@ -796,10 +796,8 @@ func TestTransportCacheStats_NoHits(t *testing.T) {
 
 func TestTransportCacheStats_WithHits(t *testing.T) {
 	checker := NewHTTPChecker()
-	checker.cacheMu.Lock()
-	checker.cacheHits = 3
-	checker.cacheMisses = 7
-	checker.cacheMu.Unlock()
+	checker.cacheHits.Store(3)
+	checker.cacheMisses.Store(7)
 
 	hits, misses, ratio := checker.TransportCacheStats()
 	if hits != 3 {
@@ -815,10 +813,8 @@ func TestTransportCacheStats_WithHits(t *testing.T) {
 
 func TestTransportCacheStats_OnlyHits(t *testing.T) {
 	checker := NewHTTPChecker()
-	checker.cacheMu.Lock()
-	checker.cacheHits = 5
-	checker.cacheMisses = 0
-	checker.cacheMu.Unlock()
+	checker.cacheHits.Store(5)
+	checker.cacheMisses.Store(0)
 
 	hits, misses, ratio := checker.TransportCacheStats()
 	if hits != 5 {
@@ -834,10 +830,8 @@ func TestTransportCacheStats_OnlyHits(t *testing.T) {
 
 func TestTransportCacheStats_OnlyMisses(t *testing.T) {
 	checker := NewHTTPChecker()
-	checker.cacheMu.Lock()
-	checker.cacheHits = 0
-	checker.cacheMisses = 5
-	checker.cacheMu.Unlock()
+	checker.cacheHits.Store(0)
+	checker.cacheMisses.Store(5)
 
 	hits, misses, ratio := checker.TransportCacheStats()
 	if hits != 0 {

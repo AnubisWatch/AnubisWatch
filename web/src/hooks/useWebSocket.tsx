@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState, ReactNode, useCallback } from 'react'
 import { WebSocketContext, type WebSocketMessage } from './webSocketContext'
+import {
+  AUTH_SESSION_CHANGED_EVENT,
+  type AuthSessionChange,
+} from '../api/authEvents'
 
 interface WebSocketProviderProps {
   children: ReactNode
@@ -13,9 +17,13 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const reconnectAttemptsRef = useRef(0)
   const shouldReconnectRef = useRef(false)
+  const sessionActiveRef = useRef(false)
   const maxReconnectAttempts = 5
 
   const connect = useCallback(() => {
+    if (!sessionActiveRef.current) {
+      return
+    }
     // Authenticate via the HttpOnly auth_token cookie (set by server on login).
     // The browser sends cookies automatically with the WebSocket upgrade request.
     // If there's no valid session, the server rejects the connection — the
@@ -66,7 +74,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
         setConnected(false)
         wsRef.current = null
 
-        if (shouldReconnectRef.current && localStorage.getItem('auth_token') && reconnectAttemptsRef.current < maxReconnectAttempts) {
+        if (shouldReconnectRef.current && sessionActiveRef.current && reconnectAttemptsRef.current < maxReconnectAttempts) {
           reconnectAttemptsRef.current++
           const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000)
 
@@ -108,34 +116,28 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     }
   }, [])
 
-  // Auto-connect on mount. The HttpOnly cookie (set by server on login) is
-  // sent with the WebSocket upgrade request automatically. If the user has
-  // a valid session cookie, the connection succeeds; if not, the server
-  // rejects it and the onclose handler stops reconnecting.
+  // useAuth is the authority for whether the HttpOnly cookie was validated.
+  // Waiting for its event prevents anonymous connection/retry storms.
   useEffect(() => {
-    connect()
-
-    return () => {
-      disconnect()
-    }
-  }, [connect, disconnect])
-
-  // Listen for cross-tab storage changes (legacy backward compat).
-  // New sessions use HttpOnly cookies, so AUTH_TOKEN_CHANGED_EVENT no longer fires.
-  useEffect(() => {
-    const handleStorage = (e: StorageEvent) => {
-      if (e.key === 'auth_token') {
-        if (e.newValue) {
-          connect()
-        } else {
-          disconnect()
-        }
+    const handleSessionChange = (event: Event) => {
+      const change = (event as CustomEvent<AuthSessionChange>).detail
+      if (change?.state === 'authenticated') {
+        sessionActiveRef.current = true
+        reconnectAttemptsRef.current = 0
+        disconnect()
+        sessionActiveRef.current = true
+        connect()
+      } else if (change?.state === 'anonymous') {
+        sessionActiveRef.current = false
+        disconnect()
       }
     }
 
-    window.addEventListener('storage', handleStorage)
+    window.addEventListener(AUTH_SESSION_CHANGED_EVENT, handleSessionChange)
     return () => {
-      window.removeEventListener('storage', handleStorage)
+      window.removeEventListener(AUTH_SESSION_CHANGED_EVENT, handleSessionChange)
+      sessionActiveRef.current = false
+      disconnect()
     }
   }, [connect, disconnect])
 

@@ -883,9 +883,9 @@ func (s *RESTServer) handleChangePassword(ctx *Context) error {
 		return ctx.Error(http.StatusBadRequest, "invalid request body")
 	}
 
-	// Extract token from Authorization header (already validated by requireAuth)
-	authHeader := ctx.Request.Header.Get("Authorization")
-	token := strings.TrimPrefix(authHeader, "Bearer ")
+	// Use the same header-or-cookie extraction as requireAuth so HttpOnly
+	// cookie sessions can change their password without a bearer header.
+	token := requestAuthToken(ctx.Request)
 
 	if err := s.auth.ChangePassword(token, req.CurrentPassword, req.NewPassword); err != nil {
 		if strings.Contains(err.Error(), "current password") {
@@ -1046,10 +1046,21 @@ func (s *RESTServer) handleOIDCCallback(ctx *Context) error {
 		return ctx.Error(http.StatusUnauthorized, "OIDC authentication failed: "+err.Error())
 	}
 
-	// Return token (in production, redirect to dashboard with token in cookie)
+	// Use the same HttpOnly session cookie policy as local login. Keeping the
+	// token out of JSON prevents browser JavaScript from reading it.
+	// #nosec G124 -- Secure is enabled for TLS/proxied HTTPS; local HTTP dev and E2E need non-Secure cookies.
+	http.SetCookie(ctx.Response, &http.Cookie{
+		Name:     "auth_token",
+		Value:    token,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   ctx.Request.TLS != nil || ctx.Request.Header.Get("X-Forwarded-Proto") == "https",
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   86400 * 7,
+	})
+
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
-		"user":  user,
-		"token": token,
+		"user": user,
 	})
 }
 

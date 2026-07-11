@@ -147,14 +147,9 @@ services:
     ports:
       - "9091:9090"
     volumes:
-      - ./configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--storage.tsdb.retention.time=15d'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
+    # Use the image's bundled configuration. Add an explicit config mount only
+    # when a real Prometheus configuration is maintained alongside this file.
     networks:
       - anubis-net
 
@@ -169,11 +164,17 @@ services:
       - "3000:3000"
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./config/grafana:/etc/grafana/provisioning:ro
+    # No provisioning directory is mounted by default because the repository
+    # does not ship one. Configure dashboards through Grafana or add a real
+    # provisioning directory before enabling the monitoring profile.
     environment:
       - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?must set GRAFANA_ADMIN_PASSWORD}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-}
       - GF_USERS_ALLOW_SIGN_UP=false
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - 'test -n "`printenv GF_SECURITY_ADMIN_PASSWORD`" || { echo "GRAFANA_ADMIN_PASSWORD must be set" >&2; exit 1; }; exec /run.sh'
     networks:
       - anubis-net
     depends_on:

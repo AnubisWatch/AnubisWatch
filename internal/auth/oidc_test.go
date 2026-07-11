@@ -568,30 +568,31 @@ func TestOIDCAuthenticator_OIDCCallback_OIDCError(t *testing.T) {
 }
 
 func TestOIDCAuthenticator_FetchOIDCConfig_Success(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/.well-known/openid-configuration" {
 			http.NotFound(w, r)
 			return
 		}
 		json.NewEncoder(w).Encode(oidcConfig{
-			Issuer:      "https://test.example.com",
-			AuthURL:     "https://test.example.com/auth",
-			TokenURL:    "https://test.example.com/token",
-			UserInfoURL: "https://test.example.com/userinfo",
-			JWKSURI:     "https://test.example.com/jwks",
+			Issuer:      server.URL,
+			AuthURL:     server.URL + "/auth",
+			TokenURL:    server.URL + "/token",
+			UserInfoURL: server.URL + "/userinfo",
+			JWKSURI:     server.URL + "/jwks",
 		})
 	}))
 	defer server.Close()
 
-	auth := &OIDCAuthenticator{config: core.OIDCAuth{Issuer: server.URL}}
+	auth := &OIDCAuthenticator{config: core.OIDCAuth{Issuer: server.URL + "/"}}
 	cfg, err := auth.fetchOIDCConfig()
 	if err != nil {
 		t.Fatalf("fetchOIDCConfig failed: %v", err)
 	}
-	if cfg.AuthURL != "https://test.example.com/auth" {
+	if cfg.AuthURL != server.URL+"/auth" {
 		t.Errorf("Expected AuthURL, got %s", cfg.AuthURL)
 	}
-	if cfg.TokenURL != "https://test.example.com/token" {
+	if cfg.TokenURL != server.URL+"/token" {
 		t.Errorf("Expected TokenURL, got %s", cfg.TokenURL)
 	}
 }
@@ -1117,8 +1118,6 @@ func TestOIDCAuthenticator_OIDCCallback_Success(t *testing.T) {
 		t.Fatalf("failed to generate RSA key: %v", err)
 	}
 	jwks := createTestJWK(priv)
-	jwkServer := newJWKServer(t, jwks)
-	defer jwkServer.Close()
 
 	var idToken string
 	var server *httptest.Server
@@ -1130,7 +1129,7 @@ func TestOIDCAuthenticator_OIDCCallback_Success(t *testing.T) {
 				AuthURL:     server.URL + "/auth",
 				TokenURL:    server.URL + "/token",
 				UserInfoURL: server.URL + "/userinfo",
-				JWKSURI:     jwkServer.URL + "/jwks",
+				JWKSURI:     server.URL + "/jwks",
 			})
 		case "/token":
 			json.NewEncoder(w).Encode(tokenResponse{
@@ -1138,6 +1137,8 @@ func TestOIDCAuthenticator_OIDCCallback_Success(t *testing.T) {
 				IDToken:     idToken,
 				TokenType:   "Bearer",
 			})
+		case "/jwks":
+			json.NewEncoder(w).Encode(jwks)
 		case "/userinfo":
 			json.NewEncoder(w).Encode(userInfoResponse{
 				Email: "oidcuser@example.com",
@@ -1207,8 +1208,6 @@ func TestOIDCAuthenticator_OIDCCallback_EmptyEmail(t *testing.T) {
 		t.Fatalf("failed to generate RSA key: %v", err)
 	}
 	jwks := createTestJWK(priv)
-	jwkServer := newJWKServer(t, jwks)
-	defer jwkServer.Close()
 
 	var idToken string
 	var server *httptest.Server
@@ -1219,7 +1218,7 @@ func TestOIDCAuthenticator_OIDCCallback_EmptyEmail(t *testing.T) {
 				Issuer:   server.URL,
 				AuthURL:  server.URL + "/auth",
 				TokenURL: server.URL + "/token",
-				JWKSURI:  jwkServer.URL + "/jwks",
+				JWKSURI:  server.URL + "/jwks",
 			})
 		case "/token":
 			json.NewEncoder(w).Encode(tokenResponse{
@@ -1227,6 +1226,8 @@ func TestOIDCAuthenticator_OIDCCallback_EmptyEmail(t *testing.T) {
 				IDToken:     idToken,
 				TokenType:   "Bearer",
 			})
+		case "/jwks":
+			json.NewEncoder(w).Encode(jwks)
 		default:
 			http.NotFound(w, r)
 		}
@@ -1271,8 +1272,6 @@ func TestOIDCAuthenticator_OIDCCallback_GetUserInfoError(t *testing.T) {
 		t.Fatalf("failed to generate RSA key: %v", err)
 	}
 	jwks := createTestJWK(priv)
-	jwkServer := newJWKServer(t, jwks)
-	defer jwkServer.Close()
 
 	var idToken string
 	var server *httptest.Server
@@ -1284,7 +1283,7 @@ func TestOIDCAuthenticator_OIDCCallback_GetUserInfoError(t *testing.T) {
 				AuthURL:     server.URL + "/auth",
 				TokenURL:    server.URL + "/token",
 				UserInfoURL: server.URL + "/userinfo",
-				JWKSURI:     jwkServer.URL + "/jwks",
+				JWKSURI:     server.URL + "/jwks",
 			})
 		case "/token":
 			json.NewEncoder(w).Encode(tokenResponse{
@@ -1292,6 +1291,8 @@ func TestOIDCAuthenticator_OIDCCallback_GetUserInfoError(t *testing.T) {
 				IDToken:     idToken,
 				TokenType:   "Bearer",
 			})
+		case "/jwks":
+			json.NewEncoder(w).Encode(jwks)
 		case "/userinfo":
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(`{"error":"server error"}`))
@@ -1664,7 +1665,7 @@ func TestParseIDToken_ValidationErrors(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.well-known/openid-configuration" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"authorization_endpoint":"` + server.URL + `/auth","token_endpoint":"` + server.URL + `/token","jwks_uri":"` + server.URL + `/jwks"}`))
+			w.Write([]byte(`{"issuer":"` + server.URL + `","authorization_endpoint":"` + server.URL + `/auth","token_endpoint":"` + server.URL + `/token","jwks_uri":"` + server.URL + `/jwks"}`))
 			return
 		}
 		if r.URL.Path == "/jwks" {
@@ -1716,7 +1717,7 @@ func TestFindKeyForJWT_NoMatchingKid(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.well-known/openid-configuration" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"authorization_endpoint":"` + server.URL + `/auth","token_endpoint":"` + server.URL + `/token","jwks_uri":"` + server.URL + `/jwks"}`))
+			w.Write([]byte(`{"issuer":"` + server.URL + `","authorization_endpoint":"` + server.URL + `/auth","token_endpoint":"` + server.URL + `/token","jwks_uri":"` + server.URL + `/jwks"}`))
 			return
 		}
 		if r.URL.Path == "/jwks" {
@@ -1753,7 +1754,7 @@ func TestVerifyJWTSignature_KeyTypeMismatch(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.well-known/openid-configuration" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"authorization_endpoint":"` + server.URL + `/auth","token_endpoint":"` + server.URL + `/token","jwks_uri":"` + server.URL + `/jwks"}`))
+			w.Write([]byte(`{"issuer":"` + server.URL + `","authorization_endpoint":"` + server.URL + `/auth","token_endpoint":"` + server.URL + `/token","jwks_uri":"` + server.URL + `/jwks"}`))
 			return
 		}
 		if r.URL.Path == "/jwks" {
@@ -1797,7 +1798,7 @@ func TestVerifyJWTSignature_ES256KeyTypeMismatch(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.well-known/openid-configuration" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"authorization_endpoint":"` + server.URL + `/auth","token_endpoint":"` + server.URL + `/token","jwks_uri":"` + server.URL + `/jwks"}`))
+			w.Write([]byte(`{"issuer":"` + server.URL + `","authorization_endpoint":"` + server.URL + `/auth","token_endpoint":"` + server.URL + `/token","jwks_uri":"` + server.URL + `/jwks"}`))
 			return
 		}
 		if r.URL.Path == "/jwks" {
@@ -1835,9 +1836,10 @@ func TestFetchJWKs_MissingJWKSURI(t *testing.T) {
 		RedirectURL: "http://localhost/callback",
 	}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"authorization_endpoint":"https://example.com/auth","token_endpoint":"https://example.com/token"}`))
+		w.Write([]byte(`{"issuer":"` + server.URL + `","authorization_endpoint":"` + server.URL + `/auth","token_endpoint":"` + server.URL + `/token"}`))
 	}))
 	defer server.Close()
 
@@ -1865,7 +1867,7 @@ func TestVerifyJWTSignature_UnsupportedAlgorithm(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.well-known/openid-configuration" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"authorization_endpoint":"` + server.URL + `/auth","token_endpoint":"` + server.URL + `/token","jwks_uri":"` + server.URL + `/jwks"}`))
+			w.Write([]byte(`{"issuer":"` + server.URL + `","authorization_endpoint":"` + server.URL + `/auth","token_endpoint":"` + server.URL + `/token","jwks_uri":"` + server.URL + `/jwks"}`))
 			return
 		}
 		if r.URL.Path == "/jwks" {
@@ -2075,7 +2077,7 @@ func TestVerifyJWTSignature_SignatureDecodeError(t *testing.T) {
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/.well-known/openid-configuration" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`{"authorization_endpoint":"` + server.URL + `/auth","token_endpoint":"` + server.URL + `/token","jwks_uri":"` + server.URL + `/jwks"}`))
+			w.Write([]byte(`{"issuer":"` + server.URL + `","authorization_endpoint":"` + server.URL + `/auth","token_endpoint":"` + server.URL + `/token","jwks_uri":"` + server.URL + `/jwks"}`))
 			return
 		}
 		if r.URL.Path == "/jwks" {

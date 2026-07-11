@@ -2431,8 +2431,8 @@ func TestNode_ProcessCommitted(t *testing.T) {
 	node.lastApplied = 0
 	node.log = []core.RaftLogEntry{
 		{}, // sentinel
-		{Index: 1, Term: 1, Type: core.LogCommand, Data: []byte(`{"op":"set","table":"test","key":"k1","value":"djE="}`)},
-		{Index: 2, Term: 1, Type: core.LogCommand, Data: []byte(`{"op":"set","table":"test","key":"k2","value":"djI="}`)},
+		{Index: 1, Term: 1, Type: core.LogCommand, Data: []byte(`{"op":0,"table":"test","key":"k1","value":"djE="}`)},
+		{Index: 2, Term: 1, Type: core.LogCommand, Data: []byte(`{"op":0,"table":"test","key":"k2","value":"djI="}`)},
 	}
 
 	// Register futures for notification
@@ -3062,8 +3062,22 @@ func TestNode_proposeMembershipChange_Committed(t *testing.T) {
 	node.mu.Lock()
 	node.state.Store(core.StateLeader)
 	node.currentTerm = 1
-	node.commitIndex = 100 // High enough to satisfy commit check immediately
 	node.mu.Unlock()
+
+	applied := make(chan struct{})
+	go func() {
+		defer close(applied)
+		for {
+			node.mu.Lock()
+			if len(node.log) > 1 {
+				node.lastApplied = uint64(len(node.log) - 1)
+				node.mu.Unlock()
+				return
+			}
+			node.mu.Unlock()
+			time.Sleep(time.Millisecond)
+		}
+	}()
 
 	change := core.MembershipChange{
 		Type:      core.MembershipAddPeer,
@@ -3073,11 +3087,13 @@ func TestNode_proposeMembershipChange_Committed(t *testing.T) {
 		Phase:     "joint",
 	}
 
-	// Should succeed since commitIndex >= entry.Index
+	// The centralized commit/apply path owns membership mutation; the proposer
+	// only waits until that path has advanced lastApplied.
 	err := node.proposeMembershipChange(change)
 	if err != nil {
 		t.Fatalf("proposeMembershipChange failed: %v", err)
 	}
+	<-applied
 
 	// Verify the log entry was appended
 	node.mu.RLock()

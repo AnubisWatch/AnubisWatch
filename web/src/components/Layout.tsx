@@ -1,29 +1,25 @@
-import { Sidebar } from './Sidebar'
-import { Header } from './Header'
-import { Outlet } from 'react-router-dom'
+import { Outlet } from "react-router-dom";
+import { Header } from "./Header";
+import { Sidebar } from "./Sidebar";
 
 export function Layout() {
-  return (
-    <div className="flex min-h-screen bg-gradient-to-br from-[#0a0a15] via-[#0f172a] to-[#0a0a15] relative">
-      {/* Ancient Egypt background pattern */}
-      <div className="fixed inset-0 hieroglyph-pattern opacity-20 pointer-events-none" />
+	return (
+		<div className="flex min-h-screen bg-[var(--bg-primary)] relative text-[var(--text-primary)]">
+			<div className="fixed inset-0 pointer-events-none bg-[radial-gradient(circle_at_top_left,rgba(212,175,55,0.08),transparent_28%),radial-gradient(circle_at_bottom_right,rgba(20,184,166,0.06),transparent_24%)]" />
+			<div className="fixed inset-0 hieroglyph-pattern opacity-[0.08] pointer-events-none" />
 
-      {/* Sacred geometry decorations */}
-      <div className="fixed inset-0 sacred-geometry pointer-events-none" />
-
-      {/* Golden glow effects */}
-      <div className="fixed top-0 left-0 w-96 h-96 bg-[#D4AF37]/5 rounded-full blur-3xl pointer-events-none" />
-      <div className="fixed bottom-0 right-0 w-96 h-96 bg-[#40E0D0]/5 rounded-full blur-3xl pointer-events-none" />
-
-      <Sidebar />
-      <div className="flex-1 flex flex-col min-h-screen relative z-10">
-        <Header />
-        <main id="main-content" className="flex-1 p-6 overflow-auto">
-          <div className="max-w-7xl mx-auto">
-            <Outlet />
-          </div>
-        </main>
-      </div>
-    </div>
-  )
+			<Sidebar />
+			<div className="flex-1 flex min-h-screen flex-col relative z-10">
+				<Header />
+				<main
+					id="main-content"
+					className="flex-1 overflow-auto px-4 py-5 sm:px-6 sm:py-6 lg:px-8"
+				>
+					<div className="mx-auto w-full max-w-7xl">
+						<Outlet />
+					</div>
+				</main>
+			</div>
+		</div>
+	);
 }

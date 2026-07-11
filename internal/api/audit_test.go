@@ -581,6 +581,25 @@ func TestAuditLogger_Stop_FlushRemaining(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 }
 
+func TestAuditLogger_StopIsConcurrentAndIdempotent(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	al := NewAuditLogger(logger, &mockAuditBackend{})
+
+	const callers = 16
+	var wg sync.WaitGroup
+	wg.Add(callers)
+	for i := 0; i < callers; i++ {
+		go func() {
+			defer wg.Done()
+			al.Stop()
+		}()
+	}
+	wg.Wait()
+
+	// A later caller must also be a no-op rather than closing twice.
+	al.Stop()
+}
+
 // TestAuditLogger_Flush_NilBackend tests flush with nil backend
 func TestAuditLogger_Flush_NilBackend(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

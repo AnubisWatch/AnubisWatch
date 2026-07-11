@@ -7,6 +7,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { AUTH_SESSION_CHANGED_EVENT, type AuthSessionChange } from "../api/authEvents";
 
 const user = {
   id: "user-1",
@@ -40,6 +41,11 @@ describe("WorkspaceSwitcher", () => {
 
   it("switches to another visible workspace", async () => {
     const onWorkspaceSwitched = vi.fn();
+    const sessionChanges: AuthSessionChange[] = [];
+    const onSessionChange = (event: Event) => {
+      sessionChanges.push((event as CustomEvent<AuthSessionChange>).detail);
+    };
+    window.addEventListener(AUTH_SESSION_CHANGED_EVENT, onSessionChange, { once: true });
     const fetchMock = vi.fn(
       async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = new URL(String(input), "http://localhost");
@@ -82,6 +88,10 @@ describe("WorkspaceSwitcher", () => {
       "/api/v1/auth/workspace",
       expect.objectContaining({ method: "POST" }),
     );
+    expect(sessionChanges).toEqual([
+      { state: "authenticated", user: { ...user, workspace: "ops" } },
+    ]);
+    expect(localStorage.getItem("auth_user")).toBeNull();
   });
 
   it("shows API errors without switching", async () => {

@@ -17,7 +17,7 @@ services:
       ANUBIS_LOG_LEVEL: info
     volumes:
       - anubis-data-1:/data
-      - ./anubis.yaml:/etc/anubis/anubis.yaml:ro
+      - ../../configs/anubis.yaml:/etc/anubis/anubis.yaml:ro
     networks:
       - anubis-network
     healthcheck:
@@ -47,7 +47,7 @@ services:
       ANUBIS_LOG_LEVEL: info
     volumes:
       - anubis-data-2:/data
-      - ./anubis.yaml:/etc/anubis/anubis.yaml:ro
+      - ../../configs/anubis.yaml:/etc/anubis/anubis.yaml:ro
     networks:
       - anubis-network
     depends_on:
@@ -80,7 +80,7 @@ services:
       ANUBIS_LOG_LEVEL: info
     volumes:
       - anubis-data-3:/data
-      - ./anubis.yaml:/etc/anubis/anubis.yaml:ro
+      - ../../configs/anubis.yaml:/etc/anubis/anubis.yaml:ro
     networks:
       - anubis-network
     depends_on:

@@ -32,6 +32,7 @@ type AuditLogger struct {
 	backend  AuditBackend
 	buffer   chan *AuditEvent
 	shutdown chan struct{}
+	stopOnce sync.Once
 	wg       sync.WaitGroup
 }
 
@@ -233,7 +234,9 @@ func (al *AuditLogger) flush(events []*AuditEvent) {
 
 // Stop gracefully shuts down the audit logger
 func (al *AuditLogger) Stop() {
-	close(al.shutdown)
+	al.stopOnce.Do(func() {
+		close(al.shutdown)
+	})
 	al.wg.Wait()
 }
 

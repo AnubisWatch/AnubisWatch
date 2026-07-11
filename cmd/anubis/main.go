@@ -300,6 +300,14 @@ func serve() {
 	if err := server.Stop(shutdownCtx); err != nil {
 		logger.Error("error during shutdown", "err", err)
 	}
+
+	// If shutdown was triggered by a critical component failing to start
+	// (e.g. the REST listener could not bind), exit non-zero so supervisors
+	// and orchestrators treat it as a crash rather than a successful run.
+	if err := server.StartupError(); err != nil {
+		logger.Error("server exited due to component failure", "err", err)
+		os.Exit(1)
+	}
 }
 
 type serveOptions struct {

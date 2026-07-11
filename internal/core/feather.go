@@ -48,6 +48,7 @@ type ServerConfig struct {
 	AllowedOrigins []string        `json:"allowed_origins" yaml:"allowed_origins"`
 	GRPCReflection bool            `json:"grpc_reflection" yaml:"grpc_reflection"` // Enable gRPC reflection (default: false for security)
 	TrustedProxies []string        `json:"trusted_proxies" yaml:"trusted_proxies"` // IPs that can set X-Forwarded-For (empty = trust none)
+	MetricsAuth    bool            `json:"metrics_auth" yaml:"metrics_auth"`       // Require auth on /metrics (default: false for Prometheus scraping; enable in multi-tenant/exposed setups)
 }
 
 // TLSServerConfig defines TLS settings

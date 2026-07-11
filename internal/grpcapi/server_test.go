@@ -288,6 +288,7 @@ func (m *mockGRPCProbe) ForceCheck(soulID string) (interface{}, error) {
 // mockSoul implements a minimal soul with getters for PB conversion
 type mockSoul struct {
 	id, name, status, soulType, target string
+	tags                               []string
 }
 
 func (m *mockSoul) GetID() string              { return m.id }
@@ -298,7 +299,7 @@ func (m *mockSoul) GetTarget() string          { return m.target }
 func (m *mockSoul) GetInterval() time.Duration { return 60 * time.Second }
 func (m *mockSoul) GetTimeout() time.Duration  { return 10 * time.Second }
 func (m *mockSoul) GetEnabled() bool           { return true }
-func (m *mockSoul) GetTags() []string          { return nil }
+func (m *mockSoul) GetTags() []string          { return m.tags }
 func (m *mockSoul) GetWorkspaceID() string     { return "default" }
 func (m *mockSoul) GetRegion() string          { return "" }
 func (m *mockSoul) GetCreatedAt() time.Time    { return time.Time{} }
@@ -717,6 +718,12 @@ func TestServer_CreateJourney(t *testing.T) {
 	}
 	if resp == nil {
 		t.Fatal("CreateJourney returned nil")
+	}
+	if resp.Id == "" {
+		t.Fatal("CreateJourney returned an empty generated ID")
+	}
+	if stored := store.journeys[resp.Id]; stored == nil {
+		t.Fatalf("CreateJourney returned ID %q that was not saved", resp.Id)
 	}
 }
 

@@ -1,4 +1,7 @@
-import { dispatchAuthTokenChanged } from './authEvents'
+import {
+  dispatchAuthSessionChanged,
+  dispatchAuthTokenChanged,
+} from './authEvents'
 
 const API_BASE_URL = '/api/v1'
 
@@ -370,10 +373,12 @@ class ApiClient {
     dispatchAuthTokenChanged()
   }
 
-  clearToken() {
+  clearToken(notify = true) {
     this.token = null
     localStorage.removeItem('auth_token')
-    dispatchAuthTokenChanged()
+    if (notify) {
+      dispatchAuthTokenChanged()
+    }
   }
 
   private async request<T>(
@@ -407,8 +412,12 @@ class ApiClient {
 
     if (!response.ok) {
       if (response.status === 401) {
-        this.clearToken()
-        window.location.href = '/login'
+        this.token = null
+        localStorage.removeItem('auth_token')
+        dispatchAuthSessionChanged({ state: 'anonymous' })
+        if (endpoint !== '/auth/me' && endpoint !== '/auth/login') {
+          window.location.href = '/login'
+        }
       }
       const error = await response.json().catch(() => ({ error: 'Unknown error' }))
       throw new Error(error.error || `HTTP ${response.status}`)

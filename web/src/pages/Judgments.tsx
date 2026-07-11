@@ -54,7 +54,7 @@ export function Judgments() {
     const matchesSearch = (j.soul_name?.toLowerCase().includes(search.toLowerCase()) ||
                          j.region?.toLowerCase().includes(search.toLowerCase()))
     const timestamp = new Date(j.timestamp).getTime()
-    const matchesTimeRange = Number.isNaN(timestamp) || timestamp >= timeRangeCutoff()
+    const matchesTimeRange = Number.isFinite(timestamp) && timestamp >= timeRangeCutoff()
     return matchesFilter && matchesSearch && matchesTimeRange
   })
 

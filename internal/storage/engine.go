@@ -1070,23 +1070,9 @@ func (db *CobaltDB) recoverFromWAL() error {
 		// Replay operation
 		switch entry.Op {
 		case "PUT":
-			value := entry.Value
-			// If encryption is enabled, try to decrypt WAL entries (they were stored encrypted).
-			// If decryption fails, store raw value (pre-encryption migration).
-			if db.encryptor != nil && db.encryptor.isEncrypted(value) {
-				if decrypted, err := db.encryptor.decrypt(value); err == nil {
-					value = decrypted
-				} else {
-					// Log warning but continue with raw value - this handles
-					// the case where WAL was written before encryption was enabled
-					if db.logger != nil {
-						db.logger.Warn("WAL entry decryption failed, storing raw value",
-							"key", entry.Key,
-							"error", err)
-					}
-				}
-			}
-			db.data.insert(entry.Key, value)
+			// WAL values use the same representation as the B+Tree: ciphertext
+			// when encryption is enabled. Get is the single decryption boundary.
+			db.data.insert(entry.Key, entry.Value)
 		case "DELETE":
 			db.data.insert(entry.Key, nil)
 		}

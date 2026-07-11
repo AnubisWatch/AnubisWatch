@@ -150,7 +150,7 @@ func (v *SSRFValidator) parseIP(host string) net.IP {
 		return net.IPv4(byte(parsed>>24&0xff), byte(parsed>>16&0xff), byte(parsed>>8&0xff), byte(parsed&0xff))
 	}
 	// Try hex: 0x7F000001 -> 127.0.0.1
-	if len(host) >= 3 && host[:2] == "0x" || host[:2] == "0X" {
+	if len(host) >= 3 && (host[:2] == "0x" || host[:2] == "0X") {
 		if parsed, err := strconv.ParseUint(host[2:], 16, 32); err == nil {
 			return net.IPv4(byte(parsed>>24&0xff), byte(parsed>>16&0xff), byte(parsed>>8&0xff), byte(parsed&0xff))
 		}
@@ -311,8 +311,9 @@ func (v *SSRFValidator) WrapDialer(dial func(network, addr string) (net.Conn, er
 // WrapDialerContext wraps net.DialContext with SSRF protection.
 func (v *SSRFValidator) WrapDialerContext(dial func(ctx context.Context, network, addr string) (net.Conn, error)) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
+		host, port, err := net.SplitHostPort(addr)
+		hasPort := err == nil
+		if !hasPort {
 			host = addr
 		}
 
@@ -327,13 +328,31 @@ func (v *SSRFValidator) WrapDialerContext(dial func(ctx context.Context, network
 		if err != nil {
 			return nil, fmt.Errorf("SSRF: cannot resolve hostname %q: %w", host, err)
 		}
+		// Validate every resolved address and pin the dial to a validated IP.
+		// Dialing the literal IP (rather than re-passing the hostname, which
+		// would trigger a second, unvalidated resolution) closes the
+		// DNS-rebinding TOCTOU window between validation and connection.
+		var pinned net.IP
 		for _, resolved := range addrs {
 			ip := v.parseIP(resolved)
-			if ip != nil && v.isBlockedIP(ip) {
+			if ip == nil {
+				return nil, fmt.Errorf("SSRF: hostname %q resolved to unparseable address %q", host, resolved)
+			}
+			if v.isBlockedIP(ip) {
 				return nil, fmt.Errorf("SSRF: hostname %q resolves to blocked IP %q", host, resolved)
 			}
+			if pinned == nil {
+				pinned = ip
+			}
+		}
+		if pinned == nil {
+			return nil, fmt.Errorf("SSRF: hostname %q resolved to no addresses", host)
 		}
 
-		return dial(ctx, network, addr)
+		pinnedAddr := pinned.String()
+		if hasPort {
+			pinnedAddr = net.JoinHostPort(pinned.String(), port)
+		}
+		return dial(ctx, network, pinnedAddr)
 	}
 }

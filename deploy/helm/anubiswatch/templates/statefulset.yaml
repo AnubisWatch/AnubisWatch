@@ -44,6 +44,9 @@ spec:
             - name: http
               containerPort: {{ .Values.service.httpPort }}
               protocol: TCP
+            - name: grpc
+              containerPort: {{ .Values.service.grpcPort }}
+              protocol: TCP
             - name: raft
               containerPort: {{ .Values.service.clusterPort }}
               protocol: TCP

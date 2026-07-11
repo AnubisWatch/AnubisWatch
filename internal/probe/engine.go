@@ -119,12 +119,53 @@ type circuitBreaker struct {
 	lastStateChange time.Time
 }
 
-// soulRunner manages the ticker for a single soul
+// soulRunner manages the ticker for a single soul.
+//
+// The soul config and lastStatus are accessed both by the runner's own
+// ticker goroutine and by REST-triggered calls (AssignSouls, TriggerImmediate,
+// GetSoulStatus). mu guards those two mutable fields; ticker/cancel are set
+// once at construction and only touched by the owning engine under e.mu.
 type soulRunner struct {
+	mu         sync.Mutex
 	soul       *core.Soul
+	interval   time.Duration
 	ticker     *time.Ticker
 	cancel     context.CancelFunc
 	lastStatus core.SoulStatus
+}
+
+func (r *soulRunner) getSoul() *core.Soul {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.soul
+}
+
+func (r *soulRunner) setSoul(s *core.Soul) {
+	r.mu.Lock()
+	r.soul = s
+	r.mu.Unlock()
+}
+
+func soulInterval(s *core.Soul) time.Duration {
+	if s.Weight.Duration > 0 {
+		return s.Weight.Duration
+	}
+	return 60 * time.Second
+}
+
+func (r *soulRunner) getStatus() core.SoulStatus {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastStatus
+}
+
+// swapStatus stores the new status and returns the previous one.
+func (r *soulRunner) swapStatus(s core.SoulStatus) core.SoulStatus {
+	r.mu.Lock()
+	prev := r.lastStatus
+	r.lastStatus = s
+	r.mu.Unlock()
+	return prev
 }
 
 // NewEngine creates a new probe engine
@@ -212,9 +253,17 @@ func (e *Engine) AssignSouls(souls []*core.Soul) {
 		}
 
 		if existing, exists := e.souls[soul.ID]; exists {
-			// Update soul config without restart if only config changed
-			existing.soul = soul
-			continue
+			if existing.interval == soulInterval(soul) {
+				// Configuration-only updates do not disturb the schedule.
+				existing.setSoul(soul)
+				continue
+			}
+
+			// A ticker's period is fixed. Replace the whole runner when Weight
+			// changes so the new cadence takes effect immediately and cleanly.
+			existing.cancel()
+			existing.ticker.Stop()
+			delete(e.souls, soul.ID)
 		}
 		e.startSoul(soul)
 	}
@@ -237,15 +286,13 @@ func (e *Engine) regionMatches(regions []string) bool {
 func (e *Engine) startSoul(soul *core.Soul) {
 	ctx, cancel := context.WithCancel(e.ctx)
 
-	interval := soul.Weight.Duration
-	if interval == 0 {
-		interval = 60 * time.Second // default 60s
-	}
+	interval := soulInterval(soul)
 
 	runner := &soulRunner{
-		soul:   soul,
-		ticker: time.NewTicker(interval),
-		cancel: cancel,
+		soul:     soul,
+		interval: interval,
+		ticker:   time.NewTicker(interval),
+		cancel:   cancel,
 	}
 	e.souls[soul.ID] = runner
 
@@ -277,7 +324,7 @@ func (e *Engine) startSoul(soul *core.Soul) {
 
 // judgeSoul executes a single check with concurrency limiting and circuit breaker
 func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
-	soul := runner.soul
+	soul := runner.getSoul()
 
 	// Check circuit breaker first
 	if cb := e.getCircuitBreaker(soul.ID); cb != nil && cb.isOpen(e.Config().CircuitBreaker) {
@@ -366,8 +413,7 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 
 	// Evaluate alert rules
 	if e.alerter != nil {
-		prevStatus := runner.lastStatus
-		runner.lastStatus = judgment.Status
+		prevStatus := runner.swapStatus(judgment.Status)
 		e.alerter.ProcessJudgment(soul, prevStatus, judgment)
 	}
 
@@ -403,16 +449,18 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 		}
 	}
 
-	checker, ok := e.registry.Get(runner.soul.Type)
+	soul := runner.getSoul()
+
+	checker, ok := e.registry.Get(soul.Type)
 	if !ok {
-		return nil, &core.ConfigError{Field: "type", Message: "unknown type " + string(runner.soul.Type)}
+		return nil, &core.ConfigError{Field: "type", Message: "unknown type " + string(soul.Type)}
 	}
 
-	if err := checker.Validate(runner.soul); err != nil {
+	if err := checker.Validate(soul); err != nil {
 		return nil, err
 	}
 
-	timeout := runner.soul.Timeout.Duration
+	timeout := soul.Timeout.Duration
 	if timeout == 0 {
 		timeout = 10 * time.Second
 	}
@@ -421,7 +469,7 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 
 	// K7: apply the same master security gate here so manually-triggered
 	// checks honour the global InsecureSkipVerify policy.
-	checkSoul := e.applySecurityGate(runner.soul)
+	checkSoul := e.applySecurityGate(soul)
 
 	judgment, err := checker.Judge(checkCtx, checkSoul)
 	if err != nil {
@@ -431,22 +479,22 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 		if checkCtx.Err() != nil {
 			return nil, checkCtx.Err()
 		}
-		judgment = failJudgment(runner.soul, err)
-		e.recordFailure(runner.soul.ID)
+		judgment = failJudgment(soul, err)
+		e.recordFailure(soul.ID)
 	} else if judgment.Status == core.SoulDead {
-		e.recordFailure(runner.soul.ID)
+		e.recordFailure(soul.ID)
 	} else {
-		e.recordSuccess(runner.soul.ID)
+		e.recordSuccess(soul.ID)
 	}
 
 	judgment.JackalID = e.nodeID
 	judgment.Region = e.region
-	judgment.WorkspaceID = runner.soul.WorkspaceID
+	judgment.WorkspaceID = soul.WorkspaceID
 	if judgment.ID == "" {
 		judgment.ID = core.GenerateID()
 	}
 	if judgment.SoulID == "" {
-		judgment.SoulID = runner.soul.ID
+		judgment.SoulID = soul.ID
 	}
 	if judgment.Timestamp.IsZero() {
 		judgment.Timestamp = time.Now().UTC()
@@ -456,7 +504,7 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 		if err := retryWithBackoff(ctx, 3, 100*time.Millisecond, func() error {
 			return e.store.SaveJudgment(ctx, judgment)
 		}); err != nil {
-			e.logger.Error("failed to save immediate judgment after retries", "err", err, "soul", runner.soul.Name)
+			e.logger.Error("failed to save immediate judgment after retries", "err", err, "soul", soul.Name)
 			return nil, err
 		}
 	}
@@ -466,9 +514,8 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 	}
 
 	if e.alerter != nil {
-		prevStatus := runner.lastStatus
-		runner.lastStatus = judgment.Status
-		e.alerter.ProcessJudgment(runner.soul, prevStatus, judgment)
+		prevStatus := runner.swapStatus(judgment.Status)
+		e.alerter.ProcessJudgment(soul, prevStatus, judgment)
 	}
 
 	return judgment, nil
@@ -506,8 +553,10 @@ func (e *Engine) GetSoulStatus(soulID string) (*core.SoulStatus, error) {
 		return nil, &core.NotFoundError{Entity: "soul", ID: soulID}
 	}
 
-	// Return the last known status from the runner
-	return &runner.lastStatus, nil
+	// Return a copy of the last known status; the field is mutated
+	// concurrently by the runner's check goroutine.
+	status := runner.getStatus()
+	return &status, nil
 }
 
 // ListActiveSouls returns all currently assigned souls
@@ -517,7 +566,7 @@ func (e *Engine) ListActiveSouls() []*core.Soul {
 
 	souls := make([]*core.Soul, 0, len(e.souls))
 	for _, runner := range e.souls {
-		souls = append(souls, runner.soul)
+		souls = append(souls, runner.getSoul())
 	}
 	return souls
 }

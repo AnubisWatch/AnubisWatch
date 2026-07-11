@@ -89,16 +89,17 @@ func (db *CobaltDB) ListVerdicts(ctx context.Context, workspaceID string, status
 		}
 
 		verdicts = append(verdicts, &v)
-
-		if limit > 0 && len(verdicts) >= limit {
-			break
-		}
 	}
 
-	// Sort by fired time descending
+	// Sort all matching verdicts before limiting; PrefixScan returns a map, so
+	// iteration order cannot determine which records make the result page.
 	sort.Slice(verdicts, func(i, j int) bool {
 		return verdicts[i].FiredAt.After(verdicts[j].FiredAt)
 	})
+
+	if limit > 0 && len(verdicts) > limit {
+		verdicts = verdicts[:limit]
+	}
 
 	return verdicts, nil
 }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertCircle, Building2, Check, ChevronsUpDown, Loader2 } from 'lucide-react'
 import { api, User, Workspace } from '../api/client'
+import { dispatchAuthSessionChanged } from '../api/authEvents'
 
 interface WorkspaceSwitcherProps {
   user: User | null
@@ -64,7 +65,8 @@ export function WorkspaceSwitcher({ user, onWorkspaceSwitched }: WorkspaceSwitch
     setSwitchingTo(workspaceID)
     setError(null)
     try {
-      await api.post<User>('/auth/workspace', { workspace: workspaceID })
+      const switchedUser = await api.post<User>('/auth/workspace', { workspace: workspaceID })
+      dispatchAuthSessionChanged({ state: 'authenticated', user: switchedUser })
       setOpen(false)
       if (onWorkspaceSwitched) {
         onWorkspaceSwitched()

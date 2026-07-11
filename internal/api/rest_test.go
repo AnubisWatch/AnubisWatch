@@ -629,7 +629,7 @@ func (a *mockAuthenticator) Login(email, password string) (*User, string, error)
 func (a *mockAuthenticator) Logout(token string) error { return nil }
 func (a *mockAuthenticator) Shutdown()                 {}
 func (a *mockAuthenticator) ChangePassword(token, currentPassword, newPassword string) error {
-	if currentPassword == "TestPass1234!" && newPassword == "NewTestPass1234!" {
+	if token == "valid-token" && currentPassword == "TestPass1234!" && newPassword == "NewTestPass1234!" {
 		return nil
 	}
 	return errors.New("current password is incorrect")
@@ -6125,6 +6125,32 @@ func TestHandleChangePassword_Success(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleChangePassword_CookieAuth(t *testing.T) {
+	storage := newMockStorage()
+	auth := &mockAuthenticator{}
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		store:      storage,
+		router:     router,
+		auth:       auth,
+		authConfig: authEnabled(),
+		logger:     newTestLogger(),
+		cluster:    &mockClusterManager{},
+	}
+	router.Handle("PUT", "/api/v1/auth/change-password", server.requireAuth(server.handleChangePassword))
+
+	body := bytes.NewBufferString(`{"current_password":"TestPass1234!","new_password":"NewTestPass1234!"}`)
+	req := httptest.NewRequest("PUT", "/api/v1/auth/change-password", body)
+	req.AddCookie(&http.Cookie{Name: "auth_token", Value: "valid-token"})
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected cookie-authenticated password change to succeed, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

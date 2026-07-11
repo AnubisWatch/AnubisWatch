@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -149,13 +150,38 @@ func (rm *RetentionManager) purgeRawData(cutoff time.Time) error {
 			}
 
 			judgmentTime := time.Unix(0, ts)
-			if judgmentTime.Before(cutoff) {
-				if err := rm.db.Delete(key); err != nil {
-					rm.logger.Warn("failed to delete old judgment", "key", key, "err", err)
-				} else {
-					deleted++
-				}
+			if !judgmentTime.Before(cutoff) {
+				continue
 			}
+
+			data, err := rm.db.Get(key)
+			if err != nil {
+				rm.logger.Warn("failed to read old judgment", "key", key, "err", err)
+				continue
+			}
+			var judgment core.Judgment
+			if err := json.Unmarshal(data, &judgment); err != nil {
+				rm.logger.Warn("failed to decode old judgment", "key", key, "err", err)
+				continue
+			}
+
+			if err := rm.db.Delete(key); err != nil {
+				rm.logger.Warn("failed to delete old judgment", "key", key, "err", err)
+				continue
+			}
+
+			// SaveJudgment creates both a durable ID index key and an in-memory
+			// lookup entry. Retention must remove both after deleting the primary.
+			if judgment.ID != "" {
+				idxKey := fmt.Sprintf("%s/judgment-idx/%s", ws, judgment.ID)
+				if err := rm.db.Delete(idxKey); err != nil {
+					return fmt.Errorf("delete judgment index %q: %w", idxKey, err)
+				}
+				rm.db.mu.Lock()
+				delete(rm.db.judgmentIndex, judgment.ID)
+				rm.db.mu.Unlock()
+			}
+			deleted++
 		}
 	}
 

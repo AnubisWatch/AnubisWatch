@@ -9,6 +9,8 @@ import (
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 	v1 "github.com/AnubisWatch/anubiswatch/internal/grpcapi/v1"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // testUserContext is imported from server_test.go - but since it's in the same package, we can use it directly.
@@ -172,6 +174,53 @@ func TestServer_ListSouls_StoreError(t *testing.T) {
 	_, err := srv.ListSouls(testUserContext(), &v1.ListSoulsRequest{})
 	if err == nil {
 		t.Error("Expected error for storage failure")
+	}
+}
+
+func TestServer_ListSouls_FiltersBeforePagination(t *testing.T) {
+	store := newMockGRPCStore()
+	store.souls["dns-prod"] = &mockSoul{id: "dns-prod", name: "DNS prod", soulType: "dns", tags: []string{"prod"}}
+	store.souls["http-prod"] = &mockSoul{id: "http-prod", name: "HTTP prod", soulType: "http", tags: []string{"prod", "critical"}}
+	store.souls["http-dev"] = &mockSoul{id: "http-dev", name: "HTTP dev", soulType: "http", tags: []string{"dev"}}
+	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
+
+	soulType := "http"
+	tag := "prod"
+	resp, err := srv.ListSouls(testUserContext(), &v1.ListSoulsRequest{Limit: 1, Type: &soulType, Tag: &tag})
+	if err != nil {
+		t.Fatalf("ListSouls failed: %v", err)
+	}
+	if len(resp.Souls) != 1 || resp.Souls[0].Id != "http-prod" {
+		t.Fatalf("expected only http-prod, got %+v", resp.Souls)
+	}
+	assertPagination(t, resp.Pagination, 1, 0, 1, false, -1)
+}
+
+func TestServer_GettersReturnNotFoundForNilResource(t *testing.T) {
+	store := newMockGRPCStore()
+	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
+
+	tests := []struct {
+		name string
+		call func() error
+	}{
+		{name: "soul", call: func() error { _, err := srv.GetSoul(testUserContext(), &v1.GetSoulRequest{Id: "missing"}); return err }},
+		{name: "channel", call: func() error {
+			_, err := srv.GetChannel(testUserContext(), &v1.GetChannelRequest{Id: "missing"})
+			return err
+		}},
+		{name: "rule", call: func() error { _, err := srv.GetRule(testUserContext(), &v1.GetRuleRequest{Id: "missing"}); return err }},
+		{name: "journey", call: func() error {
+			_, err := srv.GetJourney(testUserContext(), &v1.GetJourneyRequest{Id: "missing"})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := status.Code(tt.call()); got != codes.NotFound {
+				t.Fatalf("expected NotFound, got %s", got)
+			}
+		})
 	}
 }
 

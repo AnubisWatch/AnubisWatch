@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"math/big"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -101,6 +102,97 @@ type userInfoResponse struct {
 	Email         string `json:"email"`
 	Name          string `json:"name"`
 	EmailVerified bool   `json:"email_verified"`
+}
+
+const oidcMaxResponseBody = 1 << 20 // 1 MiB
+
+func normalizedIssuer(raw string) (*url.URL, string, error) {
+	issuer, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid OIDC issuer: %w", err)
+	}
+	if issuer.Host == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" {
+		return nil, "", fmt.Errorf("invalid OIDC issuer URL")
+	}
+	if issuer.Scheme != "https" && !(issuer.Scheme == "http" && issuerLoopback(issuer)) {
+		return nil, "", fmt.Errorf("OIDC issuer must use HTTPS (HTTP is only allowed for loopback)")
+	}
+	issuer.Path = strings.TrimRight(issuer.Path, "/")
+	issuer.RawPath = ""
+	return issuer, issuer.String(), nil
+}
+
+func issuerLoopback(u *url.URL) bool {
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func effectivePort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	if u.Scheme == "https" {
+		return "443"
+	}
+	if u.Scheme == "http" {
+		return "80"
+	}
+	return ""
+}
+
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) &&
+		strings.EqualFold(a.Hostname(), b.Hostname()) &&
+		effectivePort(a) == effectivePort(b)
+}
+
+func validateOIDCEndpoint(raw, name string, issuer *url.URL) (*url.URL, error) {
+	endpoint, err := url.Parse(raw)
+	if err != nil || endpoint.Host == "" || endpoint.User != nil || endpoint.Fragment != "" {
+		return nil, fmt.Errorf("invalid OIDC %s endpoint", name)
+	}
+	if endpoint.Scheme != "https" {
+		// Plain HTTP is a development-only exception and must stay on a loopback
+		// origin. OIDC permits legitimate endpoint origins to differ from the
+		// issuer, so production trust is pinned by exact issuer metadata plus TLS.
+		if issuer.Scheme != "http" || !issuerLoopback(issuer) || endpoint.Scheme != "http" || !issuerLoopback(endpoint) {
+			return nil, fmt.Errorf("OIDC %s endpoint must use HTTPS", name)
+		}
+	}
+	return endpoint, nil
+}
+
+func oidcHTTPClient(trustedOrigin *url.URL) *http.Client {
+	return &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return fmt.Errorf("too many OIDC redirects")
+			}
+			if req.URL.Scheme != "https" && !(trustedOrigin.Scheme == "http" && issuerLoopback(trustedOrigin) && req.URL.Scheme == "http" && issuerLoopback(req.URL)) {
+				return fmt.Errorf("OIDC redirect must use HTTPS")
+			}
+			if !sameOrigin(trustedOrigin, req.URL) {
+				return fmt.Errorf("OIDC redirect changed trusted origin")
+			}
+			return nil
+		},
+	}
+}
+
+func decodeOIDCJSON(body io.Reader, dst interface{}) error {
+	data, err := io.ReadAll(io.LimitReader(body, oidcMaxResponseBody+1))
+	if err != nil {
+		return err
+	}
+	if len(data) > oidcMaxResponseBody {
+		return fmt.Errorf("OIDC response body exceeds %d bytes", oidcMaxResponseBody)
+	}
+	return json.Unmarshal(data, dst)
 }
 
 // NewOIDCAuthenticator creates a new OIDC authenticator with local fallback.
@@ -291,16 +383,15 @@ func (o *OIDCAuthenticator) OIDCCallback(code, state, nonce string) (*api.User, 
 	return user, token, nil
 }
 
-// fetchOIDCConfig fetches the OIDC discovery document
+// fetchOIDCConfig fetches and validates the OIDC discovery document.
 func (o *OIDCAuthenticator) fetchOIDCConfig() (*oidcConfig, error) {
-	// Normalize issuer URL (remove trailing slash)
-	issuer := strings.TrimSuffix(o.config.Issuer, "/")
-
-	// Try well-known endpoint
+	issuerURL, issuer, err := normalizedIssuer(o.config.Issuer)
+	if err != nil {
+		return nil, err
+	}
 	wellKnownURL := issuer + "/.well-known/openid-configuration"
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(wellKnownURL)
+	resp, err := oidcHTTPClient(issuerURL).Get(wellKnownURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch OIDC config from %s: %w", wellKnownURL, err)
 	}
@@ -311,12 +402,34 @@ func (o *OIDCAuthenticator) fetchOIDCConfig() (*oidcConfig, error) {
 	}
 
 	var cfg oidcConfig
-	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
+	if err := decodeOIDCJSON(resp.Body, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse OIDC config: %w", err)
 	}
-
+	returnedIssuer, normalizedReturnedIssuer, err := normalizedIssuer(cfg.Issuer)
+	if err != nil || normalizedReturnedIssuer != issuer {
+		return nil, fmt.Errorf("OIDC discovery issuer does not match configured issuer")
+	}
 	if cfg.AuthURL == "" || cfg.TokenURL == "" {
 		return nil, fmt.Errorf("OIDC config missing authorization or token endpoint")
+	}
+
+	endpoints := []struct {
+		raw      string
+		name     string
+		required bool
+	}{
+		{cfg.AuthURL, "authorization", true},
+		{cfg.TokenURL, "token", true},
+		{cfg.UserInfoURL, "userinfo", false},
+		{cfg.JWKSURI, "JWKS", false},
+	}
+	for _, endpoint := range endpoints {
+		if endpoint.raw == "" && !endpoint.required {
+			continue
+		}
+		if _, err := validateOIDCEndpoint(endpoint.raw, endpoint.name, returnedIssuer); err != nil {
+			return nil, err
+		}
 	}
 
 	return &cfg, nil
@@ -337,7 +450,20 @@ func (o *OIDCAuthenticator) exchangeCode(code string) (*tokenResponse, error) {
 	data.Set("client_id", o.config.ClientID)
 	data.Set("client_secret", o.config.ClientSecret)
 
-	resp, err := http.Post(cfg.TokenURL, "application/x-www-form-urlencoded", strings.NewReader(data.Encode()))
+	issuerURL, _, err := normalizedIssuer(o.config.Issuer)
+	if err != nil {
+		return nil, err
+	}
+	tokenURL, err := validateOIDCEndpoint(cfg.TokenURL, "token", issuerURL)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodPost, cfg.TokenURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := oidcHTTPClient(tokenURL).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("token request failed: %w", err)
 	}
@@ -349,7 +475,7 @@ func (o *OIDCAuthenticator) exchangeCode(code string) (*tokenResponse, error) {
 	}
 
 	var tokenResp tokenResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+	if err := decodeOIDCJSON(resp.Body, &tokenResp); err != nil {
 		return nil, fmt.Errorf("failed to parse token response: %w", err)
 	}
 
@@ -373,8 +499,15 @@ func (o *OIDCAuthenticator) getUserInfo(accessToken string) (*userInfoResponse, 
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
+	issuerURL, _, err := normalizedIssuer(o.config.Issuer)
+	if err != nil {
+		return nil, err
+	}
+	userInfoURL, err := validateOIDCEndpoint(cfg.UserInfoURL, "userinfo", issuerURL)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := oidcHTTPClient(userInfoURL).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("userinfo request failed: %w", err)
 	}
@@ -385,7 +518,7 @@ func (o *OIDCAuthenticator) getUserInfo(accessToken string) (*userInfoResponse, 
 	}
 
 	var userInfo userInfoResponse
-	if err := json.NewDecoder(resp.Body).Decode(&userInfo); err != nil {
+	if err := decodeOIDCJSON(resp.Body, &userInfo); err != nil {
 		return nil, fmt.Errorf("failed to parse userinfo: %w", err)
 	}
 
@@ -418,8 +551,15 @@ func (o *OIDCAuthenticator) fetchJWKs() (*jwkSet, error) {
 		return nil, fmt.Errorf("OIDC config missing jwks_uri")
 	}
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(cfg.JWKSURI)
+	issuerURL, _, err := normalizedIssuer(o.config.Issuer)
+	if err != nil {
+		return nil, err
+	}
+	jwksURL, err := validateOIDCEndpoint(cfg.JWKSURI, "JWKS", issuerURL)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := oidcHTTPClient(jwksURL).Get(cfg.JWKSURI)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch JWKs from %s: %w", cfg.JWKSURI, err)
 	}
@@ -430,7 +570,7 @@ func (o *OIDCAuthenticator) fetchJWKs() (*jwkSet, error) {
 	}
 
 	var jwks jwkSet
-	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+	if err := decodeOIDCJSON(resp.Body, &jwks); err != nil {
 		return nil, fmt.Errorf("failed to parse JWK set: %w", err)
 	}
 

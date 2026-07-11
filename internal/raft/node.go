@@ -557,11 +557,9 @@ func (n *Node) proposeMembershipChange(change core.MembershipChange) error {
 			return fmt.Errorf("timeout waiting for membership change to commit")
 		case <-ticker.C:
 			n.mu.RLock()
-			committed := n.commitIndex >= entry.Index
+			applied := n.lastApplied >= entry.Index
 			n.mu.RUnlock()
-			if committed {
-				// Apply the membership change
-				n.applyMembershipChange(change, entry.Index)
+			if applied {
 				return nil
 			}
 		}
@@ -1587,30 +1585,46 @@ func containsString(slice []string, s string) bool {
 	return false
 }
 
-// processCommitted applies committed entries to FSM
+// processCommitted applies committed entries to FSM.
+// lastApplied is advanced only after the entry has been applied successfully.
 func (n *Node) processCommitted(commitIndex uint64) {
 	for {
-		n.mu.Lock()
+		n.mu.RLock()
 		if n.lastApplied >= commitIndex {
-			n.mu.Unlock()
-			break
+			n.mu.RUnlock()
+			return
 		}
-		n.lastApplied++
-		entry := n.log[n.lastApplied]
-		n.mu.Unlock()
+		nextIndex := n.lastApplied + 1
+		entry := n.log[nextIndex]
+		n.mu.RUnlock()
 
-		// Handle membership changes
+		var applyErr error
 		if entry.Type == core.LogMembershipChange {
 			var change core.MembershipChange
-			if err := json.Unmarshal(entry.Data, &change); err == nil {
+			if err := json.Unmarshal(entry.Data, &change); err != nil {
+				applyErr = fmt.Errorf("decode membership change at index %d: %w", entry.Index, err)
+			} else {
 				n.applyMembershipChange(change, entry.Index)
 			}
-		} else {
-			// Apply to FSM
-			n.fsm.Apply(&entry)
+		} else if result := n.fsm.Apply(&entry); result != nil {
+			if err, ok := result.(error); ok {
+				applyErr = err
+			} else {
+				applyErr = fmt.Errorf("FSM apply returned unexpected result at index %d: %v", entry.Index, result)
+			}
 		}
 
-		// Notify waiters
+		if applyErr != nil {
+			n.logger.Error("Failed to apply committed entry", "index", entry.Index, "term", entry.Term, "error", applyErr)
+			n.notifyApply(entry.Index, entry.Term, applyErr)
+			return
+		}
+
+		n.mu.Lock()
+		if n.lastApplied < entry.Index {
+			n.lastApplied = entry.Index
+		}
+		n.mu.Unlock()
 		n.notifyApply(entry.Index, entry.Term, nil)
 	}
 }

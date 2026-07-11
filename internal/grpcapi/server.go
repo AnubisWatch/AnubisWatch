@@ -281,6 +281,56 @@ func matchesOptionalString(value, expected string) bool {
 	return expected == "" || strings.EqualFold(value, expected)
 }
 
+func soulMatchesListFilters(soul interface{}, req *v1.ListSoulsRequest) bool {
+	if req.GetType() != "" {
+		var soulType string
+		switch typed := soul.(type) {
+		case *core.Soul:
+			soulType = string(typed.Type)
+		case map[string]interface{}:
+			soulType, _ = typed["type"].(string)
+		case interface{ GetType() string }:
+			soulType = typed.GetType()
+		}
+		if !strings.EqualFold(soulType, req.GetType()) {
+			return false
+		}
+	}
+
+	if req.GetTag() != "" {
+		var tags []string
+		switch typed := soul.(type) {
+		case *core.Soul:
+			tags = typed.Tags
+		case map[string]interface{}:
+			switch raw := typed["tags"].(type) {
+			case []string:
+				tags = raw
+			case []interface{}:
+				for _, value := range raw {
+					if tag, ok := value.(string); ok {
+						tags = append(tags, tag)
+					}
+				}
+			}
+		case interface{ GetTags() []string }:
+			tags = typed.GetTags()
+		}
+		matched := false
+		for _, tag := range tags {
+			if strings.EqualFold(tag, req.GetTag()) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+
+	return true
+}
+
 // --- PB Conversion: core → protobuf ---
 
 // soulToPB converts a core.Soul to protobuf Soul
@@ -1004,6 +1054,30 @@ func (s *Server) ListSouls(ctx context.Context, req *v1.ListSoulsRequest) (*v1.L
 
 	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
+	// Type and tag are declared request filters, so they must be applied before
+	// pagination; filtering a storage-sized page would otherwise skip matches
+	// and produce incorrect totals/next offsets.
+	if req.GetType() != "" || req.GetTag() != "" {
+		allSouls, err := s.store.ListSoulsNoCtx(workspace, 0, 0)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to list souls: %v", err)
+		}
+		filtered := make([]interface{}, 0, len(allSouls))
+		for _, soul := range allSouls {
+			if soulMatchesListFilters(soul, req) {
+				filtered = append(filtered, soul)
+			}
+		}
+		page, pagination := paginate(filtered, offset, limit)
+		pbSouls := make([]*v1.Soul, 0, len(page))
+		for _, soul := range page {
+			if pb := soulToPB(soul); pb != nil {
+				pbSouls = append(pbSouls, pb)
+			}
+		}
+		return &v1.ListSoulsResponse{Souls: pbSouls, Pagination: pagination}, nil
+	}
+
 	souls, err := s.store.ListSoulsNoCtx(workspace, offset, limit+1)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list souls: %v", err)
@@ -1047,7 +1121,7 @@ func (s *Server) GetSoul(ctx context.Context, req *v1.GetSoulRequest) (*v1.Soul,
 	}
 
 	soul, err := s.store.GetSoulNoCtx(req.Id)
-	if err != nil {
+	if err != nil || soul == nil {
 		return nil, status.Errorf(codes.NotFound, "soul not found: %s", req.Id)
 	}
 	if s, ok := soul.(*core.Soul); ok && s.WorkspaceID != "" && s.WorkspaceID != user.Workspace {
@@ -1448,7 +1522,7 @@ func (s *Server) GetChannel(ctx context.Context, req *v1.GetChannelRequest) (*v1
 	}
 
 	ch, err := s.store.GetChannelNoCtx(req.Id, user.Workspace)
-	if err != nil {
+	if err != nil || ch == nil {
 		return nil, status.Errorf(codes.NotFound, "channel not found: %s", req.Id)
 	}
 	if pb := channelToPB(ch); pb != nil {
@@ -1605,7 +1679,7 @@ func (s *Server) GetRule(ctx context.Context, req *v1.GetRuleRequest) (*v1.Rule,
 	}
 
 	r, err := s.store.GetRuleNoCtx(req.Id, user.Workspace)
-	if err != nil {
+	if err != nil || r == nil {
 		return nil, status.Errorf(codes.NotFound, "rule not found: %s", req.Id)
 	}
 	// Verify rule belongs to caller's workspace (IDOR protection)
@@ -1770,7 +1844,7 @@ func (s *Server) GetJourney(ctx context.Context, req *v1.GetJourneyRequest) (*v1
 	}
 
 	j, err := s.store.GetJourneyNoCtx(req.Id)
-	if err != nil {
+	if err != nil || j == nil {
 		return nil, status.Errorf(codes.NotFound, "journey not found: %s", req.Id)
 	}
 	if err := ensureJourneyWorkspace(j, workspace); err != nil {
@@ -1797,17 +1871,20 @@ func (s *Server) CreateJourney(ctx context.Context, req *v1.CreateJourneyRequest
 
 	journeyData := pbToJourneyConfig(req)
 	journeyData["workspace_id"] = workspace
+	id := core.GenerateID()
+	journeyData["id"] = id
 	if err := s.store.SaveJourneyNoCtx(journeyData); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create journey: %v", err)
 	}
 
-	journeys, _ := s.store.ListJourneysNoCtx(workspace, 0, 1)
-	if len(journeys) > 0 {
-		if pb := journeyToPB(journeys[0]); pb != nil {
-			return pb, nil
-		}
+	created, err := s.store.GetJourneyNoCtx(id)
+	if err != nil || created == nil {
+		return nil, status.Errorf(codes.Internal, "journey created but could not be retrieved")
 	}
-	return nil, status.Errorf(codes.Internal, "journey created but could not be retrieved")
+	if pb := journeyToPB(created); pb != nil {
+		return pb, nil
+	}
+	return nil, status.Errorf(codes.Internal, "failed to convert created journey")
 }
 
 func (s *Server) UpdateJourney(ctx context.Context, req *v1.UpdateJourneyRequest) (*v1.Journey, error) {
