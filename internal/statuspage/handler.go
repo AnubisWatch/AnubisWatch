@@ -100,7 +100,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build status page data
-	data, err := h.buildStatusPageData(page)
+	data, err := buildStatusPageDataFn(h, page)
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -288,6 +288,11 @@ func (h *Handler) showPasswordForm(w http.ResponseWriter, r *http.Request, page 
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(html))
+}
+
+// buildStatusPageDataFn can be overwritten by tests to inject build errors.
+var buildStatusPageDataFn = func(h *Handler, page *core.StatusPage) (*core.StatusPageData, error) {
+	return h.buildStatusPageData(page)
 }
 
 // buildStatusPageData builds the data for a status page
@@ -881,17 +886,7 @@ func (h *Handler) BadgeHandler(w http.ResponseWriter, r *http.Request) {
 	overallStatus := core.CalculateOverallStatus(souls)
 
 	// Determine badge color
-	var color string
-	switch overallStatus.Status {
-	case "operational":
-		color = "22c55e" // Green
-	case "degraded":
-		color = "f59e0b" // Amber
-	case "down", "major_outage":
-		color = "ef4444" // Red
-	default:
-		color = "6b7280" // Gray
-	}
+	color := statusColorFromStatus(overallStatus.Status)
 
 	// Check format
 	format := r.URL.Query().Get("format")
@@ -988,17 +983,7 @@ func (h *Handler) WidgetHandler(w http.ResponseWriter, r *http.Request) {
 
 	overallStatus := core.CalculateOverallStatus(souls)
 
-	var statusColor string
-	switch overallStatus.Status {
-	case "operational":
-		statusColor = "#22c55e"
-	case "degraded":
-		statusColor = "#f59e0b"
-	case "down", "major_outage":
-		statusColor = "#ef4444"
-	default:
-		statusColor = "#6b7280"
-	}
+	statusColor := "#" + statusColorFromStatus(overallStatus.Status)
 
 	style := r.URL.Query().Get("style")
 	showDetails := style == "detailed"
@@ -1172,6 +1157,20 @@ func (h *Handler) Router() http.Handler {
 	mux.HandleFunc("/widget", h.WidgetHandler)
 
 	return mux
+}
+
+// statusColorFromStatus returns the hex color for a given overall status string.
+func statusColorFromStatus(status string) string {
+	switch status {
+	case "operational":
+		return "22c55e"
+	case "degraded":
+		return "f59e0b"
+	case "down", "major_outage":
+		return "ef4444"
+	default:
+		return "6b7280"
+	}
 }
 
 // sanitizeCSS removes dangerous patterns from user-supplied CSS that could be

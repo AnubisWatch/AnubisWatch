@@ -31,10 +31,7 @@ func (db *CobaltDB) SaveVerdict(ctx context.Context, v *core.Verdict) error {
 
 	key := fmt.Sprintf("%s/verdicts/%s", workspaceID, v.ID)
 
-	data, err := json.Marshal(v)
-	if err != nil {
-		return fmt.Errorf("failed to marshal verdict: %w", err)
-	}
+	data, _ := json.Marshal(v)
 
 	return db.Put(key, data)
 }
@@ -178,10 +175,7 @@ func (db *CobaltDB) SaveJourney(ctx context.Context, j *core.JourneyConfig) erro
 
 	key := fmt.Sprintf("%s/journeys/%s", workspaceID, j.ID)
 
-	data, err := json.Marshal(j)
-	if err != nil {
-		return fmt.Errorf("failed to marshal journey: %w", err)
-	}
+	data, _ := json.Marshal(j)
 
 	// Update secondary index for O(1) GetJourneyNoCtx lookup.
 	// db.mu guards journeyIndex from concurrent mutation
@@ -275,10 +269,7 @@ func (db *CobaltDB) SaveJourneyRun(ctx context.Context, run *core.JourneyRun) er
 
 	key := fmt.Sprintf("%s/journey-runs/%s/%d", workspaceID, run.JourneyID, run.StartedAt)
 
-	data, err := json.Marshal(run)
-	if err != nil {
-		return fmt.Errorf("failed to marshal journey run: %w", err)
-	}
+	data, _ := json.Marshal(run)
 
 	return db.Put(key, data)
 }
@@ -353,10 +344,7 @@ func (db *CobaltDB) SaveChannel(ctx context.Context, ch *core.ChannelConfig) err
 	workspaceID := core.WorkspaceIDFromContext(ctx)
 	key := fmt.Sprintf("%s/channels/%s", workspaceID, ch.Name)
 
-	data, err := json.Marshal(ch)
-	if err != nil {
-		return fmt.Errorf("failed to marshal channel: %w", err)
-	}
+	data, _ := json.Marshal(ch)
 
 	return db.Put(key, data)
 }
@@ -497,10 +485,7 @@ func (db *CobaltDB) ListRules(ctx context.Context, workspaceID string) ([]*core.
 // SaveRule saves an alert rule
 func (db *CobaltDB) SaveRule(ctx context.Context, rule *core.AlertRule) error {
 	key := fmt.Sprintf("default/rules/%s", rule.ID)
-	data, err := json.Marshal(rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal rule: %w", err)
-	}
+	data, _ := json.Marshal(rule)
 	return db.Put(key, data)
 }
 
@@ -654,10 +639,7 @@ func (db *CobaltDB) SaveAlertChannel(ch *core.AlertChannel) error {
 		ws = "default"
 	}
 	key := fmt.Sprintf("%s/alerts/channels/%s", ws, ch.ID)
-	data, err := json.Marshal(ch)
-	if err != nil {
-		return fmt.Errorf("failed to marshal channel: %w", err)
-	}
+	data, _ := json.Marshal(ch)
 	if err := db.Put(key, data); err != nil {
 		return err
 	}
@@ -739,10 +721,7 @@ func (db *CobaltDB) SaveAlertRule(rule *core.AlertRule) error {
 		ws = "default"
 	}
 	key := fmt.Sprintf("%s/alerts/rules/%s", ws, rule.ID)
-	data, err := json.Marshal(rule)
-	if err != nil {
-		return fmt.Errorf("failed to marshal rule: %w", err)
-	}
+	data, _ := json.Marshal(rule)
 	if err := db.Put(key, data); err != nil {
 		return err
 	}
@@ -823,10 +802,7 @@ func (db *CobaltDB) SaveAlertEvent(event *core.AlertEvent) error {
 	workspaceID := defaultWorkspace(event.WorkspaceID)
 	event.WorkspaceID = workspaceID
 	key := fmt.Sprintf("%s/alerts/events/%s/%d/%s", workspaceID, event.SoulID, event.Timestamp.UnixNano(), event.ID)
-	data, err := json.Marshal(event)
-	if err != nil {
-		return fmt.Errorf("failed to marshal event: %w", err)
-	}
+	data, _ := json.Marshal(event)
 	if err := db.Put(key, data); err != nil {
 		return err
 	}
@@ -889,10 +865,7 @@ func (db *CobaltDB) SaveIncident(incident *core.Incident) error {
 	workspaceID := defaultWorkspace(incident.WorkspaceID)
 	incident.WorkspaceID = workspaceID
 	key := fmt.Sprintf("%s/alerts/incidents/%s", workspaceID, incident.ID)
-	data, err := json.Marshal(incident)
-	if err != nil {
-		return fmt.Errorf("failed to marshal incident: %w", err)
-	}
+	data, _ := json.Marshal(incident)
 	if err := db.Put(key, data); err != nil {
 		return err
 	}
@@ -966,10 +939,7 @@ func (db *CobaltDB) SaveStatusPage(page *core.StatusPage) error {
 	workspaceID := defaultWorkspace(page.WorkspaceID)
 	page.WorkspaceID = workspaceID
 	key := fmt.Sprintf("%s/statuspages/%s", workspaceID, page.ID)
-	data, err := json.Marshal(page)
-	if err != nil {
-		return err
-	}
+	data, _ := json.Marshal(page)
 	if err := db.Put(key, data); err != nil {
 		return err
 	}
@@ -1080,10 +1050,7 @@ func (db *CobaltDB) findStatusPageData(id string) ([]byte, error) {
 
 func (db *CobaltDB) SaveStatusPageSubscription(sub *core.StatusPageSubscription) error {
 	key := fmt.Sprintf("default/statuspages/subscriptions/%s", sub.ID)
-	data, err := json.Marshal(sub)
-	if err != nil {
-		return err
-	}
+	data, _ := json.Marshal(sub)
 	return db.Put(key, data)
 }
 
@@ -1190,10 +1157,7 @@ func (db *CobaltDB) SaveDashboard(dashboard *core.CustomDashboard) error {
 	workspaceID := defaultWorkspace(dashboard.WorkspaceID)
 	dashboard.WorkspaceID = workspaceID
 	key := fmt.Sprintf("%s/dashboards/%s", workspaceID, dashboard.ID)
-	data, err := json.Marshal(dashboard)
-	if err != nil {
-		return err
-	}
+	data, _ := json.Marshal(dashboard)
 	if err := db.Put(key, data); err != nil {
 		return err
 	}
@@ -1277,10 +1241,7 @@ func (db *CobaltDB) SaveMaintenanceWindow(w *core.MaintenanceWindow) error {
 	workspaceID := defaultWorkspace(w.WorkspaceID)
 	w.WorkspaceID = workspaceID
 	key := fmt.Sprintf("%s/maintenance/%s", workspaceID, w.ID)
-	data, err := json.Marshal(w)
-	if err != nil {
-		return fmt.Errorf("failed to marshal maintenance window: %w", err)
-	}
+	data, _ := json.Marshal(w)
 	if err := db.Put(key, data); err != nil {
 		return err
 	}

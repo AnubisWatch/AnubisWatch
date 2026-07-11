@@ -32,25 +32,33 @@ func newEncryptor(key string) (*encryptor, error) {
 	return &encryptor{masterKey: []byte(key)}, nil
 }
 
+// hkdfReadFull is overwritten by tests to inject HKDF read failures.
+var hkdfReadFull = func(r io.Reader, b []byte) (int, error) { return io.ReadFull(r, b) }
+
 // deriveKey uses HKDF-SHA256 to derive an AES-256 key from the master key
 // and a random salt. This replaces the simple SHA-256 hash with a proper
 // KDF that supports domain separation and per-encryption salt.
 func (e *encryptor) deriveKey(salt []byte) ([]byte, error) {
 	derivedKey := make([]byte, 32)
 	hkdfReader := hkdf.New(sha256.New, e.masterKey, salt, []byte(encryptionKDFInfo))
-	if _, err := io.ReadFull(hkdfReader, derivedKey); err != nil {
+	if _, err := hkdfReadFull(hkdfReader, derivedKey); err != nil {
 		return nil, fmt.Errorf("HKDF key derivation failed: %w", err)
 	}
 	return derivedKey, nil
 }
 
-// buildCipher creates an AES-GCM cipher from a derived key
+// buildCipher creates an AES-GCM cipher from a derived key.
+// Tests can override buildCipherSeam to inject cipher creation failures.
+var buildCipherSeam = func(block cipher.Block) (cipher.AEAD, error) {
+	return cipher.NewGCM(block)
+}
+
 func (e *encryptor) buildCipher(derivedKey []byte) (cipher.AEAD, error) {
 	block, err := aes.NewCipher(derivedKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
 	}
-	gcm, err := cipher.NewGCM(block)
+	gcm, err := buildCipherSeam(block)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GCM: %w", err)
 	}

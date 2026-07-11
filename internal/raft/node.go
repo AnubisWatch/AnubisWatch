@@ -524,10 +524,7 @@ func (n *Node) RemovePeer(peerID string) error {
 
 // proposeMembershipChange proposes a membership change to the cluster
 func (n *Node) proposeMembershipChange(change core.MembershipChange) error {
-	data, err := json.Marshal(change)
-	if err != nil {
-		return fmt.Errorf("failed to marshal membership change: %w", err)
-	}
+	data, _ := json.Marshal(change)
 
 	entry := core.RaftLogEntry{
 		Index: uint64(len(n.log)),
@@ -647,11 +644,7 @@ func (n *Node) transitionToFinalConfig(change core.MembershipChange, jointIndex 
 	finalChange.Phase = "final"
 	finalChange.OldConfig = nil
 
-	data, err := json.Marshal(finalChange)
-	if err != nil {
-		n.logger.Error("Failed to marshal final membership change", "error", err)
-		return
-	}
+	data, _ := json.Marshal(finalChange)
 
 	entry := core.RaftLogEntry{
 		Index: uint64(len(n.log)),

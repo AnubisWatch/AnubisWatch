@@ -48,8 +48,8 @@ jobs:
           mkdir -p /tmp/anubis-data
           chmod 700 /tmp/anubis-data
 
-      - name: Run tests with coverage and race detector
-        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+      - name: Run tests and enforce exact coverage
+        run: ./scripts/check-go-coverage.sh
         env:
           ANUBIS_DATA_DIR: /tmp/anubis-data
           ANUBIS_CONFIG: /tmp/anubis-test.json
@@ -57,20 +57,9 @@ jobs:
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6
         with:
-          files: ./coverage.out
+          files: ./coverage-filtered.out
           flags: backend
-          fail_ci_if_error: false
-
-      - name: Check coverage threshold (excluding generated code)
-        run: |
-          # Exclude generated protobuf code from coverage calculation
-          grep -v "internal/grpcapi/v1/" coverage.out > coverage-filtered.out || true
-          COVERAGE=$(go tool cover -func=coverage-filtered.out | grep total | awk '{print $3}' | sed 's/%//' | cut -d. -f1)
-          echo "Total coverage (excluding generated): $COVERAGE%"
-          if [ "$COVERAGE" -lt 75 ]; then
-            echo "Coverage $COVERAGE% is below threshold 75%"
-            exit 1
-          fi
+          fail_ci_if_error: true
 
   # Frontend Tests
   test-frontend:
@@ -100,7 +89,7 @@ jobs:
         working-directory: web
         run: pnpm run lint
 
-      - name: Run tests
+      - name: Run tests and enforce exact coverage
         working-directory: web
         run: pnpm run test:coverage
 
@@ -109,7 +98,7 @@ jobs:
         with:
           files: ./web/coverage/coverage-final.json
           flags: frontend
-          fail_ci_if_error: false
+          fail_ci_if_error: true
 
   # Dashboard E2E
   e2e-dashboard:

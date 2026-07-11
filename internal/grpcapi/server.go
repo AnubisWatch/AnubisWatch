@@ -1686,9 +1686,6 @@ func (s *Server) GetRule(ctx context.Context, req *v1.GetRuleRequest) (*v1.Rule,
 	if rule, ok := r.(*core.AlertRule); ok && rule.WorkspaceID != "" && rule.WorkspaceID != user.Workspace {
 		return nil, status.Error(codes.PermissionDenied, "access denied: rule belongs to another workspace")
 	}
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "rule not found: %s", req.Id)
-	}
 	if pb := ruleToPB(r); pb != nil {
 		return pb, nil
 	}
@@ -2065,10 +2062,6 @@ func (s *Server) StreamJudgments(req *v1.StreamRequest, stream v1.AnubisWatchSer
 	if workspace == "" {
 		workspace = "default"
 	}
-	if err != nil {
-		return err
-	}
-
 	// Poll-based streaming: check for new judgments every second
 	soulID := ""
 	if req.SoulId != nil {

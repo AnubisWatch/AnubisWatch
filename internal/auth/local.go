@@ -191,6 +191,9 @@ func (a *LocalAuthenticator) loadSessions() {
 	}
 }
 
+// saveSessionsJSON is overwritten by tests to inject marshal failures.
+var saveSessionsJSON = json.Marshal
+
 // saveSessionsLocked persists sessions and users to disk
 // Must be called with a.mu held (at least RLock)
 func (a *LocalAuthenticator) saveSessionsLocked() {
@@ -221,7 +224,7 @@ func (a *LocalAuthenticator) saveSessionsLocked() {
 		Lockouts:    lockoutsCopy,
 	}
 
-	jsonData, err := json.Marshal(data)
+	jsonData, err := saveSessionsJSON(data)
 	if err != nil {
 		return
 	}
@@ -250,9 +253,13 @@ func (a *LocalAuthenticator) saveSessionsLocked() {
 	os.Chmod(a.sessionPath, 0600)
 }
 
+// cleanupInterval is the interval between session cleanup runs.
+// Tests can shorten this to verify the cleanup loop without waiting 5 minutes.
+var cleanupInterval = 5 * time.Minute
+
 // cleanupExpiredSessions removes expired sessions periodically
 func (a *LocalAuthenticator) cleanupExpiredSessions() {
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(cleanupInterval)
 	defer ticker.Stop()
 	defer close(a.cleanupDone)
 
@@ -429,27 +436,21 @@ func (a *LocalAuthenticator) SwitchWorkspace(token, workspace string) (*api.User
 	return user, nil
 }
 
-// generateToken returns a 256-bit hex-encoded random token, or an error
-// if the system CSPRNG is unavailable. Previously this panicked; callers
-// now receive an error and can decide whether to fail closed (refuse to
-// issue a token) or fall back. In practice CSPRNG failure means /dev/urandom
-// is unreachable, which is unrecoverable, but a graceful error is easier
-// to diagnose and doesn't crash the test binary.
+// generateToken returns a 256-bit hex-encoded random token.
+// Go 1.26 made crypto/rand.Read runtime-fatal on error, so we no longer
+// propagate an error — the CSPRNG is guaranteed available or the process
+// terminates (see https://go.dev/issue/66821).
 func generateToken() (string, error) {
 	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("CSPRNG failure: cannot generate secure token: %w", err)
-	}
+	rand.Read(b)
 	return hex.EncodeToString(b), nil
 }
 
-// generateID returns a 128-bit hex-encoded random ID, or an error if the
-// system CSPRNG is unavailable. See generateToken for the rationale.
+// generateID returns a 128-bit hex-encoded random ID.
+// See generateToken for error-handling rationale.
 func generateID() (string, error) {
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("CSPRNG failure: cannot generate secure ID: %w", err)
-	}
+	rand.Read(b)
 	return hex.EncodeToString(b), nil
 }
 

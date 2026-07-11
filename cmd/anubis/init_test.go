@@ -160,6 +160,38 @@ func TestGetDefaultDataDir_Default(t *testing.T) {
 	}
 }
 
+func TestDefaultDataDir_Darwin(t *testing.T) {
+	dir := defaultDataDir("darwin")
+	if !strings.Contains(dir, "Library/Application Support") {
+		t.Errorf("darwin data dir: %s", dir)
+	}
+}
+func TestDefaultDataDirForOS_Windows(t *testing.T) {
+	dir := defaultDataDirForOS("windows")
+	// On a Linux host APPDATA is empty; the function still returns a path.
+	if dir == "" {
+		t.Errorf("windows data dir should not be empty")
+	}
+}
+func TestDefaultDataDirForOS_Linux(t *testing.T) {
+	dir := defaultDataDirForOS("linux")
+	if !strings.Contains(dir, "/var/lib/anubis") {
+		t.Errorf("linux data dir: %s", dir)
+	}
+}
+func TestDefaultDataDir_Windows(t *testing.T) {
+	dir := defaultDataDir("windows")
+	if dir == "" {
+		t.Errorf("windows default data dir should not be empty")
+	}
+}
+func TestDefaultDataDir_Linux(t *testing.T) {
+	dir := defaultDataDir("linux")
+	if !strings.Contains(dir, "anubis") {
+		t.Errorf("linux default data dir: %s", dir)
+	}
+}
+
 // TestGetDefaultDataDir_WindowsAppData tests getDefaultDataDir with APPDATA set
 func TestGetDefaultDataDir_WindowsAppData(t *testing.T) {
 	if runtime.GOOS != "windows" {

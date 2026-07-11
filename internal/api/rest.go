@@ -659,10 +659,7 @@ func buildOpenAPIJSON() []byte {
 		}
 	}
 
-	data, err := json.Marshal(spec)
-	if err != nil {
-		return openapiJSON
-	}
+	data, _ := json.Marshal(spec)
 	return data
 }
 

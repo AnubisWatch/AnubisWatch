@@ -10,7 +10,7 @@ LDFLAGS   := -s -w \
   -X main.Commit=$(COMMIT) \
   -X main.BuildDate=$(DATE)
 
-.PHONY: all build clean test test-short benchmark lint dashboard run docker preflight-production smoke-production capture-production-evidence help
+.PHONY: all build clean test test-coverage test-short benchmark lint dashboard dashboard-coverage run docker preflight-production smoke-production capture-production-evidence help
 
 all: dashboard build ## Build dashboard and binary
 
@@ -30,7 +30,10 @@ clean: ## Clean build artifacts
 	@echo "✓ Cleaned"
 
 test: ## Run all tests
-	go test -race -coverprofile=coverage.out ./...
+	go test -race ./cmd/... ./internal/...
+
+test-coverage: ## Enforce exact Go coverage for cmd and internal packages
+	./scripts/check-go-coverage.sh
 
 test-short: ## Run short tests only
 	go test -short ./...
@@ -66,6 +69,9 @@ dashboard: ## Build React dashboard
 
 dashboard-dev: ## Run dashboard dev server
 	cd web && npm run dev
+
+dashboard-coverage: ## Enforce exact dashboard coverage
+	cd web && pnpm run test:coverage
 
 # Cross-compilation
 build-all: ## Build for all platforms

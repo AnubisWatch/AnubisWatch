@@ -392,8 +392,12 @@ func getDefaultDataDir() string {
 	if dir := os.Getenv("ANUBIS_DATA_DIR"); dir != "" {
 		return dir
 	}
+	return defaultDataDir(runtime.GOOS)
+}
 
-	switch runtime.GOOS {
+// defaultDataDir is a pure function driven by the OS constant for testability.
+func defaultDataDir(goos string) string {
+	switch goos {
 	case "windows":
 		appData := os.Getenv("APPDATA")
 		if appData == "" {

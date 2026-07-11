@@ -9,12 +9,17 @@ import (
 
 // getSystemConfigPath returns system-wide config path
 func getSystemConfigPath() string {
-	switch runtime.GOOS {
+	return systemConfigPath(runtime.GOOS)
+}
+
+// systemConfigPath is a pure function for testability.
+func systemConfigPath(goos string) string {
+	switch goos {
 	case "windows":
 		return filepath.Join(os.Getenv("PROGRAMDATA"), "AnubisWatch", "anubis.json")
 	case "darwin":
 		return "/Library/Application Support/AnubisWatch/anubis.json"
-	default: // Linux
+	default:
 		return "/etc/anubis/anubis.json"
 	}
 }
@@ -26,7 +31,12 @@ func getSystemConfigPaths() []string {
 
 // getUserConfigPath returns user-specific config path
 func getUserConfigPath() string {
-	switch runtime.GOOS {
+	return userConfigPath(runtime.GOOS)
+}
+
+// userConfigPath is a pure function for testability.
+func userConfigPath(goos string) string {
+	switch goos {
 	case "windows":
 		appData := os.Getenv("APPDATA")
 		if appData == "" {
@@ -36,9 +46,8 @@ func getUserConfigPath() string {
 	case "darwin":
 		home, _ := os.UserHomeDir()
 		return filepath.Join(home, "Library", "Application Support", "AnubisWatch", "anubis.json")
-	default: // Linux
+	default:
 		home, _ := os.UserHomeDir()
-		// XDG Config standard
 		if xdgConfig := os.Getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
 			return filepath.Join(xdgConfig, "anubis", "anubis.json")
 		}

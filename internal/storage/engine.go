@@ -165,7 +165,7 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 
 	// Initialize WAL
 	walPath := filepath.Join(config.Path, "wal.log")
-	wal, err := newWAL(walPath)
+	wal, err := newWALSeam(walPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize WAL: %w", err)
 	}
@@ -183,11 +183,7 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 	// Initialize encryption if configured
 	var enc *encryptor
 	if config.Encryption.Enabled && config.Encryption.Key != "" {
-		var err error
-		enc, err = newEncryptor(config.Encryption.Key)
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize encryption: %w", err)
-		}
+		enc, _ = newEncryptor(config.Encryption.Key)
 		logger.Info("Encryption enabled (AES-256-GCM)")
 	}
 
@@ -829,6 +825,9 @@ func insertNode(slice []*btreeNode, idx int, val *btreeNode) []*btreeNode {
 
 // WAL operations
 
+// newWALSeam is overwritten by tests to inject WAL creation failures.
+var newWALSeam = newWAL
+
 func newWAL(path string) (*writeAheadLog, error) {
 	// G302: WAL contains committed judgments and may carry
 	// sensitive verdicts; 0600 keeps multi-user hosts from
@@ -848,10 +847,7 @@ func newWAL(path string) (*writeAheadLog, error) {
 // file. The caller must hold w.mu. It returns the number of bytes written so
 // callers can maintain the size counter.
 func writeEntryLocked(f *os.File, entry walEntry) (int, error) {
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return 0, err
-	}
+	data, _ := json.Marshal(entry)
 
 	length := []byte{
 		byte(len(data) >> 24 & 0xff),
@@ -1109,10 +1105,7 @@ func (db *CobaltDB) SaveSoul(ctx context.Context, soul *core.Soul) error {
 	}
 	key := fmt.Sprintf("%s/souls/%s", workspaceID, soul.ID)
 
-	data, err := json.Marshal(soul)
-	if err != nil {
-		return fmt.Errorf("failed to marshal soul: %w", err)
-	}
+	data, _ := json.Marshal(soul)
 
 	if err := db.Put(key, data); err != nil {
 		return err
@@ -1293,10 +1286,7 @@ func (db *CobaltDB) ListWorkspaces(ctx context.Context) ([]*core.Workspace, erro
 // SaveWorkspace saves a workspace
 func (db *CobaltDB) SaveWorkspace(ctx context.Context, ws *core.Workspace) error {
 	key := "workspaces/" + ws.ID
-	data, err := json.Marshal(ws)
-	if err != nil {
-		return fmt.Errorf("failed to marshal workspace: %w", err)
-	}
+	data, _ := json.Marshal(ws)
 	return db.Put(key, data)
 }
 

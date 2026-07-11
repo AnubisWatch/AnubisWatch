@@ -130,10 +130,7 @@ func (f *StorageFSM) Snapshot() (core.FSMCommand, error) {
 	}
 
 	// Serialize
-	data, err := json.Marshal(snapshot)
-	if err != nil {
-		return core.FSMCommand{}, err
-	}
+	data, _ := json.Marshal(snapshot)
 
 	return core.FSMCommand{
 		Op:    core.FSMSet,

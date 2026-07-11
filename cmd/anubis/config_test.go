@@ -33,6 +33,31 @@ func TestGetSystemConfigPath(t *testing.T) {
 	}
 }
 
+func TestSystemConfigPath_Darwin(t *testing.T) {
+	path := systemConfigPath("darwin")
+	if !contains(path, "/Library/Application Support/") {
+		t.Errorf("darwin path does not contain /Library/Application Support/: %s", path)
+	}
+}
+func TestSystemConfigPath_Windows(t *testing.T) {
+	path := systemConfigPath("windows")
+	if !contains(path, "AnubisWatch") {
+		t.Errorf("windows path does not contain AnubisWatch: %s", path)
+	}
+}
+func TestUserConfigPath_Windows(t *testing.T) {
+	path := userConfigPath("windows")
+	if !contains(path, "AnubisWatch") {
+		t.Errorf("windows user path missing AnubisWatch: %s", path)
+	}
+}
+func TestUserConfigPath_Darwin(t *testing.T) {
+	path := userConfigPath("darwin")
+	if !contains(path, "Library/Application Support") {
+		t.Errorf("darwin user path: %s", path)
+	}
+}
+
 // TestGetUserConfigPath tests getUserConfigPath function
 func TestGetUserConfigPath(t *testing.T) {
 	path := getUserConfigPath()

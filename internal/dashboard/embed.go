@@ -2,11 +2,15 @@ package dashboard
 
 import (
 	"embed"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"path"
 	"strings"
 )
+
+// dashboardSubFS is overwritten by tests to inject fs.Sub failures.
+var dashboardSubFS = fs.Sub
 
 //go:embed dist/*
 var distFS embed.FS
@@ -19,9 +23,9 @@ type Handler struct {
 // NewHandler creates a new dashboard handler
 func NewHandler() (*Handler, error) {
 	// Create sub filesystem for dist directory
-	subFS, err := fs.Sub(distFS, "dist")
+	subFS, err := dashboardSubFS(distFS, "dist")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get dashboard sub FS: %w", err)
 	}
 
 	return &Handler{

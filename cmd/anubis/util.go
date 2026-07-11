@@ -44,7 +44,12 @@ func getDataDir() string {
 	if testDataDir != "" {
 		return testDataDir
 	}
-	switch runtime.GOOS {
+	return defaultDataDirForOS(runtime.GOOS)
+}
+
+// defaultDataDirForOS returns the platform-specific data directory.
+func defaultDataDirForOS(goos string) string {
+	switch goos {
 	case "windows":
 		return filepath.Join(os.Getenv("APPDATA"), "anubis")
 	default:

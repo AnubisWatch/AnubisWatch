@@ -492,10 +492,7 @@ func (m *Manager) calculateChecksum(backup *Backup) (string, error) {
 	data := *backup
 	data.Checksum = ""
 
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return "", err
-	}
+	jsonData, _ := json.Marshal(data)
 
 	hash := sha256.Sum256(jsonData)
 	return hex.EncodeToString(hash[:]), nil
@@ -528,10 +525,7 @@ func (m *Manager) writeBackupFile(backup *Backup, path string, opts Options) err
 	}
 
 	// Serialize backup to JSON
-	jsonData, err := json.MarshalIndent(backup, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal backup: %w", err)
-	}
+	jsonData, _ := json.MarshalIndent(backup, "", "  ")
 
 	// Encrypt if requested
 	if opts.Encrypt && encryptionKey != nil {
@@ -728,10 +722,7 @@ func (m *Manager) ExportToTar(ctx context.Context, w io.Writer, opts Options) er
 	}
 
 	// Serialize backup
-	data, err := json.MarshalIndent(backup, "", "  ")
-	if err != nil {
-		return err
-	}
+	data, _ := json.MarshalIndent(backup, "", "  ")
 
 	// Write to tar
 	header := &tar.Header{

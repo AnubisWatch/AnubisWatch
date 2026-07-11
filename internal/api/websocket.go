@@ -540,11 +540,7 @@ func (s *WebSocketServer) broadcastLoop(ctx context.Context) {
 // broadcastMessage sends a message to all connected clients.
 // Called by broadcastLoop; not safe to call directly with the server lock held.
 func (s *WebSocketServer) broadcastMessage(msg WSMessage) {
-	data, err := json.Marshal(msg)
-	if err != nil {
-		s.logger.Error("Failed to marshal message", "error", err)
-		return
-	}
+	data, _ := json.Marshal(msg)
 
 	s.mu.RLock()
 	clients := make([]*WSClient, 0, len(s.clients))
@@ -623,11 +619,7 @@ func (s *WebSocketServer) broadcastToRoom(room string, msg WSMessage) {
 	}
 	s.mu.RUnlock()
 
-	data, err := json.Marshal(msg)
-	if err != nil {
-		s.logger.Error("Failed to marshal message", "error", err)
-		return
-	}
+	data, _ := json.Marshal(msg)
 
 	for _, clientID := range clientIDs {
 		s.mu.RLock()

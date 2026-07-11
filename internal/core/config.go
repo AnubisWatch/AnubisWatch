@@ -365,16 +365,16 @@ func (c *Config) validate() error {
 	return nil
 }
 
-func SaveConfig(path string, config *Config) error {
-	var data []byte
-	var err error
-
+// saveConfigMarshal is overwritten by tests to inject marshal failures.
+var saveConfigMarshal = func(path string, config *Config) ([]byte, error) {
 	if strings.HasSuffix(path, ".yaml") || strings.HasSuffix(path, ".yml") {
-		data, err = yaml.Marshal(config)
-	} else {
-		data, err = json.MarshalIndent(config, "", "  ")
+		return yaml.Marshal(config)
 	}
+	return json.MarshalIndent(config, "", "  ")
+}
 
+func SaveConfig(path string, config *Config) error {
+	data, err := saveConfigMarshal(path, config)
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}

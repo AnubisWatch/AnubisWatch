@@ -459,10 +459,6 @@ export function useAuth() {
         dispatchAuthSessionChanged({ state: 'anonymous' })
       }
       throw error
-    } finally {
-      if (sequence === syncSequence.current) {
-        setLoading(false)
-      }
     }
   }, [])
 

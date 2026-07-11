@@ -3,6 +3,7 @@ package dashboard
 import (
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -168,6 +169,18 @@ func TestHandler_ServeHTTP_ContentTypeSet(t *testing.T) {
 	ct := w.Header().Get("Content-Type")
 	if ct != "text/html; charset=utf-8" {
 		t.Errorf("Expected text/html content-type, got %q", ct)
+	}
+}
+
+func TestNewHandler_FSSubFailure(t *testing.T) {
+	old := dashboardSubFS
+	dashboardSubFS = func(_ fs.FS, _ string) (fs.FS, error) {
+		return nil, errors.New("injected fs error")
+	}
+	t.Cleanup(func() { dashboardSubFS = old })
+
+	if _, err := NewHandler(); err == nil {
+		t.Fatal("expected fs.Sub injection error")
 	}
 }
 

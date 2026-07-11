@@ -2,10 +2,66 @@ package storage
 
 import (
 	"bytes"
+	"crypto/cipher"
+	"crypto/rand"
+	"errors"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
+
+var _ io.Reader = (*failReader)(nil)
+
+func TestEncryptor_DeriveKeyFailure(t *testing.T) {
+	old := hkdfReadFull
+	hkdfReadFull = func(_ io.Reader, _ []byte) (int, error) {
+		return 0, errors.New("hkdf injection")
+	}
+	t.Cleanup(func() { hkdfReadFull = old })
+
+	enc := &encryptor{masterKey: []byte("test")}
+	if _, err := enc.deriveKey(make([]byte, 32)); err == nil {
+		t.Fatal("expected HKDF failure")
+	}
+}
+
+func TestEncryptor_BuildCipherFailure(t *testing.T) {
+	old := buildCipherSeam
+	buildCipherSeam = func(_ cipher.Block) (cipher.AEAD, error) {
+		return nil, errors.New("gcm injection")
+	}
+	t.Cleanup(func() { buildCipherSeam = old })
+
+	enc := &encryptor{masterKey: []byte("test-key-12345678")}
+	if _, err := enc.encrypt([]byte("data")); err == nil || !strings.Contains(err.Error(), "gcm injection") {
+		t.Fatalf("encrypt error = %v", err)
+	}
+}
+
+func TestNewEngine_WALFailure(t *testing.T) {
+	old := newWALSeam
+	newWALSeam = func(_ string) (*writeAheadLog, error) {
+		return nil, errors.New("wal injection")
+	}
+	t.Cleanup(func() { newWALSeam = old })
+
+	if _, err := NewEngine(core.StorageConfig{Path: t.TempDir()}, nil); err == nil || !strings.Contains(err.Error(), "wal injection") {
+		t.Fatalf("NewEngine error = %v", err)
+	}
+}
+
+func TestEncryptor_RandReaderFailure(t *testing.T) {
+	old := rand.Reader
+	rand.Reader = &failReader{}
+	t.Cleanup(func() { rand.Reader = old })
+
+	enc := &encryptor{masterKey: []byte("test-key-12345678")}
+	if _, err := enc.encrypt([]byte("data")); err == nil {
+		t.Fatal("expected rand.Reader failure")
+	}
+}
 
 func TestEncryptor_EncryptDecrypt(t *testing.T) {
 	enc, err := newEncryptor("test-secret-key")

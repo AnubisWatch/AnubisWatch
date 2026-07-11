@@ -46,6 +46,12 @@ type TracerProvider struct {
 	logger   *slog.Logger
 }
 
+// tracerResource is overwritten by tests to inject resource.New failures.
+var tracerResource = resource.New
+
+// tracerExporter is overwritten by tests to inject exporter creation failures.
+var tracerExporter = createExporter
+
 // InitTracer initializes the global tracer provider.
 // Returns a cleanup function that must be called on shutdown.
 func InitTracer(ctx context.Context, cfg Config, logger *slog.Logger) (*TracerProvider, error) {
@@ -66,7 +72,7 @@ func InitTracer(ctx context.Context, cfg Config, logger *slog.Logger) (*TracerPr
 	}
 
 	// Create resource with service info
-	res, err := resource.New(ctx,
+	res, err := tracerResource(ctx,
 		resource.WithAttributes(
 			semconv.ServiceName(cfg.ServiceName),
 			semconv.ServiceVersion(cfg.ServiceVersion),
@@ -78,7 +84,7 @@ func InitTracer(ctx context.Context, cfg Config, logger *slog.Logger) (*TracerPr
 	}
 
 	// Configure OTLP exporter
-	exporter, err := createExporter(ctx, endpoint, cfg.Insecure)
+	exporter, err := tracerExporter(ctx, endpoint, cfg.Insecure)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OTLP exporter: %w", err)
 	}

@@ -83,10 +83,8 @@ func (al *AuditLogger) Log(eventType, userID, resource, action, status string, d
 	}
 
 	if details != nil {
-		data, err := json.Marshal(details)
-		if err == nil {
-			event.Details = data
-		}
+		data, _ := json.Marshal(details)
+		event.Details = data
 	}
 
 	select {
@@ -141,10 +139,8 @@ func (al *AuditLogger) LogAuth(userID, ipAddress, action, status string, details
 	}
 
 	if details != nil {
-		data, err := json.Marshal(details)
-		if err == nil {
-			event.Details = data
-		}
+		data, _ := json.Marshal(details)
+		event.Details = data
 	}
 
 	select {

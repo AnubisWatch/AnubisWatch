@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func newTestLogger() *slog.Logger {
@@ -203,6 +206,42 @@ func TestProvider_ReturnsEmptyWrapper(t *testing.T) {
 	// Shutdown on an empty wrapper must not panic and must not error.
 	if err := tp.Shutdown(context.Background()); err != nil {
 		t.Errorf("Shutdown(empty wrapper) err = %v, want nil", err)
+	}
+}
+
+func TestInitTracer_EnabledResourceFailure(t *testing.T) {
+	oldRes := tracerResource
+	tracerResource = func(_ context.Context, _ ...resource.Option) (*resource.Resource, error) {
+		return nil, io.ErrUnexpectedEOF
+	}
+	t.Cleanup(func() { tracerResource = oldRes })
+	oldExp := tracerExporter
+	tracerExporter = createExporter
+	t.Cleanup(func() { tracerExporter = oldExp })
+
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	cfg.Endpoint = "localhost:9999"
+	if _, err := InitTracer(context.Background(), cfg, newTestLogger()); err == nil {
+		t.Fatal("expected resource error")
+	}
+}
+
+func TestInitTracer_EnabledExporterFailure(t *testing.T) {
+	oldRes := tracerResource
+	tracerResource = resource.New
+	t.Cleanup(func() { tracerResource = oldRes })
+	oldExp := tracerExporter
+	tracerExporter = func(_ context.Context, _ string, _ bool) (sdktrace.SpanExporter, error) {
+		return nil, io.EOF
+	}
+	t.Cleanup(func() { tracerExporter = oldExp })
+
+	cfg := DefaultConfig()
+	cfg.Enabled = true
+	cfg.Endpoint = "localhost:9998"
+	if _, err := InitTracer(context.Background(), cfg, newTestLogger()); err == nil {
+		t.Fatal("expected exporter error")
 	}
 }
 

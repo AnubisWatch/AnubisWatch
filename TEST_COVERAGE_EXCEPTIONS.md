@@ -1,71 +1,51 @@
-# Test Coverage Exceptions
+# Test Coverage Policy and Exceptions
 
-This document records the current uncovered areas that remain after the latest automated test pass and explains why they are not yet at 100% practical coverage.
+AnubisWatch enforces exact 100% coverage on project-owned application code. Coverage is a merge gate, not an informational metric: both local targets and CI exit non-zero when the covered surface is below the configured threshold.
 
-## Coverage artifacts
-
-- Go coverage profile: `coverage.out`
-- Web coverage report directory: `web/coverage/`
-- Web HTML report entrypoint: `web/coverage/index.html`
-- Web JSON coverage map: `web/coverage/coverage-final.json`
-
-## Full-suite commands
+## Commands
 
 ### Go
+
 ```bash
-go test ./... -coverprofile=coverage.out -covermode=atomic
+make test-coverage
+# equivalent: ./scripts/check-go-coverage.sh
 ```
 
-### Web unit/integration coverage
+The Go gate runs race-enabled tests with atomic coverage over **only**:
+
+- `./cmd/...`
+- `./internal/...`
+
+It writes `coverage.out`, filters the generated exception into `coverage-filtered.out`, and compares covered statement blocks with total statement blocks. Direct block comparison is intentional because the formatted `go tool cover` percentage is rounded and could otherwise display `100.0%` with an uncovered block.
+
+### Web
+
 ```bash
-cd web && npm run test:coverage
-```
-This command runs Vitest coverage with `--sequence.concurrent false` to keep module-mocked page tests isolated and reproducible in the full suite.
-
-### Web E2E smoke
-```bash
-cd web && npm run e2e
+make dashboard-coverage
+# equivalent: cd web && pnpm run test:coverage
 ```
 
-## Remaining practical exceptions
+Vitest starts with every application TypeScript file under `web/src/**/*.{ts,tsx}`, including `web/src/main.tsx`, and enforces 100% statements, branches, functions, and lines both globally and per file.
 
-### Generated / third-party / low-value files
-- `internal/grpcapi/v1/*.pb.go`
-  - Generated protobuf/grpc bindings. These are machine-generated artifacts and are not practical line/branch coverage targets.
-- `web/node_modules/**`
-  - Third-party vendored dependency code; not project-owned test surface.
+## Allowed exceptions
 
-### Remaining large UI/state matrices
-These files still contain broad interaction surfaces and state permutations that were not fully closed in this pass.
+Exceptions are limited to files that are not hand-written application logic.
 
-- `web/src/pages/Journeys.tsx`
-  - Complex create/edit modal and run-history branch matrix remains the largest uncovered page flow.
-- `web/src/pages/SoulEdit.tsx`
-  - Still has untested negative and variant editing branches.
-- `web/src/pages/SoulDetail.tsx`
-  - Core interactions are covered, but deep tab/content permutations still remain.
+### Go
 
-### Shared hook/client internals
-- `web/src/api/hooks.ts`
-  - Hook internals have many fetch/error/refetch paths and mounted-state branches; current tests exercise major consumers but not every internal branch directly.
-- `web/src/api/client.ts`
-  - Significantly improved, but still has uncovered serialization/normalization branches not all exposed through current UI flows.
+- `internal/grpcapi/v1/*.pb.go` — generated protobuf and gRPC bindings. Regenerate these from their schema rather than editing or unit-testing generated implementation details.
 
-### Stable full-suite limitation
-- The repository now has a stable documented web coverage command (`npm run test:coverage` → `vitest run --coverage --sequence.concurrent false`), and that command passes in documented verification runs.
-- Some page suites use partial module mocks of shared hook modules. The documented serialized invocation is stable, but future coverage work should continue moving logic into lower-level pure helper tests where possible to avoid order-sensitive interactions.
+### Web
 
-### CLI / backend breadth
-The Go suite fully passes, but overall backend coverage remains below 100% because the CLI and several operational command paths depend on OS/process/network conditions and numerous argument permutations.
+- `web/src/**/*.{test,spec}.{ts,tsx}` — test implementations.
+- `web/src/test/**` — shared test setup and fixtures.
+- `web/src/**/*.d.ts` — ambient/type declarations with no executable application behavior.
+- `web/src/**/__generated__/**` and `web/src/**/*.generated.{ts,tsx}` — generated source.
+- `web/dist/**` — compiled build output.
+- `web/node_modules/**` — third-party dependencies.
 
-Representative low-coverage areas include:
-- `cmd/anubis/config.go`
-- `cmd/anubis/init.go`
-- `cmd/anubis/cluster.go`
-- `cmd/anubis/backup.go`
+There are no application-file, feature, CLI, page, hook, store, component, or entry-point exceptions. Any new exception requires an explicit policy change in this document and the corresponding coverage configuration; silently narrowing the coverage input is not acceptable.
 
-These are practical to continue improving, but full branch closure requires many environment/IO permutations and is not yet complete.
+## CI and Codecov
 
-## Important note
-
-At this stage, the test suite has a 100% pass rate under the documented command surface used for verification, but the repository does **not** yet have 100% line/branch coverage. This file exists to make the current exceptions explicit rather than implicit.
+CI runs the same Go script and Vitest command used locally, then uploads `coverage-filtered.out` with the `backend` flag and `web/coverage/coverage-final.json` with the `frontend` flag. `codecov.yml` independently requires 100% project and patch coverage with zero threshold tolerance. Codecov upload errors also fail CI so a missing report cannot look like a successful coverage check.

@@ -103,10 +103,7 @@ func (d *SlackDispatcher) Send(ctx context.Context, event *core.AlertEvent, chan
 		payload.IconEmoji = icon
 	}
 
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
-	}
+	data, _ := json.Marshal(payload)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", webhookURL, bytes.NewReader(data))
 	if err != nil {
@@ -245,10 +242,7 @@ func (d *DiscordDispatcher) Send(ctx context.Context, event *core.AlertEvent, ch
 		payload.AvatarURL = avatar
 	}
 
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
-	}
+	data, _ := json.Marshal(payload)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", webhookURL, bytes.NewReader(data))
 	if err != nil {
@@ -486,10 +480,7 @@ func (d *PagerDutyDispatcher) Send(ctx context.Context, event *core.AlertEvent, 
 		},
 	}
 
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
-	}
+	data, _ := json.Marshal(payload)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://events.pagerduty.com/v2/enqueue", bytes.NewReader(data))
 	if err != nil {
@@ -596,10 +587,7 @@ func (d *OpsGenieDispatcher) Send(ctx context.Context, event *core.AlertEvent, c
 		return d.closeAlert(ctx, host, apiKey, payload.Alias)
 	}
 
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
-	}
+	data, _ := json.Marshal(payload)
 
 	url := fmt.Sprintf("https://%s/v2/alerts", host)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(data))
@@ -789,10 +777,7 @@ func (d *TelegramDispatcher) Send(ctx context.Context, event *core.AlertEvent, c
 		payload["disable_notification"] = "true"
 	}
 
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
-	}
+	data, _ := json.Marshal(payload)
 
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(data))
 	if err != nil {
@@ -1038,10 +1023,7 @@ func (d *WebHookDispatcher) Send(ctx context.Context, event *core.AlertEvent, ch
 		"timestamp":   event.Timestamp,
 	}
 
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
-	}
+	data, _ := json.Marshal(payload)
 
 	// Apply template if provided
 	if template, ok := channel.Config["template"].(string); ok && template != "" {
