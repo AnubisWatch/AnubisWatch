@@ -148,7 +148,10 @@ export function useSoul(id: string | undefined) {
 
 export function useSoulJudgments(soulId: string | undefined) {
   return useApi<Judgment[]>(
-    () => api.get<Judgment[]>(`/souls/${soulId}/judgments`),
+    async () => {
+      const resp = await api.get<{data: Judgment[]; total: number; has_more: boolean; next_cursor?: string}>(`/souls/${soulId}/judgments`)
+      return resp.data
+    },
     [soulId]
   )
 }
