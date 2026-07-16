@@ -1,4 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import {
   ArrowLeft,
   Activity,
@@ -140,17 +141,24 @@ export function SoulDetail() {
     await updateSoul({ enabled: !soul.enabled })
   }
 
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+
   const handleDelete = async () => {
-    if (!soul || !confirm('Are you sure you want to delete this soul? This action cannot be undone.')) return
-    setIsDeleting(true)
-    try {
-      await deleteSoul()
-      navigate('/souls')
-    } catch (err) {
-      alert('Failed to delete soul: ' + (err instanceof Error ? err.message : 'Unknown error'))
-    } finally {
-      setIsDeleting(false)
-    }
+   setShowDeleteDialog(true)
+  }
+
+  const handleConfirmDelete = async () => {
+   if (!soul) return
+   setShowDeleteDialog(false)
+   setIsDeleting(true)
+   try {
+   await deleteSoul()
+   navigate('/souls')
+   } catch (err) {
+   alert('Failed to delete soul: ' + (err instanceof Error ? err.message : 'Unknown error'))
+   } finally {
+   setIsDeleting(false)
+   }
   }
 
   const handleForceCheck = async () => {
@@ -731,6 +739,16 @@ export function SoulDetail() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        open={showDeleteDialog}
+        title="Delete Soul"
+        message={<>Are you sure you want to delete <strong className="text-[var(--text-primary)]">{soul?.name || 'this soul'}</strong>? This action cannot be undone. All associated judgments and alert history will be permanently removed.</>}
+        confirmLabel="Delete"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setShowDeleteDialog(false)}
+        resourceName={soul?.name}
+      />
     </div>
   )
 }
@@ -829,7 +847,7 @@ function JudgmentsList({ judgments, loading, error, getStatusIcon, getStatusText
     )
   }
 
-  return (
+  return (<>
     <div className="divide-y divide-gray-700/50">
       {judgments.map((judgment) => (
         <div
@@ -867,5 +885,6 @@ function JudgmentsList({ judgments, loading, error, getStatusIcon, getStatusText
         </div>
       ))}
     </div>
+    </>
   )
 }

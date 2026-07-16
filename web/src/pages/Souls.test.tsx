@@ -288,11 +288,24 @@ describe("Souls page", () => {
 		renderSouls();
 		fireEvent.click(screen.getByLabelText("Refresh souls"));
 		await waitFor(() => expect(mockFetchSouls).toHaveBeenCalledTimes(2));
-		(globalThis.confirm as ReturnType<typeof vi.fn>).mockReturnValueOnce(false);
+		// Click delete → dialog opens
 		fireEvent.click(screen.getByLabelText(/delete soul api/i));
-		expect(mockDeleteSoul).not.toHaveBeenCalled();
+		await waitFor(() => {
+			expect(screen.getByRole('dialog')).toBeInTheDocument()
+		})
+		// Cancel the dialog
+		fireEvent.click(screen.getByText('Cancel'))
+		await waitFor(() => {
+			expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+		})
+		expect(mockDeleteSoul).not.toHaveBeenCalled()
+		// Click delete again → confirm this time
 		mockDeleteSoul.mockRejectedValueOnce(new Error("delete failed"));
 		fireEvent.click(screen.getByLabelText(/delete soul api/i));
+		await waitFor(() => {
+			expect(screen.getByRole('dialog')).toBeInTheDocument()
+		})
+		fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
 		await waitFor(() => expect(window.alert).toHaveBeenCalledWith("Failed to delete soul: delete failed"));
 		mockUpdateSoul.mockRejectedValueOnce("toggle failed");
 		fireEvent.click(screen.getByLabelText(/pause api/i));
@@ -317,6 +330,11 @@ describe("Souls page", () => {
 		fireEvent.click(screen.getByLabelText("List view"));
 		fireEvent.click(screen.getByLabelText("Grid view"));
 		fireEvent.click(screen.getByLabelText(/delete soul fallback/i));
+		// ConfirmDialog should appear — click the confirm button
+		await waitFor(() => {
+			expect(screen.getByRole('dialog')).toBeInTheDocument()
+		})
+		fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
 		await waitFor(() => expect(mockDeleteSoul).toHaveBeenCalledWith("1"));
 		fireEvent.click(screen.getByRole("button", { name: /add soul/i }));
 		fireEvent.click(screen.getByRole("button", { name: "Cancel" }));

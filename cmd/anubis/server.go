@@ -290,255 +290,68 @@ type grpcProbeAdapter struct {
 	engine *probe.Engine
 }
 
-func (a *grpcProbeAdapter) ForceCheck(soulID string) (interface{}, error) {
+func (a *grpcProbeAdapter) ForceCheck(soulID string) (*core.Judgment, error) {
 	return a.engine.ForceCheck(soulID)
 }
 
-// grpcStorageAdapter wraps restStorageAdapter to return interface{} for gRPC compatibility
+// grpcStorageAdapter wraps restStorageAdapter to provide concrete types for the
+// gRPC Store interface. Every method simply forwards to the underlying storage
+// — there are no more interface{} conversions or map-based fallbacks.
 type grpcStorageAdapter struct {
 	inner   *restStorageAdapter
 	journey *journey.Executor
 }
 
-// sliceToInterface converts a typed slice to []interface{} for gRPC compatibility
-// This eliminates repetitive boilerplate in List*NoCtx methods
-func sliceToInterface[T any](items []T) []interface{} {
-	result := make([]interface{}, len(items))
-	for i, item := range items {
-		result[i] = item
-	}
-	return result
-}
-
-func grpcString(m map[string]interface{}, key string) string {
-	if v, ok := m[key].(string); ok {
-		return v
-	}
-	return ""
-}
-
-func grpcBool(m map[string]interface{}, key string, fallback bool) bool {
-	if v, ok := m[key].(bool); ok {
-		return v
-	}
-	return fallback
-}
-
-func grpcDuration(m map[string]interface{}, key string, fallback time.Duration) core.Duration {
-	if v, ok := m[key].(string); ok && v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			return core.Duration{Duration: d}
-		}
-	}
-	return core.Duration{Duration: fallback}
-}
-
-func grpcStringSlice(v interface{}) []string {
-	switch values := v.(type) {
-	case []string:
-		return values
-	case []interface{}:
-		out := make([]string, 0, len(values))
-		for _, item := range values {
-			if s, ok := item.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
-func grpcMapToSoul(m map[string]interface{}) *core.Soul {
-	now := time.Now()
-	id := grpcString(m, "id")
-	if id == "" {
-		id = core.GenerateID()
-	}
-	return &core.Soul{
-		ID:          id,
-		WorkspaceID: grpcString(m, "workspace_id"),
-		Name:        grpcString(m, "name"),
-		Type:        core.CheckType(grpcString(m, "type")),
-		Target:      grpcString(m, "target"),
-		Weight:      grpcDuration(m, "interval", time.Minute),
-		Timeout:     grpcDuration(m, "timeout", 10*time.Second),
-		Enabled:     grpcBool(m, "enabled", true),
-		Tags:        grpcStringSlice(m["tags"]),
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-}
-
-func grpcMapToChannel(m map[string]interface{}) *core.AlertChannel {
-	now := time.Now()
-	id := grpcString(m, "id")
-	if id == "" {
-		id = core.GenerateID()
-	}
-	cfg := make(map[string]interface{})
-	for k, v := range m {
-		switch k {
-		case "id", "name", "type", "enabled", "workspace_id":
-			continue
-		default:
-			cfg[k] = v
-		}
-	}
-	return &core.AlertChannel{
-		ID:          id,
-		WorkspaceID: grpcString(m, "workspace_id"),
-		Name:        grpcString(m, "name"),
-		Type:        core.AlertChannelType(grpcString(m, "type")),
-		Enabled:     grpcBool(m, "enabled", true),
-		Config:      cfg,
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-}
-
-func grpcMapToRule(m map[string]interface{}) *core.AlertRule {
-	now := time.Now()
-	id := grpcString(m, "id")
-	if id == "" {
-		id = core.GenerateID()
-	}
-	severity := core.Severity(grpcString(m, "severity"))
-	if severity == "" {
-		severity = core.SeverityWarning
-	}
-	return &core.AlertRule{
-		ID:          id,
-		WorkspaceID: grpcString(m, "workspace_id"),
-		Name:        grpcString(m, "name"),
-		Enabled:     grpcBool(m, "enabled", true),
-		Channels:    grpcStringSlice(m["channels"]),
-		Severity:    severity,
-		Scope:       core.RuleScope{Type: "all"},
-		Cooldown:    grpcDuration(m, "cooldown", 5*time.Minute),
-		CreatedAt:   now,
-	}
-}
-
-func grpcMapToJourney(m map[string]interface{}) *core.JourneyConfig {
-	now := time.Now()
-	id := grpcString(m, "id")
-	if id == "" {
-		id = core.GenerateID()
-	}
-	return &core.JourneyConfig{
-		ID:          id,
-		WorkspaceID: grpcString(m, "workspace_id"),
-		Name:        grpcString(m, "name"),
-		Description: grpcString(m, "description"),
-		Weight:      grpcDuration(m, "interval", time.Minute),
-		Timeout:     grpcDuration(m, "timeout", 30*time.Second),
-		Enabled:     grpcBool(m, "enabled", true),
-		Variables:   map[string]string{},
-		CreatedAt:   now,
-		UpdatedAt:   now,
-	}
-}
-
-func (a *grpcStorageAdapter) GetSoulNoCtx(id string) (interface{}, error) {
+func (a *grpcStorageAdapter) GetSoulNoCtx(id string) (*core.Soul, error) {
 	return a.inner.GetSoulNoCtx(id)
 }
-func (a *grpcStorageAdapter) ListSoulsNoCtx(ws string, o, l int) ([]interface{}, error) {
-	souls, err := a.inner.ListSoulsNoCtx(ws, o, l)
-	if err != nil {
-		return nil, err
-	}
-	return sliceToInterface(souls), nil
+func (a *grpcStorageAdapter) ListSoulsNoCtx(ws string, o, l int) ([]*core.Soul, error) {
+	return a.inner.ListSoulsNoCtx(ws, o, l)
 }
-func (a *grpcStorageAdapter) SaveSoulNoCtx(s interface{}) error {
-	switch soul := s.(type) {
-	case *core.Soul:
-		return a.inner.SaveSoul(context.Background(), soul)
-	case map[string]interface{}:
-		return a.inner.SaveSoul(context.Background(), grpcMapToSoul(soul))
-	default:
-		return fmt.Errorf("invalid soul type: %T", s)
-	}
+func (a *grpcStorageAdapter) SaveSoulNoCtx(soul *core.Soul) error {
+	return a.inner.SaveSoul(context.Background(), soul)
 }
 func (a *grpcStorageAdapter) DeleteSoulNoCtx(id string) error { return a.inner.DeleteSoulNoCtx(id) }
-func (a *grpcStorageAdapter) ListJudgmentsNoCtx(soulID string, start, end time.Time, limit int) ([]interface{}, error) {
-	judgments, err := a.inner.ListJudgmentsNoCtx(soulID, start, end, limit)
-	if err != nil {
-		return nil, err
-	}
-	return sliceToInterface(judgments), nil
+func (a *grpcStorageAdapter) ListJudgmentsNoCtx(soulID string, start, end time.Time, limit int) ([]*core.Judgment, error) {
+	return a.inner.ListJudgmentsNoCtx(soulID, start, end, limit)
 }
-func (a *grpcStorageAdapter) GetChannelNoCtx(id string, ws string) (interface{}, error) {
+func (a *grpcStorageAdapter) GetChannelNoCtx(id string, ws string) (*core.AlertChannel, error) {
 	return a.inner.GetChannelNoCtx(id, ws)
 }
-func (a *grpcStorageAdapter) ListChannelsNoCtx(ws string) ([]interface{}, error) {
-	channels, err := a.inner.ListChannelsNoCtx(ws)
-	if err != nil {
-		return nil, err
-	}
-	return sliceToInterface(channels), nil
+func (a *grpcStorageAdapter) ListChannelsNoCtx(ws string) ([]*core.AlertChannel, error) {
+	return a.inner.ListChannelsNoCtx(ws)
 }
-func (a *grpcStorageAdapter) SaveChannelNoCtx(ch interface{}) error {
-	switch channel := ch.(type) {
-	case *core.AlertChannel:
-		return a.inner.SaveChannelNoCtx(channel)
-	case map[string]interface{}:
-		return a.inner.SaveChannelNoCtx(grpcMapToChannel(channel))
-	default:
-		return fmt.Errorf("invalid channel type: %T", ch)
-	}
+func (a *grpcStorageAdapter) SaveChannelNoCtx(ch *core.AlertChannel) error {
+	return a.inner.SaveChannelNoCtx(ch)
 }
 func (a *grpcStorageAdapter) DeleteChannelNoCtx(id string, ws string) error {
 	return a.inner.DeleteChannelNoCtx(id, ws)
 }
-func (a *grpcStorageAdapter) GetRuleNoCtx(id string, ws string) (interface{}, error) {
+func (a *grpcStorageAdapter) GetRuleNoCtx(id string, ws string) (*core.AlertRule, error) {
 	return a.inner.GetRuleNoCtx(id, ws)
 }
-func (a *grpcStorageAdapter) ListRulesNoCtx(ws string) ([]interface{}, error) {
-	rules, err := a.inner.ListRulesNoCtx(ws)
-	if err != nil {
-		return nil, err
-	}
-	return sliceToInterface(rules), nil
+func (a *grpcStorageAdapter) ListRulesNoCtx(ws string) ([]*core.AlertRule, error) {
+	return a.inner.ListRulesNoCtx(ws)
 }
-func (a *grpcStorageAdapter) SaveRuleNoCtx(rule interface{}) error {
-	switch r := rule.(type) {
-	case *core.AlertRule:
-		return a.inner.SaveRuleNoCtx(r)
-	case map[string]interface{}:
-		return a.inner.SaveRuleNoCtx(grpcMapToRule(r))
-	default:
-		return fmt.Errorf("invalid rule type: %T", rule)
-	}
+func (a *grpcStorageAdapter) SaveRuleNoCtx(rule *core.AlertRule) error {
+	return a.inner.SaveRuleNoCtx(rule)
 }
 func (a *grpcStorageAdapter) DeleteRuleNoCtx(id string, ws string) error {
 	return a.inner.DeleteRuleNoCtx(id, ws)
 }
-func (a *grpcStorageAdapter) GetJourneyNoCtx(id string) (interface{}, error) {
+func (a *grpcStorageAdapter) GetJourneyNoCtx(id string) (*core.JourneyConfig, error) {
 	return a.inner.GetJourneyNoCtx(id)
 }
-func (a *grpcStorageAdapter) ListJourneysNoCtx(ws string, o, l int) ([]interface{}, error) {
-	journeys, err := a.inner.ListJourneysNoCtx(ws, o, l)
-	if err != nil {
-		return nil, err
-	}
-	return sliceToInterface(journeys), nil
+func (a *grpcStorageAdapter) ListJourneysNoCtx(ws string, o, l int) ([]*core.JourneyConfig, error) {
+	return a.inner.ListJourneysNoCtx(ws, o, l)
 }
-func (a *grpcStorageAdapter) SaveJourneyNoCtx(j interface{}) error {
-	switch journey := j.(type) {
-	case *core.JourneyConfig:
-		return a.inner.SaveJourneyNoCtx(journey)
-	case map[string]interface{}:
-		return a.inner.SaveJourneyNoCtx(grpcMapToJourney(journey))
-	default:
-		return fmt.Errorf("invalid journey type: %T", j)
-	}
+func (a *grpcStorageAdapter) SaveJourneyNoCtx(j *core.JourneyConfig) error {
+	return a.inner.SaveJourneyNoCtx(j)
 }
 func (a *grpcStorageAdapter) DeleteJourneyNoCtx(id string) error {
 	return a.inner.DeleteJourneyNoCtx(id)
 }
-func (a *grpcStorageAdapter) RunJourneyNoCtx(workspace, journeyID string) (interface{}, error) {
+func (a *grpcStorageAdapter) RunJourneyNoCtx(workspace, journeyID string) (*core.JourneyRun, error) {
 	if a.journey == nil {
 		return nil, fmt.Errorf("journey executor not available")
 	}
@@ -548,21 +361,13 @@ func (a *grpcStorageAdapter) RunJourneyNoCtx(workspace, journeyID string) (inter
 	}
 	return a.journey.RunOnce(context.Background(), j)
 }
-func (a *grpcStorageAdapter) ListEvents(soulID string, limit int) ([]interface{}, error) {
-	events, err := a.inner.store.ListAlertEvents(soulID, limit)
-	if err != nil {
-		return nil, err
-	}
-	return sliceToInterface(events), nil
+func (a *grpcStorageAdapter) ListEvents(soulID string, limit int) ([]*core.AlertEvent, error) {
+	return a.inner.store.ListAlertEvents(soulID, limit)
 }
-func (a *grpcStorageAdapter) ListJourneyRunsNoCtx(workspace, journeyID string, limit int) ([]interface{}, error) {
-	runs, err := a.inner.store.QueryJourneyRuns(context.Background(), workspace, journeyID, limit)
-	if err != nil {
-		return nil, err
-	}
-	return sliceToInterface(runs), nil
+func (a *grpcStorageAdapter) ListJourneyRunsNoCtx(workspace, journeyID string, limit int) ([]*core.JourneyRun, error) {
+	return a.inner.store.QueryJourneyRuns(context.Background(), workspace, journeyID, limit)
 }
-func (a *grpcStorageAdapter) GetJourneyRunNoCtx(workspace, journeyID, runID string) (interface{}, error) {
+func (a *grpcStorageAdapter) GetJourneyRunNoCtx(workspace, journeyID, runID string) (*core.JourneyRun, error) {
 	return a.inner.store.GetJourneyRun(context.Background(), workspace, journeyID, runID)
 }
 

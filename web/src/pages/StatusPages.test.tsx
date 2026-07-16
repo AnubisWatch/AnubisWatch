@@ -82,10 +82,7 @@ describe("StatusPages", () => {
 			value: undefined,
 			configurable: true,
 		});
-		Object.defineProperty(window, "confirm", {
-			value: vi.fn(() => true),
-			configurable: true,
-		});
+
 	});
 
 	afterEach(() => {
@@ -181,6 +178,10 @@ describe("StatusPages", () => {
 				name: /delete status page production status/i,
 			}),
 		);
+		await waitFor(() => {
+			expect(screen.getByRole("dialog")).toBeInTheDocument();
+		});
+		fireEvent.click(screen.getByRole("button", { name: /confirm/i }));
 		await waitFor(() => expect(mockDeletePage).toHaveBeenCalledWith("page-1"));
 	});
 
@@ -226,10 +227,13 @@ describe("StatusPages", () => {
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 	});
 
-	it("cancels deletion and closes the modal with both controls", () => {
-		Object.defineProperty(window, "confirm", { value: vi.fn(() => false), configurable: true });
+	it("cancels deletion and closes the modal with both controls", async () => {
 		render(<StatusPages />);
 		fireEvent.click(screen.getByLabelText(/delete status page production status/i));
+		await waitFor(() => {
+			expect(screen.getByRole("dialog")).toBeInTheDocument();
+		});
+		fireEvent.click(screen.getByText("Cancel"));
 		expect(mockDeletePage).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByRole("button", { name: /create page/i }));
 		fireEvent.click(screen.getByLabelText("Close dialog"));

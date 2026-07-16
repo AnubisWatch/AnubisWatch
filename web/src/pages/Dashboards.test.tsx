@@ -77,7 +77,6 @@ describe('Dashboards', () => {
   it('deletes a dashboard after confirm', async () => {
     const dashboards = [{ id: 'dash-1', name: 'Test Dashboard', widgets: [], refresh_sec: 0 }]
     mockUseDashboards.mockReturnValue({ dashboards, loading: false, deleteDashboard: mockDeleteDashboard })
-    ;(globalThis as unknown as { confirm: () => boolean }).confirm = vi.fn(() => true)
     mockDeleteDashboard.mockResolvedValue(undefined)
 
     render(
@@ -89,6 +88,11 @@ describe('Dashboards', () => {
     fireEvent.click(screen.getByLabelText('Delete dashboard Test Dashboard'))
 
     await waitFor(() => {
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
+
+    await waitFor(() => {
       expect(mockDeleteDashboard).toHaveBeenCalledWith('dash-1')
     })
   })
@@ -96,7 +100,6 @@ describe('Dashboards', () => {
   it('cancels delete when user declines confirm', async () => {
     const dashboards = [{ id: 'dash-1', name: 'Test Dashboard', widgets: [], refresh_sec: 0 }]
     mockUseDashboards.mockReturnValue({ dashboards, loading: false, deleteDashboard: mockDeleteDashboard })
-    ;(globalThis as unknown as { confirm: () => boolean }).confirm = vi.fn(() => false)
 
     render(
       <MemoryRouter>
@@ -107,7 +110,13 @@ describe('Dashboards', () => {
     fireEvent.click(screen.getByLabelText('Delete dashboard Test Dashboard'))
 
     await waitFor(() => {
-      expect(mockDeleteDashboard).not.toHaveBeenCalled()
+      expect(screen.getByRole('dialog')).toBeInTheDocument()
     })
+    fireEvent.click(screen.getByText('Cancel'))
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+    expect(mockDeleteDashboard).not.toHaveBeenCalled()
   })
 })

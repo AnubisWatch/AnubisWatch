@@ -219,6 +219,8 @@ describe("Alerts", () => {
 		});
 
 		fireEvent.click(screen.getByLabelText(/delete channel pagerduty primary/i));
+		await screen.findByRole("dialog");
+		fireEvent.click(screen.getByRole("button", { name: /confirm/i }));
 		await waitFor(() =>
 			expect(mockDeleteChannel).toHaveBeenCalledWith("channel-1"),
 		);
@@ -293,10 +295,13 @@ describe("Alerts", () => {
 			);
 		});
 
-		(globalThis.confirm as ReturnType<typeof vi.fn>).mockReturnValueOnce(false);
 		fireEvent.click(screen.getByLabelText(/delete rule/i));
+		await screen.findByRole("dialog");
+		fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
 		expect(mockDeleteRule).not.toHaveBeenCalled();
 		fireEvent.click(screen.getByLabelText(/delete rule/i));
+		await screen.findByRole("dialog");
+		fireEvent.click(screen.getByRole("button", { name: /confirm/i }));
 		await waitFor(() => expect(mockDeleteRule).toHaveBeenCalledWith("rule-1"));
 
 		mockUseRules.mockReturnValue({

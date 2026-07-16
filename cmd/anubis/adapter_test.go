@@ -418,16 +418,14 @@ func TestGrpcStorageAdapter_SaveMapPayloads(t *testing.T) {
 	db := setupTestStore(t)
 	adapter := &grpcStorageAdapter{inner: &restStorageAdapter{store: db}}
 
-	if err := adapter.SaveSoulNoCtx(map[string]interface{}{
-		"id":           "map-soul",
-		"workspace_id": "tenant-a",
-		"name":         "Map Soul",
-		"type":         "http",
-		"target":       "https://example.com",
-		"interval":     "30s",
-		"timeout":      "5s",
-		"enabled":      true,
-		"tags":         []string{"api"},
+	if err := adapter.SaveSoulNoCtx(&core.Soul{
+		ID: "map-soul", WorkspaceID: "tenant-a",
+		Name: "Map Soul", Type: "http",
+		Target: "https://example.com",
+		Weight: core.Duration{Duration: 30 * time.Second},
+		Timeout: core.Duration{Duration: 5 * time.Second},
+		Enabled: true,
+		Tags:    []string{"api"},
 	}); err != nil {
 		t.Fatalf("SaveSoulNoCtx map failed: %v", err)
 	}
@@ -439,13 +437,10 @@ func TestGrpcStorageAdapter_SaveMapPayloads(t *testing.T) {
 		t.Fatalf("unexpected soul conversion: %+v", soul)
 	}
 
-	if err := adapter.SaveChannelNoCtx(map[string]interface{}{
-		"id":           "map-channel",
-		"workspace_id": "tenant-a",
-		"name":         "Slack",
-		"type":         "slack",
-		"enabled":      true,
-		"webhook_url":  "https://hooks.example.test",
+	if err := adapter.SaveChannelNoCtx(&core.AlertChannel{
+		ID: "map-channel", WorkspaceID: "tenant-a",
+		Name: "Slack", Type: "slack", Enabled: true,
+		Config: map[string]interface{}{"webhook_url": "https://hooks.example.test"},
 	}); err != nil {
 		t.Fatalf("SaveChannelNoCtx map failed: %v", err)
 	}
@@ -457,14 +452,12 @@ func TestGrpcStorageAdapter_SaveMapPayloads(t *testing.T) {
 		t.Fatalf("channel config was not preserved: %+v", channel.Config)
 	}
 
-	if err := adapter.SaveRuleNoCtx(map[string]interface{}{
-		"id":           "map-rule",
-		"workspace_id": "tenant-a",
-		"name":         "Rule",
-		"enabled":      true,
-		"channels":     []string{"map-channel"},
-		"severity":     "critical",
-		"cooldown":     "2m",
+	if err := adapter.SaveRuleNoCtx(&core.AlertRule{
+		ID: "map-rule", WorkspaceID: "tenant-a",
+		Name: "Rule", Enabled: true,
+		Channels: []string{"map-channel"},
+		Severity: core.SeverityCritical,
+		Cooldown: core.Duration{Duration: 2 * time.Minute},
 	}); err != nil {
 		t.Fatalf("SaveRuleNoCtx map failed: %v", err)
 	}
@@ -476,14 +469,12 @@ func TestGrpcStorageAdapter_SaveMapPayloads(t *testing.T) {
 		t.Fatalf("unexpected rule conversion: %+v", rule)
 	}
 
-	if err := adapter.SaveJourneyNoCtx(map[string]interface{}{
-		"id":           "map-journey",
-		"workspace_id": "tenant-a",
-		"name":         "Journey",
-		"description":  "Synthetic flow",
-		"interval":     "45s",
-		"timeout":      "20s",
-		"enabled":      true,
+	if err := adapter.SaveJourneyNoCtx(&core.JourneyConfig{
+		ID: "map-journey", WorkspaceID: "tenant-a",
+		Name: "Journey", Description: "Synthetic flow",
+		Weight: core.Duration{Duration: 45 * time.Second},
+		Timeout: core.Duration{Duration: 20 * time.Second},
+		Enabled: true,
 	}); err != nil {
 		t.Fatalf("SaveJourneyNoCtx map failed: %v", err)
 	}

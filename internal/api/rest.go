@@ -32,6 +32,19 @@ const (
 	maxJSONDepth = 32
 )
 
+// sensitiveQueryParams lists URL query parameters whose values must never
+// appear in logs, traces, or error messages (tokens, secrets, keys, etc.).
+var sensitiveQueryParams = map[string]bool{
+	"token":    true,
+	"api_key":  true,
+	"apikey":   true,
+	"secret":   true,
+	"password": true,
+	"passwd":   true,
+	"key":      true,
+	"auth":     true,
+}
+
 // maxDepthReader wraps an io.Reader to track JSON nesting depth.
 // It counts [, { as +1 and ], } as -1, rejecting reads when
 // depth exceeds maxJSONDepth.
@@ -154,6 +167,7 @@ type Context struct {
 	User      *User
 	Workspace string
 	StartTime time.Time
+	RequestID string // unique request identifier for log correlation
 }
 
 // Pagination holds pagination metadata
@@ -356,6 +370,7 @@ func NewRESTServer(config core.ServerConfig, authConfig core.AuthConfig, store S
 // setupRoutes configures API routes
 func (s *RESTServer) setupRoutes() {
 	// Middleware - order matters
+	s.router.Use(s.requestIDMiddleware)   // MUST be first: injects request ID before any logging
 	s.router.Use(s.loggingMiddleware)
 	s.router.Use(s.securityHeadersMiddleware) // Add security headers to all responses
 	s.router.Use(s.corsMiddleware)
@@ -517,7 +532,7 @@ func (s *RESTServer) setupRoutes() {
 	s.router.Handle("GET", "/ws", s.handleWebSocket)
 
 	// SSE (Server-Sent Events) endpoint - better fallback support
-	s.router.Handle("GET", "/api/v1/events", s.handleSSE)
+	s.router.Handle("GET", "/api/v1/events", s.requireAuth(s.handleSSE))
 }
 
 // Start starts the REST server
@@ -2354,7 +2369,7 @@ func (s *RESTServer) requireAuth(handler Handler) Handler {
 		}
 
 		// SECURITY: Support both Authorization header and httpOnly cookie (VULN-004 fix)
-		// Check Authorization header first, then fall back to cookie
+		// Check Authorization header first, then fall back to cookie, then query param.
 		token := ctx.Request.Header.Get("Authorization")
 		token = strings.TrimPrefix(token, "Bearer ")
 
@@ -2362,6 +2377,15 @@ func (s *RESTServer) requireAuth(handler Handler) Handler {
 		if token == "" {
 			if cookie, err := ctx.Request.Cookie("auth_token"); err == nil {
 				token = cookie.Value
+			}
+		}
+
+		// Query-parameter fallback (primarily for SSE, which cannot set custom
+		// headers via EventSource). Only enabled for GET requests to minimize
+		// the risk of token leakage through Referer / server logs.
+		if token == "" && ctx.Request.Method == http.MethodGet {
+			if q := ctx.Request.URL.Query().Get("token"); q != "" {
+				token = q
 			}
 		}
 
@@ -2397,6 +2421,9 @@ func (s *RESTServer) requireRole(handler Handler, permission string) Handler {
 
 func (s *RESTServer) loggingMiddleware(handler Handler) Handler {
 	return func(ctx *Context) error {
+		// Strip sensitive query params before logging/tracing
+		sanitizedURL := sanitizeURL(ctx.Request.URL.String())
+
 		// Extract trace context from incoming headers
 		propagator := otel.GetTextMapPropagator()
 		parentCtx := propagator.Extract(ctx.Request.Context(), propagation.HeaderCarrier(ctx.Request.Header))
@@ -2406,8 +2433,9 @@ func (s *RESTServer) loggingMiddleware(handler Handler) Handler {
 		ctxSpan, span := otel.Tracer("anubiswatch/http").Start(parentCtx, spanName,
 			trace.WithAttributes(
 				attribute.String("http.method", ctx.Request.Method),
-				attribute.String("http.url", ctx.Request.URL.String()),
+				attribute.String("http.url", sanitizedURL),
 				attribute.String("http.route", ctx.Request.URL.Path),
+				attribute.String("http.request_id", ctx.RequestID),
 			),
 		)
 		defer span.End()
@@ -2431,8 +2459,10 @@ func (s *RESTServer) loggingMiddleware(handler Handler) Handler {
 		s.logger.Info("HTTP request",
 			"method", ctx.Request.Method,
 			"path", ctx.Request.URL.Path,
+			"query", sanitizeQueryString(ctx.Request.URL.RawQuery), // sanitized — masks tokens
 			"duration", duration,
 			"error", err,
+			"request_id", ctx.RequestID,
 			"trace_id", span.SpanContext().TraceID().String())
 
 		return err
@@ -2445,6 +2475,90 @@ func statusCodeFromError(err error) int {
 	}
 	// Extract status code from context error if available
 	return 500
+}
+
+// sanitizeURL returns a copy of urlStr with the values of sensitive query
+// parameters replaced by "***" so that tokens, secrets and credentials never
+// appear in logs, traces or error messages. Only known parameter names from
+// sensitiveQueryParams are masked; all other parameters are left intact.
+func sanitizeURL(urlStr string) string {
+	idx := strings.IndexByte(urlStr, '?')
+	if idx < 0 {
+		return urlStr
+	}
+	base := urlStr[:idx]
+	rawQuery := urlStr[idx+1:]
+	sanitized := sanitizeQueryString(rawQuery)
+	if sanitized == rawQuery {
+		return urlStr
+	}
+	return base + "?" + sanitized
+}
+
+// sanitizeQueryString returns a copy of rawQuery with the values of sensitive
+// query parameters replaced by "***". It accepts a raw query string (the part
+// after "?") and returns the sanitized form.
+func sanitizeQueryString(rawQuery string) string {
+	if rawQuery == "" {
+		return rawQuery
+	}
+
+	var b strings.Builder
+	b.Grow(len(rawQuery))
+
+	first := true
+	for rawQuery != "" {
+		var pair string
+		ampIdx := strings.IndexByte(rawQuery, '&')
+		if ampIdx < 0 {
+			pair = rawQuery
+			rawQuery = ""
+		} else {
+			pair = rawQuery[:ampIdx]
+			rawQuery = rawQuery[ampIdx+1:]
+		}
+
+		if !first {
+			b.WriteByte('&')
+		}
+		first = false
+
+		eqIdx := strings.IndexByte(pair, '=')
+		if eqIdx < 0 {
+			// No value — parameter without "=", pass through
+			b.WriteString(pair)
+			continue
+		}
+		key := pair[:eqIdx]
+		val := pair[eqIdx+1:]
+		b.WriteString(key)
+		b.WriteByte('=')
+		if sensitiveQueryParams[key] && val != "" {
+			b.WriteString("***")
+		} else {
+			b.WriteString(val)
+		}
+	}
+
+	return b.String()
+}
+
+// requestIDMiddleware generates a unique request ID for every API request.
+// It reads an existing X-Request-ID header (for client-side correlation) or
+// generates a new ULID. The ID is set on the response, attached to the
+// request context, and surfaced in structured logs and OpenTelemetry spans.
+// Placing this middleware first means every downstream middleware and handler
+// can rely on ctx.RequestID being set.
+func (s *RESTServer) requestIDMiddleware(handler Handler) Handler {
+	return func(ctx *Context) error {
+		id := ctx.Request.Header.Get("X-Request-ID")
+		if id == "" {
+			id = core.GenerateID()
+		}
+		ctx.RequestID = id
+		ctx.Response.Header().Set("X-Request-ID", id)
+		return handler(ctx)
+	}
 }
 
 func (s *RESTServer) corsMiddleware(handler Handler) Handler {
@@ -2618,7 +2732,7 @@ func (s *RESTServer) securityHeadersMiddleware(handler Handler) Handler {
 		ctx.Response.Header().Set("X-Frame-Options", "DENY")
 		ctx.Response.Header().Set("X-XSS-Protection", "1; mode=block")
 		ctx.Response.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		ctx.Response.Header().Set("Content-Security-Policy", "default-src 'self'")
+		ctx.Response.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws: wss:; font-src 'self' data:")
 		// HSTS: force HTTPS — only set when TLS is actually enabled
 		if s.config.TLS.Enabled {
 			ctx.Response.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")

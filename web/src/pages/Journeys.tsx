@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
-  Route,
-  Plus,
-  Play,
-  Pause,
-  Edit,
-  Trash2,
+ Route,
+ Plus,
+ Play,
+ Pause,
+ Edit,
+ Trash2,
   CheckCircle2,
   XCircle,
   Clock,
@@ -21,6 +21,7 @@ import {
   Loader2,
   X
 } from 'lucide-react'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { api } from '../api/client'
 
 interface Journey {
@@ -428,9 +429,17 @@ export function Journeys() {
     await updateJourney(id, { enabled: !enabled })
   }
 
+  const [deletingJourney, setDeletingJourney] = useState<string | null>(null)
+
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this journey?')) return
-    await deleteJourney(id)
+   setDeletingJourney(id)
+  }
+
+  const handleConfirmDelete = async () => {
+   if (!deletingJourney) return
+   const id = deletingJourney
+   setDeletingJourney(null)
+   await deleteJourney(id)
   }
 
   const handleRun = async (id: string) => {
@@ -484,7 +493,7 @@ export function Journeys() {
     }
   }
 
-  return (
+  return (<>
     <div className="space-y-8">
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -1032,5 +1041,16 @@ export function Journeys() {
         />
       )}
     </div>
+  
+      <ConfirmDialog
+        open={deletingJourney !== null}
+        title="Delete Journey"
+        message={<>Are you sure you want to delete <strong className="text-[var(--text-primary)]">{journeys.find((j) => j.id === deletingJourney)?.name || 'this journey'}</strong>? This action cannot be undone.</>}
+        confirmLabel="Delete"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setDeletingJourney(null)}
+        resourceName={journeys.find((j) => j.id === deletingJourney)?.name}
+      />
+    </>
   )
 }

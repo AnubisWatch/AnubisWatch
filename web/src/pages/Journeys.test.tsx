@@ -94,7 +94,6 @@ describe('Journeys', () => {
     apiMocks.put.mockResolvedValue({})
     apiMocks.delete.mockResolvedValue({})
     vi.spyOn(window, 'alert').mockImplementation(() => undefined)
-    vi.spyOn(window, 'confirm').mockReturnValue(true)
   })
 
   it('shows loading, all journey visual variants, stats, and resets filters', async () => {
@@ -236,6 +235,7 @@ describe('Journeys', () => {
       get length() { return [1, 1, 0, 1][lengthRead++] ?? 1 },
       filter: () => [],
       reduce: () => 0,
+      find: () => undefined,
     } as unknown as JourneyFixture[]
     apiMocks.get.mockResolvedValueOnce(changingCollection)
     render(<Journeys />)
@@ -300,10 +300,13 @@ describe('Journeys', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Enable journey Failed DNS' }))
     await waitFor(() => expect(apiMocks.put).toHaveBeenCalledWith('/journeys/j2', { enabled: true }))
 
-    vi.mocked(window.confirm).mockReturnValueOnce(false).mockReturnValueOnce(true)
     fireEvent.click(screen.getByRole('button', { name: 'Delete journey Checkout Flow' }))
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }))
     expect(apiMocks.delete).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Delete journey Checkout Flow' }))
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
     await waitFor(() => expect(apiMocks.delete).toHaveBeenCalledWith('/journeys/journey-1'))
 
     const run = deferred<object>()

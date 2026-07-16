@@ -661,7 +661,7 @@ func TestServer_Start_GRPCServerError(t *testing.T) {
 
 type mockGRPCProbe struct{}
 
-func (m *mockGRPCProbe) ForceCheck(soulID string) (interface{}, error) {
+func (m *mockGRPCProbe) ForceCheck(soulID string) (*core.Judgment, error) {
 	return nil, fmt.Errorf("mock error")
 }
 

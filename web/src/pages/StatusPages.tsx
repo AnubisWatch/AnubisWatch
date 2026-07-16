@@ -18,8 +18,9 @@ import {
   Share2,
   Palette,
   X,
-  Check
+  Check,
 } from 'lucide-react'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { useStatusPages, useSouls } from '../api/hooks'
 import type { StatusPage } from '../api/client'
 
@@ -178,9 +179,17 @@ export function StatusPages() {
     await handleCopyUrl(url, page.id)
   }
 
+  const [deletingPage, setDeletingPage] = useState<string | null>(null)
+
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this status page?')) return
-    await deletePage(id)
+   setDeletingPage(id)
+  }
+
+  const handleConfirmDelete = async () => {
+   if (!deletingPage) return
+   const id = deletingPage
+   setDeletingPage(null)
+   await deletePage(id)
   }
 
   const filteredPages = pages.filter(page => {
@@ -216,7 +225,7 @@ export function StatusPages() {
     }
   }
 
-  return (
+  return (<>
     <div className="space-y-8">
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -627,5 +636,16 @@ export function StatusPages() {
         </div>
       )}
     </div>
+  
+      <ConfirmDialog
+        open={deletingPage !== null}
+        title="Delete Status Page"
+        message={<>Are you sure you want to delete <strong className="text-[var(--text-primary)]">{pages.find((p) => p.id === deletingPage)?.name || 'this status page'}</strong>? This action cannot be undone.</>}
+        confirmLabel="Delete"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setDeletingPage(null)}
+        resourceName={pages.find((p) => p.id === deletingPage)?.name}
+      />
+    </>
   )
 }

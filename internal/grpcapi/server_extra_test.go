@@ -24,28 +24,28 @@ type failingMockGRPCStore struct {
 	listSoulsErr     bool
 }
 
-func (m *failingMockGRPCStore) ListJudgmentsNoCtx(soulID string, start, end time.Time, limit int) ([]interface{}, error) {
+func (m *failingMockGRPCStore) ListJudgmentsNoCtx(soulID string, start, end time.Time, limit int) ([]*core.Judgment, error) {
 	if m.listJudgmentsErr {
 		return nil, fmt.Errorf("db error")
 	}
 	return m.mockGRPCStore.ListJudgmentsNoCtx(soulID, start, end, limit)
 }
 
-func (m *failingMockGRPCStore) ListEvents(soulID string, limit int) ([]interface{}, error) {
+func (m *failingMockGRPCStore) ListEvents(soulID string, limit int) ([]*core.AlertEvent, error) {
 	if m.listEventsErr {
 		return nil, fmt.Errorf("db error")
 	}
 	return m.mockGRPCStore.ListEvents(soulID, limit)
 }
 
-func (m *failingMockGRPCStore) GetJourneyRunNoCtx(workspace, journeyID, runID string) (interface{}, error) {
+func (m *failingMockGRPCStore) GetJourneyRunNoCtx(workspace, journeyID, runID string) (*core.JourneyRun, error) {
 	if m.getJourneyRunErr {
 		return nil, fmt.Errorf("db error")
 	}
 	return m.mockGRPCStore.GetJourneyRunNoCtx(workspace, journeyID, runID)
 }
 
-func (m *failingMockGRPCStore) ListSoulsNoCtx(ws string, o, l int) ([]interface{}, error) {
+func (m *failingMockGRPCStore) ListSoulsNoCtx(ws string, o, l int) ([]*core.Soul, error) {
 	if m.listSoulsErr {
 		return nil, fmt.Errorf("db error")
 	}
@@ -69,7 +69,7 @@ func (m *errorVerdictsStream) Context() context.Context { return m.ctx }
 func (m *errorVerdictsStream) Send(v *v1.Verdict) error { return errors.New("send error") }
 
 func TestServer_Start_InvalidAddress(t *testing.T) {
-	srv := NewServer("invalid://:abc", newMockGRPCStore(), &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
+	srv := NewServer("invalID://:abc", newMockGRPCStore(), &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 	if err := srv.Start(); err == nil {
 		t.Error("Expected error for invalid listen address")
 	}
@@ -92,8 +92,8 @@ func TestServer_StreamJudgments_StoreError(t *testing.T) {
 
 func TestServer_StreamJudgments_SendError(t *testing.T) {
 	store := newMockGRPCStore()
-	store.judgments = []interface{}{
-		&mockJudgment{id: "j1", soulID: "s1", status: "alive", duration: 10 * time.Millisecond, message: "ok", timestamp: time.Now()},
+	store.judgments = []*core.Judgment{
+		{ID: "j1", SoulID: "s1", Status: "alive", Duration: 10 * time.Millisecond, Message: "ok", Timestamp: time.Now()},
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
@@ -125,8 +125,8 @@ func TestServer_StreamVerdicts_StoreError(t *testing.T) {
 
 func TestServer_StreamVerdicts_SendError(t *testing.T) {
 	store := newMockGRPCStore()
-	store.events = []interface{}{
-		&mockAlertEvent{id: "evt_1", soulID: "s1", status: "firing", severity: "critical", message: "alert", timestamp: time.Now()},
+	store.events = []*core.AlertEvent{
+		{ID: "evt_1", SoulID: "s1", Status: "firing", Severity: "critical", Message: "alert", Timestamp: time.Now()},
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
@@ -179,9 +179,9 @@ func TestServer_ListSouls_StoreError(t *testing.T) {
 
 func TestServer_ListSouls_FiltersBeforePagination(t *testing.T) {
 	store := newMockGRPCStore()
-	store.souls["dns-prod"] = &mockSoul{id: "dns-prod", name: "DNS prod", soulType: "dns", tags: []string{"prod"}}
-	store.souls["http-prod"] = &mockSoul{id: "http-prod", name: "HTTP prod", soulType: "http", tags: []string{"prod", "critical"}}
-	store.souls["http-dev"] = &mockSoul{id: "http-dev", name: "HTTP dev", soulType: "http", tags: []string{"dev"}}
+	store.souls["dns-prod"] = &core.Soul{ID: "dns-prod", Name: "DNS prod", Type: "dns", Tags: []string{"prod"}}
+	store.souls["http-prod"] = &core.Soul{ID: "http-prod", Name: "HTTP prod", Type: "http", Tags: []string{"prod", "critical"}}
+	store.souls["http-dev"] = &core.Soul{ID: "http-dev", Name: "HTTP dev", Type: "http", Tags: []string{"dev"}}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
 	soulType := "http"
@@ -227,7 +227,7 @@ func TestServer_GettersReturnNotFoundForNilResource(t *testing.T) {
 func TestServer_ListSouls_PaginationHasMore(t *testing.T) {
 	store := newMockGRPCStore()
 	for i := 0; i < 5; i++ {
-		_ = store.SaveSoulNoCtx(map[string]interface{}{"name": fmt.Sprintf("soul-%d", i)})
+		_ = store.SaveSoulNoCtx(&core.Soul{Name: fmt.Sprintf("soul-%d", i)})
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
@@ -267,7 +267,7 @@ func TestServer_ListChannels_AppliesPagination(t *testing.T) {
 	store := newMockGRPCStore()
 	for i := 0; i < 5; i++ {
 		id := fmt.Sprintf("ch_%d", i)
-		store.channels[id] = &mockChannel{id: id, name: id, chType: "webhook"}
+		store.channels[id] = &core.AlertChannel{ID: id, Name: id, Type: "webhook"}
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
@@ -285,7 +285,7 @@ func TestServer_ListRules_AppliesPagination(t *testing.T) {
 	store := newMockGRPCStore()
 	for i := 0; i < 5; i++ {
 		id := fmt.Sprintf("rule_%d", i)
-		store.rules[id] = &mockRule{id: id, name: id}
+		store.rules[id] = &core.AlertRule{ID: id, Name: id}
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
@@ -303,7 +303,7 @@ func TestServer_ListJourneys_AppliesPagination(t *testing.T) {
 	store := newMockGRPCStore()
 	for i := 0; i < 5; i++ {
 		id := fmt.Sprintf("journey_%d", i)
-		store.journeys[id] = &mockJourney{id: id, name: id}
+		store.journeys[id] = &core.JourneyConfig{ID: id, Name: id}
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
@@ -319,12 +319,12 @@ func TestServer_ListJourneys_AppliesPagination(t *testing.T) {
 
 func TestServer_ListJudgments_FiltersStatusAndOffsets(t *testing.T) {
 	store := newMockGRPCStore()
-	store.souls["s1"] = &mockSoul{id: "s1", name: "test"}
+	store.souls["s1"] = &core.Soul{ID: "s1", Name: "test"}
 	now := time.Now()
-	store.judgments = []interface{}{
-		&mockJudgment{id: "j1", soulID: "s1", status: "alive", duration: time.Millisecond, timestamp: now},
-		&mockJudgment{id: "j2", soulID: "s1", status: "dead", duration: time.Millisecond, timestamp: now},
-		&mockJudgment{id: "j3", soulID: "s1", status: "alive", duration: time.Millisecond, timestamp: now},
+	store.judgments = []*core.Judgment{
+		{ID: "j1", SoulID: "s1", Status: "alive", Duration: time.Millisecond, Timestamp: now},
+		&core.Judgment{ID: "j2", SoulID: "s1", Status: "dead", Duration: time.Millisecond, Timestamp: now},
+		&core.Judgment{ID: "j3", SoulID: "s1", Status: "alive", Duration: time.Millisecond, Timestamp: now},
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 	statusFilter := "alive"
@@ -346,11 +346,11 @@ func TestServer_ListJudgments_FiltersStatusAndOffsets(t *testing.T) {
 func TestServer_ListVerdicts_FiltersStatusSeverityAndOffsets(t *testing.T) {
 	store := newMockGRPCStore()
 	now := time.Now()
-	store.events = []interface{}{
-		&mockAlertEvent{id: "evt_1", soulID: "s1", status: "firing", severity: "critical", timestamp: now},
-		&mockAlertEvent{id: "evt_2", soulID: "s1", status: "resolved", severity: "critical", timestamp: now},
-		&mockAlertEvent{id: "evt_3", soulID: "s1", status: "firing", severity: "warning", timestamp: now},
-		&mockAlertEvent{id: "evt_4", soulID: "s1", status: "firing", severity: "critical", timestamp: now},
+	store.events = []*core.AlertEvent{
+		{ID: "evt_1", SoulID: "s1", Status: "firing", Severity: "critical", Timestamp: now},
+		&core.AlertEvent{ID: "evt_2", SoulID: "s1", Status: "resolved", Severity: "critical", Timestamp: now},
+		&core.AlertEvent{ID: "evt_3", SoulID: "s1", Status: "firing", Severity: "warning", Timestamp: now},
+		&core.AlertEvent{ID: "evt_4", SoulID: "s1", Status: "firing", Severity: "critical", Timestamp: now},
 	}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 	statusFilter := "firing"
@@ -682,7 +682,7 @@ func TestApplySoulUpdates_Tags(t *testing.T) {
 		t.Errorf("Expected 3 tags, got %d", len(soul.Tags))
 	}
 	if soul.Tags[0] != "tag1" || soul.Tags[1] != "tag2" || soul.Tags[2] != "tag3" {
-		t.Errorf("Unexpected tags: %v", soul.Tags)
+		t.Errorf("Unexpected Tags: %v", soul.Tags)
 	}
 }
 

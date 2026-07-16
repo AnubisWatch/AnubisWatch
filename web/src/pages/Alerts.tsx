@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
-  Bell,
-  Plus,
+ Bell,
+ Plus,
   Check,
   AlertTriangle,
   AlertCircle,
@@ -25,6 +25,7 @@ import {
 } from 'lucide-react'
 import { useChannels, useIncidents, useRules } from '../api/hooks'
 import type { AlertChannel, AlertRule } from '../api/client'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 type Severity = 'critical' | 'warning' | 'info'
 type ChannelType = 'slack' | 'email' | 'pagerduty' | 'webhook' | 'discord'
@@ -202,14 +203,29 @@ export function Alerts() {
     await updateRule(id, { enabled: !enabled })
   }
 
+  const [deletingChannelId, setDeletingChannelId] = useState<string | null>(null)
+  const [deletingRuleId, setDeletingRuleId] = useState<string | null>(null)
+
   const handleDeleteChannel = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this channel?')) return
-    await deleteChannel(id)
+   setDeletingChannelId(id)
+  }
+
+  const handleConfirmDeleteChannel = async () => {
+   if (!deletingChannelId) return
+   const id = deletingChannelId
+   setDeletingChannelId(null)
+   await deleteChannel(id)
   }
 
   const handleDeleteRule = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this rule?')) return
-    await deleteRule(id)
+   setDeletingRuleId(id)
+  }
+
+  const handleConfirmDeleteRule = async () => {
+   if (!deletingRuleId) return
+   const id = deletingRuleId
+   setDeletingRuleId(null)
+   await deleteRule(id)
   }
 
   const handleSaveChannel = async () => {
@@ -335,7 +351,7 @@ export function Alerts() {
   const loading = activeTab === 'channels' ? channelsLoading : activeTab === 'rules' ? rulesLoading : false
   const error = activeTab === 'channels' ? channelsError : activeTab === 'rules' ? rulesError : null
 
-  return (
+  return (<>
     <div className="space-y-8">
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -1106,5 +1122,24 @@ export function Alerts() {
         </div>
       )}
     </div>
+  
+      <ConfirmDialog
+        open={deletingChannelId !== null}
+        title="Delete Alert Channel"
+        message={<>Are you sure you want to delete this alert channel? This action cannot be undone.</>}
+        confirmLabel="Delete"
+        onConfirm={handleConfirmDeleteChannel}
+        onCancel={() => setDeletingChannelId(null)}
+      />
+
+      <ConfirmDialog
+        open={deletingRuleId !== null}
+        title="Delete Alert Rule"
+        message={<>Are you sure you want to delete this alert rule? This action cannot be undone.</>}
+        confirmLabel="Delete"
+        onConfirm={handleConfirmDeleteRule}
+        onCancel={() => setDeletingRuleId(null)}
+      />
+    </>
   )
 }

@@ -183,10 +183,13 @@ func (v *SSRFValidator) isBlockedHost(host string) bool {
 	return false
 }
 
-// isBlockedIP checks if an IP address is blocked
+// isBlockedIP checks if an IP address is blocked.
+// The AllowPrivate field is set once at construction time via NewSSRFValidator
+// (which reads ANUBIS_SSRF_ALLOW_PRIVATE) or explicitly by the caller.
+// We do NOT re-read the env var here — it never changes at runtime and
+// os.Getenv has non-trivial overhead on every probe check hot path.
 func (v *SSRFValidator) isBlockedIP(ip net.IP) bool {
-	// Check if explicitly allowed first (or via environment variable for tests)
-	if v.AllowPrivate || os.Getenv("ANUBIS_SSRF_ALLOW_PRIVATE") == "1" {
+	if v.AllowPrivate {
 		return false
 	}
 

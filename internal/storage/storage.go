@@ -165,6 +165,8 @@ func (db *CobaltDB) GetActiveVerdicts(ctx context.Context, workspaceID, soulID s
 func (db *CobaltDB) SaveJourney(ctx context.Context, j *core.JourneyConfig) error {
 	if j.ID == "" {
 		j.ID = core.GenerateID()
+	} else if err := validateResourceID(j.ID, "journey"); err != nil {
+		return err
 	}
 
 	workspaceID := j.WorkspaceID
@@ -634,6 +636,9 @@ func (db *CobaltDB) GetRaftLogEntry(ctx context.Context, index uint64) (term uin
 
 // SaveAlertChannel saves an alert channel
 func (db *CobaltDB) SaveAlertChannel(ch *core.AlertChannel) error {
+	if err := validateResourceID(ch.ID, "channel"); err != nil {
+		return err
+	}
 	ws := ch.WorkspaceID
 	if ws == "" {
 		ws = "default"
@@ -716,6 +721,9 @@ func (db *CobaltDB) DeleteAlertChannel(id string, workspace string) error {
 
 // SaveAlertRule saves an alert rule
 func (db *CobaltDB) SaveAlertRule(rule *core.AlertRule) error {
+	if err := validateResourceID(rule.ID, "rule"); err != nil {
+		return err
+	}
 	ws := rule.WorkspaceID
 	if ws == "" {
 		ws = "default"
@@ -936,6 +944,9 @@ func (db *CobaltDB) ListActiveIncidents() ([]*core.Incident, error) {
 // StatusPage repository methods
 
 func (db *CobaltDB) SaveStatusPage(page *core.StatusPage) error {
+	if err := validateResourceID(page.ID, "statuspage"); err != nil {
+		return err
+	}
 	workspaceID := defaultWorkspace(page.WorkspaceID)
 	page.WorkspaceID = workspaceID
 	key := fmt.Sprintf("%s/statuspages/%s", workspaceID, page.ID)
@@ -1154,6 +1165,9 @@ func (db *CobaltDB) GetUptimeHistory(soulID string, days int) ([]core.UptimeDay,
 }
 
 func (db *CobaltDB) SaveDashboard(dashboard *core.CustomDashboard) error {
+	if err := validateResourceID(dashboard.ID, "dashboard"); err != nil {
+		return err
+	}
 	workspaceID := defaultWorkspace(dashboard.WorkspaceID)
 	dashboard.WorkspaceID = workspaceID
 	key := fmt.Sprintf("%s/dashboards/%s", workspaceID, dashboard.ID)
@@ -1237,6 +1251,8 @@ func (db *CobaltDB) findDashboardData(id string) ([]byte, error) {
 func (db *CobaltDB) SaveMaintenanceWindow(w *core.MaintenanceWindow) error {
 	if w.ID == "" {
 		w.ID = core.GenerateID()
+	} else if err := validateResourceID(w.ID, "maintenance"); err != nil {
+		return err
 	}
 	workspaceID := defaultWorkspace(w.WorkspaceID)
 	w.WorkspaceID = workspaceID

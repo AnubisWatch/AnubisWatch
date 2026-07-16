@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"log/slog"
 	"os"
@@ -128,6 +129,17 @@ const (
 	walCheckpointInterval = 30 * time.Second
 )
 
+// validateResourceID checks that a resource ID does not contain '/', which
+// would break the key format "workspaceID/type/resourceID".  All IDs generated
+// by core.GenerateID() (Crockford Base32 ULIDs) are safe; this guard catches
+// user-supplied or imported IDs that could corrupt the key hierarchy.
+func validateResourceID(id, entity string) error {
+	if strings.Contains(id, "/") {
+		return fmt.Errorf("invalid %s ID %q: must not contain '/'", entity, id)
+	}
+	return nil
+}
+
 // writeAheadLog provides crash recovery
 type writeAheadLog struct {
 	path string
@@ -180,10 +192,21 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 		btreeOrder: btreeOrder,
 	}
 
-	// Initialize encryption if configured
+	// Initialize encryption if configured.
+	// When Encryption.Enabled is true the caller MUST supply a non-empty key.
+	// An error here (empty key, HKDF init failure, etc.) prevents the engine
+	// from starting so the operator cannot accidentally run with unencrypted
+	// storage while believing encryption is active.
 	var enc *encryptor
-	if config.Encryption.Enabled && config.Encryption.Key != "" {
-		enc, _ = newEncryptor(config.Encryption.Key)
+	if config.Encryption.Enabled {
+		if config.Encryption.Key == "" {
+			return nil, fmt.Errorf("encryption is enabled but encryption.key is empty")
+		}
+		var err error
+		enc, err = newEncryptor(config.Encryption.Key)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize encryption: %w", err)
+		}
 		logger.Info("Encryption enabled (AES-256-GCM)")
 	}
 
@@ -447,10 +470,158 @@ func (db *CobaltDB) Checkpoint() error {
 		return err
 	}
 
+	// After a successful checkpoint the WAL no longer contains tombstone
+	// (nil-valued) entries, but the in-memory B+Tree still holds them.
+	// Compact the tree to reclaim those slots and re-index in-memory maps
+	// so judgmentIndex and friends don't accumulate stale entries until
+	// the next process restart.
+	// Hold both db.mu and db.data.mu: compactTree mutates the B+Tree and
+	// rebuildIndexes writes index/workspace maps.
+	db.mu.Lock()
+	db.data.mu.Lock()
+	db.compactTree()
+	db.rebuildIndexes()
+	db.data.mu.Unlock()
+	db.mu.Unlock()
+
 	db.checkpointBaseMu.Lock()
 	db.checkpointBaseSz = db.wal.currentSize()
 	db.checkpointBaseMu.Unlock()
 	return nil
+}
+
+// compactTree removes nil-valued tombstone entries from the in-memory B+Tree
+// by rebuilding it from scratch. Caller must hold db.data.mu.
+// IMPORTANT: does NOT replace db.data — it rebuilds the tree under the existing
+// root by collecting live entries, clearing the tree, and re-inserting.
+func (db *CobaltDB) compactTree() {
+	// Collect all live entries
+	type kv struct {
+		key   string
+		value []byte
+	}
+	var live []kv
+	node := db.data.root
+	for node != nil && !node.isLeaf {
+		if len(node.children) == 0 {
+			node = nil
+			break
+		}
+		node = node.children[0]
+	}
+	for node != nil {
+		for i, key := range node.keys {
+			if node.values[i] != nil {
+				live = append(live, kv{key: key, value: node.values[i]})
+			}
+		}
+		node = node.next
+	}
+
+	// Rebuild the tree in-place: create a fresh root and re-insert.
+	// We mutate the existing btreeIndex fields directly rather than
+	// replacing db.data, so callers don't lose their mutex reference.
+	newRoot := &btreeNode{
+		isLeaf: true,
+		keys:   make([]string, 0),
+		values: make([][]byte, 0),
+	}
+	// Reset the existing index in-place.
+	db.data.root = newRoot
+	db.data.nextSeq = 0
+	for _, e := range live {
+		_ = db.data.insert(e.key, e.value)
+	}
+	db.data.nextSeq = uint64(len(live))
+}
+
+// rebuildIndexes clears and repopulates all in-memory secondary indexes by
+// scanning the live B+Tree. Caller must hold db.mu (or db.data.mu when called
+// from compactTree/Checkpoint which already holds it).
+func (db *CobaltDB) rebuildIndexes() {
+	// Reset all index maps
+	db.soulIndex = make(map[string]string)
+	db.judgmentIndex = make(map[string]string)
+	db.channelIndex = make(map[string]string)
+	db.ruleIndex = make(map[string]string)
+	db.journeyIndex = make(map[string]string)
+	db.incidentIndex = make(map[string]string)
+	db.statusPageIndex = make(map[string]string)
+	db.dashboardIndex = make(map[string]string)
+	db.maintenanceIndex = make(map[string]string)
+	db.alertEventIndex = make(map[string]string)
+	db.workspaceIndex = make(map[string]struct{})
+	db.workspaceOrder = make([]string, 0)
+
+	// Scan the tree for all keys and rebuild indexes using the same
+	// key-parsing logic as replayWAL.
+	node := db.data.root
+	for node != nil && !node.isLeaf {
+		if len(node.children) == 0 {
+			return
+		}
+		node = node.children[0]
+	}
+	for node != nil {
+		for _, key := range node.keys {
+			parts := strings.SplitN(key, "/", 3)
+			if len(parts) < 2 {
+				continue
+			}
+			workspaceID := parts[0]
+			db.recordWorkspaceLocked(workspaceID)
+
+			if len(parts) < 3 {
+				continue
+			}
+			resourceType := parts[1]
+			resourceID := parts[2]
+
+			switch resourceType {
+			case "souls":
+				db.soulIndex[resourceID] = workspaceID
+			case "judgment-idx":
+				db.judgmentIndex[resourceID] = key
+			case "channels":
+				db.channelIndex[resourceID] = workspaceID
+			case "rules":
+				db.ruleIndex[resourceID] = workspaceID
+			case "journeys":
+				db.journeyIndex[resourceID] = workspaceID
+			case "alerts":
+				subParts := strings.SplitN(resourceID, "/", 2)
+				subType := subParts[0]
+				subID := ""
+				if len(subParts) == 2 {
+					subID = subParts[1]
+				}
+				switch subType {
+				case "channels":
+					db.channelIndex[subID] = workspaceID
+				case "rules":
+					db.ruleIndex[subID] = workspaceID
+				case "incidents":
+					db.incidentIndex[subID] = workspaceID
+				case "events":
+					if subID != "" {
+						eventParts := strings.SplitN(subID, "/", 3)
+						if len(eventParts) == 3 {
+							db.alertEventIndex[eventParts[2]] = workspaceID
+						}
+					}
+				}
+			case "statuspages":
+				if !strings.HasPrefix(resourceID, "subscriptions/") {
+					db.statusPageIndex[resourceID] = workspaceID
+				}
+			case "dashboards":
+				db.dashboardIndex[resourceID] = workspaceID
+			case "maintenance":
+				db.maintenanceIndex[resourceID] = workspaceID
+			}
+		}
+		node = node.next
+	}
 }
 
 // checkpointLoop periodically compacts the WAL once it has grown well past its
@@ -843,10 +1014,31 @@ func newWAL(path string) (*writeAheadLog, error) {
 	}, nil
 }
 
+// walChecksum computes a CRC-32/IEEE checksum over the JSON representation of
+// entry with the Crc32 field zeroed. This gives a deterministic checksum that
+// covers all meaningful fields (op, key, value, time) and is backward-compatible:
+// a Crc32 value of zero means "no checksum" (legacy entry).
+func walChecksum(entry walEntry) (uint32, error) {
+	entry.Crc32 = 0
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return 0, err
+	}
+	return crc32.ChecksumIEEE(data), nil
+}
+
 // writeEntryLocked marshals and appends one length-prefixed entry to the given
 // file. The caller must hold w.mu. It returns the number of bytes written so
-// callers can maintain the size counter.
+// callers can maintain the size counter. A CRC-32/IEEE checksum is computed
+// over the entry's meaningful fields and embedded in the stored JSON.
 func writeEntryLocked(f *os.File, entry walEntry) (int, error) {
+	// Compute CRC32 checksum over the entry (covers op, key, value, time)
+	csum, err := walChecksum(entry)
+	if err != nil {
+		return 0, fmt.Errorf("checksum computation failed: %w", err)
+	}
+	entry.Crc32 = csum
+
 	data, _ := json.Marshal(entry)
 
 	length := []byte{
@@ -997,6 +1189,10 @@ type walEntry struct {
 	Key   string `json:"key"`
 	Value []byte `json:"value,omitempty"`
 	Time  int64  `json:"time"`
+	// Crc32 is a CRC-32/IEEE checksum covering the entry's op, key, value,
+	// and time fields (everything except crc32 itself). Zero means no
+	// checksum (legacy entry written before this field was introduced).
+	Crc32 uint32 `json:"crc32,omitempty"`
 }
 
 // logWALTornTail records that WAL replay stopped early at a malformed tail
@@ -1063,6 +1259,26 @@ func (db *CobaltDB) recoverFromWAL() error {
 			break
 		}
 
+		// Verify CRC32 checksum for entries that carry one (Crc32 != 0).
+		// Entries without a checksum (zero value, written before the field
+		// was introduced) are accepted for backward compatibility.
+		if entry.Crc32 != 0 {
+			expected, err := walChecksum(entry)
+			if err != nil {
+				db.logger.Warn("WAL entry checksum computation failed, skipping verification",
+					"err", err, "key", entry.Key)
+			} else if expected != entry.Crc32 {
+				db.logger.Warn("WAL entry checksum mismatch — skipping corrupted entry",
+					"key", entry.Key, "op", entry.Op,
+					"expected", expected, "got", entry.Crc32)
+				// Unlike a torn tail (where we don't know the entry boundary),
+				// we already read this entry's length prefix successfully, so we
+				// know exactly where the next entry starts. Skip this entry and
+				// continue recovery with the next one.
+				continue
+			}
+		}
+
 		// Replay operation
 		switch entry.Op {
 		case "PUT":
@@ -1099,6 +1315,9 @@ func (db *CobaltDB) recoverFromWAL() error {
 
 // SaveSoul saves a soul to storage
 func (db *CobaltDB) SaveSoul(ctx context.Context, soul *core.Soul) error {
+	if err := validateResourceID(soul.ID, "soul"); err != nil {
+		return err
+	}
 	workspaceID := soul.WorkspaceID
 	if workspaceID == "" {
 		workspaceID = "default"
@@ -1285,6 +1504,9 @@ func (db *CobaltDB) ListWorkspaces(ctx context.Context) ([]*core.Workspace, erro
 
 // SaveWorkspace saves a workspace
 func (db *CobaltDB) SaveWorkspace(ctx context.Context, ws *core.Workspace) error {
+	if err := validateResourceID(ws.ID, "workspace"); err != nil {
+		return err
+	}
 	key := "workspaces/" + ws.ID
 	data, _ := json.Marshal(ws)
 	return db.Put(key, data)

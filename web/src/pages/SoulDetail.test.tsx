@@ -174,6 +174,9 @@ describe("SoulDetail", () => {
 		).toBeInTheDocument();
 
 		fireEvent.click(screen.getByLabelText("Delete soul"));
+		// Confirm dialog should now be open — click the confirm button
+		await screen.findByRole("dialog");
+		fireEvent.click(screen.getByRole("button", { name: /confirm/i }));
 		await waitFor(() => {
 			expect(mockDeleteSoul).toHaveBeenCalled();
 			expect(mockNavigate).toHaveBeenCalledWith("/souls");
@@ -181,9 +184,6 @@ describe("SoulDetail", () => {
 	});
 
 	it("surfaces force-check failures and respects delete cancellation", async () => {
-		(
-			globalThis.confirm as unknown as ReturnType<typeof vi.fn>
-		).mockReturnValueOnce(false);
 		mockForceCheck.mockRejectedValueOnce(new Error("network down"));
 		renderDetail();
 
@@ -195,7 +195,12 @@ describe("SoulDetail", () => {
 		});
 
 		fireEvent.click(screen.getByLabelText("Delete soul"));
-		expect(mockDeleteSoul).not.toHaveBeenCalled();
+		// Dialog opens — click Cancel to verify cancellation
+		await screen.findByRole("dialog");
+		fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+		await waitFor(() => {
+			expect(mockDeleteSoul).not.toHaveBeenCalled();
+		});
 	});
 
 	it("renders judgment loading, error, and empty states", () => {
@@ -265,6 +270,8 @@ describe("SoulDetail", () => {
 		fireEvent.click(screen.getByRole("button", { name: /test now/i }));
 		expect(await screen.findByText("Check failed: Unknown error")).toBeInTheDocument();
 		fireEvent.click(screen.getByLabelText("Delete soul"));
+		await screen.findByRole("dialog");
+		fireEvent.click(screen.getByRole("button", { name: /confirm/i }));
 		await waitFor(() => expect(globalThis.alert).toHaveBeenCalledWith("Failed to delete soul: Unknown error"));
 	});
 

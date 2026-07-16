@@ -27,10 +27,7 @@ vi.mock("../api/client", () => ({
 describe("Maintenance", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		Object.defineProperty(window, "confirm", {
-			value: vi.fn(() => true),
-			configurable: true,
-		});
+
 		mocks.get.mockImplementation((endpoint: string) => {
 			if (endpoint === "/souls") {
 				return Promise.resolve({
@@ -325,13 +322,20 @@ describe("Maintenance", () => {
 			);
 		});
 
-		Object.defineProperty(window, "confirm", { value: vi.fn(() => false), configurable: true });
 		fireEvent.click(screen.getByLabelText(/delete maintenance window active window/i));
+		await waitFor(() => {
+			expect(screen.getByRole('dialog')).toBeInTheDocument()
+		})
+		fireEvent.click(screen.getByText('Cancel'))
 		expect(mocks.delete).not.toHaveBeenCalled();
-		Object.defineProperty(window, "confirm", { value: vi.fn(() => true), configurable: true });
+
 		fireEvent.click(
 			screen.getByLabelText(/delete maintenance window active window/i),
 		);
+		await waitFor(() => {
+			expect(screen.getByRole('dialog')).toBeInTheDocument()
+		})
+		fireEvent.click(screen.getByRole('button', { name: /confirm/i }))
 		await waitFor(() =>
 			expect(mocks.delete).toHaveBeenCalledWith("/maintenance/mw-1"),
 		);

@@ -33,6 +33,7 @@ import {
   type SoulType,
 } from '../utils/soulForm'
 import { getStatusColor, getStatusText, getStatusLabel } from '../utils/statusUtils'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 type SoulDisplayStatus = 'healthy' | 'unhealthy' | 'unknown' | 'checking' | 'check_failed'
 
@@ -68,6 +69,7 @@ export function Souls() {
 
   // Form state
   const [formData, setFormData] = useState<SoulFormData>(defaultSoulFormData)
+  const [deletingSoul, setDeletingSoul] = useState<string | null>(null)
 
   useEffect(() => {
     fetchSouls()
@@ -116,7 +118,13 @@ export function Souls() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this soul?')) return
+    setDeletingSoul(id)
+  }
+
+  const handleConfirmDelete = async () => {
+    const id = deletingSoul
+    if (!id) return
+    setDeletingSoul(null)
     try {
       await deleteSoul(id)
     } catch (err) {
@@ -682,6 +690,26 @@ export function Souls() {
           </div>
         </div>
       )}
+
+      {/* Delete confirmation dialog */}
+      <ConfirmDialog
+        open={deletingSoul !== null}
+        title="Delete Soul"
+        message={
+          <>
+            Are you sure you want to delete{' '}
+            <strong className="text-[var(--text-primary)]">
+              {souls.find((s) => s.id === deletingSoul)?.name || 'this soul'}
+            </strong>
+            ? This action cannot be undone. All associated judgments and alert
+            history will be permanently removed.
+          </>
+        }
+        confirmLabel="Delete"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setDeletingSoul(null)}
+        resourceName={souls.find((s) => s.id === deletingSoul)?.name}
+      />
     </div>
   )
 }

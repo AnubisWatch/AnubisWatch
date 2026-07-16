@@ -42,39 +42,40 @@ type Server struct {
 	auth  Authenticator
 }
 
-// Store defines the storage operations available to the gRPC server
+// Store defines the storage operations available to the gRPC server.
+// Every method uses concrete *core.* types — no interface{} fallbacks.
 type Store interface {
-	GetSoulNoCtx(id string) (interface{}, error)
-	ListSoulsNoCtx(workspace string, offset, limit int) ([]interface{}, error)
-	SaveSoulNoCtx(soul interface{}) error
+	GetSoulNoCtx(id string) (*core.Soul, error)
+	ListSoulsNoCtx(workspace string, offset, limit int) ([]*core.Soul, error)
+	SaveSoulNoCtx(soul *core.Soul) error
 	DeleteSoulNoCtx(id string) error
 
-	ListJudgmentsNoCtx(soulID string, start, end time.Time, limit int) ([]interface{}, error)
+	ListJudgmentsNoCtx(soulID string, start, end time.Time, limit int) ([]*core.Judgment, error)
 
-	GetChannelNoCtx(id string, workspace string) (interface{}, error)
-	ListChannelsNoCtx(workspace string) ([]interface{}, error)
-	SaveChannelNoCtx(ch interface{}) error
+	GetChannelNoCtx(id string, workspace string) (*core.AlertChannel, error)
+	ListChannelsNoCtx(workspace string) ([]*core.AlertChannel, error)
+	SaveChannelNoCtx(ch *core.AlertChannel) error
 	DeleteChannelNoCtx(id string, workspace string) error
 
-	GetRuleNoCtx(id string, workspace string) (interface{}, error)
-	ListRulesNoCtx(workspace string) ([]interface{}, error)
-	SaveRuleNoCtx(rule interface{}) error
+	GetRuleNoCtx(id string, workspace string) (*core.AlertRule, error)
+	ListRulesNoCtx(workspace string) ([]*core.AlertRule, error)
+	SaveRuleNoCtx(rule *core.AlertRule) error
 	DeleteRuleNoCtx(id string, workspace string) error
 
-	GetJourneyNoCtx(id string) (interface{}, error)
-	ListJourneysNoCtx(workspace string, offset, limit int) ([]interface{}, error)
-	SaveJourneyNoCtx(j interface{}) error
+	GetJourneyNoCtx(id string) (*core.JourneyConfig, error)
+	ListJourneysNoCtx(workspace string, offset, limit int) ([]*core.JourneyConfig, error)
+	SaveJourneyNoCtx(j *core.JourneyConfig) error
 	DeleteJourneyNoCtx(id string) error
-	RunJourneyNoCtx(workspace, journeyID string) (interface{}, error)
-	ListJourneyRunsNoCtx(workspace, journeyID string, limit int) ([]interface{}, error)
-	GetJourneyRunNoCtx(workspace, journeyID, runID string) (interface{}, error)
+	RunJourneyNoCtx(workspace, journeyID string) (*core.JourneyRun, error)
+	ListJourneyRunsNoCtx(workspace, journeyID string, limit int) ([]*core.JourneyRun, error)
+	GetJourneyRunNoCtx(workspace, journeyID, runID string) (*core.JourneyRun, error)
 
-	ListEvents(soulID string, limit int) ([]interface{}, error)
+	ListEvents(soulID string, limit int) ([]*core.AlertEvent, error)
 }
 
 // ProbeEngine interface for probe operations
 type ProbeEngine interface {
-	ForceCheck(soulID string) (interface{}, error)
+	ForceCheck(soulID string) (*core.Judgment, error)
 }
 
 // AlertManager interface (reserved for future use)
@@ -281,43 +282,13 @@ func matchesOptionalString(value, expected string) bool {
 	return expected == "" || strings.EqualFold(value, expected)
 }
 
-func soulMatchesListFilters(soul interface{}, req *v1.ListSoulsRequest) bool {
-	if req.GetType() != "" {
-		var soulType string
-		switch typed := soul.(type) {
-		case *core.Soul:
-			soulType = string(typed.Type)
-		case map[string]interface{}:
-			soulType, _ = typed["type"].(string)
-		case interface{ GetType() string }:
-			soulType = typed.GetType()
-		}
-		if !strings.EqualFold(soulType, req.GetType()) {
-			return false
-		}
+func matchesSoulFilters(soul *core.Soul, req *v1.ListSoulsRequest) bool {
+	if req.GetType() != "" && !strings.EqualFold(string(soul.Type), req.GetType()) {
+		return false
 	}
-
 	if req.GetTag() != "" {
-		var tags []string
-		switch typed := soul.(type) {
-		case *core.Soul:
-			tags = typed.Tags
-		case map[string]interface{}:
-			switch raw := typed["tags"].(type) {
-			case []string:
-				tags = raw
-			case []interface{}:
-				for _, value := range raw {
-					if tag, ok := value.(string); ok {
-						tags = append(tags, tag)
-					}
-				}
-			}
-		case interface{ GetTags() []string }:
-			tags = typed.GetTags()
-		}
 		matched := false
-		for _, tag := range tags {
+		for _, tag := range soul.Tags {
 			if strings.EqualFold(tag, req.GetTag()) {
 				matched = true
 				break
@@ -327,450 +298,260 @@ func soulMatchesListFilters(soul interface{}, req *v1.ListSoulsRequest) bool {
 			return false
 		}
 	}
-
 	return true
+}
+
+func paginateSouls(items []*core.Soul, offset, limit int) ([]*core.Soul, *v1.Pagination) {
+	total := len(items)
+	start := offset
+	if start > total {
+		start = total
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	page := items[start:end]
+	return page, newPagination(total, offset, limit, len(page))
+}
+
+func paginateJudgments(items []*core.Judgment, offset, limit int) ([]*core.Judgment, *v1.Pagination) {
+	total := len(items)
+	start := offset
+	if start > total {
+		start = total
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	page := items[start:end]
+	return page, newPagination(total, offset, limit, len(page))
 }
 
 // --- PB Conversion: core → protobuf ---
 
 // soulToPB converts a core.Soul to protobuf Soul
-func soulToPB(s interface{}) *v1.Soul {
-	if soul, ok := s.(*core.Soul); ok {
-		return &v1.Soul{
-			Id:        soul.ID,
-			Name:      soul.Name,
-			Type:      string(soul.Type),
-			Target:    soul.Target,
-			Interval:  int32(soul.Weight.Duration.Seconds()),
-			Timeout:   int32(soul.Timeout.Duration.Seconds()),
-			Enabled:   soul.Enabled,
-			Tags:      soul.Tags,
-			Workspace: soul.WorkspaceID,
-			CreatedAt: ts(soul.CreatedAt),
-			UpdatedAt: ts(soul.UpdatedAt),
-		}
-	}
-
-	soul, ok := s.(interface {
-		GetID() string
-		GetName() string
-		GetType() string
-		GetTarget() string
-		GetInterval() time.Duration
-		GetTimeout() time.Duration
-		GetEnabled() bool
-		GetTags() []string
-		GetWorkspaceID() string
-		GetRegion() string
-		GetCreatedAt() time.Time
-		GetUpdatedAt() time.Time
-		GetHTTP() interface{}
-		GetTCP() interface{}
-		GetDNS() interface{}
-		GetTLS() interface{}
-		GetGRPC() interface{}
-	})
-	if !ok {
-		// Try direct type assertion for the concrete type
-		type hasFields interface {
-			GetID() string
-			GetName() string
-			GetType() string
-			GetTarget() string
-			GetWeight() time.Duration
-			GetTimeout() time.Duration
-			GetEnabled() bool
-			GetTags() []string
-			GetWorkspaceID() string
-			GetRegion() string
-			GetCreatedAt() time.Time
-			GetUpdatedAt() time.Time
-		}
-		if hf, ok := s.(hasFields); ok {
-			return &v1.Soul{
-				Id:        hf.GetID(),
-				Name:      hf.GetName(),
-				Type:      string(hf.GetType()),
-				Target:    hf.GetTarget(),
-				Interval:  int32(hf.GetWeight().Seconds()),
-				Timeout:   int32(hf.GetTimeout().Seconds()),
-				Enabled:   hf.GetEnabled(),
-				Tags:      hf.GetTags(),
-				Workspace: hf.GetWorkspaceID(),
-				CreatedAt: ts(hf.GetCreatedAt()),
-				UpdatedAt: ts(hf.GetUpdatedAt()),
-			}
-		}
+func soulToPB(soul *core.Soul) *v1.Soul {
+	if soul == nil {
 		return nil
 	}
 	return &v1.Soul{
-		Id:        soul.GetID(),
-		Name:      soul.GetName(),
-		Type:      soul.GetType(),
-		Target:    soul.GetTarget(),
-		Interval:  int32(soul.GetInterval().Seconds()),
-		Timeout:   int32(soul.GetTimeout().Seconds()),
-		Enabled:   soul.GetEnabled(),
-		Tags:      soul.GetTags(),
-		Workspace: soul.GetWorkspaceID(),
-		CreatedAt: ts(soul.GetCreatedAt()),
-		UpdatedAt: ts(soul.GetUpdatedAt()),
+		Id:        soul.ID,
+		Name:      soul.Name,
+		Type:      string(soul.Type),
+		Target:    soul.Target,
+		Interval:  int32(soul.Weight.Duration.Seconds()),
+		Timeout:   int32(soul.Timeout.Duration.Seconds()),
+		Enabled:   soul.Enabled,
+		Tags:      soul.Tags,
+		Workspace: soul.WorkspaceID,
+		CreatedAt: ts(soul.CreatedAt),
+		UpdatedAt: ts(soul.UpdatedAt),
 	}
 }
 
 // judgmentToPB converts a core.Judgment to protobuf Judgment
-func judgmentToPB(j interface{}) *v1.Judgment {
-	if judgment, ok := j.(*core.Judgment); ok {
-		return &v1.Judgment{
-			Id:        judgment.ID,
-			SoulId:    judgment.SoulID,
-			Status:    string(judgment.Status),
-			LatencyMs: judgment.Duration.Milliseconds(),
-			Message:   judgment.Message,
-			Timestamp: ts(judgment.Timestamp),
-			NodeId:    judgment.JackalID,
-			Region:    judgment.Region,
-		}
-	}
-
-	type hasFields interface {
-		GetID() string
-		GetSoulID() string
-		GetSoulName() string
-		GetStatus() string
-		GetDuration() time.Duration
-		GetMessage() string
-		GetTimestamp() time.Time
-		GetJackalID() string
-		GetRegion() string
-	}
-	hf, ok := j.(hasFields)
-	if !ok {
+func judgmentToPB(j *core.Judgment) *v1.Judgment {
+	if j == nil {
 		return nil
 	}
 	return &v1.Judgment{
-		Id:        hf.GetID(),
-		SoulId:    hf.GetSoulID(),
-		SoulName:  hf.GetSoulName(),
-		Status:    hf.GetStatus(),
-		LatencyMs: hf.GetDuration().Milliseconds(),
-		Message:   hf.GetMessage(),
-		Timestamp: ts(hf.GetTimestamp()),
-		NodeId:    hf.GetJackalID(),
-		Region:    hf.GetRegion(),
+		Id:        j.ID,
+		SoulId:    j.SoulID,
+		Status:    string(j.Status),
+		LatencyMs: j.Duration.Milliseconds(),
+		Message:   j.Message,
+		Timestamp: ts(j.Timestamp),
+		NodeId:    j.JackalID,
+		Region:    j.Region,
 	}
 }
 
 // channelToPB converts a core.AlertChannel to protobuf Channel
-func channelToPB(c interface{}) *v1.Channel {
-	if channel, ok := c.(*core.AlertChannel); ok {
-		strCfg := make(map[string]string, len(channel.Config))
-		for k, v := range channel.Config {
-			strCfg[k] = fmt.Sprintf("%v", v)
-		}
-		return &v1.Channel{
-			Id:        channel.ID,
-			Name:      channel.Name,
-			Type:      string(channel.Type),
-			Enabled:   channel.Enabled,
-			Config:    strCfg,
-			Workspace: channel.WorkspaceID,
-			CreatedAt: ts(channel.CreatedAt),
-		}
-	}
-
-	type hasFields interface {
-		GetID() string
-		GetName() string
-		GetType() string
-		GetEnabled() bool
-		GetConfig() map[string]interface{}
-		GetWorkspaceID() string
-		GetCreatedAt() time.Time
-	}
-	hf, ok := c.(hasFields)
-	if !ok {
+func channelToPB(ch *core.AlertChannel) *v1.Channel {
+	if ch == nil {
 		return nil
 	}
-	cfg := hf.GetConfig()
-	strCfg := make(map[string]string, len(cfg))
-	for k, v := range cfg {
+	strCfg := make(map[string]string, len(ch.Config))
+	for k, v := range ch.Config {
 		strCfg[k] = fmt.Sprintf("%v", v)
 	}
 	return &v1.Channel{
-		Id:        hf.GetID(),
-		Name:      hf.GetName(),
-		Type:      hf.GetType(),
-		Enabled:   hf.GetEnabled(),
+		Id:        ch.ID,
+		Name:      ch.Name,
+		Type:      string(ch.Type),
+		Enabled:   ch.Enabled,
 		Config:    strCfg,
-		Workspace: hf.GetWorkspaceID(),
-		CreatedAt: ts(hf.GetCreatedAt()),
+		Workspace: ch.WorkspaceID,
+		CreatedAt: ts(ch.CreatedAt),
 	}
 }
 
 // ruleToPB converts a core.AlertRule to protobuf Rule
-func ruleToPB(r interface{}) *v1.Rule {
-	if rule, ok := r.(*core.AlertRule); ok {
-		channelID := ""
-		if len(rule.Channels) > 0 {
-			channelID = rule.Channels[0]
-		}
-		return &v1.Rule{
-			Id:        rule.ID,
-			Name:      rule.Name,
-			Enabled:   rule.Enabled,
-			ChannelId: channelID,
-			Workspace: rule.WorkspaceID,
-			CreatedAt: ts(rule.CreatedAt),
-		}
-	}
-
-	type hasFields interface {
-		GetID() string
-		GetName() string
-		GetEnabled() bool
-		GetChannels() []string
-		GetWorkspaceID() string
-		GetCreatedAt() time.Time
-	}
-	hf, ok := r.(hasFields)
-	if !ok {
+func ruleToPB(rule *core.AlertRule) *v1.Rule {
+	if rule == nil {
 		return nil
 	}
 	channelID := ""
-	if ch := hf.GetChannels(); len(ch) > 0 {
-		channelID = ch[0]
+	if len(rule.Channels) > 0 {
+		channelID = rule.Channels[0]
 	}
 	return &v1.Rule{
-		Id:        hf.GetID(),
-		Name:      hf.GetName(),
-		Enabled:   hf.GetEnabled(),
+		Id:        rule.ID,
+		Name:      rule.Name,
+		Enabled:   rule.Enabled,
 		ChannelId: channelID,
-		Workspace: hf.GetWorkspaceID(),
-		CreatedAt: ts(hf.GetCreatedAt()),
+		Workspace: rule.WorkspaceID,
+		CreatedAt: ts(rule.CreatedAt),
+	}
+}
+
+// journeyRunToPB converts a core.JourneyRun to protobuf JourneyRun
+func journeyRunToPB(run *core.JourneyRun) *v1.JourneyRun {
+	if run == nil {
+		return nil
+	}
+	var startedAt, completedAt *timestamppb.Timestamp
+	if run.StartedAt > 0 {
+		startedAt = timestamppb.New(time.UnixMilli(run.StartedAt))
+	}
+	if run.CompletedAt > 0 {
+		completedAt = timestamppb.New(time.UnixMilli(run.CompletedAt))
+	}
+	steps := make([]*v1.JourneyStepResult, 0, len(run.Steps))
+	for _, step := range run.Steps {
+		steps = append(steps, &v1.JourneyStepResult{
+			Name:       step.Name,
+			StepIndex:  int32(step.StepIndex),
+			DurationMs: step.Duration,
+			Status:     string(step.Status),
+			Message:    step.Message,
+			Extracted:  step.Extracted,
+		})
+	}
+	return &v1.JourneyRun{
+		Id:          run.ID,
+		JourneyId:   run.JourneyID,
+		Workspace:   run.WorkspaceID,
+		JackalId:    run.JackalID,
+		Region:      run.Region,
+		StartedAt:   startedAt,
+		CompletedAt: completedAt,
+		DurationMs:  run.Duration,
+		Status:      string(run.Status),
+		Steps:       steps,
+		Variables:   run.Variables,
 	}
 }
 
 // journeyToPB converts a core.JourneyConfig to protobuf Journey
-func journeyRunToPB(r interface{}) *v1.JourneyRun {
-	if run, ok := r.(*core.JourneyRun); ok {
-		var startedAt, completedAt *timestamppb.Timestamp
-		if run.StartedAt > 0 {
-			startedAt = timestamppb.New(time.UnixMilli(run.StartedAt))
-		}
-		if run.CompletedAt > 0 {
-			completedAt = timestamppb.New(time.UnixMilli(run.CompletedAt))
-		}
-		steps := make([]*v1.JourneyStepResult, 0, len(run.Steps))
-		for _, step := range run.Steps {
-			steps = append(steps, &v1.JourneyStepResult{
-				Name:       step.Name,
-				StepIndex:  int32(step.StepIndex),
-				DurationMs: step.Duration,
-				Status:     string(step.Status),
-				Message:    step.Message,
-				Extracted:  step.Extracted,
-			})
-		}
-		return &v1.JourneyRun{
-			Id:          run.ID,
-			JourneyId:   run.JourneyID,
-			Workspace:   run.WorkspaceID,
-			JackalId:    run.JackalID,
-			Region:      run.Region,
-			StartedAt:   startedAt,
-			CompletedAt: completedAt,
-			DurationMs:  run.Duration,
-			Status:      string(run.Status),
-			Steps:       steps,
-			Variables:   run.Variables,
-		}
-	}
-
-	type hasStepResultFields interface {
-		GetName() string
-		GetStepIndex() int
-		GetDuration() int64
-		GetStatus() string
-		GetMessage() string
-		GetExtracted() map[string]string
-	}
-	type hasFields interface {
-		GetID() string
-		GetJourneyID() string
-		GetWorkspaceID() string
-		GetJackalID() string
-		GetRegion() string
-		GetStartedAt() int64
-		GetCompletedAt() int64
-		GetDuration() int64
-		GetStatus() string
-		GetSteps() []interface{}
-		GetVariables() map[string]string
-	}
-	hf, ok := r.(hasFields)
-	if !ok {
+func journeyToPB(j *core.JourneyConfig) *v1.Journey {
+	if j == nil {
 		return nil
 	}
-
-	steps := hf.GetSteps()
-	pbSteps := make([]*v1.JourneyStepResult, 0, len(steps))
-	for _, step := range steps {
-		if sf, ok := step.(hasStepResultFields); ok {
-			pbSteps = append(pbSteps, &v1.JourneyStepResult{
-				Name:       sf.GetName(),
-				StepIndex:  int32(sf.GetStepIndex()),
-				DurationMs: sf.GetDuration(),
-				Status:     sf.GetStatus(),
-				Message:    sf.GetMessage(),
-				Extracted:  sf.GetExtracted(),
-			})
-		}
+	steps := make([]*v1.JourneyStep, 0, len(j.Steps))
+	for _, step := range j.Steps {
+		steps = append(steps, &v1.JourneyStep{
+			Name:    step.Name,
+			Type:    string(step.Type),
+			Target:  step.Target,
+			Timeout: int32(step.Timeout.Duration.Seconds()),
+		})
 	}
-
-	var startedAt, completedAt *timestamppb.Timestamp
-	if hf.GetStartedAt() > 0 {
-		startedAt = timestamppb.New(time.UnixMilli(hf.GetStartedAt()))
-	}
-	if hf.GetCompletedAt() > 0 {
-		completedAt = timestamppb.New(time.UnixMilli(hf.GetCompletedAt()))
-	}
-
-	return &v1.JourneyRun{
-		Id:          hf.GetID(),
-		JourneyId:   hf.GetJourneyID(),
-		Workspace:   hf.GetWorkspaceID(),
-		JackalId:    hf.GetJackalID(),
-		Region:      hf.GetRegion(),
-		StartedAt:   startedAt,
-		CompletedAt: completedAt,
-		DurationMs:  hf.GetDuration(),
-		Status:      hf.GetStatus(),
-		Steps:       pbSteps,
-		Variables:   hf.GetVariables(),
+	return &v1.Journey{
+		Id:          j.ID,
+		Name:        j.Name,
+		Description: j.Description,
+		Interval:    int32(j.Weight.Duration.Seconds()),
+		Enabled:     j.Enabled,
+		Workspace:   j.WorkspaceID,
+		Steps:       steps,
+		CreatedAt:   ts(j.CreatedAt),
 	}
 }
 
-// journeyToPB converts a journey to protobuf
-func journeyToPB(j interface{}) *v1.Journey {
-	if journey, ok := j.(*core.JourneyConfig); ok {
-		steps := make([]*v1.JourneyStep, 0, len(journey.Steps))
-		for _, step := range journey.Steps {
-			steps = append(steps, &v1.JourneyStep{
-				Name:    step.Name,
-				Type:    string(step.Type),
-				Target:  step.Target,
-				Timeout: int32(step.Timeout.Duration.Seconds()),
-			})
-		}
-		return &v1.Journey{
-			Id:          journey.ID,
-			Name:        journey.Name,
-			Description: journey.Description,
-			Interval:    int32(journey.Weight.Duration.Seconds()),
-			Enabled:     journey.Enabled,
-			Workspace:   journey.WorkspaceID,
-			Steps:       steps,
-			CreatedAt:   ts(journey.CreatedAt),
-		}
-	}
+// --- PB Conversion: core → protobuf (for alert events) ---
 
-	type hasStepFields interface {
-		GetName() string
-		GetType() string
-		GetTarget() string
-		GetTimeout() time.Duration
-	}
-	type hasFields interface {
-		GetID() string
-		GetName() string
-		GetDescription() string
-		GetWeight() time.Duration
-		GetEnabled() bool
-		GetWorkspaceID() string
-		GetSteps() []interface{}
-		GetCreatedAt() time.Time
-	}
-	hf, ok := j.(hasFields)
-	if !ok {
+// eventToVerdict converts a core.AlertEvent to protobuf Verdict
+func eventToVerdict(event *core.AlertEvent) *v1.Verdict {
+	if event == nil {
 		return nil
 	}
-	steps := hf.GetSteps()
-	pbSteps := make([]*v1.JourneyStep, 0, len(steps))
-	for _, step := range steps {
-		if sf, ok := step.(hasStepFields); ok {
-			pbSteps = append(pbSteps, &v1.JourneyStep{
-				Name:    sf.GetName(),
-				Type:    string(sf.GetType()),
-				Target:  sf.GetTarget(),
-				Timeout: int32(sf.GetTimeout().Seconds()),
-			})
-		}
+	status := "firing"
+	if event.Resolved {
+		status = "resolved"
+	} else if event.Acknowledged {
+		status = "acknowledged"
 	}
-	return &v1.Journey{
-		Id:          hf.GetID(),
-		Name:        hf.GetName(),
-		Description: hf.GetDescription(),
-		Interval:    int32(hf.GetWeight().Seconds()),
-		Enabled:     hf.GetEnabled(),
-		Workspace:   hf.GetWorkspaceID(),
-		Steps:       pbSteps,
-		CreatedAt:   ts(hf.GetCreatedAt()),
+	return &v1.Verdict{
+		Id:       event.ID,
+		SoulId:   event.SoulID,
+		SoulName: event.SoulName,
+		RuleId:   event.ChannelID,
+		Status:   status,
+		Severity: string(event.Severity),
+		Message:  event.Message,
+		FiredAt:  ts(event.Timestamp),
 	}
 }
 
 // --- PB Conversion: protobuf → core (for mutations) ---
 
-func pbToSoulConfig(req *v1.CreateSoulRequest) map[string]interface{} {
-	cfg := make(map[string]interface{})
-	cfg["name"] = req.Name
-	cfg["type"] = req.Type
-	cfg["target"] = req.Target
-	cfg["interval"] = fmt.Sprintf("%ds", req.Interval)
-	cfg["timeout"] = fmt.Sprintf("%ds", req.Timeout)
-	cfg["enabled"] = req.Enabled
-	cfg["tags"] = req.Tags
-	cfg["labels"] = req.Labels
-	return cfg
+func pbToSoulConfig(req *v1.CreateSoulRequest) *core.Soul {
+	return &core.Soul{
+		ID:       core.GenerateID(),
+		Name:     req.Name,
+		Type:     core.CheckType(req.Type),
+		Target:   req.Target,
+		Weight:   core.Duration{Duration: time.Duration(req.Interval) * time.Second},
+		Timeout:  core.Duration{Duration: time.Duration(req.Timeout) * time.Second},
+		Enabled:  req.Enabled,
+		Tags:     req.Tags,
+	}
 }
 
-func pbToChannelConfig(req *v1.CreateChannelRequest) map[string]interface{} {
-	cfg := make(map[string]interface{})
-	cfg["name"] = req.Name
-	cfg["type"] = req.Type
-	cfg["enabled"] = req.Enabled
-	// Convert string config back to map
+func pbToChannelConfig(req *v1.CreateChannelRequest) *core.AlertChannel {
+	channelType := core.AlertChannelType(req.Type)
+	now := time.Now()
+	ch := &core.AlertChannel{
+		ID:        core.GenerateID(),
+		Name:      req.Name,
+		Type:      channelType,
+		Enabled:   req.Enabled,
+		Config:    make(map[string]interface{}),
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
 	if req.Config != nil {
 		for k, v := range req.Config {
-			cfg[k] = v
+			ch.Config[k] = v
 		}
 	}
-	cfg["workspace_id"] = req.Workspace
-	return cfg
+	return ch
 }
 
-func pbToRuleConfig(req *v1.CreateRuleRequest) map[string]interface{} {
-	cfg := make(map[string]interface{})
-	cfg["name"] = req.Name
-	cfg["enabled"] = req.Enabled
-	cfg["channels"] = []string{req.ChannelId}
-	cfg["workspace_id"] = req.Workspace
-	if req.Config != nil {
-		for k, v := range req.Config {
-			cfg[k] = v
-		}
+func pbToRuleConfig(req *v1.CreateRuleRequest) *core.AlertRule {
+	now := time.Now()
+	return &core.AlertRule{
+		ID:        core.GenerateID(),
+		Name:      req.Name,
+		Enabled:   req.Enabled,
+		Channels:  []string{req.ChannelId},
+		CreatedAt: now,
 	}
-	return cfg
 }
 
-func pbToJourneyConfig(req *v1.CreateJourneyRequest) map[string]interface{} {
-	cfg := make(map[string]interface{})
-	cfg["name"] = req.Name
-	cfg["description"] = req.Description
-	cfg["interval"] = fmt.Sprintf("%ds", req.Interval)
-	cfg["enabled"] = req.Enabled
-	cfg["workspace_id"] = req.Workspace
-	return cfg
+func pbToJourneyConfig(req *v1.CreateJourneyRequest) *core.JourneyConfig {
+	now := time.Now()
+	return &core.JourneyConfig{
+		ID:          core.GenerateID(),
+		Name:        req.Name,
+		Description: req.Description,
+		Weight:      core.Duration{Duration: time.Duration(req.Interval) * time.Second},
+		Enabled:     req.Enabled,
+		CreatedAt:   now,
+	}
 }
 
 func workspaceFromContext(ctx context.Context) (string, error) {
@@ -1062,13 +843,13 @@ func (s *Server) ListSouls(ctx context.Context, req *v1.ListSoulsRequest) (*v1.L
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to list souls: %v", err)
 		}
-		filtered := make([]interface{}, 0, len(allSouls))
+		filtered := make([]*core.Soul, 0, len(allSouls))
 		for _, soul := range allSouls {
-			if soulMatchesListFilters(soul, req) {
+			if matchesSoulFilters(soul, req) {
 				filtered = append(filtered, soul)
 			}
 		}
-		page, pagination := paginate(filtered, offset, limit)
+		page, pagination := paginateSouls(filtered, offset, limit)
 		pbSouls := make([]*v1.Soul, 0, len(page))
 		for _, soul := range page {
 			if pb := soulToPB(soul); pb != nil {
@@ -1124,13 +905,10 @@ func (s *Server) GetSoul(ctx context.Context, req *v1.GetSoulRequest) (*v1.Soul,
 	if err != nil || soul == nil {
 		return nil, status.Errorf(codes.NotFound, "soul not found: %s", req.Id)
 	}
-	if s, ok := soul.(*core.Soul); ok && s.WorkspaceID != "" && s.WorkspaceID != user.Workspace {
+	if soul.WorkspaceID != "" && soul.WorkspaceID != user.Workspace {
 		return nil, status.Error(codes.PermissionDenied, "access denied: soul belongs to another workspace")
 	}
-	if pb := soulToPB(soul); pb != nil {
-		return pb, nil
-	}
-	return nil, status.Errorf(codes.Internal, "failed to convert soul")
+	return soulToPB(soul), nil
 }
 
 func (s *Server) CreateSoul(ctx context.Context, req *v1.CreateSoulRequest) (*v1.Soul, error) {
@@ -1142,29 +920,22 @@ func (s *Server) CreateSoul(ctx context.Context, req *v1.CreateSoulRequest) (*v1
 		return nil, err
 	}
 
-	soulData := pbToSoulConfig(req)
-	soulData["workspace_id"] = user.Workspace
-	if soulData["workspace_id"] == "" {
-		soulData["workspace_id"] = "default"
+	soul := pbToSoulConfig(req)
+	soul.WorkspaceID = user.Workspace
+	if soul.WorkspaceID == "" {
+		soul.WorkspaceID = "default"
 	}
-	// Generate ID in the handler to prevent concurrent race conditions (logic bug fix)
-	id := core.GenerateID()
-	soulData["id"] = id
 
-	if err := s.store.SaveSoulNoCtx(soulData); err != nil {
+	if err := s.store.SaveSoulNoCtx(soul); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create soul: %v", err)
 	}
 
 	// Retrieve the created soul directly using the generated ID
-	ch, err := s.store.GetSoulNoCtx(id)
+	created, err := s.store.GetSoulNoCtx(soul.ID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "soul created but could not be retrieved: %v", err)
 	}
-
-	if pb := soulToPB(ch); pb != nil {
-		return pb, nil
-	}
-	return nil, status.Errorf(codes.Internal, "failed to convert created soul")
+	return soulToPB(created), nil
 }
 
 func (s *Server) UpdateSoul(ctx context.Context, req *v1.UpdateSoulRequest) (*v1.Soul, error) {
@@ -1178,34 +949,20 @@ func (s *Server) UpdateSoul(ctx context.Context, req *v1.UpdateSoulRequest) (*v1
 
 	// Get existing soul first
 	existing, err := s.store.GetSoulNoCtx(req.Id)
-	if err != nil {
+	if err != nil || existing == nil {
 		return nil, status.Errorf(codes.NotFound, "soul not found: %s", req.Id)
 	}
-	if s, ok := existing.(*core.Soul); ok && s.WorkspaceID != "" && s.WorkspaceID != user.Workspace {
+	if existing.WorkspaceID != "" && existing.WorkspaceID != user.Workspace {
 		return nil, status.Error(codes.PermissionDenied, "access denied: soul belongs to another workspace")
 	}
 
-	switch current := existing.(type) {
-	case *core.Soul:
-		applySoulUpdates(current, req)
-		if err := s.store.SaveSoulNoCtx(current); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to update soul: %v", err)
-		}
-	case map[string]interface{}:
-		updates := legacyMapUpdates(req)
-		for k, v := range updates {
-			current[k] = v
-		}
-		if err := s.store.SaveSoulNoCtx(current); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to update soul: %v", err)
-		}
+	applySoulUpdates(existing, req)
+	if err := s.store.SaveSoulNoCtx(existing); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update soul: %v", err)
 	}
 
-	existing, _ = s.store.GetSoulNoCtx(req.Id)
-	if pb := soulToPB(existing); pb != nil {
-		return pb, nil
-	}
-	return nil, status.Errorf(codes.Internal, "failed to convert updated soul")
+	updated, _ := s.store.GetSoulNoCtx(req.Id)
+	return soulToPB(updated), nil
 }
 
 func (s *Server) DeleteSoul(ctx context.Context, req *v1.DeleteSoulRequest) (*emptypb.Empty, error) {
@@ -1217,10 +974,10 @@ func (s *Server) DeleteSoul(ctx context.Context, req *v1.DeleteSoulRequest) (*em
 		return nil, err
 	}
 	existing, err := s.store.GetSoulNoCtx(req.Id)
-	if err != nil {
+	if err != nil || existing == nil {
 		return nil, status.Errorf(codes.NotFound, "soul not found: %s", req.Id)
 	}
-	if s, ok := existing.(*core.Soul); ok && s.WorkspaceID != "" && s.WorkspaceID != user.Workspace {
+	if existing.WorkspaceID != "" && existing.WorkspaceID != user.Workspace {
 		return nil, status.Error(codes.PermissionDenied, "access denied: soul belongs to another workspace")
 	}
 	if err := s.store.DeleteSoulNoCtx(req.Id); err != nil {
@@ -1256,11 +1013,10 @@ func (s *Server) ListJudgments(ctx context.Context, req *v1.ListJudgmentsRequest
 	}
 
 	// If soulID specified, verify it belongs to caller's workspace (IDOR protection).
-	// If soul does not exist, allow the call to proceed � ListJudgments will return empty.
 	if soulID != "" {
 		soul, err := s.store.GetSoulNoCtx(soulID)
 		if err == nil && soul != nil {
-			if s, ok := soul.(*core.Soul); ok && s.WorkspaceID != "" && s.WorkspaceID != user.Workspace {
+			if soul.WorkspaceID != "" && soul.WorkspaceID != user.Workspace {
 				return nil, status.Error(codes.PermissionDenied, "access denied: soul belongs to another workspace")
 			}
 		}
@@ -1270,18 +1026,14 @@ func (s *Server) ListJudgments(ctx context.Context, req *v1.ListJudgmentsRequest
 	if req.GetStatus() != "" || soulID == "" {
 		fetchLimit = 0
 	}
-	var judgments []interface{}
+	var judgments []*core.Judgment
 	if soulID == "" {
 		souls, err := s.store.ListSoulsNoCtx(user.Workspace, 0, 0)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to list souls for judgments: %v", err)
 		}
 		for _, soul := range souls {
-			id := resourceID(soul)
-			if id == "" {
-				continue
-			}
-			soulJudgments, err := s.store.ListJudgmentsNoCtx(id, start, end, fetchLimit)
+			soulJudgments, err := s.store.ListJudgmentsNoCtx(soul.ID, start, end, fetchLimit)
 			if err != nil {
 				return nil, status.Errorf(codes.Internal, "failed to list judgments: %v", err)
 			}
@@ -1295,16 +1047,16 @@ func (s *Server) ListJudgments(ctx context.Context, req *v1.ListJudgmentsRequest
 		}
 	}
 
-	filtered := make([]interface{}, 0, len(judgments))
+	filtered := make([]*core.Judgment, 0, len(judgments))
 	for _, j := range judgments {
-		if matchesOptionalString(statusValue(j), req.GetStatus()) {
+		if matchesOptionalString(string(j.Status), req.GetStatus()) {
 			filtered = append(filtered, j)
 		}
 	}
 	sort.SliceStable(filtered, func(i, j int) bool {
-		return timestampValue(filtered[i]).After(timestampValue(filtered[j]))
+		return filtered[i].Timestamp.After(filtered[j].Timestamp)
 	})
-	page, pagination := paginate(filtered, offset, limit)
+	page, pagination := paginateJudgments(filtered, offset, limit)
 
 	pbJudgments := make([]*v1.Judgment, 0, len(page))
 	for _, j := range page {
@@ -1392,23 +1144,34 @@ func (s *Server) ListVerdicts(ctx context.Context, req *v1.ListVerdictsRequest) 
 		return nil, status.Errorf(codes.Internal, "failed to list verdicts: %v", err)
 	}
 
-	filtered := make([]interface{}, 0, len(events))
+	filtered := make([]*core.AlertEvent, 0, len(events))
 	for _, e := range events {
-		if ws := resourceWorkspace(e); ws != "" && ws != workspace {
+		if ws := e.WorkspaceID; ws != "" && ws != workspace {
 			continue
 		}
-		if !matchesOptionalString(statusValue(e), req.GetStatus()) {
+		if !matchesOptionalString(string(e.Status), req.GetStatus()) {
 			continue
 		}
-		if !matchesOptionalString(severityValue(e), req.GetSeverity()) {
+		if !matchesOptionalString(string(e.Severity), req.GetSeverity()) {
 			continue
 		}
 		filtered = append(filtered, e)
 	}
 	sort.SliceStable(filtered, func(i, j int) bool {
-		return timestampValue(filtered[i]).After(timestampValue(filtered[j]))
+		return filtered[i].Timestamp.After(filtered[j].Timestamp)
 	})
-	page, pagination := paginate(filtered, offset, limit)
+	// Inline pagination for AlertEvents
+	total := len(filtered)
+	start := offset
+	if start > total {
+		start = total
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	page := filtered[start:end]
+	pagination := newPagination(total, offset, limit, len(page))
 
 	pbVerdicts := make([]*v1.Verdict, 0, len(page))
 	for _, e := range page {
@@ -1421,60 +1184,6 @@ func (s *Server) ListVerdicts(ctx context.Context, req *v1.ListVerdictsRequest) 
 		Verdicts:   pbVerdicts,
 		Pagination: pagination,
 	}, nil
-}
-
-func eventToVerdict(e interface{}) *v1.Verdict {
-	if event, ok := e.(*core.AlertEvent); ok {
-		status := "firing"
-		if event.Resolved {
-			status = "resolved"
-		} else if event.Acknowledged {
-			status = "acknowledged"
-		}
-		return &v1.Verdict{
-			Id:       event.ID,
-			SoulId:   event.SoulID,
-			SoulName: event.SoulName,
-			RuleId:   event.ChannelID,
-			Status:   status,
-			Severity: string(event.Severity),
-			Message:  event.Message,
-			FiredAt:  ts(event.Timestamp),
-		}
-	}
-
-	type hasFields interface {
-		GetID() string
-		GetSoulID() string
-		GetSoulName() string
-		GetChannelID() string
-		GetStatus() string
-		GetSeverity() string
-		GetMessage() string
-		GetTimestamp() time.Time
-		GetResolved() bool
-		GetAcknowledged() bool
-	}
-	hf, ok := e.(hasFields)
-	if !ok {
-		return nil
-	}
-	status := "firing"
-	if hf.GetResolved() {
-		status = "resolved"
-	} else if hf.GetAcknowledged() {
-		status = "acknowledged"
-	}
-	return &v1.Verdict{
-		Id:       hf.GetID(),
-		SoulId:   hf.GetSoulID(),
-		SoulName: hf.GetSoulName(),
-		RuleId:   hf.GetChannelID(),
-		Status:   status,
-		Severity: hf.GetSeverity(),
-		Message:  hf.GetMessage(),
-		FiredAt:  ts(hf.GetTimestamp()),
-	}
 }
 
 // --- Channel RPCs ---
@@ -1497,7 +1206,18 @@ func (s *Server) ListChannels(ctx context.Context, req *v1.ListChannelsRequest) 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list channels: %v", err)
 	}
-	page, pagination := paginate(channels, offset, limit)
+	// Inline pagination for channels
+	total := len(channels)
+	start := offset
+	if start > total {
+		start = total
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	page := channels[start:end]
+	pagination := newPagination(total, offset, limit, len(page))
 
 	pbChannels := make([]*v1.Channel, 0, len(page))
 	for _, ch := range page {
@@ -1525,10 +1245,7 @@ func (s *Server) GetChannel(ctx context.Context, req *v1.GetChannelRequest) (*v1
 	if err != nil || ch == nil {
 		return nil, status.Errorf(codes.NotFound, "channel not found: %s", req.Id)
 	}
-	if pb := channelToPB(ch); pb != nil {
-		return pb, nil
-	}
-	return nil, status.Errorf(codes.Internal, "failed to convert channel")
+	return channelToPB(ch), nil
 }
 
 func (s *Server) CreateChannel(ctx context.Context, req *v1.CreateChannelRequest) (*v1.Channel, error) {
@@ -1544,25 +1261,18 @@ func (s *Server) CreateChannel(ctx context.Context, req *v1.CreateChannelRequest
 		workspace = "default"
 	}
 
-	channelData := pbToChannelConfig(req)
-	channelData["workspace_id"] = workspace
-	// Generate ID in the handler to prevent concurrent race conditions (logic bug fix)
-	id := core.GenerateID()
-	channelData["id"] = id
+	ch := pbToChannelConfig(req)
+	ch.WorkspaceID = workspace
 
-	if err := s.store.SaveChannelNoCtx(channelData); err != nil {
+	if err := s.store.SaveChannelNoCtx(ch); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create channel: %v", err)
 	}
 
-	ch, err := s.store.GetChannelNoCtx(id, workspace)
+	created, err := s.store.GetChannelNoCtx(ch.ID, workspace)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "channel created but could not be retrieved: %v", err)
 	}
-
-	if pb := channelToPB(ch); pb != nil {
-		return pb, nil
-	}
-	return nil, status.Errorf(codes.Internal, "failed to convert channel")
+	return channelToPB(created), nil
 }
 
 func (s *Server) UpdateChannel(ctx context.Context, req *v1.UpdateChannelRequest) (*v1.Channel, error) {
@@ -1579,39 +1289,17 @@ func (s *Server) UpdateChannel(ctx context.Context, req *v1.UpdateChannelRequest
 	}
 
 	existing, err := s.store.GetChannelNoCtx(req.Id, workspace)
-	if err != nil {
+	if err != nil || existing == nil {
 		return nil, status.Errorf(codes.NotFound, "channel not found: %s", req.Id)
 	}
-	if err := ensureResourceWorkspace(existing, workspace, "channel"); err != nil {
-		return nil, err
+
+	applyChannelUpdates(existing, req)
+	if err := s.store.SaveChannelNoCtx(existing); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update channel: %v", err)
 	}
 
-	switch current := existing.(type) {
-	case *core.AlertChannel:
-		applyChannelUpdates(current, req)
-		if err := s.store.SaveChannelNoCtx(current); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to update channel: %v", err)
-		}
-	case map[string]interface{}:
-		if req.Name != nil {
-			current["name"] = *req.Name
-		}
-		if req.Enabled != nil {
-			current["enabled"] = *req.Enabled
-		}
-		if req.Config != nil {
-			applyChannelConfig(current, req.Config)
-		}
-		if err := s.store.SaveChannelNoCtx(current); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to update channel: %v", err)
-		}
-	}
-
-	existing, _ = s.store.GetChannelNoCtx(req.Id, workspace)
-	if pb := channelToPB(existing); pb != nil {
-		return pb, nil
-	}
-	return nil, status.Errorf(codes.Internal, "failed to convert updated channel")
+	updated, _ := s.store.GetChannelNoCtx(req.Id, workspace)
+	return channelToPB(updated), nil
 }
 
 func (s *Server) DeleteChannel(ctx context.Context, req *v1.DeleteChannelRequest) (*emptypb.Empty, error) {
@@ -1625,7 +1313,7 @@ func (s *Server) DeleteChannel(ctx context.Context, req *v1.DeleteChannelRequest
 	if workspace == "" {
 		workspace = "default"
 	}
-	if _, err := s.store.GetChannelNoCtx(req.Id, workspace); err != nil {
+	if existing, err := s.store.GetChannelNoCtx(req.Id, workspace); err != nil || existing == nil {
 		return nil, status.Errorf(codes.NotFound, "channel not found: %s", req.Id)
 	}
 	if err := s.store.DeleteChannelNoCtx(req.Id, workspace); err != nil {
@@ -1654,7 +1342,18 @@ func (s *Server) ListRules(ctx context.Context, req *v1.ListRulesRequest) (*v1.L
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list rules: %v", err)
 	}
-	page, pagination := paginate(rules, offset, limit)
+	// Inline pagination for rules
+	total := len(rules)
+	start := offset
+	if start > total {
+		start = total
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	page := rules[start:end]
+	pagination := newPagination(total, offset, limit, len(page))
 
 	pbRules := make([]*v1.Rule, 0, len(page))
 	for _, r := range page {
@@ -1682,14 +1381,7 @@ func (s *Server) GetRule(ctx context.Context, req *v1.GetRuleRequest) (*v1.Rule,
 	if err != nil || r == nil {
 		return nil, status.Errorf(codes.NotFound, "rule not found: %s", req.Id)
 	}
-	// Verify rule belongs to caller's workspace (IDOR protection)
-	if rule, ok := r.(*core.AlertRule); ok && rule.WorkspaceID != "" && rule.WorkspaceID != user.Workspace {
-		return nil, status.Error(codes.PermissionDenied, "access denied: rule belongs to another workspace")
-	}
-	if pb := ruleToPB(r); pb != nil {
-		return pb, nil
-	}
-	return nil, status.Errorf(codes.Internal, "failed to convert rule")
+	return ruleToPB(r), nil
 }
 
 func (s *Server) CreateRule(ctx context.Context, req *v1.CreateRuleRequest) (*v1.Rule, error) {
@@ -1705,25 +1397,18 @@ func (s *Server) CreateRule(ctx context.Context, req *v1.CreateRuleRequest) (*v1
 		workspace = "default"
 	}
 
-	ruleData := pbToRuleConfig(req)
-	ruleData["workspace_id"] = workspace
-	// Generate ID in the handler to prevent concurrent race conditions (logic bug fix)
-	id := core.GenerateID()
-	ruleData["id"] = id
+	rule := pbToRuleConfig(req)
+	rule.WorkspaceID = workspace
 
-	if err := s.store.SaveRuleNoCtx(ruleData); err != nil {
+	if err := s.store.SaveRuleNoCtx(rule); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create rule: %v", err)
 	}
 
-	r, err := s.store.GetRuleNoCtx(id, workspace)
+	created, err := s.store.GetRuleNoCtx(rule.ID, workspace)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "rule created but could not be retrieved: %v", err)
 	}
-
-	if pb := ruleToPB(r); pb != nil {
-		return pb, nil
-	}
-	return nil, status.Errorf(codes.Internal, "failed to convert rule")
+	return ruleToPB(created), nil
 }
 
 func (s *Server) UpdateRule(ctx context.Context, req *v1.UpdateRuleRequest) (*v1.Rule, error) {
@@ -1736,40 +1421,17 @@ func (s *Server) UpdateRule(ctx context.Context, req *v1.UpdateRuleRequest) (*v1
 	}
 
 	existing, err := s.store.GetRuleNoCtx(req.Id, user.Workspace)
-	if err != nil {
+	if err != nil || existing == nil {
 		return nil, status.Errorf(codes.NotFound, "rule not found: %s", req.Id)
 	}
 
-	if err := ensureResourceWorkspace(existing, user.Workspace, "rule"); err != nil {
-		return nil, err
+	applyRuleUpdates(existing, req)
+	if err := s.store.SaveRuleNoCtx(existing); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update rule: %v", err)
 	}
 
-	switch current := existing.(type) {
-	case *core.AlertRule:
-		applyRuleUpdates(current, req)
-		if err := s.store.SaveRuleNoCtx(current); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to update rule: %v", err)
-		}
-	case map[string]interface{}:
-		if req.Name != nil {
-			current["name"] = *req.Name
-		}
-		if req.Enabled != nil {
-			current["enabled"] = *req.Enabled
-		}
-		if req.Config != nil {
-			applyRuleConfig(current, req.Config)
-		}
-		if err := s.store.SaveRuleNoCtx(current); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to update rule: %v", err)
-		}
-	}
-
-	existing, _ = s.store.GetRuleNoCtx(req.Id, user.Workspace)
-	if pb := ruleToPB(existing); pb != nil {
-		return pb, nil
-	}
-	return nil, status.Errorf(codes.Internal, "failed to convert updated rule")
+	updated, _ := s.store.GetRuleNoCtx(req.Id, user.Workspace)
+	return ruleToPB(updated), nil
 }
 
 func (s *Server) DeleteRule(ctx context.Context, req *v1.DeleteRuleRequest) (*emptypb.Empty, error) {
@@ -1783,7 +1445,7 @@ func (s *Server) DeleteRule(ctx context.Context, req *v1.DeleteRuleRequest) (*em
 	if workspace == "" {
 		workspace = "default"
 	}
-	if _, err := s.store.GetRuleNoCtx(req.Id, workspace); err != nil {
+	if existing, err := s.store.GetRuleNoCtx(req.Id, workspace); err != nil || existing == nil {
 		return nil, status.Errorf(codes.NotFound, "rule not found: %s", req.Id)
 	}
 	if err := s.store.DeleteRuleNoCtx(req.Id, workspace); err != nil {
@@ -1812,7 +1474,18 @@ func (s *Server) ListJourneys(ctx context.Context, req *v1.ListJourneysRequest) 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list journeys: %v", err)
 	}
-	page, pagination := paginate(journeys, offset, limit)
+	// Inline pagination for journeys
+	total := len(journeys)
+	start := offset
+	if start > total {
+		start = total
+	}
+	end := start + limit
+	if end > total {
+		end = total
+	}
+	page := journeys[start:end]
+	pagination := newPagination(total, offset, limit, len(page))
 
 	pbJourneys := make([]*v1.Journey, 0, len(page))
 	for _, j := range page {
@@ -1844,13 +1517,10 @@ func (s *Server) GetJourney(ctx context.Context, req *v1.GetJourneyRequest) (*v1
 	if err != nil || j == nil {
 		return nil, status.Errorf(codes.NotFound, "journey not found: %s", req.Id)
 	}
-	if err := ensureJourneyWorkspace(j, workspace); err != nil {
-		return nil, err
+	if j.WorkspaceID != "" && j.WorkspaceID != workspace {
+		return nil, status.Error(codes.PermissionDenied, "access denied: journey belongs to another workspace")
 	}
-	if pb := journeyToPB(j); pb != nil {
-		return pb, nil
-	}
-	return nil, status.Errorf(codes.Internal, "failed to convert journey")
+	return journeyToPB(j), nil
 }
 
 func (s *Server) CreateJourney(ctx context.Context, req *v1.CreateJourneyRequest) (*v1.Journey, error) {
@@ -1866,22 +1536,18 @@ func (s *Server) CreateJourney(ctx context.Context, req *v1.CreateJourneyRequest
 		workspace = "default"
 	}
 
-	journeyData := pbToJourneyConfig(req)
-	journeyData["workspace_id"] = workspace
-	id := core.GenerateID()
-	journeyData["id"] = id
-	if err := s.store.SaveJourneyNoCtx(journeyData); err != nil {
+	journey := pbToJourneyConfig(req)
+	journey.WorkspaceID = workspace
+
+	if err := s.store.SaveJourneyNoCtx(journey); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create journey: %v", err)
 	}
 
-	created, err := s.store.GetJourneyNoCtx(id)
+	created, err := s.store.GetJourneyNoCtx(journey.ID)
 	if err != nil || created == nil {
 		return nil, status.Errorf(codes.Internal, "journey created but could not be retrieved")
 	}
-	if pb := journeyToPB(created); pb != nil {
-		return pb, nil
-	}
-	return nil, status.Errorf(codes.Internal, "failed to convert created journey")
+	return journeyToPB(created), nil
 }
 
 func (s *Server) UpdateJourney(ctx context.Context, req *v1.UpdateJourneyRequest) (*v1.Journey, error) {
@@ -1898,31 +1564,20 @@ func (s *Server) UpdateJourney(ctx context.Context, req *v1.UpdateJourneyRequest
 	}
 
 	existing, err := s.store.GetJourneyNoCtx(req.Id)
-	if err != nil {
+	if err != nil || existing == nil {
 		return nil, status.Errorf(codes.NotFound, "journey not found: %s", req.Id)
 	}
-	if err := ensureJourneyWorkspace(existing, workspace); err != nil {
-		return nil, err
+	if existing.WorkspaceID != "" && existing.WorkspaceID != workspace {
+		return nil, status.Error(codes.PermissionDenied, "access denied: journey belongs to another workspace")
 	}
 
-	switch current := existing.(type) {
-	case *core.JourneyConfig:
-		applyJourneyUpdates(current, req)
-		if err := s.store.SaveJourneyNoCtx(current); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to update journey: %v", err)
-		}
-	case map[string]interface{}:
-		applyJourneyMapUpdates(current, req)
-		if err := s.store.SaveJourneyNoCtx(current); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to update journey: %v", err)
-		}
+	applyJourneyUpdates(existing, req)
+	if err := s.store.SaveJourneyNoCtx(existing); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to update journey: %v", err)
 	}
 
-	existing, _ = s.store.GetJourneyNoCtx(req.Id)
-	if pb := journeyToPB(existing); pb != nil {
-		return pb, nil
-	}
-	return nil, status.Errorf(codes.Internal, "failed to convert updated journey")
+	updated, _ := s.store.GetJourneyNoCtx(req.Id)
+	return journeyToPB(updated), nil
 }
 
 func (s *Server) DeleteJourney(ctx context.Context, req *v1.DeleteJourneyRequest) (*emptypb.Empty, error) {
@@ -1937,11 +1592,11 @@ func (s *Server) DeleteJourney(ctx context.Context, req *v1.DeleteJourneyRequest
 		workspace = "default"
 	}
 	existing, err := s.store.GetJourneyNoCtx(req.Id)
-	if err != nil {
+	if err != nil || existing == nil {
 		return nil, status.Errorf(codes.NotFound, "journey not found: %s", req.Id)
 	}
-	if err := ensureJourneyWorkspace(existing, workspace); err != nil {
-		return nil, err
+	if existing.WorkspaceID != "" && existing.WorkspaceID != workspace {
+		return nil, status.Error(codes.PermissionDenied, "access denied: journey belongs to another workspace")
 	}
 	if err := s.store.DeleteJourneyNoCtx(req.Id); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete journey: %v", err)

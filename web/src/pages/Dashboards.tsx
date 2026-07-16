@@ -3,16 +3,21 @@ import { Link } from 'react-router-dom'
 import { LayoutGrid, Plus, Trash2, BarChart3, Zap, Activity } from 'lucide-react'
 import { useDashboards } from '../api/hooks'
 import type { CustomDashboard } from '../api/client'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 
 export function Dashboards() {
   const { dashboards, loading, deleteDashboard } = useDashboards()
   const [deleting, setDeleting] = useState<string | null>(null)
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this dashboard?')) return
-    setDeleting(id)
-    await deleteDashboard(id)
-    setDeleting(null)
+  	setDeleting(id)
+  }
+
+  const handleConfirmDelete = async () => {
+  	if (!deleting) return
+  	const id = deleting
+  	setDeleting(null)
+  	await deleteDashboard(id)
   }
 
   const getWidgetIcon = (type: string) => {
@@ -25,7 +30,8 @@ export function Dashboards() {
   }
 
   return (
-    <div className="space-y-8 animate-fade-in">
+    <>
+      <div className="space-y-8 animate-fade-in">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -134,5 +140,16 @@ export function Dashboards() {
         </div>
       )}
     </div>
+
+      <ConfirmDialog
+        open={deleting !== null}
+        title="Delete Dashboard"
+        message={<>Are you sure you want to delete <strong className="text-[var(--text-primary)]">{dashboards.find((d) => d.id === deleting)?.name || 'this dashboard'}</strong>? This action cannot be undone.</>}
+        confirmLabel="Delete"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setDeleting(null)}
+        resourceName={dashboards.find((d) => d.id === deleting)?.name}
+      />
+    </>
   )
 }

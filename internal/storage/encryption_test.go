@@ -52,6 +52,37 @@ func TestNewEngine_WALFailure(t *testing.T) {
 	}
 }
 
+func TestNewEngine_EncryptionEnabledEmptyKey(t *testing.T) {
+	cfg := core.StorageConfig{
+		Path: t.TempDir(),
+		Encryption: core.EncryptionConfig{
+			Enabled: true,
+			Key:     "",
+		},
+	}
+	if _, err := NewEngine(cfg, nil); err == nil {
+		t.Fatal("expected error when encryption is enabled but key is empty")
+	}
+}
+
+func TestNewEngine_EncryptionEnabledValidKey(t *testing.T) {
+	cfg := core.StorageConfig{
+		Path: t.TempDir(),
+		Encryption: core.EncryptionConfig{
+			Enabled: true,
+			Key:     "a-valid-key-for-testing-purposes!!",
+		},
+	}
+	db, err := NewEngine(cfg, newTestLogger())
+	if err != nil {
+		t.Fatalf("NewEngine with valid key should succeed: %v", err)
+	}
+	defer db.Close()
+	if db.encryptor == nil {
+		t.Fatal("encryptor should be initialized when encryption is enabled")
+	}
+}
+
 func TestEncryptor_RandReaderFailure(t *testing.T) {
 	old := rand.Reader
 	rand.Reader = &failReader{}

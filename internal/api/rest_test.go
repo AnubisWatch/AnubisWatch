@@ -5544,6 +5544,43 @@ func TestHandleSSE(t *testing.T) {
 	}
 }
 
+// TestHandleSSE_RequiresAuth verifies the SSE endpoint returns 401 when
+// accessed without authentication via the router.
+func TestHandleSSE_RequiresAuth(t *testing.T) {
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      newMockStorage(),
+		router:     router,
+		auth:       &mockAuthenticator{},
+		logger:     newTestLogger(),
+	}
+	router.Handle("GET", "/api/v1/events", server.requireAuth(server.handleSSE))
+
+	// No auth token — should be rejected
+	req := httptest.NewRequest("GET", "/api/v1/events", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 without auth, got %d", w.Code)
+	}
+
+	// Valid token via query parameter — uses a cancellable context so the
+	// SSE loop does not hang.
+	ctx, cancel := context.WithCancel(context.Background())
+	req = httptest.NewRequest("GET", "/api/v1/events?token=valid-token", nil)
+	req = req.WithContext(ctx)
+	w = httptest.NewRecorder()
+	go router.ServeHTTP(w, req)
+	time.Sleep(50 * time.Millisecond) // let handler start and write headers
+	cancel()
+	time.Sleep(50 * time.Millisecond) // let handler exit
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 with valid token query param, got %d", w.Code)
+	}
+}
+
 func TestHandleResolveIncident_FailingStore(t *testing.T) {
 	alert := &failingAlertManager{}
 	router := &Router{routes: make(map[string]map[string]Handler)}

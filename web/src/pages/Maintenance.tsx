@@ -1,9 +1,9 @@
 import { useState, useCallback, useEffect } from 'react'
 import {
-  Wrench,
-  Plus,
-  Edit,
-  Trash2,
+ Wrench,
+ Plus,
+ Edit,
+ Trash2,
   Clock,
   Calendar,
   Search,
@@ -18,6 +18,7 @@ import {
   Loader2,
   Check
 } from 'lucide-react'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { api } from '../api/client'
 import { useSouls } from '../api/hooks'
 
@@ -184,9 +185,17 @@ export function Maintenance() {
     await update(w.id, { enabled: !w.enabled })
   }
 
+  const [deletingWindow, setDeletingWindow] = useState<string | null>(null)
+
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this maintenance window?')) return
-    await remove(id)
+   setDeletingWindow(id)
+  }
+
+  const handleConfirmDelete = async () => {
+   if (!deletingWindow) return
+   const id = deletingWindow
+   setDeletingWindow(null)
+   await remove(id)
   }
 
   const filtered = data.filter(w => {
@@ -217,7 +226,7 @@ export function Maintenance() {
     )
   }
 
-  return (
+  return (<>
     <div className="space-y-8">
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -621,5 +630,16 @@ export function Maintenance() {
         </div>
       )}
     </div>
+  
+      <ConfirmDialog
+        open={deletingWindow !== null}
+        title="Delete Maintenance Window"
+        message={<>Are you sure you want to delete <strong className="text-[var(--text-primary)]">{data.find((w) => w.id === deletingWindow)?.name || 'this maintenance window'}</strong>? This action cannot be undone.</>}
+        confirmLabel="Delete"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setDeletingWindow(null)}
+        resourceName={data.find((w) => w.id === deletingWindow)?.name}
+      />
+    </>
   )
 }
