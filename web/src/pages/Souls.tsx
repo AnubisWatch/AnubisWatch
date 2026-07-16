@@ -1,8 +1,6 @@
 import { useEffect, useState, useMemo } from 'react'
 import {
   Plus,
-  Search,
-  Filter,
   Ghost,
   Play,
   Pause,
@@ -13,10 +11,8 @@ import {
   Server,
   XCircle,
   Clock,
-  ChevronDown,
   RefreshCw,
   Wifi,
-  X,
   CheckCircle2
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -34,6 +30,9 @@ import {
 } from '../utils/soulForm'
 import { getStatusColor, getStatusText, getStatusLabel } from '../utils/statusUtils'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { SoulStatsCards } from '../components/SoulStatsCards'
+import { SoulFilterBar } from '../components/SoulFilterBar'
+import { SoulCreateModal } from '../components/SoulCreateModal'
 
 type SoulDisplayStatus = 'healthy' | 'unhealthy' | 'unknown' | 'checking' | 'check_failed'
 
@@ -200,121 +199,17 @@ export function Souls() {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-        <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-400 text-sm font-medium">Total Essence</p>
-              <p className="text-2xl font-bold text-white mt-1">{stats.total}</p>
-            </div>
-            <div className="w-10 h-10 bg-gray-800 rounded-xl flex items-center justify-center">
-              <Ghost className="w-5 h-5 text-gray-400" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-400 text-sm font-medium">Breathing</p>
-              <p className="text-2xl font-bold text-emerald-400 mt-1">{stats.active}</p>
-            </div>
-            <div className="w-10 h-10 bg-emerald-500/10 rounded-xl flex items-center justify-center">
-              <Play className="w-5 h-5 text-emerald-400" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-400 text-sm font-medium">Chaos</p>
-              <p className="text-2xl font-bold text-rose-400 mt-1">{stats.issues}</p>
-            </div>
-            <div className="w-10 h-10 bg-rose-500/10 rounded-xl flex items-center justify-center">
-              <XCircle className="w-5 h-5 text-rose-400" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-400 text-sm font-medium">Embalmed</p>
-              <p className="text-2xl font-bold text-gray-400 mt-1">{stats.disabled}</p>
-            </div>
-            <div className="w-10 h-10 bg-gray-700 rounded-xl flex items-center justify-center">
-              <Pause className="w-5 h-5 text-gray-400" />
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-gray-400 text-sm font-medium">Rituals</p>
-              <p className="text-2xl font-bold text-amber-400 mt-1">{stats.types}</p>
-            </div>
-            <div className="w-10 h-10 bg-amber-500/10 rounded-xl flex items-center justify-center">
-              <Server className="w-5 h-5 text-amber-400" />
-            </div>
-          </div>
-        </div>
-      </div>
+      <SoulStatsCards stats={stats} />
 
       {/* Filters */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4">
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-          <input
-            type="text"
-            placeholder="Search souls by name or target..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="w-full bg-gray-900 border border-gray-700/50 rounded-xl pl-11 pr-4 py-3 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50 transition-colors"
-          />
-        </div>
-
-        <div className="flex items-center gap-3">
-          <div className="relative">
-            <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-            <select
-              value={filter}
-              onChange={(e) => setFilter(e.target.value)}
-              className="bg-gray-900 border border-gray-700/50 rounded-xl pl-10 pr-8 py-3 text-sm text-white focus:outline-none focus:border-amber-500/50 appearance-none cursor-pointer"
-            >
-              <option value="all">All Souls</option>
-              <option value="enabled">Active Only</option>
-              <option value="disabled">Disabled Only</option>
-              <option value="http">HTTP</option>
-              <option value="tcp">TCP</option>
-              <option value="issues">With Issues</option>
-            </select>
-            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 pointer-events-none" />
-          </div>
-
-          <div className="flex items-center bg-gray-900 border border-gray-700/50 rounded-xl p-1">
-            <button
-              onClick={() => setViewMode('list')}
-              className={`p-2 rounded-lg transition-colors ${viewMode === 'list' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'}`}
-              aria-label="List view"
-            >
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" clipRule="evenodd" />
-              </svg>
-            </button>
-            <button
-              onClick={() => setViewMode('grid')}
-              className={`p-2 rounded-lg transition-colors ${viewMode === 'grid' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'}`}
-              aria-label="Grid view"
-            >
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
-                <path d="M5 3a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2V5a2 2 0 00-2-2H5zM5 11a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2v-2a2 2 0 00-2-2H5zM11 5a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V5zM11 13a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      </div>
+      <SoulFilterBar
+        search={search}
+        onSearchChange={setSearch}
+        filter={filter}
+        onFilterChange={setFilter}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
+      />
 
       {/* Content */}
       {viewMode === 'list' ? (
@@ -536,160 +431,16 @@ export function Souls() {
       )}
 
       {/* Add Soul Modal */}
-      {showModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="soul-modal-title"
-          onKeyDown={(e) => { if (e.key === 'Escape') setShowModal(false) }}
-        >
-          <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-auto">
-            <div className="p-6 border-b border-gray-700/50 flex items-center justify-between">
-              <h2 id="soul-modal-title" className="text-xl font-bold text-white">Add New Soul</h2>
-              <button
-                onClick={() => { setShowModal(false); setFormErrors({}) }}
-                className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
-                aria-label="Close dialog"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleCreateSoul} className="p-6 space-y-5">
-              {/* Name */}
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">Name</label>
-                <input
-                  type="text"
-                  required
-                  value={formData.name}
-                  onChange={(e) => {
-                    setFormData({ ...formData, name: e.target.value })
-                    if (formErrors.name) setFormErrors({ ...formErrors, name: '' })
-                  }}
-                  placeholder="e.g., Production API"
-                  className={`w-full bg-gray-950 border rounded-xl px-4 py-3 text-white placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50 ${
-                    formErrors.name ? 'border-rose-500' : 'border-gray-700'
-                  }`}
-                />
-                {formErrors.name && <p className="mt-1 text-xs text-rose-400">{formErrors.name}</p>}
-              </div>
-
-              {/* Type */}
-              <div>
-                <label htmlFor="soul-type" className="block text-sm font-medium text-gray-300 mb-2">Type</label>
-                <select
-                  id="soul-type"
-                  aria-label="Soul type"
-                  value={formData.type}
-                  onChange={(e) => setFormData(nextSoulFormDataForType(formData, e.target.value as SoulType))}
-                  className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
-                >
-                  {soulTypeOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Target */}
-              <div>
-                <label htmlFor="soul-target" className="block text-sm font-medium text-gray-300 mb-2">
-                  {soulTargetHints[formData.type].label}
-                </label>
-                <input
-                  id="soul-target"
-                  data-testid="soul-target"
-                  type="text"
-                  required
-                  value={formData.target}
-                  onChange={(e) => {
-                    setFormData({ ...formData, target: e.target.value })
-                    if (formErrors.target) setFormErrors({ ...formErrors, target: '' })
-                  }}
-                  placeholder={soulTargetHints[formData.type].placeholder}
-                  className={`w-full bg-gray-950 border rounded-xl px-4 py-3 text-white placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50 ${
-                    formErrors.target ? 'border-rose-500' : 'border-gray-700'
-                  }`}
-                />
-                {formErrors.target ? (
-                  <p className="mt-2 text-xs text-rose-400">{formErrors.target}</p>
-                ) : (
-                  <p className="mt-2 text-xs text-gray-500">{soulTargetHints[formData.type].help}</p>
-                )}
-              </div>
-
-              <SoulProtocolFields formData={formData} setFormData={setFormData} />
-
-              {/* Interval & Timeout */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Interval (seconds)</label>
-                  <input
-                    type="number"
-                    min="10"
-                    value={formData.weight}
-                    onChange={(e) => setFormData({ ...formData, weight: parseInt(e.target.value) })}
-                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Timeout (seconds)</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={formData.timeout}
-                    onChange={(e) => setFormData({ ...formData, timeout: parseInt(e.target.value) })}
-                    className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
-                  />
-                </div>
-              </div>
-
-              {/* Enabled Toggle */}
-              <div className="flex items-center gap-3 p-4 bg-gray-800/50 rounded-xl">
-                <input
-                  type="checkbox"
-                  id="enabled"
-                  checked={formData.enabled}
-                  onChange={(e) => setFormData({ ...formData, enabled: e.target.checked })}
-                  className="w-5 h-5 rounded border-gray-600 text-amber-500 focus:ring-amber-500/20"
-                />
-                <label htmlFor="enabled" className="text-sm text-gray-300">
-                  Enable monitoring immediately
-                </label>
-              </div>
-
-              {/* Buttons */}
-              <div className="flex gap-3 pt-4">
-                <button
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="flex-1 px-4 py-3 bg-gray-800 hover:bg-gray-700 text-white rounded-xl transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="flex-1 px-4 py-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-                >
-                  {loading ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Creating...
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="w-4 h-4" />
-                      Create Soul
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <SoulCreateModal
+        open={showModal}
+        formData={formData}
+        formErrors={formErrors}
+        loading={loading}
+        onClose={() => { setShowModal(false); setFormErrors({}) }}
+        onSubmit={handleCreateSoul}
+        onFormDataChange={setFormData}
+        onErrorsChange={setFormErrors}
+      />
 
       {/* Delete confirmation dialog */}
       <ConfirmDialog
