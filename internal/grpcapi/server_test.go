@@ -243,94 +243,7 @@ func (m *mockGRPCProbe) ForceCheck(soulID string) (*core.Judgment, error) {
 	}, nil
 }
 
-// mockSoul implements a minimal soul with getters for PB conversion
-type mockSoul struct {
-	id, name, status, soulType, target string
-	tags                               []string
-}
-
-func (m *mockSoul) GetID() string              { return m.id }
-func (m *mockSoul) GetName() string            { return m.name }
-func (m *mockSoul) GetStatus() string          { return m.status }
-func (m *mockSoul) GetType() string            { return m.soulType }
-func (m *mockSoul) GetTarget() string          { return m.target }
-func (m *mockSoul) GetInterval() time.Duration { return 60 * time.Second }
-func (m *mockSoul) GetTimeout() time.Duration  { return 10 * time.Second }
-func (m *mockSoul) GetEnabled() bool           { return true }
-func (m *mockSoul) GetTags() []string          { return m.tags }
-func (m *mockSoul) GetWorkspaceID() string     { return "default" }
-func (m *mockSoul) GetRegion() string          { return "" }
-func (m *mockSoul) GetCreatedAt() time.Time    { return time.Time{} }
-func (m *mockSoul) GetUpdatedAt() time.Time    { return time.Time{} }
-func (m *mockSoul) GetHTTP() interface{}       { return nil }
-func (m *mockSoul) GetTCP() interface{}        { return nil }
-func (m *mockSoul) GetDNS() interface{}        { return nil }
-func (m *mockSoul) GetTLS() interface{}        { return nil }
-func (m *mockSoul) GetGRPC() interface{}       { return nil }
-
-// mockChannel implements a minimal channel with getters
-type mockChannel struct {
-	id, name, chType string
-}
-
-func (m *mockChannel) GetID() string                     { return m.id }
-func (m *mockChannel) GetName() string                   { return m.name }
-func (m *mockChannel) GetType() string                   { return m.chType }
-func (m *mockChannel) GetEnabled() bool                  { return true }
-func (m *mockChannel) GetConfig() map[string]interface{} { return make(map[string]interface{}) }
-func (m *mockChannel) GetWorkspaceID() string            { return "default" }
-func (m *mockChannel) GetCreatedAt() time.Time           { return time.Time{} }
-
-// mockRule implements a minimal rule with getters
-type mockRule struct {
-	id, name string
-}
-
-func (m *mockRule) GetID() string           { return m.id }
-func (m *mockRule) GetName() string         { return m.name }
-func (m *mockRule) GetEnabled() bool        { return true }
-func (m *mockRule) GetChannels() []string   { return []string{"ch_1"} }
-func (m *mockRule) GetWorkspaceID() string  { return "default" }
-func (m *mockRule) GetCreatedAt() time.Time { return time.Time{} }
-
-// mockJourney implements a minimal journey with getters
-type mockJourney struct {
-	id, name, workspaceID string
-}
-
-func (m *mockJourney) GetID() string    { return m.id }
-func (m *mockJourney) GetName() string  { return m.name }
-func (m *mockJourney) GetEnabled() bool { return true }
-func (m *mockJourney) GetWorkspaceID() string {
-	if m.workspaceID != "" {
-		return m.workspaceID
-	}
-	return "default"
-}
-func (m *mockJourney) GetDescription() string   { return "" }
-func (m *mockJourney) GetWeight() time.Duration { return 0 }
-func (m *mockJourney) GetSteps() []interface{}  { return nil }
-func (m *mockJourney) GetCreatedAt() time.Time  { return time.Time{} }
-
 // mockAlertEvent implements a minimal alert event for verdict conversion
-type mockAlertEvent struct {
-	id, soulID, soulName, channelID, status, severity, message string
-	timestamp                                                  time.Time
-	resolved                                                   bool
-	acknowledged                                               bool
-}
-
-func (m *mockAlertEvent) GetID() string           { return m.id }
-func (m *mockAlertEvent) GetSoulID() string       { return m.soulID }
-func (m *mockAlertEvent) GetSoulName() string     { return m.soulName }
-func (m *mockAlertEvent) GetChannelID() string    { return m.channelID }
-func (m *mockAlertEvent) GetStatus() string       { return m.status }
-func (m *mockAlertEvent) GetSeverity() string     { return m.severity }
-func (m *mockAlertEvent) GetMessage() string      { return m.message }
-func (m *mockAlertEvent) GetTimestamp() time.Time { return m.timestamp }
-func (m *mockAlertEvent) GetResolved() bool       { return m.resolved }
-func (m *mockAlertEvent) GetAcknowledged() bool   { return m.acknowledged }
-
 func TestNewServer(t *testing.T) {
 	store := newMockGRPCStore()
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
@@ -697,27 +610,6 @@ func TestServer_DeleteJourney(t *testing.T) {
 	}
 }
 
-// mockJourneyRun implements a minimal journey run with getters
-
-type mockJourneyRun struct {
-	id, journeyID, workspaceID, jackalID, region, status string
-	startedAt, completedAt, duration                     int64
-	steps                                                []interface{}
-	variables                                            map[string]string
-}
-
-func (m *mockJourneyRun) GetID() string                   { return m.id }
-func (m *mockJourneyRun) GetJourneyID() string            { return m.journeyID }
-func (m *mockJourneyRun) GetWorkspaceID() string          { return m.workspaceID }
-func (m *mockJourneyRun) GetJackalID() string             { return m.jackalID }
-func (m *mockJourneyRun) GetRegion() string               { return m.region }
-func (m *mockJourneyRun) GetStartedAt() int64             { return m.startedAt }
-func (m *mockJourneyRun) GetCompletedAt() int64           { return m.completedAt }
-func (m *mockJourneyRun) GetDuration() int64              { return m.duration }
-func (m *mockJourneyRun) GetStatus() string               { return m.status }
-func (m *mockJourneyRun) GetSteps() []interface{}         { return m.steps }
-func (m *mockJourneyRun) GetVariables() map[string]string { return m.variables }
-
 type baseServerStream struct{}
 
 func (baseServerStream) SetHeader(md metadata.MD) error  { return nil }
@@ -773,24 +665,6 @@ func TestServer_UpdateSoul(t *testing.T) {
 }
 
 // mockJudgment implements a minimal judgment with getters
-
-type mockJudgment struct {
-	id, soulID, soulName, status, message string
-	duration                              time.Duration
-	timestamp                             time.Time
-	jackalID, region                      string
-}
-
-func (m *mockJudgment) GetID() string              { return m.id }
-func (m *mockJudgment) GetSoulID() string          { return m.soulID }
-func (m *mockJudgment) GetSoulName() string        { return m.soulName }
-func (m *mockJudgment) GetStatus() string          { return m.status }
-func (m *mockJudgment) GetDuration() time.Duration { return m.duration }
-func (m *mockJudgment) GetMessage() string         { return m.message }
-func (m *mockJudgment) GetTimestamp() time.Time    { return m.timestamp }
-func (m *mockJudgment) GetJackalID() string        { return m.jackalID }
-func (m *mockJudgment) GetRegion() string          { return m.region }
-
 func TestServer_ListJudgments(t *testing.T) {
 	store := newMockGRPCStore()
 	store.souls["s1"] = &core.Soul{ID: "s1", Name: "test"}
