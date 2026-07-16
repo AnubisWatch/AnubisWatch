@@ -1296,15 +1296,63 @@ func (s *RESTServer) handleListJudgments(ctx *Context) error {
 		return ctx.Error(http.StatusForbidden, "access denied: soul belongs to another workspace")
 	}
 
+	// Parse pagination: cursor-based takes precedence over offset-based.
+	// When a cursor (judgment ULID) is provided, the response starts from
+	// entries after that cursor. Offset-based is the fallback.
+	cursor := ctx.Request.URL.Query().Get("cursor")
+	offset, limit := parsePagination(ctx.Request, 20, 100)
+
 	start := time.Now().Add(-24 * time.Hour)
 	end := time.Now()
 
-	judgments, err := s.store.ListJudgmentsNoCtx(soulID, start, end, 100)
+	// When no cursor is provided, respect the offset by fetching enough
+	// data to satisfy it. With cursor the offset is implicit.
+	fetchLimit := limit
+	if cursor == "" && offset > 0 {
+		fetchLimit = offset + limit
+	}
+
+	judgments, err := s.store.ListJudgmentsNoCtx(soulID, start, end, fetchLimit)
 	if err != nil {
 		return s.internalError(ctx, err, "internal server error")
 	}
 
-	return ctx.JSON(http.StatusOK, judgments)
+	// If cursor provided, filter to entries after it (ULIDs are lexicographically sortable)
+	if cursor != "" {
+		filtered := make([]*core.Judgment, 0, len(judgments))
+		for _, j := range judgments {
+			if j.ID > cursor {
+				filtered = append(filtered, j)
+			}
+		}
+		judgments = filtered
+	}
+
+	// Apply offset and limit
+	total := len(judgments)
+	startIdx := offset
+	if startIdx > total {
+		startIdx = total
+	}
+	endIdx := startIdx + limit
+	if endIdx > total {
+		endIdx = total
+	}
+	page := judgments[startIdx:endIdx]
+	hasMore := endIdx < total
+
+	// Build next_cursor from the last returned judgment (for cursor-based clients)
+	var nextCursor string
+	if hasMore && len(page) > 0 {
+		nextCursor = page[len(page)-1].ID
+	}
+
+	return ctx.JSON(http.StatusOK, map[string]interface{}{
+		"data":        page,
+		"total":       total,
+		"has_more":    hasMore,
+		"next_cursor": nextCursor,
+	})
 }
 
 func (s *RESTServer) handleGetJudgment(ctx *Context) error {
