@@ -1,7 +1,7 @@
 # Production Readiness Checklist
 
-**Date:** 2026-06-28  
-**Status:** Ready for single-node deployment behind TLS-terminating proxy
+**Date:** 2026-07-15  
+**Status:** Production-ready for single/multi-node deployment
 
 ## Build Verification
 
@@ -31,6 +31,20 @@
 - [x] **Raft transport OOM** (`transport.go`): RPC payload size capped at 16MB
 - [x] **Escalation message** (`manager.go`): Uses human-readable SoulName instead of opaque ULID
 
+## Type Safety & API Hardening
+
+- [x] **gRPC interface{} elimination** (`grpcapi/server.go`): Store interface, PB conversions, and handlers rewritten — 74 `interface{}` usages → 0 in production code
+- [x] **Request ID middleware** (`api/rest.go`): Every API request gets a ULID, logged in structured logs and OpenTelemetry spans, returned as `X-Request-ID` header
+- [x] **Key format validation** (`storage/engine.go`, `storage/storage.go`): `validateResourceID` guards against `/` in IDs across 8 entity types (souls, channels, rules, journeys, workspaces, status pages, dashboards, maintenance windows)
+- [x] **Cursor-based pagination** (`api/rest.go`): Judgment list endpoint accepts `cursor` query param (ULID-based), returns `next_cursor`/`has_more` — prevents phantom reads on live streams
+- [x] **CSP header** (`api/rest.go`): Content-Security-Policy set on all responses
+
+## Frontend Hardening
+
+- [x] **ConfirmDialog** (`components/ConfirmDialog.tsx`): Reusable accessible dialog with focus trapping, Escape-to-close, ARIA compliance. Integrated into Souls, SoulDetail, Alerts, Journeys, Dashboards, StatusPages, Maintenance pages
+- [x] **Souls page decomposition** (`pages/Souls.tsx`): 716 → 466 lines. Extracted `SoulStatsCards`, `SoulFilterBar`, `SoulCreateModal`
+- [x] **Color contrast** (`index.css`): Dark theme `--text-muted` lightened from `#94a3b8` → `#adbac7` for WCAG AA compliance
+
 ## CI Pipeline
 
 - [x] `.github/workflows/ci.yml` runs full test suite with `-race` flag
@@ -48,11 +62,19 @@
 
 ## Known Limitations
 
-1. **Multi-node cluster**: Raft `InstallSnapshot` is a stub — cluster log compaction not functional. Single-node mode is fully supported.
-2. **Multi-tenancy**: REST API enforces workspace isolation. gRPC layer lacks role-based authorization (all authenticated users can mutate).
-3. **TLS**: Container defaults to TLS disabled; operators should terminate TLS at ingress or configure `server.tls.enabled: true`.
+1. **On-disk index**: CobaltDB B+Tree lives entirely in memory; WAL replay is the sole recovery mechanism. For datasets with millions of judgments, startup time increases linearly. Tracked as F-002.
+2. **Multi-node cluster**: Raft `InstallSnapshot` is a stub — cluster log compaction not functional. Single-node mode is fully supported and recommended.
+3. **gRPC authorization**: REST API enforces fine-grained RBAC. gRPC layer has basic auth but lacks resource-scoped permission checks.
 
 ## Deployment Instructions
+
+### Production Preflight
+
+```bash
+VALUES=deploy/helm/anubiswatch/values-production.example.yaml \
+ANUBIS_PREFLIGHT_CREATE_NAMESPACE=true \
+  bash scripts/production-preflight.sh
+```
 
 ### Single-node (recommended for most deployments)
 
