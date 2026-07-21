@@ -1577,7 +1577,9 @@ func (s *RESTServer) handleUpdateChannel(ctx *Context) error {
 	channel.WorkspaceID = ctx.Workspace
 	channel.CreatedAt = existing.CreatedAt
 	channel.UpdatedAt = time.Now()
-	mergeChannelSecrets(existing, &channel)
+	if err := mergeChannelSecrets(existing, &channel); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
 
 	if err := s.alert.RegisterChannel(&channel); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
@@ -2265,6 +2267,41 @@ func normalizeStatusPageForSave(page *core.StatusPage) error {
 	return nil
 }
 
+// validateStatusPageSouls checks that every soul ID referenced in the page
+// belongs to the page's workspace. Cross-tenant soul disclosure is prevented
+// both at write time (here) and at read time (buildStatusPageData in the
+// statuspage handler), so an attacker cannot publish another tenant's soul
+// status on their own public status page.
+func validateStatusPageSouls(page *core.StatusPage, store Storage) error {
+	// Collect all unique soul IDs from the page and its groups.
+	seen := make(map[string]bool)
+	for _, id := range page.Souls {
+		if id != "" && !seen[id] {
+			seen[id] = true
+		}
+	}
+	for _, g := range page.Groups {
+		for _, id := range g.SoulIDs {
+			if id != "" && !seen[id] {
+				seen[id] = true
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	for id := range seen {
+		soul, err := store.GetSoulNoCtx(id)
+		if err != nil {
+			return fmt.Errorf("soul %s: %w", id, err)
+		}
+		if !sameWorkspace(soul.WorkspaceID, page.WorkspaceID) {
+			return fmt.Errorf("soul %s does not belong to workspace %s", id, page.WorkspaceID)
+		}
+	}
+	return nil
+}
+
 func isValidStatusPageSlug(slug string) bool {
 	if strings.HasPrefix(slug, "-") || strings.HasSuffix(slug, "-") {
 		return false
@@ -2320,6 +2357,10 @@ func (s *RESTServer) handleCreateStatusPage(ctx *Context) error {
 	page.CreatedAt = time.Now()
 	page.UpdatedAt = time.Now()
 
+	if err := validateStatusPageSouls(&page, s.store); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
+
 	if err := s.store.SaveStatusPageNoCtx(&page); err != nil {
 		return s.internalError(ctx, err, "internal server error")
 	}
@@ -2361,6 +2402,10 @@ func (s *RESTServer) handleUpdateStatusPage(ctx *Context) error {
 	page.WorkspaceID = contextWorkspace(ctx)
 	page.CreatedAt = existing.CreatedAt
 	page.UpdatedAt = time.Now()
+
+	if err := validateStatusPageSouls(&page, s.store); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
 
 	if err := s.store.SaveStatusPageNoCtx(&page); err != nil {
 		return s.internalError(ctx, err, "internal server error")
