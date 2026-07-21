@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -488,4 +489,48 @@ func (s *InMemorySnapshotSource) Read(p []byte) (n int, err error) {
 // Close closes the snapshot source
 func (s *InMemorySnapshotSource) Close() error {
 	return nil
+}
+
+// InMemoryStableStore is an in-memory stable store for testing Raft durability.
+type InMemoryStableStore struct {
+	mu   sync.RWMutex
+	data map[string][]byte
+}
+
+// NewInMemoryStableStore creates a new in-memory stable store.
+func NewInMemoryStableStore() *InMemoryStableStore {
+	return &InMemoryStableStore{
+		data: make(map[string][]byte),
+	}
+}
+
+func (s *InMemoryStableStore) Get(key string) ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	val, ok := s.data[key]
+	if !ok {
+		return nil, &core.NotFoundError{Entity: "stable", ID: key}
+	}
+	return val, nil
+}
+
+func (s *InMemoryStableStore) Set(key string, val []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data[key] = val
+	return nil
+}
+
+func (s *InMemoryStableStore) GetUint64(key string) (uint64, error) {
+	val, err := s.Get(key)
+	if err != nil {
+		return 0, err
+	}
+	return binary.BigEndian.Uint64(val), nil
+}
+
+func (s *InMemoryStableStore) SetUint64(key string, val uint64) error {
+	buf := make([]byte, 8)
+	binary.BigEndian.PutUint64(buf, val)
+	return s.Set(key, buf)
 }
