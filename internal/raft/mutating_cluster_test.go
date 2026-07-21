@@ -144,8 +144,8 @@ func TestNodeProcessCommittedPropagatesFSMError(t *testing.T) {
 	node.fsm = &failingFSM{err: applyErr}
 	node.log = append(node.log, core.RaftLogEntry{Index: 1, Term: 3, Type: core.LogCommand})
 	future := &applyFuture{done: make(chan struct{})}
-	applyWaiters.Store(uint64(1), future)
-	t.Cleanup(func() { applyWaiters.Delete(uint64(1)) })
+	node.applyWaiters.Store(uint64(1), future)
+	t.Cleanup(func() { node.applyWaiters.Delete(uint64(1)) })
 
 	node.processCommitted(1)
 

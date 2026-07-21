@@ -3,6 +3,7 @@ package core
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // VerdictsConfig holds alert rules configuration
@@ -117,6 +118,14 @@ type NecropolisConfig struct {
 type DiscoveryConfig struct {
 	Mode  string   `json:"mode" yaml:"mode"` // mdns, gossip, manual
 	Seeds []string `json:"seeds" yaml:"seeds"`
+}
+
+// gossips reports whether this node runs the UDP gossip/mDNS discovery layer.
+// Mirrors the condition cluster.Manager uses to construct raft.Discovery:
+// mode "manual" (or unset) means peers are configured statically instead.
+func (n NecropolisConfig) gossips() bool {
+	mode := strings.TrimSpace(n.Discovery.Mode)
+	return mode != "" && mode != "manual"
 }
 
 // RaftConfig defines Raft consensus settings
@@ -265,6 +274,32 @@ func (c *RaftConfig) Validate() error {
 	if c.AdvertiseAddr == "" {
 		c.AdvertiseAddr = c.BindAddr
 	}
+	if c.ElectionTimeout.Duration == 0 {
+		c.ElectionTimeout.Duration = time.Second
+	} else if c.ElectionTimeout.Duration < 0 {
+		return &ValidationError{Field: "election_timeout", Message: "election timeout must be positive"}
+	}
+	if c.HeartbeatTimeout.Duration == 0 {
+		c.HeartbeatTimeout.Duration = 300 * time.Millisecond
+	} else if c.HeartbeatTimeout.Duration < 0 {
+		return &ValidationError{Field: "heartbeat_timeout", Message: "heartbeat timeout must be positive"}
+	}
+	if c.CommitTimeout.Duration == 0 {
+		c.CommitTimeout.Duration = 50 * time.Millisecond
+	} else if c.CommitTimeout.Duration < 0 {
+		return &ValidationError{Field: "commit_timeout", Message: "commit timeout must be positive"}
+	}
+	if c.MaxAppendEntries == 0 {
+		c.MaxAppendEntries = 64
+	} else if c.MaxAppendEntries < 0 {
+		return &ValidationError{Field: "max_append_entries", Message: "max append entries must be positive"}
+	}
+	if c.SnapshotThreshold < 0 {
+		return &ValidationError{Field: "snapshot_threshold", Message: "snapshot threshold must not be negative"}
+	}
+	if c.TrailingLogs < 0 {
+		return &ValidationError{Field: "trailing_logs", Message: "trailing logs must not be negative"}
+	}
 	return nil
 }
 
@@ -272,6 +307,9 @@ func (c *RaftConfig) Validate() error {
 func (c ServerConfig) validate() error {
 	if c.Port < 1 || c.Port > 65535 {
 		return &ConfigError{Field: "server.port", Message: "port must be between 1 and 65535"}
+	}
+	if c.GRPCPort < 0 || c.GRPCPort > 65535 {
+		return &ConfigError{Field: "server.grpc_port", Message: "grpc_port must be 0 (disabled) or between 1 and 65535"}
 	}
 	if c.TLS.Enabled {
 		if c.TLS.Cert == "" || c.TLS.Key == "" {
@@ -286,8 +324,17 @@ func (c StorageConfig) validate() error {
 	if c.Path == "" {
 		return &ConfigError{Field: "storage.path", Message: "storage path is required"}
 	}
-	if c.Encryption.Enabled && c.Encryption.Key == "" {
-		return &ConfigError{Field: "storage.encryption.key", Message: "encryption key is required when encryption is enabled"}
+	if c.Encryption.Enabled {
+		key := strings.TrimSpace(c.Encryption.Key)
+		if key == "" {
+			return &ConfigError{Field: "storage.encryption.key", Message: "encryption key is required when encryption is enabled"}
+		}
+		lowerKey := strings.ToLower(key)
+		for _, marker := range []string{"replace-with", "change_me", "changeme"} {
+			if strings.Contains(lowerKey, marker) {
+				return &ConfigError{Field: "storage.encryption.key", Message: "placeholder encryption keys are not allowed"}
+			}
+		}
 	}
 	if c.BTreeOrder < 3 && c.BTreeOrder != 0 {
 		return &ConfigError{Field: "storage.btree_order", Message: "btree_order must be at least 3"}

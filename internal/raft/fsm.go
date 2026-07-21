@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
@@ -119,9 +120,15 @@ func (f *StorageFSM) Snapshot() (core.FSMCommand, error) {
 		return core.FSMCommand{}, err
 	}
 
-	// Build snapshot
+	// Build an application-state snapshot. Raft's own log, hard-state, and
+	// snapshot metadata live in the same embedded database but are not FSM
+	// state; including them would make restore overwrite the consensus records
+	// that authorize the restore itself.
 	snapshot := make(map[string][]byte)
 	for _, key := range keys {
+		if strings.HasPrefix(key, "raft/") {
+			continue
+		}
 		value, err := f.store.Get(key)
 		if err != nil {
 			continue
@@ -150,19 +157,38 @@ func (f *StorageFSM) Restore(snapshot []byte) error {
 		return err
 	}
 
-	// Clear existing data
-	if err := f.store.DeletePrefix(""); err != nil {
+	// Clear only application state. Raft metadata shares the database and must
+	// remain intact while the FSM image is replaced.
+	keys, err := f.store.List("")
+	if err != nil {
 		return err
 	}
+	for _, key := range keys {
+		if strings.HasPrefix(key, "raft/") {
+			continue
+		}
+		if err := f.store.Delete(key); err != nil {
+			return err
+		}
+	}
 
-	// Restore data
 	for key, value := range data {
+		if strings.HasPrefix(key, "raft/") {
+			continue
+		}
 		if err := f.store.Set(key, value); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+// SetLastApplied records the snapshot boundary after a successful restore.
+func (f *StorageFSM) SetLastApplied(index uint64) {
+	f.mu.Lock()
+	f.index = index
+	f.mu.Unlock()
 }
 
 // LastApplied returns the last applied index

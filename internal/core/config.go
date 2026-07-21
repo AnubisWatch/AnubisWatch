@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"regexp"
 	"strings"
@@ -217,6 +218,15 @@ func (c *Config) setDefaults() {
 	if c.Necropolis.Raft.HeartbeatTimeout.Duration == 0 {
 		c.Necropolis.Raft.HeartbeatTimeout.Duration = 300 * 1e6 // 300ms
 	}
+	if c.Necropolis.Raft.CommitTimeout.Duration == 0 {
+		c.Necropolis.Raft.CommitTimeout.Duration = 50 * 1e6 // 50ms
+	}
+	if c.Necropolis.Raft.MaxAppendEntries == 0 {
+		c.Necropolis.Raft.MaxAppendEntries = 64
+	}
+	if c.Necropolis.Raft.TrailingLogs == 0 {
+		c.Necropolis.Raft.TrailingLogs = 1024
+	}
 	if c.Necropolis.Raft.SnapshotInterval.Duration == 0 {
 		c.Necropolis.Raft.SnapshotInterval.Duration = 300 * 1e9 // 300s
 	}
@@ -348,21 +358,39 @@ func (c *Config) validate() error {
 		return err
 	}
 
-	// CRITICAL-2 follow-up: when environment=production, plaintext serving
-	// is never acceptable. Reject configs that try to deploy without TLS.
-	// Operators who terminate TLS at a reverse proxy / ingress can set
-	// environment="production-proxied" (the value shipped in the container
-	// image, which listens on plain HTTP behind a TLS-terminating proxy) or
-	// any other non-"production" value; the gate is opt-in via the exact
-	// value "production". Do NOT broaden this to a prefix match, or
-	// "production-proxied" would be caught and the container would crash-loop.
-	if strings.EqualFold(strings.TrimSpace(c.Environment), "production") {
-		if !c.Server.TLS.Enabled {
-			return fmt.Errorf("config error: server.tls.enabled must be true when environment is \"production\" (use environment=\"production-proxied\" when TLS is terminated upstream)")
-		}
+	// Production deployments must not expose bearer credentials over a
+	// plaintext management listener. HTTP may be plaintext in the explicit
+	// production-proxied topology because the ingress terminates TLS, but gRPC
+	// is not routed by the shipped ingress and therefore remains disabled unless
+	// the process itself has TLS enabled.
+	environment := strings.ToLower(strings.TrimSpace(c.Environment))
+	if environment == "production" && !c.Server.TLS.Enabled {
+		return fmt.Errorf("config error: server.tls.enabled must be true when environment is \"production\" (use environment=\"production-proxied\" when HTTP TLS is terminated upstream)")
+	}
+	if (environment == "production" || environment == "production-proxied") && c.Server.GRPCPort > 0 && !c.Server.TLS.Enabled && !isLoopbackHost(c.Server.Host) {
+		return fmt.Errorf("config error: server.grpc_port must be 0, server.tls.enabled must be true, or server.host must be a loopback IP in %q; bearer-token gRPC must not use plaintext transport", environment)
+	}
+
+	// K9: gossip messages are authenticated by a shared-secret HMAC. With no
+	// secret the receiver accepts unsigned messages, so anyone who can reach
+	// the gossip port can inject peers. Fail fast here with an actionable
+	// message; raft.NewDiscovery enforces the same rule at startup for
+	// clustering enabled via CLI flags (which are applied after validation).
+	// Discovery mode "manual" never gossips, so it is exempt.
+	if c.Necropolis.Enabled && !c.Necropolis.SingleNode && c.Necropolis.gossips() &&
+		strings.TrimSpace(c.Necropolis.ClusterSecret) == "" {
+		return fmt.Errorf("config error: necropolis.cluster_secret must be set when necropolis.enabled is true and peer discovery is active (set ANUBIS_CLUSTER_SECRET, or use necropolis.discovery.mode=\"manual\" to disable gossip)")
 	}
 
 	return nil
+}
+
+// isLoopbackHost deliberately accepts only literal loopback IPs. Hostnames such
+// as "localhost" can be reconfigured or resolved inconsistently across
+// environments, so they are not a sufficiently explicit plaintext exception.
+func isLoopbackHost(host string) bool {
+	ip := net.ParseIP(strings.TrimSpace(strings.Trim(host, "[]")))
+	return ip != nil && ip.IsLoopback()
 }
 
 // saveConfigMarshal is overwritten by tests to inject marshal failures.
@@ -393,7 +421,7 @@ func GenerateDefaultConfig() *Config {
 		Server: ServerConfig{
 			Host:     "0.0.0.0",
 			Port:     8443,
-			GRPCPort: 9090,
+			GRPCPort: 0,
 			TLS: TLSServerConfig{
 				Enabled: false,
 			},

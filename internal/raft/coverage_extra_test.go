@@ -11,10 +11,12 @@ type failingStorage struct {
 	data            map[string][]byte
 	setErr          error
 	deletePrefixErr error
+	listErr         error
+	deleteErr       error
 	failSetKey      string
 }
 
-func (s *failingStorage) Get(key string) ([]byte, error) { return s.data[key], nil }
+func (s *failingStorage) Get(key string) ([]byte, error)          { return s.data[key], nil }
 func (s *failingStorage) Set(key string, value []byte) error {
 	if s.setErr != nil && (s.failSetKey == "" || s.failSetKey == key) {
 		return s.setErr
@@ -22,17 +24,29 @@ func (s *failingStorage) Set(key string, value []byte) error {
 	s.data[key] = value
 	return nil
 }
-func (s *failingStorage) Delete(key string) error { delete(s.data, key); return nil }
-func (s *failingStorage) DeletePrefix(string) error {
-	if s.deletePrefixErr != nil {
-		return s.deletePrefixErr
+func (s *failingStorage) Delete(key string) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
 	}
+	delete(s.data, key)
+	return nil
+}
+func (s *failingStorage) DeletePrefix(string) error {
 	for key := range s.data {
 		delete(s.data, key)
 	}
 	return nil
 }
-func (s *failingStorage) List(string) ([]string, error) { return nil, nil }
+func (s *failingStorage) List(string) ([]string, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	keys := make([]string, 0, len(s.data))
+	for k := range s.data {
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
 
 func TestStorageFSMAdditionalErrorPaths(t *testing.T) {
 	boom := errors.New("boom")
@@ -53,11 +67,18 @@ func TestStorageFSMAdditionalErrorPaths(t *testing.T) {
 	}
 
 	store.setErr = nil
-	store.deletePrefixErr = boom
+	store.data["raft/dummy"] = []byte("x")
+	store.data["workspace/souls/s1"] = []byte("data")
+	store.listErr = boom
 	if err := fsm.Restore([]byte(`{"key":"dmFsdWU="}`)); !errors.Is(err, boom) {
-		t.Fatalf("delete-prefix error = %v", err)
+		t.Fatalf("list error during restore = %v", err)
 	}
-	store.deletePrefixErr = nil
+	store.listErr = nil
+	store.deleteErr = boom
+	if err := fsm.Restore([]byte(`{"key":"dmFsdWU="}`)); !errors.Is(err, boom) {
+		t.Fatalf("delete error during restore = %v", err)
+	}
+	store.deleteErr = nil
 	store.setErr = boom
 	store.failSetKey = "key"
 	if err := fsm.Restore([]byte(`{"key":"dmFsdWU="}`)); !errors.Is(err, boom) {

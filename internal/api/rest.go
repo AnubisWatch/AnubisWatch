@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -35,14 +36,22 @@ const (
 // sensitiveQueryParams lists URL query parameters whose values must never
 // appear in logs, traces, or error messages (tokens, secrets, keys, etc.).
 var sensitiveQueryParams = map[string]bool{
-	"token":    true,
-	"api_key":  true,
-	"apikey":   true,
-	"secret":   true,
-	"password": true,
-	"passwd":   true,
-	"key":      true,
-	"auth":     true,
+	"token":             true,
+	"api_key":           true,
+	"apikey":            true,
+	"secret":            true,
+	"password":          true,
+	"passwd":            true,
+	"key":               true,
+	"auth":              true,
+	"code":              true,
+	"state":             true,
+	"nonce":             true,
+	"id_token":          true,
+	"access_token":      true,
+	"refresh_token":     true,
+	"client_secret":     true,
+	"error_description": true,
 }
 
 // maxDepthReader wraps an io.Reader to track JSON nesting depth.
@@ -141,11 +150,36 @@ type JourneyExecutor interface {
 
 // Router handles HTTP routing
 type Router struct {
-	routes         map[string]map[string]Handler // path -> method -> handler
+	routes map[string]map[string]Handler // path -> method -> handler
+	// paramRoutes buckets parameterized patterns by segment count, each bucket
+	// kept in most-specific-first order. Go map iteration is randomized, so
+	// resolving parameterized routes by ranging over `routes` would pick a
+	// non-deterministic winner whenever two patterns match the same path.
+	paramRoutes    map[int][]string
 	middleware     []Middleware
 	dashboard      http.Handler
 	statusPage     http.Handler
 	allowedOrigins []string // Allowed CORS origins from config
+}
+
+// moreSpecificRoute reports whether pattern a must be tried before b.
+// A literal segment beats a `:param` at the earliest position where they
+// differ (so /souls/stats wins over /souls/:id); ties break lexicographically
+// to keep the order total and stable.
+func moreSpecificRoute(a, b string) bool {
+	aParts := strings.Split(a, "/")
+	bParts := strings.Split(b, "/")
+	for i := 0; i < len(aParts) && i < len(bParts); i++ {
+		aParam := strings.HasPrefix(aParts[i], ":")
+		bParam := strings.HasPrefix(bParts[i], ":")
+		if aParam != bParam {
+			return !aParam
+		}
+	}
+	if len(aParts) != len(bParts) {
+		return len(aParts) < len(bParts)
+	}
+	return a < b
 }
 
 // Handler is an HTTP handler function
@@ -253,7 +287,8 @@ type Storage interface {
 
 // ProbeEngine interface for probe operations
 type ProbeEngine interface {
-	AssignSouls(souls []*core.Soul)
+	UpsertSoul(soul *core.Soul)
+	RemoveSoul(soulID string)
 	GetStatus() *core.ProbeStatus
 	ForceCheck(soulID string) (*core.Judgment, error)
 }
@@ -309,6 +344,12 @@ type ClusterManager interface {
 	Leader() string
 	IsClustered() bool
 	GetStatus() *ClusterStatus
+	// ApplyMutation routes an FSM-backed mutation through the cluster consensus
+	// layer. When the node is not the leader, ApplyMutation returns
+	// *core.RaftError with ErrNotLeader (the caller may forward the request).
+	// When clustering is disabled it returns an error so the caller can write
+	// locally instead.
+	ApplyMutation(cmd core.FSMCommand, timeout time.Duration) (uint64, uint64, error)
 }
 
 // ClusterStatus holds cluster status info
@@ -370,7 +411,7 @@ func NewRESTServer(config core.ServerConfig, authConfig core.AuthConfig, store S
 // setupRoutes configures API routes
 func (s *RESTServer) setupRoutes() {
 	// Middleware - order matters
-	s.router.Use(s.requestIDMiddleware)   // MUST be first: injects request ID before any logging
+	s.router.Use(s.requestIDMiddleware) // MUST be first: injects request ID before any logging
 	s.router.Use(s.loggingMiddleware)
 	s.router.Use(s.securityHeadersMiddleware) // Add security headers to all responses
 	s.router.Use(s.corsMiddleware)
@@ -1016,10 +1057,10 @@ func (s *RESTServer) handleOIDCCallback(ctx *Context) error {
 		return ctx.Error(http.StatusBadRequest, "missing code or state")
 	}
 
-	// Check for OIDC error
-	if errParam := ctx.Request.URL.Query().Get("error"); errParam != "" {
-		errDesc := ctx.Request.URL.Query().Get("error_description")
-		return ctx.Error(http.StatusBadRequest, fmt.Sprintf("OIDC error: %s (%s)", errParam, errDesc))
+	// Do not reflect provider-controlled query values. Besides being untrusted,
+	// error descriptions can contain user identifiers or token fragments.
+	if ctx.Request.URL.Query().Get("error") != "" {
+		return ctx.Error(http.StatusBadRequest, "OIDC provider rejected authentication (access_denied)")
 	}
 
 	// Retrieve nonce from secure cookie for CSRF protection
@@ -1078,13 +1119,6 @@ func (s *RESTServer) handleOIDCCallback(ctx *Context) error {
 
 // Soul handlers
 
-type soulMonitorResponse struct {
-	*core.Soul
-	Status    string     `json:"status"`
-	LastCheck *time.Time `json:"last_check,omitempty"`
-	Latency   int64      `json:"latency,omitempty"`
-}
-
 func soulMonitorStatus(status core.SoulStatus) string {
 	switch status {
 	case core.SoulAlive:
@@ -1096,11 +1130,8 @@ func soulMonitorStatus(status core.SoulStatus) string {
 	}
 }
 
-func (s *RESTServer) soulWithLatestJudgment(soul *core.Soul) soulMonitorResponse {
-	response := soulMonitorResponse{
-		Soul:   soul,
-		Status: "unknown",
-	}
+func (s *RESTServer) soulWithLatestJudgment(soul *core.Soul) soulMonitorDTO {
+	response := redactedSoulMonitorResponse(soul, "unknown", nil, 0)
 
 	if soul == nil {
 		return response
@@ -1131,7 +1162,7 @@ func (s *RESTServer) handleListSouls(ctx *Context) error {
 	// Check if there are more results
 	hasMore := len(souls) == limit
 	nextOffset := offset + limit
-	data := make([]soulMonitorResponse, 0, len(souls))
+	data := make([]soulMonitorDTO, 0, len(souls))
 	for _, soul := range souls {
 		data = append(data, s.soulWithLatestJudgment(soul))
 	}
@@ -1171,7 +1202,7 @@ func (s *RESTServer) handleCreateSoul(ctx *Context) error {
 		return s.internalError(ctx, err, "internal server error")
 	}
 
-	s.syncProbeAssignments(ctx.Request.Context(), ctx.Workspace)
+	s.syncProbeSoul(&soul)
 
 	return ctx.JSON(http.StatusCreated, s.soulWithLatestJudgment(&soul))
 }
@@ -1212,6 +1243,7 @@ func (s *RESTServer) handleUpdateSoul(ctx *Context) error {
 	// Preserve server-managed fields to prevent mass assignment
 	soul.CreatedAt = existing.CreatedAt
 	soul.UpdatedAt = time.Now()
+	mergeSoulSecrets(existing, &soul)
 
 	if err := soul.Validate(); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
@@ -1222,7 +1254,7 @@ func (s *RESTServer) handleUpdateSoul(ctx *Context) error {
 		return ctx.Error(http.StatusInternalServerError, "failed to update soul")
 	}
 
-	s.syncProbeAssignments(ctx.Request.Context(), ctx.Workspace)
+	s.syncProbeSoul(&soul)
 
 	return ctx.JSON(http.StatusOK, s.soulWithLatestJudgment(&soul))
 }
@@ -1244,9 +1276,22 @@ func (s *RESTServer) handleDeleteSoul(ctx *Context) error {
 		return ctx.Error(http.StatusInternalServerError, "failed to delete soul")
 	}
 
-	s.syncProbeAssignments(ctx.Request.Context(), ctx.Workspace)
+	if s.probe != nil {
+		s.probe.RemoveSoul(id)
+	}
 
 	return ctx.JSON(http.StatusNoContent, nil)
+}
+
+func (s *RESTServer) syncProbeSoul(soul *core.Soul) {
+	if s.probe == nil || soul == nil {
+		return
+	}
+	if soul.Enabled {
+		s.probe.UpsertSoul(soul)
+		return
+	}
+	s.probe.RemoveSoul(soul.ID)
 }
 
 func (s *RESTServer) handleForceCheck(ctx *Context) error {
@@ -1268,20 +1313,7 @@ func (s *RESTServer) handleForceCheck(ctx *Context) error {
 		return s.internalError(ctx, err, "internal server error")
 	}
 
-	return ctx.JSON(http.StatusOK, judgment)
-}
-
-func (s *RESTServer) syncProbeAssignments(ctx context.Context, workspace string) {
-	if s.probe == nil {
-		return
-	}
-
-	souls, err := s.store.ListSoulsNoCtx(workspace, 0, 1000)
-	if err != nil {
-		s.logger.Warn("failed to refresh probe soul assignments", "workspace", workspace, "err", err)
-		return
-	}
-	s.probe.AssignSouls(souls)
+	return ctx.JSON(http.StatusOK, redactedJudgmentFromCore(judgment))
 }
 
 func (s *RESTServer) handleListJudgments(ctx *Context) error {
@@ -1296,60 +1328,78 @@ func (s *RESTServer) handleListJudgments(ctx *Context) error {
 		return ctx.Error(http.StatusForbidden, "access denied: soul belongs to another workspace")
 	}
 
-	// Parse pagination: cursor-based takes precedence over offset-based.
-	// When a cursor (judgment ULID) is provided, the response starts from
-	// entries after that cursor. Offset-based is the fallback.
+	// Storage returns newest first. A cursor identifies the last item from the
+	// previous page; the next page therefore contains strictly older items.
 	cursor := ctx.Request.URL.Query().Get("cursor")
 	offset, limit := parsePagination(ctx.Request, 20, 100)
-
 	start := time.Now().Add(-24 * time.Hour)
 	end := time.Now()
+	fetchLimit := offset + limit + 1 // one look-ahead item determines has_more
 
-	// When no cursor is provided, respect the offset by fetching enough
-	// data to satisfy it. With cursor the offset is implicit.
-	fetchLimit := limit
-	if cursor == "" && offset > 0 {
-		fetchLimit = offset + limit
+	var cursorJudgment *core.Judgment
+	if cursor != "" {
+		offset = 0 // cursor pagination takes precedence over legacy offset
+		cursorJudgment, err = s.store.GetJudgmentNoCtx(cursor)
+		if err != nil || cursorJudgment == nil || cursorJudgment.SoulID != soulID ||
+			(cursorJudgment.WorkspaceID != "" && cursorJudgment.WorkspaceID != ctx.Workspace) {
+			return ctx.Error(http.StatusBadRequest, "invalid judgment cursor")
+		}
+		// Include the cursor itself, then remove it deterministically below. This
+		// preserves same-timestamp judgments by using ID as the tie-breaker. The
+		// storage API has no native cursor, so fetch the bounded 24-hour window;
+		// truncating before the tie-break would skip same-timestamp entries.
+		end = cursorJudgment.Timestamp.Add(time.Nanosecond)
+		fetchLimit = 0
 	}
 
 	judgments, err := s.store.ListJudgmentsNoCtx(soulID, start, end, fetchLimit)
 	if err != nil {
 		return s.internalError(ctx, err, "internal server error")
 	}
+	nonNil := judgments[:0]
+	for _, judgment := range judgments {
+		if judgment != nil {
+			nonNil = append(nonNil, judgment)
+		}
+	}
+	judgments = nonNil
+	sort.Slice(judgments, func(i, j int) bool {
+		if judgments[i].Timestamp.Equal(judgments[j].Timestamp) {
+			return judgments[i].ID > judgments[j].ID
+		}
+		return judgments[i].Timestamp.After(judgments[j].Timestamp)
+	})
 
-	// If cursor provided, filter to entries after it (ULIDs are lexicographically sortable)
-	if cursor != "" {
+	if cursorJudgment != nil {
 		filtered := make([]*core.Judgment, 0, len(judgments))
-		for _, j := range judgments {
-			if j.ID > cursor {
-				filtered = append(filtered, j)
+		for _, judgment := range judgments {
+			if judgment == nil {
+				continue
+			}
+			if judgment.Timestamp.Before(cursorJudgment.Timestamp) ||
+				(judgment.Timestamp.Equal(cursorJudgment.Timestamp) && judgment.ID < cursor) {
+				filtered = append(filtered, judgment)
 			}
 		}
 		judgments = filtered
 	}
 
-	// Apply offset and limit
-	total := len(judgments)
-	startIdx := offset
-	if startIdx > total {
-		startIdx = total
+	if offset > len(judgments) {
+		offset = len(judgments)
 	}
-	endIdx := startIdx + limit
-	if endIdx > total {
-		endIdx = total
-	}
-	page := judgments[startIdx:endIdx]
-	hasMore := endIdx < total
-
-	// Build next_cursor from the last returned judgment (for cursor-based clients)
-	var nextCursor string
-	if hasMore && len(page) > 0 {
-		nextCursor = page[len(page)-1].ID
+	judgments = judgments[offset:]
+	hasMore := len(judgments) > limit
+	if hasMore {
+		judgments = judgments[:limit]
 	}
 
+	nextCursor := ""
+	if hasMore && len(judgments) > 0 {
+		nextCursor = judgments[len(judgments)-1].ID
+	}
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
-		"data":        page,
-		"total":       total,
+		"data":        redactedJudgmentsFromCore(judgments),
+		"total":       len(judgments), // page count; global count requires storage support
 		"has_more":    hasMore,
 		"next_cursor": nextCursor,
 	})
@@ -1367,7 +1417,7 @@ func (s *RESTServer) handleGetJudgment(ctx *Context) error {
 		return ctx.Error(http.StatusForbidden, "access denied: judgment belongs to another workspace")
 	}
 
-	return ctx.JSON(http.StatusOK, judgment)
+	return ctx.JSON(http.StatusOK, redactedJudgmentFromCore(judgment))
 }
 
 func (s *RESTServer) handleListAllJudgments(ctx *Context) error {
@@ -1420,7 +1470,7 @@ func (s *RESTServer) handleListAllJudgments(ctx *Context) error {
 		allJudgments = allJudgments[:500]
 	}
 
-	return ctx.JSON(http.StatusOK, allJudgments)
+	return ctx.JSON(http.StatusOK, redactedJudgmentsFromCore(allJudgments))
 }
 
 // Channel handlers
@@ -1445,8 +1495,13 @@ func (s *RESTServer) handleListChannels(ctx *Context) error {
 	hasMore := end < len(allChannels)
 	nextOffset := offset + limit
 
+	redacted := make([]*redactedChannelDTO, 0, len(channels))
+	for _, channel := range channels {
+		redacted = append(redacted, redactedChannelDTOFromCore(channel))
+	}
+
 	response := PaginatedResponse{
-		Data: channels,
+		Data: redacted,
 		Pagination: Pagination{
 			Total:   len(allChannels),
 			Offset:  offset,
@@ -1477,7 +1532,7 @@ func (s *RESTServer) handleCreateChannel(ctx *Context) error {
 		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 
-	return ctx.JSON(http.StatusCreated, channel)
+	return ctx.JSON(http.StatusCreated, redactedChannelDTOFromCore(&channel))
 }
 
 func (s *RESTServer) handleGetChannel(ctx *Context) error {
@@ -1487,7 +1542,7 @@ func (s *RESTServer) handleGetChannel(ctx *Context) error {
 		if ch.WorkspaceID != "" && ch.WorkspaceID != ctx.Workspace {
 			return ctx.Error(http.StatusForbidden, "access denied: channel belongs to another workspace")
 		}
-		return ctx.JSON(http.StatusOK, ch)
+		return ctx.JSON(http.StatusOK, redactedChannelDTOFromCore(ch))
 	}
 	// Fallback to storage with user's workspace
 	channel, err := s.store.GetChannelNoCtx(id, ctx.Workspace)
@@ -1495,7 +1550,7 @@ func (s *RESTServer) handleGetChannel(ctx *Context) error {
 		return ctx.Error(http.StatusNotFound, "channel not found")
 	}
 
-	return ctx.JSON(http.StatusOK, channel)
+	return ctx.JSON(http.StatusOK, redactedChannelDTOFromCore(channel))
 }
 
 func (s *RESTServer) handleUpdateChannel(ctx *Context) error {
@@ -1520,13 +1575,15 @@ func (s *RESTServer) handleUpdateChannel(ctx *Context) error {
 
 	channel.ID = id
 	channel.WorkspaceID = ctx.Workspace
+	channel.CreatedAt = existing.CreatedAt
 	channel.UpdatedAt = time.Now()
+	mergeChannelSecrets(existing, &channel)
 
 	if err := s.alert.RegisterChannel(&channel); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 
-	return ctx.JSON(http.StatusOK, channel)
+	return ctx.JSON(http.StatusOK, redactedChannelDTOFromCore(&channel))
 }
 
 func (s *RESTServer) handleDeleteChannel(ctx *Context) error {
@@ -2428,10 +2485,10 @@ func (s *RESTServer) requireAuth(handler Handler) Handler {
 			}
 		}
 
-		// Query-parameter fallback (primarily for SSE, which cannot set custom
-		// headers via EventSource). Only enabled for GET requests to minimize
-		// the risk of token leakage through Referer / server logs.
-		if token == "" && ctx.Request.Method == http.MethodGet {
+		// EventSource cannot set custom headers, so the SSE endpoint alone accepts
+		// a query token. Other GET endpoints must not turn URLs into bearer-token
+		// carriers because URLs leak through history, referrers and proxy logs.
+		if token == "" && ctx.Request.Method == http.MethodGet && ctx.Request.URL.Path == "/api/v1/events" {
 			if q := ctx.Request.URL.Query().Get("token"); q != "" {
 				token = q
 			}
@@ -2581,7 +2638,8 @@ func sanitizeQueryString(rawQuery string) string {
 		val := pair[eqIdx+1:]
 		b.WriteString(key)
 		b.WriteByte('=')
-		if sensitiveQueryParams[key] && val != "" {
+		decodedKey, err := url.QueryUnescape(key)
+		if err == nil && sensitiveQueryParams[strings.ToLower(decodedKey)] && val != "" {
 			b.WriteString("***")
 		} else {
 			b.WriteString(val)
@@ -2780,7 +2838,7 @@ func (s *RESTServer) securityHeadersMiddleware(handler Handler) Handler {
 		ctx.Response.Header().Set("X-Frame-Options", "DENY")
 		ctx.Response.Header().Set("X-XSS-Protection", "1; mode=block")
 		ctx.Response.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		ctx.Response.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws: wss:; font-src 'self' data:")
+		ctx.Response.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws: wss:; font-src 'self'; base-uri 'self'; form-action 'self'")
 		// HSTS: force HTTPS — only set when TLS is actually enabled
 		if s.config.TLS.Enabled {
 			ctx.Response.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
@@ -2979,6 +3037,20 @@ func (s *RESTServer) rateLimitMiddleware(handler Handler) Handler {
 func (r *Router) Handle(method, path string, handler Handler) {
 	if r.routes[path] == nil {
 		r.routes[path] = make(map[string]Handler)
+
+		if strings.Contains(path, ":") {
+			if r.paramRoutes == nil {
+				r.paramRoutes = make(map[int][]string)
+			}
+			// matchRoute only matches equal segment counts, so bucketing by
+			// count keeps the per-request scan to the plausible candidates.
+			n := len(strings.Split(path, "/"))
+			bucket := append(r.paramRoutes[n], path)
+			sort.Slice(bucket, func(i, j int) bool {
+				return moreSpecificRoute(bucket[i], bucket[j])
+			})
+			r.paramRoutes[n] = bucket
+		}
 	}
 
 	// Apply middleware
@@ -3046,10 +3118,10 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	// Try parameterized routes (simple implementation)
-	for routePath, handlers := range r.routes {
+	// Try parameterized routes, most specific first
+	for _, routePath := range r.paramRoutes[len(strings.Split(path, "/"))] {
 		if params, ok := matchRoute(routePath, path); ok {
-			if handler, ok := handlers[method]; ok {
+			if handler, ok := r.routes[routePath][method]; ok {
 				ctx := &Context{
 					Request:  req,
 					Response: w,

@@ -27,8 +27,12 @@ func createTestNode(t *testing.T) *Node {
 }
 
 func newTestRaftLogger() *slog.Logger {
+	level := slog.LevelWarn
+	if os.Getenv("ANUBIS_TEST_LOG_LEVEL") == "debug" {
+		level = slog.LevelDebug
+	}
 	return slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelWarn,
+		Level: level,
 	}))
 }
 
@@ -1642,7 +1646,7 @@ func TestNode_NotifyApply(t *testing.T) {
 	future := &applyFuture{
 		done: make(chan struct{}),
 	}
-	applyWaiters.Store(uint64(1), future)
+	node.applyWaiters.Store(uint64(1), future)
 
 	// Notify
 	node.notifyApply(1, 5, nil)
@@ -2366,6 +2370,166 @@ func TestNode_HandleAppendEntriesResponse_HigherTerm(t *testing.T) {
 	}
 }
 
+func TestNode_HandleAppendEntriesResponse_OutOfOrderSuccessDoesNotRegressProgress(t *testing.T) {
+	node := createTestNode(t)
+	node.state.Store(core.StateLeader)
+	node.currentTerm = 3
+
+	peer := &Peer{ID: "node-2", nextIndex: 4}
+	node.peers[peer.ID] = peer
+	node.nextIndex[peer.ID] = 4
+	node.matchIndex[peer.ID] = 0
+
+	newerReq := &core.AppendEntriesRequest{
+		Term:         3,
+		PrevLogIndex: 3,
+		Entries:      make([]core.RaftLogEntry, 3),
+	}
+	node.handleAppendEntriesResponse(peer, newerReq, &core.AppendEntriesResponse{Term: 3, Success: true})
+
+	olderReq := &core.AppendEntriesRequest{
+		Term:         3,
+		PrevLogIndex: 0,
+		Entries:      make([]core.RaftLogEntry, 3),
+	}
+	node.handleAppendEntriesResponse(peer, olderReq, &core.AppendEntriesResponse{Term: 3, Success: true})
+
+	if got := node.matchIndex[peer.ID]; got != 6 {
+		t.Errorf("out-of-order success regressed matchIndex: got %d, want 6", got)
+	}
+	if got := node.nextIndex[peer.ID]; got != 7 {
+		t.Errorf("out-of-order success regressed nextIndex: got %d, want 7", got)
+	}
+	if peer.matchIndex != 6 || peer.nextIndex != 7 {
+		t.Errorf("peer progress regressed: matchIndex=%d nextIndex=%d, want 6/7", peer.matchIndex, peer.nextIndex)
+	}
+}
+
+func TestNode_HandleAppendEntriesResponse_StaleFailureDoesNotRegressProgress(t *testing.T) {
+	node := createTestNode(t)
+	node.state.Store(core.StateLeader)
+	node.currentTerm = 3
+
+	peer := &Peer{ID: "node-2", nextIndex: 4}
+	node.peers[peer.ID] = peer
+	node.nextIndex[peer.ID] = 4
+	node.matchIndex[peer.ID] = 0
+
+	successfulReq := &core.AppendEntriesRequest{
+		Term:         3,
+		PrevLogIndex: 3,
+		Entries:      make([]core.RaftLogEntry, 3),
+	}
+	staleReq := &core.AppendEntriesRequest{
+		Term:         3,
+		PrevLogIndex: 3,
+		Entries:      make([]core.RaftLogEntry, 3),
+	}
+	node.handleAppendEntriesResponse(peer, successfulReq, &core.AppendEntriesResponse{Term: 3, Success: true})
+	node.handleAppendEntriesResponse(peer, staleReq, &core.AppendEntriesResponse{
+		Term:          3,
+		Success:       false,
+		ConflictTerm:  2,
+		ConflictIndex: 1,
+	})
+
+	if got := node.matchIndex[peer.ID]; got != 6 {
+		t.Errorf("stale failure regressed matchIndex: got %d, want 6", got)
+	}
+	if got := node.nextIndex[peer.ID]; got != 7 {
+		t.Errorf("stale failure regressed nextIndex: got %d, want 7", got)
+	}
+	if peer.matchIndex != 6 || peer.nextIndex != 7 {
+		t.Errorf("peer progress regressed: matchIndex=%d nextIndex=%d, want 6/7", peer.matchIndex, peer.nextIndex)
+	}
+}
+
+func TestNode_HandleAppendEntriesResponse_OutOfOrderFailureAfterBackoffIgnored(t *testing.T) {
+	node := createTestNode(t)
+	node.state.Store(core.StateLeader)
+	node.currentTerm = 3
+
+	peer := &Peer{ID: "node-2", nextIndex: 9, matchIndex: 2}
+	node.peers[peer.ID] = peer
+	node.nextIndex[peer.ID] = 9
+	node.matchIndex[peer.ID] = 2
+
+	newerReq := &core.AppendEntriesRequest{Term: 3, PrevLogIndex: 8}
+	node.handleAppendEntriesResponse(peer, newerReq, &core.AppendEntriesResponse{Term: 3, Success: false})
+
+	olderReq := &core.AppendEntriesRequest{Term: 3, PrevLogIndex: 7}
+	node.handleAppendEntriesResponse(peer, olderReq, &core.AppendEntriesResponse{
+		Term:          3,
+		Success:       false,
+		ConflictTerm:  2,
+		ConflictIndex: 3,
+	})
+
+	if got := node.matchIndex[peer.ID]; got != 2 {
+		t.Errorf("out-of-order failure changed matchIndex: got %d, want 2", got)
+	}
+	if got := node.nextIndex[peer.ID]; got != 7 {
+		t.Errorf("out-of-order failure changed nextIndex: got %d, want 7", got)
+	}
+	if peer.matchIndex != 2 || peer.nextIndex != 7 {
+		t.Errorf("out-of-order failure changed peer progress: matchIndex=%d nextIndex=%d, want 2/7", peer.matchIndex, peer.nextIndex)
+	}
+}
+
+func TestNode_HandleAppendEntriesResponse_StaleTermIgnored(t *testing.T) {
+	tests := []struct {
+		name    string
+		reqTerm uint64
+		resp    *core.AppendEntriesResponse
+	}{
+		{name: "stale request success", reqTerm: 2, resp: &core.AppendEntriesResponse{Term: 3, Success: true}},
+		{name: "stale request failure", reqTerm: 2, resp: &core.AppendEntriesResponse{Term: 3, Success: false, ConflictIndex: 1}},
+		{name: "stale response success", reqTerm: 3, resp: &core.AppendEntriesResponse{Term: 2, Success: true}},
+		{name: "stale response failure", reqTerm: 3, resp: &core.AppendEntriesResponse{Term: 2, Success: false, ConflictIndex: 1}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			node := createTestNode(t)
+			node.state.Store(core.StateLeader)
+			node.currentTerm = 3
+
+			peer := &Peer{ID: "node-2", nextIndex: 6, matchIndex: 5}
+			node.peers[peer.ID] = peer
+			node.nextIndex[peer.ID] = 6
+			node.matchIndex[peer.ID] = 5
+
+			req := &core.AppendEntriesRequest{
+				Term:         tt.reqTerm,
+				PrevLogIndex: 5,
+				Entries:      make([]core.RaftLogEntry, 3),
+			}
+			node.handleAppendEntriesResponse(peer, req, tt.resp)
+
+			if got := node.matchIndex[peer.ID]; got != 5 {
+				t.Errorf("stale request changed matchIndex: got %d, want 5", got)
+			}
+			if got := node.nextIndex[peer.ID]; got != 6 {
+				t.Errorf("stale request changed nextIndex: got %d, want 6", got)
+			}
+			if peer.matchIndex != 5 || peer.nextIndex != 6 {
+				t.Errorf("stale request changed peer progress: matchIndex=%d nextIndex=%d, want 5/6", peer.matchIndex, peer.nextIndex)
+			}
+		})
+	}
+}
+
+func TestNode_HandleAppendEntriesResponse_NilArgumentsIgnored(t *testing.T) {
+	node := createTestNode(t)
+	peer := &Peer{ID: "node-2"}
+	req := &core.AppendEntriesRequest{}
+	resp := &core.AppendEntriesResponse{}
+
+	node.handleAppendEntriesResponse(nil, req, resp)
+	node.handleAppendEntriesResponse(peer, nil, resp)
+	node.handleAppendEntriesResponse(peer, req, nil)
+}
+
 // Test checkCommit as leader
 func TestNode_CheckCommit(t *testing.T) {
 	cfg := newTestRaftNodeConfig()
@@ -2438,8 +2602,8 @@ func TestNode_ProcessCommitted(t *testing.T) {
 	// Register futures for notification
 	f1 := &applyFuture{done: make(chan struct{})}
 	f2 := &applyFuture{done: make(chan struct{})}
-	applyWaiters.Store(uint64(1), f1)
-	applyWaiters.Store(uint64(2), f2)
+	node.applyWaiters.Store(uint64(1), f1)
+	node.applyWaiters.Store(uint64(2), f2)
 
 	node.processCommitted(2)
 
@@ -3572,5 +3736,77 @@ func TestNode_SingleNode_TimerDrivenElection(t *testing.T) {
 
 	if !node.IsLeader() {
 		t.Error("Expected node to become leader via election timer in single-node mode")
+	}
+}
+
+// TestNode_HandlePreVote_DeniesWhenLeaderIsFresh covers the leader-stickiness
+// guard: a node must not grant a pre-vote while it still believes a live leader
+// exists, otherwise an early-firing election timer can depose a healthy leader
+// and cause perpetual churn (Raft §4.2.3).
+func TestNode_HandlePreVote_DeniesWhenLeaderIsFresh(t *testing.T) {
+	node := createTestNode(t)
+	node.currentTerm = 5
+	node.log = []core.RaftLogEntry{{}, {Index: 1, Term: 5}}
+	node.leaderID = "leader-node"
+	node.lastContact = time.Now()
+
+	req := &core.PreVoteRequest{
+		Term:         6,
+		CandidateID:  "candidate-1",
+		LastLogIndex: 1,
+		LastLogTerm:  5,
+	}
+
+	resp := node.handlePreVote(req)
+	if resp.VoteGranted {
+		t.Error("pre-vote must be denied while a live leader is known")
+	}
+	if resp.Reason != "have live leader" {
+		t.Errorf("expected 'have live leader' reason, got %q", resp.Reason)
+	}
+}
+
+// TestNode_HandlePreVote_GrantsWhenLeaderIsStale confirms the guard releases
+// once leader contact ages past the election timeout, so a genuinely dead
+// leader can still be replaced.
+func TestNode_HandlePreVote_GrantsWhenLeaderIsStale(t *testing.T) {
+	node := createTestNode(t)
+	node.currentTerm = 5
+	node.log = []core.RaftLogEntry{{}, {Index: 1, Term: 5}}
+	node.leaderID = "leader-node"
+	node.lastContact = time.Now().Add(-10 * node.electionTimeout)
+
+	req := &core.PreVoteRequest{
+		Term:         6,
+		CandidateID:  "candidate-1",
+		LastLogIndex: 1,
+		LastLogTerm:  5,
+	}
+
+	resp := node.handlePreVote(req)
+	if !resp.VoteGranted {
+		t.Errorf("pre-vote must be granted once leader contact is stale, got reason %q", resp.Reason)
+	}
+}
+
+// TestNode_HandlePreVote_GrantsToCurrentLeader ensures a node still backs the
+// leader it already follows (the guard excludes the requesting candidate).
+func TestNode_HandlePreVote_GrantsToCurrentLeader(t *testing.T) {
+	node := createTestNode(t)
+	node.currentTerm = 5
+	node.log = []core.RaftLogEntry{{}, {Index: 1, Term: 5}}
+	node.leaderID = "leader-node"
+	node.lastContact = time.Now()
+
+	req := &core.PreVoteRequest{
+		Term:         6,
+		CandidateID:  "leader-node", // the current leader is re-campaigning
+		LastLogIndex: 1,
+		LastLogTerm:  5,
+	}
+
+	resp := node.handlePreVote(req)
+	if !resp.VoteGranted {
+		t.Errorf("pre-vote from the current leader must be granted, got reason %q", resp.Reason)
 	}
 }

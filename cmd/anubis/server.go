@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -119,20 +120,34 @@ func (s *Server) Start(ctx context.Context) error {
 			}
 		}
 
-		storedSouls, err := s.deps.Store.ListSouls(ctx, "default", 0, 1000)
-		if err != nil {
-			logger.Warn("failed to load stored souls for probe assignment", "err", err)
+		workspaceIDs := []string{"default"}
+		if workspaces, err := s.deps.Store.ListWorkspaces(ctx); err != nil {
+			logger.Warn("failed to load workspaces for probe assignment", "err", err)
+		} else {
+			for _, workspace := range workspaces {
+				if workspace != nil && workspace.ID != "" && workspace.ID != "default" {
+					workspaceIDs = append(workspaceIDs, workspace.ID)
+				}
+			}
 		}
-		for _, soul := range storedSouls {
-			if soul == nil {
+
+		for _, workspaceID := range workspaceIDs {
+			storedSouls, err := s.deps.Store.ListSouls(ctx, workspaceID, 0, 10000)
+			if err != nil {
+				logger.Warn("failed to load stored souls for probe assignment", "workspace", workspaceID, "err", err)
 				continue
 			}
-			if _, exists := seen[soul.ID]; exists && soul.ID != "" {
-				continue
-			}
-			soulPtrs = append(soulPtrs, soul)
-			if soul.ID != "" {
-				seen[soul.ID] = struct{}{}
+			for _, soul := range storedSouls {
+				if soul == nil {
+					continue
+				}
+				if _, exists := seen[soul.ID]; exists && soul.ID != "" {
+					continue
+				}
+				soulPtrs = append(soulPtrs, soul)
+				if soul.ID != "" {
+					seen[soul.ID] = struct{}{}
+				}
 			}
 		}
 
@@ -155,10 +170,23 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Start cluster manager
+	// Start cluster manager.
+	//
+	// When the operator explicitly asked for clustering, a start failure must
+	// abort startup rather than silently leave a standalone node behind: the
+	// node would not join consensus, and nothing would signal that the cluster
+	// it appears in is a fiction. Same reasoning as the REST bind failure
+	// below — a misconfiguration has to look like a crash to supervisors.
+	clusterRequired := cfg.Necropolis.Enabled || cfg.Necropolis.SingleNode || cfg.Necropolis.Raft.Bootstrap || len(cfg.Necropolis.Raft.Peers) > 0
+	if clusterRequired && s.deps.ClusterManager == nil {
+		return fmt.Errorf("cluster mode is enabled but the cluster manager was not initialized")
+	}
 	if s.deps.ClusterManager != nil {
 		if err := s.deps.ClusterManager.Start(ctx); err != nil {
-			logger.Warn("failed to start cluster manager", "err", err)
+			if clusterRequired || s.deps.ClusterManager.IsClustered() {
+				return fmt.Errorf("failed to start cluster manager: %w", err)
+			}
+			logger.Warn("failed to start standalone cluster manager", "err", err)
 		} else {
 			logger.Info("cluster manager initialized", "clustered", s.deps.ClusterManager.IsClustered())
 		}
@@ -180,13 +208,17 @@ func (s *Server) Start(ctx context.Context) error {
 		logger.Info("REST API server initialized", "addr", fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port))
 	}
 
-	// Start gRPC server
-	if s.deps.GRPCServer != nil {
-		if err := s.deps.GRPCServer.Start(); err != nil {
-			logger.Warn("failed to start gRPC server", "err", err)
-		} else {
-			logger.Info("gRPC API server initialized", "addr", cfg.Server.GRPCPort)
+	// Start gRPC server. A configured management endpoint is a required
+	// subsystem: continuing after a bind failure would leave supervisors with a
+	// falsely healthy process whose requested API is unavailable.
+	if cfg.Server.GRPCPort > 0 {
+		if s.deps.GRPCServer == nil {
+			return fmt.Errorf("gRPC is enabled on port %d but the server was not initialized", cfg.Server.GRPCPort)
 		}
+		if err := s.deps.GRPCServer.Start(); err != nil {
+			return fmt.Errorf("failed to start gRPC server: %w", err)
+		}
+		logger.Info("gRPC API server initialized", "addr", fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.GRPCPort))
 	}
 
 	logger.Info("AnubisWatch is ready. The judgment begins.")
@@ -292,6 +324,14 @@ type grpcProbeAdapter struct {
 
 func (a *grpcProbeAdapter) ForceCheck(soulID string) (*core.Judgment, error) {
 	return a.engine.ForceCheck(soulID)
+}
+
+func (a *grpcProbeAdapter) UpsertSoul(soul *core.Soul) {
+	a.engine.UpsertSoul(soul)
+}
+
+func (a *grpcProbeAdapter) RemoveSoul(soulID string) {
+	a.engine.RemoveSoul(soulID)
 }
 
 // grpcStorageAdapter wraps restStorageAdapter to provide concrete types for the
@@ -525,10 +565,15 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	// Initialize journey executor
 	journeyExec := journey.NewExecutor(store, logger)
 
-	// Initialize cluster manager
+	// Initialize cluster manager. When clustering was explicitly enabled, an
+	// initialization failure is fatal; falling back to a standalone manager
+	// would violate the requested topology without making the pod unhealthy.
 	clusterMgr, err := cluster.NewManager(cfg.Necropolis, store, logger)
 	if err != nil {
-		logger.Warn("failed to initialize cluster manager", "err", err)
+		if cfg.Necropolis.Enabled {
+			return nil, fmt.Errorf("failed to initialize enabled cluster manager: %w", err)
+		}
+		logger.Warn("failed to initialize standalone cluster manager", "err", err)
 		clusterMgr = nil
 	}
 
@@ -566,18 +611,19 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		grpcStore := &grpcStorageAdapter{inner: restStore, journey: journeyExec}
 		// Build TLS config for gRPC server from server TLS config
 		var grpcTLSConfig *tls.Config
-		if cfg.Server.TLS.Enabled && cfg.Server.TLS.Cert != "" && cfg.Server.TLS.Key != "" {
+		if cfg.Server.TLS.Enabled {
 			cert, err := tls.LoadX509KeyPair(cfg.Server.TLS.Cert, cfg.Server.TLS.Key)
-			if err == nil {
-				grpcTLSConfig = &tls.Config{
-					Certificates: []tls.Certificate{cert},
-					MinVersion:   tls.VersionTLS12,
-				}
+			if err != nil {
+				return nil, fmt.Errorf("failed to load gRPC TLS certificate: %w", err)
+			}
+			grpcTLSConfig = &tls.Config{
+				Certificates: []tls.Certificate{cert},
+				MinVersion:   tls.VersionTLS12,
 			}
 		}
 
 		grpcServer = grpcapi.NewServer(
-			fmt.Sprintf(":%d", cfg.Server.GRPCPort),
+			grpcListenAddress(cfg.Server),
 			grpcStore,
 			&grpcProbeAdapter{engine: probeEngine},
 			authenticator,
@@ -604,6 +650,11 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		MCPServer:         mcpServer,
 		TracerProvider:    tracerProvider,
 	}, nil
+}
+
+func grpcListenAddress(cfg core.ServerConfig) string {
+	host := strings.TrimSpace(strings.Trim(cfg.Host, "[]"))
+	return net.JoinHostPort(host, strconv.Itoa(cfg.GRPCPort))
 }
 
 func applyServerOptionOverrides(cfg *core.Config, opts ServerOptions) {
@@ -928,6 +979,13 @@ func (a *clusterAdapter) GetStatus() *api.ClusterStatus {
 		Term:        cs.Term,
 		PeerCount:   cs.PeerCount,
 	}
+}
+
+func (a *clusterAdapter) ApplyMutation(cmd core.FSMCommand, timeout time.Duration) (uint64, uint64, error) {
+	if a.mgr == nil {
+		return 0, 0, &core.RaftError{Code: core.ErrNotLeader, Message: "cluster manager not available"}
+	}
+	return a.mgr.ApplyMutation(cmd, timeout)
 }
 
 // alertStorageAdapter adapts storage.CobaltDB to alert.AlertStorage interface

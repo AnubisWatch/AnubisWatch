@@ -427,6 +427,17 @@ func (p *mockProbeEngine) AssignSouls(souls []*core.Soul) {
 	p.souls = next
 }
 
+func (p *mockProbeEngine) UpsertSoul(soul *core.Soul) {
+	if p.souls == nil {
+		p.souls = make(map[string]*core.Soul)
+	}
+	p.souls[soul.ID] = soul
+}
+
+func (p *mockProbeEngine) RemoveSoul(soulID string) {
+	delete(p.souls, soulID)
+}
+
 func (p *mockProbeEngine) GetStatus() *core.ProbeStatus {
 	return &core.ProbeStatus{Running: true, ActiveChecks: 0}
 }
@@ -614,10 +625,14 @@ func (a *failingAlertManager) ListRulesByWorkspace(workspace string) []*core.Ale
 type mockAuthenticator struct{}
 
 func (a *mockAuthenticator) Authenticate(token string) (*User, error) {
-	if token == "valid-token" {
+	switch token {
+	case "valid-token":
 		return &User{ID: "user-1", Email: "test@example.com", Role: "admin", Workspace: "default"}, nil
+	case "viewer-token":
+		return &User{ID: "user-2", Email: "viewer@example.com", Role: "viewer", Workspace: "default"}, nil
+	default:
+		return nil, http.ErrNoCookie
 	}
-	return nil, http.ErrNoCookie
 }
 func (a *mockAuthenticator) Login(email, password string) (*User, string, error) {
 	if email == "test@example.com" && password == "password" {
@@ -723,6 +738,9 @@ func (m *mockClusterManager) Leader() string    { return "test-node" }
 func (m *mockClusterManager) IsClustered() bool { return false }
 func (m *mockClusterManager) GetStatus() *ClusterStatus {
 	return &ClusterStatus{IsClustered: false, NodeID: "test-node", State: "standalone"}
+}
+func (m *mockClusterManager) ApplyMutation(cmd core.FSMCommand, timeout time.Duration) (uint64, uint64, error) {
+	return 0, 0, &core.RaftError{Code: core.ErrNotLeader, Message: "mock: write locally"}
 }
 
 func TestHandleHealth(t *testing.T) {
@@ -1504,6 +1522,63 @@ func TestRouter_ParameterizedRoutes(t *testing.T) {
 	}
 }
 
+// Ambiguous patterns must resolve to the same handler on every request.
+// Ranging over the routes map made the winner depend on Go's randomized map
+// iteration order, so this failed intermittently.
+func TestRouter_AmbiguousPatternsResolveDeterministically(t *testing.T) {
+	router := &Router{routes: make(map[string]map[string]Handler)}
+
+	hit := func(name string) Handler {
+		return func(ctx *Context) error {
+			return ctx.JSON(http.StatusOK, map[string]string{"route": name})
+		}
+	}
+
+	// Both patterns match /api/v1/souls/stats/summary.
+	router.Handle("GET", "/api/v1/souls/:id/summary", hit("param"))
+	router.Handle("GET", "/api/v1/souls/stats/:window", hit("literal"))
+
+	for i := 0; i < 50; i++ {
+		req := httptest.NewRequest("GET", "/api/v1/souls/stats/summary", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		var body map[string]string
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("iteration %d: decode response: %v", i, err)
+		}
+		// The literal "stats" segment is more specific than ":id" and must win.
+		if body["route"] != "literal" {
+			t.Fatalf("iteration %d: expected literal route to win, got %q", i, body["route"])
+		}
+	}
+}
+
+func TestMoreSpecificRoute(t *testing.T) {
+	tests := []struct {
+		name string
+		a    string
+		b    string
+		want bool
+	}{
+		{"literal beats param at first difference", "/souls/stats", "/souls/:id", true},
+		{"param loses to literal", "/souls/:id", "/souls/stats", false},
+		{"later literal still wins", "/a/:x/c", "/a/:x/:y", true},
+		{"earlier segment decides", "/a/b/:y", "/a/:x/c", true},
+		{"shorter pattern first when prefixes tie", "/a/b", "/a/b/c", true},
+		{"lexicographic tie-break", "/a/:x", "/b/:x", true},
+		{"identical patterns are not less", "/a/:x", "/a/:x", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := moreSpecificRoute(tt.a, tt.b); got != tt.want {
+				t.Errorf("moreSpecificRoute(%q, %q) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRouter_NotFound(t *testing.T) {
 	router := &Router{routes: make(map[string]map[string]Handler)}
 
@@ -1628,6 +1703,23 @@ func TestHandleUpdateSoul(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSyncProbeSoulHonorsEnabled(t *testing.T) {
+	probe := &mockProbeEngine{}
+	server := &RESTServer{probe: probe}
+
+	enabled := &core.Soul{ID: "enabled", Enabled: true}
+	server.syncProbeSoul(enabled)
+	if probe.souls[enabled.ID] != enabled {
+		t.Fatal("enabled soul was not upserted")
+	}
+
+	disabled := &core.Soul{ID: "enabled", Enabled: false}
+	server.syncProbeSoul(disabled)
+	if _, ok := probe.souls[disabled.ID]; ok {
+		t.Fatal("disabled soul remained scheduled")
 	}
 }
 
@@ -3654,6 +3746,59 @@ func TestHandleDeleteWorkspaceMissingReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestHandleListJudgments_CursorReturnsOlderPageAndRedactsDetails(t *testing.T) {
+	storage := newMockStorage()
+	now := time.Now().Add(-time.Minute)
+	storage.souls["soul-1"] = &core.Soul{ID: "soul-1", WorkspaceID: "default"}
+	for i, id := range []string{"j-new", "j-cursor", "j-old", "j-oldest"} {
+		storage.judgments[id] = &core.Judgment{
+			ID: id, SoulID: "soul-1", WorkspaceID: "default",
+			Timestamp: now.Add(-time.Duration(i) * time.Second),
+			Details:   &core.JudgmentDetails{ResponseBody: "body-secret", ResponseHeaders: map[string]string{"Set-Cookie": "cookie-secret"}},
+		}
+	}
+	server := &RESTServer{store: storage, logger: newTestLogger()}
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:  httptest.NewRequest(http.MethodGet, "/api/v1/souls/soul-1/judgments?cursor=j-cursor&offset=99&limit=1", nil),
+		Response: rec, Params: map[string]string{"id": "soul-1"}, Workspace: "default",
+	}
+	if err := server.handleListJudgments(ctx); err != nil {
+		t.Fatalf("handleListJudgments failed: %v", err)
+	}
+	var response struct {
+		Data       []core.Judgment `json:"data"`
+		HasMore    bool            `json:"has_more"`
+		NextCursor string          `json:"next_cursor"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(response.Data) != 1 || response.Data[0].ID != "j-old" || !response.HasMore || response.NextCursor != "j-old" {
+		t.Fatalf("unexpected cursor page: %#v", response)
+	}
+	if strings.Contains(rec.Body.String(), "body-secret") || strings.Contains(rec.Body.String(), "cookie-secret") {
+		t.Fatalf("judgment response leaked sensitive material: %s", rec.Body.String())
+	}
+}
+
+func TestHandleListJudgments_InvalidCursorRejected(t *testing.T) {
+	storage := newMockStorage()
+	storage.souls["soul-1"] = &core.Soul{ID: "soul-1", WorkspaceID: "default"}
+	server := &RESTServer{store: storage, logger: newTestLogger()}
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:  httptest.NewRequest(http.MethodGet, "/api/v1/souls/soul-1/judgments?cursor=missing", nil),
+		Response: rec, Params: map[string]string{"id": "soul-1"}, Workspace: "default",
+	}
+	if err := server.handleListJudgments(ctx); err != nil {
+		t.Fatalf("handleListJudgments failed: %v", err)
+	}
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleListJudgments(t *testing.T) {
 	storage := newMockStorage()
 	storage.SaveSoul(context.Background(), &core.Soul{ID: "soul-1", Name: "Test Soul", Type: core.CheckHTTP, Target: "https://example.com", WorkspaceID: "default"})
@@ -5566,6 +5711,18 @@ func TestHandleSSE_RequiresAuth(t *testing.T) {
 		t.Errorf("expected 401 without auth, got %d", w.Code)
 	}
 
+	// Query tokens are restricted to the SSE endpoint and cannot authenticate
+	// ordinary GET routes.
+	ordinary := server.requireAuth(func(ctx *Context) error { return ctx.JSON(http.StatusOK, nil) })
+	ordinaryReq := httptest.NewRequest("GET", "/api/v1/souls?token=valid-token", nil)
+	ordinaryRec := httptest.NewRecorder()
+	if err := ordinary(&Context{Request: ordinaryReq, Response: ordinaryRec}); err != nil {
+		t.Fatalf("ordinary route auth returned handler error: %v", err)
+	}
+	if ordinaryRec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected query token on ordinary GET route to be rejected, got %d", ordinaryRec.Code)
+	}
+
 	// Valid token via query parameter — uses a cancellable context so the
 	// SSE loop does not hang.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -5578,6 +5735,39 @@ func TestHandleSSE_RequiresAuth(t *testing.T) {
 	time.Sleep(50 * time.Millisecond) // let handler exit
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200 with valid token query param, got %d", w.Code)
+	}
+}
+
+func TestHandleOIDCCallbackDoesNotReflectProviderQueryValues(t *testing.T) {
+	server := &RESTServer{auth: &mockOIDCAuth{}, logger: newTestLogger()}
+	rec := httptest.NewRecorder()
+	ctx := &Context{
+		Request:  httptest.NewRequest(http.MethodGet, "/api/v1/auth/oidc/callback?code=code-secret&state=state-secret&error=custom-error&error_description=user%40example.com", nil),
+		Response: rec,
+	}
+	if err := server.handleOIDCCallback(ctx); err != nil {
+		t.Fatalf("handleOIDCCallback failed: %v", err)
+	}
+	body := rec.Body.String()
+	for _, secret := range []string{"code-secret", "state-secret", "custom-error", "user@example.com"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("OIDC response reflected %q: %s", secret, body)
+		}
+	}
+}
+
+func TestSanitizeQueryStringDecodesSensitiveParameterNames(t *testing.T) {
+	for _, raw := range []string{
+		"t%6fken=secret&ok=value",
+		"TOKEN=secret",
+		"api%5Fkey=secret",
+		"code=authorization-code&state=csrf-state&nonce=oidc-nonce",
+		"error_description=user%40example.com+denied",
+	} {
+		sanitized := sanitizeQueryString(raw)
+		if !strings.Contains(sanitized, "***") || strings.Contains(sanitized, "authorization-code") || strings.Contains(sanitized, "csrf-state") || strings.Contains(sanitized, "oidc-nonce") || strings.Contains(sanitized, "user%40example.com") || strings.Contains(sanitized, "=secret") {
+			t.Fatalf("sensitive value was not redacted: input=%q output=%q", raw, sanitized)
+		}
 	}
 }
 

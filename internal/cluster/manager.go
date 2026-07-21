@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 	"github.com/AnubisWatch/anubiswatch/internal/raft"
@@ -153,8 +154,8 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to create transport: %w", err)
 	}
 
-	// Create Raft node
-	node, err := raft.NewNode(m.config, m.logStore, m.snapshotStore, m.fsm, m.logger)
+	// Create Raft node with durable stable store for term/vote/etc.
+	node, err := raft.NewNodeWithStableStore(m.config, m.logStore, m.stableStore, m.snapshotStore, m.fsm, m.logger)
 	if err != nil {
 		return fmt.Errorf("failed to create Raft node: %w", err)
 	}
@@ -249,6 +250,30 @@ func (m *Manager) Stop(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// ApplyMutation submits an FSM command through Raft consensus. Returns
+// ErrNotLeader if this is not the leader and the cluster supports forwarding,
+// or nil when the command is committed and applied successfully. A nil node
+// (standalone mode) returns ErrNotLeader so callers can fall back to a
+// local write.
+func (m *Manager) ApplyMutation(cmd core.FSMCommand, timeout time.Duration) (uint64, uint64, error) {
+	m.mu.RLock()
+	node := m.node
+	m.mu.RUnlock()
+
+	if node == nil {
+		return 0, 0, &core.RaftError{Code: core.ErrNotLeader, Message: "standalone node: write locally"}
+	}
+	if node.State() != core.StateLeader {
+		return 0, 0, &core.RaftError{
+			Code:    core.ErrNotLeader,
+			Message: "not leader",
+			NodeID:  node.Leader(),
+		}
+	}
+	index, term, _, err := node.Apply(cmd, timeout)
+	return index, term, err
 }
 
 // IsLeader returns true if this node is the Raft leader
