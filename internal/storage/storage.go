@@ -1334,3 +1334,104 @@ func (db *CobaltDB) findMaintenanceWindowData(id string) ([]byte, error) {
 	}
 	return db.Get(fmt.Sprintf("%s/maintenance/%s", workspaceID, id))
 }
+
+// ApplyFSMCommand applies a consensus-committed FSM command to CobaltDB and
+// updates the relevant secondary index so subsequent typed lookups work.
+// This is the write path used by the Raft FSM when clustering is active.
+func (db *CobaltDB) ApplyFSMCommand(cmd *core.FSMCommand) error {
+	switch cmd.Op {
+	case core.FSMSet:
+		if err := db.Set(cmd.Key, cmd.Value); err != nil {
+			return err
+		}
+		db.updateIndexForSet(cmd.Key)
+
+	case core.FSMDelete:
+		db.updateIndexForDelete(cmd.Key)
+		if err := db.Delete(cmd.Key); err != nil {
+			return err
+		}
+
+	case core.FSMDeletePrefix:
+		results, err := db.PrefixScan(cmd.Key)
+		if err != nil {
+			return err
+		}
+		for k := range results {
+			db.updateIndexForDelete(k)
+		}
+		if err := db.DeletePrefix(cmd.Key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// updateIndexForSet updates the in-memory secondary index for a stored key
+// using the same workspace/resourceType/resourceID parsing as rebuildIndexes.
+func (db *CobaltDB) updateIndexForSet(key string) {
+	parts := strings.SplitN(key, "/", 3)
+	if len(parts) < 3 {
+		return
+	}
+	workspaceID := parts[0]
+	resourceType := parts[1]
+	resourceID := parts[2]
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.recordWorkspaceLocked(workspaceID)
+	switch resourceType {
+	case "souls":
+		db.soulIndex[resourceID] = workspaceID
+	case "channels":
+		db.channelIndex[resourceID] = workspaceID
+	case "rules":
+		db.ruleIndex[resourceID] = workspaceID
+	case "journeys":
+		db.journeyIndex[resourceID] = workspaceID
+	case "incidents":
+		db.incidentIndex[resourceID] = workspaceID
+	case "statuspages":
+		if !strings.HasPrefix(resourceID, "subscriptions/") {
+			db.statusPageIndex[resourceID] = workspaceID
+		}
+	case "dashboards":
+		db.dashboardIndex[resourceID] = workspaceID
+	case "maintenance":
+		db.maintenanceIndex[resourceID] = workspaceID
+	}
+}
+
+// updateIndexForDelete removes the key from the in-memory secondary index.
+func (db *CobaltDB) updateIndexForDelete(key string) {
+	parts := strings.SplitN(key, "/", 3)
+	if len(parts) < 3 {
+		return
+	}
+	resourceType := parts[1]
+	resourceID := parts[2]
+
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	switch resourceType {
+	case "souls":
+		delete(db.soulIndex, resourceID)
+	case "channels":
+		delete(db.channelIndex, resourceID)
+	case "rules":
+		delete(db.ruleIndex, resourceID)
+	case "journeys":
+		delete(db.journeyIndex, resourceID)
+	case "incidents":
+		delete(db.incidentIndex, resourceID)
+	case "statuspages":
+		if !strings.HasPrefix(resourceID, "subscriptions/") {
+			delete(db.statusPageIndex, resourceID)
+		}
+	case "dashboards":
+		delete(db.dashboardIndex, resourceID)
+	case "maintenance":
+		delete(db.maintenanceIndex, resourceID)
+	}
+}

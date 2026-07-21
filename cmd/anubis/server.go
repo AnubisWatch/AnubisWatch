@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -578,8 +579,11 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	}
 
 	// Initialize REST server dependencies
-	restStore := &restStorageAdapter{store: store}
 	clusterAdapt := &clusterAdapter{mgr: clusterMgr}
+	restStore := &restStorageAdapter{store: store}
+	if clusterMgr != nil && clusterMgr.IsClustered() {
+		restStore.replicator = clusterAdapt
+	}
 
 	// Initialize dashboard handler
 	var dashboardHandler http.Handler
@@ -772,9 +776,34 @@ func (a *probeStorageAdapter) ListSouls(ctx context.Context, workspaceID string)
 	return a.store.ListSouls(ctx, workspaceID, 0, 1000)
 }
 
+// mutationApplier is the local interface for submitting commands through Raft
+// consensus. When non-nil the restStorageAdapter routes writes through it.
+type mutationApplier interface {
+	ApplyMutation(cmd core.FSMCommand, timeout time.Duration) (uint64, uint64, error)
+}
+
 // restStorageAdapter adapts storage.CobaltDB to api.Storage interface
 type restStorageAdapter struct {
-	store *storage.CobaltDB
+	store      *storage.CobaltDB
+	replicator mutationApplier
+}
+
+// applyMutation routes an FSM command through Raft consensus when clustering
+// is active; when replicator is nil it returns nil (caller should write
+// locally).
+func (a *restStorageAdapter) applyMutation(cmd core.FSMCommand) error {
+	if a.replicator == nil {
+		return nil
+	}
+	_, _, err := a.replicator.ApplyMutation(cmd, 30*time.Second)
+	if err != nil {
+		var raftErr *core.RaftError
+		if errors.As(err, &raftErr) && raftErr.Code == core.ErrNotLeader {
+			return err
+		}
+		return fmt.Errorf("consensus write failed: %w", err)
+	}
+	return nil
 }
 
 // Ping forwards to the underlying store so the REST readiness probe (/ready)
@@ -794,6 +823,14 @@ func (a *restStorageAdapter) ListSoulsNoCtx(workspace string, offset, limit int)
 }
 
 func (a *restStorageAdapter) SaveSoul(ctx context.Context, soul *core.Soul) error {
+	if a.replicator != nil {
+		key := fmt.Sprintf("%s/souls/%s", soul.WorkspaceID, soul.ID)
+		data, err := json.Marshal(soul)
+		if err != nil {
+			return err
+		}
+		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
+	}
 	return a.store.SaveSoul(ctx, soul)
 }
 
@@ -801,6 +838,10 @@ func (a *restStorageAdapter) DeleteSoul(ctx context.Context, id string) error {
 	soul, err := a.store.GetSoulNoCtx(id)
 	if err != nil {
 		return err
+	}
+	if a.replicator != nil {
+		key := fmt.Sprintf("%s/souls/%s", soul.WorkspaceID, id)
+		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: key})
 	}
 	return a.store.DeleteSoul(ctx, soul.WorkspaceID, id)
 }
@@ -826,10 +867,18 @@ func (a *restStorageAdapter) ListChannelsNoCtx(workspace string) ([]*core.AlertC
 }
 
 func (a *restStorageAdapter) SaveChannelNoCtx(ch *core.AlertChannel) error {
+	if a.replicator != nil {
+		key := fmt.Sprintf("%s/channels/%s", ch.WorkspaceID, ch.ID)
+		data, _ := json.Marshal(ch)
+		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
+	}
 	return a.store.SaveChannelNoCtx(ch)
 }
 
 func (a *restStorageAdapter) DeleteChannelNoCtx(id string, workspace string) error {
+	if a.replicator != nil {
+		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: fmt.Sprintf("%s/channels/%s", workspace, id)})
+	}
 	return a.store.DeleteChannelNoCtx(id, workspace)
 }
 
@@ -842,10 +891,18 @@ func (a *restStorageAdapter) ListRulesNoCtx(workspace string) ([]*core.AlertRule
 }
 
 func (a *restStorageAdapter) SaveRuleNoCtx(rule *core.AlertRule) error {
+	if a.replicator != nil {
+		key := fmt.Sprintf("%s/rules/%s", rule.WorkspaceID, rule.ID)
+		data, _ := json.Marshal(rule)
+		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
+	}
 	return a.store.SaveRuleNoCtx(rule)
 }
 
 func (a *restStorageAdapter) DeleteRuleNoCtx(id string, workspace string) error {
+	if a.replicator != nil {
+		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: fmt.Sprintf("%s/rules/%s", workspace, id)})
+	}
 	return a.store.DeleteRuleNoCtx(id, workspace)
 }
 
@@ -858,10 +915,18 @@ func (a *restStorageAdapter) ListWorkspacesNoCtx() ([]*core.Workspace, error) {
 }
 
 func (a *restStorageAdapter) SaveWorkspaceNoCtx(ws *core.Workspace) error {
+	if a.replicator != nil {
+		key := fmt.Sprintf("%s/workspaces/%s", ws.ID, ws.ID)
+		data, _ := json.Marshal(ws)
+		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
+	}
 	return a.store.SaveWorkspaceNoCtx(ws)
 }
 
 func (a *restStorageAdapter) DeleteWorkspaceNoCtx(id string) error {
+	if a.replicator != nil {
+		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: fmt.Sprintf("%s/workspaces/%s", id, id)})
+	}
 	return a.store.DeleteWorkspaceNoCtx(id)
 }
 
@@ -880,10 +945,22 @@ func (a *restStorageAdapter) ListStatusPagesNoCtx() ([]*core.StatusPage, error) 
 }
 
 func (a *restStorageAdapter) SaveStatusPageNoCtx(page *core.StatusPage) error {
+	if a.replicator != nil {
+		key := fmt.Sprintf("%s/statuspages/%s", page.WorkspaceID, page.ID)
+		data, _ := json.Marshal(page)
+		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
+	}
 	return a.store.SaveStatusPageNoCtx(page)
 }
 
 func (a *restStorageAdapter) DeleteStatusPageNoCtx(id string) error {
+	page, err := a.store.GetStatusPageNoCtx(id)
+	if err != nil {
+		return err
+	}
+	if a.replicator != nil {
+		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: fmt.Sprintf("%s/statuspages/%s", page.WorkspaceID, id)})
+	}
 	return a.store.DeleteStatusPageNoCtx(id)
 }
 
@@ -897,10 +974,22 @@ func (a *restStorageAdapter) ListJourneysNoCtx(workspace string, offset, limit i
 }
 
 func (a *restStorageAdapter) SaveJourneyNoCtx(journey *core.JourneyConfig) error {
+	if a.replicator != nil {
+		key := fmt.Sprintf("%s/journeys/%s", journey.WorkspaceID, journey.ID)
+		data, _ := json.Marshal(journey)
+		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
+	}
 	return a.store.SaveJourneyNoCtx(journey)
 }
 
 func (a *restStorageAdapter) DeleteJourneyNoCtx(id string) error {
+	journey, err := a.store.GetJourneyNoCtx(id)
+	if err != nil {
+		return err
+	}
+	if a.replicator != nil {
+		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: fmt.Sprintf("%s/journeys/%s", journey.WorkspaceID, id)})
+	}
 	return a.store.DeleteJourneyNoCtx(id)
 }
 
@@ -913,10 +1002,22 @@ func (a *restStorageAdapter) ListDashboardsNoCtx() ([]*core.CustomDashboard, err
 }
 
 func (a *restStorageAdapter) SaveDashboardNoCtx(dashboard *core.CustomDashboard) error {
+	if a.replicator != nil {
+		key := fmt.Sprintf("%s/dashboards/%s", dashboard.WorkspaceID, dashboard.ID)
+		data, _ := json.Marshal(dashboard)
+		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
+	}
 	return a.store.SaveDashboardNoCtx(dashboard)
 }
 
 func (a *restStorageAdapter) DeleteDashboardNoCtx(id string) error {
+	dashboard, err := a.store.GetDashboardNoCtx(id)
+	if err != nil {
+		return nil // not found — idempotent
+	}
+	if a.replicator != nil {
+		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: fmt.Sprintf("%s/dashboards/%s", dashboard.WorkspaceID, id)})
+	}
 	return a.store.DeleteDashboardNoCtx(id)
 }
 
@@ -930,10 +1031,22 @@ func (a *restStorageAdapter) ListMaintenanceWindows() ([]*core.MaintenanceWindow
 }
 
 func (a *restStorageAdapter) SaveMaintenanceWindow(w *core.MaintenanceWindow) error {
+	if a.replicator != nil {
+		key := fmt.Sprintf("%s/maintenance/%s", w.WorkspaceID, w.ID)
+		data, _ := json.Marshal(w)
+		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
+	}
 	return a.store.SaveMaintenanceWindow(w)
 }
 
 func (a *restStorageAdapter) DeleteMaintenanceWindow(id string) error {
+	w, err := a.store.GetMaintenanceWindow(id)
+	if err != nil {
+		return err
+	}
+	if a.replicator != nil {
+		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: fmt.Sprintf("%s/maintenance/%s", w.WorkspaceID, id)})
+	}
 	return a.store.DeleteMaintenanceWindow(id)
 }
 

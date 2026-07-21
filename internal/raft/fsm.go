@@ -59,6 +59,12 @@ func (f *StorageFSM) Apply(log *core.RaftLogEntry) interface{} {
 	}
 }
 
+// fsmCommandApplier is the optional interface that Storage implementations
+// can implement to handle FSM commands with proper secondary-index updates.
+type fsmCommandApplier interface {
+	ApplyFSMCommand(cmd *core.FSMCommand) error
+}
+
 // applyCommand applies a command log entry
 func (f *StorageFSM) applyCommand(log *core.RaftLogEntry) interface{} {
 	cmd, err := f.decodeCommand(log.Data)
@@ -66,6 +72,18 @@ func (f *StorageFSM) applyCommand(log *core.RaftLogEntry) interface{} {
 		return fmt.Errorf("failed to decode command: %w", err)
 	}
 
+	// Prefer the typed ApplyFSMCommand path when the store supports it.
+	// This keeps secondary indexes consistent with the consensus log.
+	if applier, ok := f.store.(fsmCommandApplier); ok {
+		if err := applier.ApplyFSMCommand(cmd); err != nil {
+			return err
+		}
+		f.index = log.Index
+		return nil
+	}
+
+	// Fallback: raw Set/Delete (does not update secondary indexes; used by
+	// in-memory test stores where indexes are not needed).
 	switch cmd.Op {
 	case core.FSMSet:
 		err = f.store.Set(cmd.Key, cmd.Value)
