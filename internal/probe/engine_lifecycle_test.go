@@ -20,6 +20,47 @@ func (c *countingChecker) Judge(_ context.Context, soul *core.Soul) (*core.Judgm
 	return &core.Judgment{SoulID: soul.ID, Status: core.SoulAlive}, nil
 }
 
+func TestPeriodicJudgmentCarriesSoulWorkspaceBeforePersistenceAndCallback(t *testing.T) {
+	checker := &countingChecker{}
+	registry := NewCheckerRegistry()
+	registry.Register(checker)
+	store := &recordingProbeStorage{souls: map[string]*core.Soul{}}
+	callback := make(chan *core.Judgment, 1)
+	engine := newTestEngine(t, EngineOptions{
+		Registry: registry,
+		Store:    store,
+		OnJudgment: func(j *core.Judgment) {
+			callback <- j
+		},
+	})
+
+	soul := &core.Soul{
+		ID:          "tenant-periodic",
+		WorkspaceID: "tenant-a",
+		Name:        "tenant-periodic",
+		Type:        checker.Type(),
+		Weight:      core.Duration{Duration: time.Hour},
+	}
+	engine.AssignSouls([]*core.Soul{soul})
+
+	select {
+	case judgment := <-callback:
+		if judgment.WorkspaceID != soul.WorkspaceID {
+			t.Fatalf("callback workspace = %q, want %q", judgment.WorkspaceID, soul.WorkspaceID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("periodic judgment callback was not invoked")
+	}
+
+	stored := store.latestJudgment()
+	if stored == nil {
+		t.Fatal("periodic judgment was not persisted")
+	}
+	if stored.WorkspaceID != soul.WorkspaceID {
+		t.Fatalf("stored workspace = %q, want %q", stored.WorkspaceID, soul.WorkspaceID)
+	}
+}
+
 func TestAssignSoulsRestartsRunnerWhenIntervalChanges(t *testing.T) {
 	checker := &countingChecker{}
 	registry := NewCheckerRegistry()

@@ -219,6 +219,9 @@ func (e *Engine) AssignSouls(souls []*core.Soul) {
 	// Determine which souls are new, removed, or updated
 	newMap := make(map[string]*core.Soul, len(souls))
 	for _, s := range souls {
+		if s == nil {
+			continue
+		}
 		// Skip souls that have region restrictions and don't match this probe
 		if len(s.Regions) > 0 && !e.regionMatches(s.Regions) {
 			e.logger.Debug("soul skipped - region mismatch",
@@ -247,6 +250,9 @@ func (e *Engine) AssignSouls(souls []*core.Soul) {
 
 	// Start new or updated souls
 	for _, soul := range souls {
+		if soul == nil {
+			continue
+		}
 		// Skip souls that have region restrictions and don't match this probe
 		if len(soul.Regions) > 0 && !e.regionMatches(soul.Regions) {
 			continue
@@ -267,6 +273,53 @@ func (e *Engine) AssignSouls(souls []*core.Soul) {
 		}
 		e.startSoul(soul)
 	}
+}
+
+// UpsertSoul adds or updates one assignment without treating it as a complete
+// global snapshot. API mutations use this path so changing one workspace cannot
+// unassign runners belonging to other workspaces.
+func (e *Engine) UpsertSoul(soul *core.Soul) {
+	if soul == nil {
+		return
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if len(soul.Regions) > 0 && !e.regionMatches(soul.Regions) {
+		if existing, ok := e.souls[soul.ID]; ok {
+			existing.cancel()
+			existing.ticker.Stop()
+			delete(e.souls, soul.ID)
+			delete(e.circuitBreakers, soul.ID)
+		}
+		return
+	}
+
+	if existing, ok := e.souls[soul.ID]; ok {
+		if existing.interval == soulInterval(soul) {
+			existing.setSoul(soul)
+			return
+		}
+		existing.cancel()
+		existing.ticker.Stop()
+		delete(e.souls, soul.ID)
+	}
+	e.startSoul(soul)
+}
+
+// RemoveSoul removes exactly one assignment and leaves every other workspace's
+// runners untouched.
+func (e *Engine) RemoveSoul(soulID string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if runner, ok := e.souls[soulID]; ok {
+		runner.cancel()
+		runner.ticker.Stop()
+		delete(e.souls, soulID)
+	}
+	delete(e.circuitBreakers, soulID)
 }
 
 // regionMatches returns true if the probe's region is in the list of regions
@@ -388,9 +441,19 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 		e.recordSuccess(soul.ID)
 	}
 
-	// Enrich judgment with node info
+	// Enrich the result before any persistence or publication. WorkspaceID is
+	// a tenant-boundary invariant: background checks run on the engine context,
+	// which intentionally has no request workspace and would otherwise fall back
+	// to "default" in storage and WebSocket routing.
 	judgment.JackalID = e.nodeID
 	judgment.Region = e.region
+	judgment.WorkspaceID = soul.WorkspaceID
+	if judgment.SoulID == "" {
+		judgment.SoulID = soul.ID
+	}
+	if judgment.Timestamp.IsZero() {
+		judgment.Timestamp = time.Now().UTC()
+	}
 	if judgment.ID == "" {
 		judgment.ID = core.GenerateID()
 	}

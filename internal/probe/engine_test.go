@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -298,6 +299,34 @@ func TestEngine_AssignSouls(t *testing.T) {
 	// the storage and alerter interfaces
 }
 
+func TestEngine_UpsertAndRemoveSoulPreserveOtherAssignments(t *testing.T) {
+	engine := newTestEngine(t, EngineOptions{
+		Registry: NewCheckerRegistry(),
+		NodeID:   "test-node",
+		Region:   "test-region",
+		Logger:   newTestProbeLogger(),
+	})
+
+	other := &core.Soul{ID: "tenant-b", Name: "Tenant B", Enabled: true, Weight: core.Duration{Duration: time.Hour}}
+	current := &core.Soul{ID: "tenant-a", Name: "Tenant A", Enabled: true, Weight: core.Duration{Duration: time.Hour}}
+	engine.AssignSouls([]*core.Soul{other, current})
+
+	updated := *current
+	updated.Name = "Tenant A updated"
+	engine.UpsertSoul(&updated)
+	if len(engine.souls) != 2 || engine.souls[other.ID] == nil {
+		t.Fatalf("upsert removed another workspace assignment: %#v", engine.souls)
+	}
+	if got := engine.souls[current.ID].getSoul().Name; got != updated.Name {
+		t.Fatalf("upserted soul name = %q, want %q", got, updated.Name)
+	}
+
+	engine.RemoveSoul(current.ID)
+	if len(engine.souls) != 1 || engine.souls[other.ID] == nil {
+		t.Fatalf("remove touched another workspace assignment: %#v", engine.souls)
+	}
+}
+
 func TestEngine_RemoveSouls(t *testing.T) {
 	registry := NewCheckerRegistry()
 	engine := newTestEngine(t, EngineOptions{
@@ -462,13 +491,31 @@ func (m *mockProbeStorage) ListSouls(ctx context.Context, workspaceID string) ([
 }
 
 type recordingProbeStorage struct {
+	mu        sync.Mutex
 	souls     map[string]*core.Soul
 	judgments []*core.Judgment
 }
 
 func (m *recordingProbeStorage) SaveJudgment(ctx context.Context, j *core.Judgment) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.judgments = append(m.judgments, j)
 	return nil
+}
+
+func (m *recordingProbeStorage) judgmentCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.judgments)
+}
+
+func (m *recordingProbeStorage) latestJudgment() *core.Judgment {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.judgments) == 0 {
+		return nil
+	}
+	return m.judgments[len(m.judgments)-1]
 }
 func (m *recordingProbeStorage) GetSoul(ctx context.Context, workspaceID, soulID string) (*core.Soul, error) {
 	if soul, ok := m.souls[soulID]; ok {
@@ -545,8 +592,8 @@ func TestEngine_ForceCheckLoadsUnassignedSoulFromStorage(t *testing.T) {
 	if judgment.Status != core.SoulAlive {
 		t.Fatalf("expected alive judgment, got %s", judgment.Status)
 	}
-	if len(store.judgments) != 1 {
-		t.Fatalf("expected saved judgment, got %d", len(store.judgments))
+	if got := store.judgmentCount(); got != 1 {
+		t.Fatalf("expected saved judgment, got %d", got)
 	}
 	if active := engine.ListActiveSouls(); len(active) != 0 {
 		t.Fatalf("expected one-off force check to avoid assigning runner, got %d active souls", len(active))
