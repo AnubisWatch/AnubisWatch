@@ -233,9 +233,12 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 		stopCh:           make(chan struct{}),
 	}
 
-	// Recover from WAL
-	if err := db.recoverFromWAL(); err != nil {
-		logger.Warn("WAL recovery failed, starting fresh", "err", err)
+	// Recovery errors other than an explicitly tolerated torn tail are fatal.
+	// Continuing with an empty in-memory tree would make durable data appear
+	// deleted and allow new writes to overwrite the only recovery evidence.
+	if err := recoverFromWALSeam(db); err != nil {
+		_ = wal.Close()
+		return nil, fmt.Errorf("failed to recover WAL: %w", err)
 	}
 
 	// Rebuild secondary indexes from existing data
@@ -342,16 +345,23 @@ func (db *CobaltDB) Get(key string) ([]byte, error) {
 		return nil, &core.NotFoundError{Entity: "key", ID: key}
 	}
 
-	// Decrypt value if encryption is enabled
-	if db.encryptor != nil {
-		decrypted, err := db.encryptor.decrypt(value)
-		if err != nil {
-			return nil, fmt.Errorf("decryption failed: %w", err)
-		}
-		return decrypted, nil
+	return db.decodeStoredValue(key, value)
+}
+
+// decodeStoredValue converts a physical B+Tree value into the logical value
+// exposed by CobaltDB's read APIs. Point reads and scans must share this
+// boundary; otherwise encryption-enabled scans leak ciphertext to callers that
+// expect JSON or Raft records and silently drop data when decoding fails.
+func (db *CobaltDB) decodeStoredValue(key string, value []byte) ([]byte, error) {
+	if db.encryptor == nil {
+		return value, nil
 	}
 
-	return value, nil
+	decrypted, err := db.encryptor.decrypt(value)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt stored value for key %q: %w", key, err)
+	}
+	return decrypted, nil
 }
 
 // Put stores a key-value pair
@@ -796,7 +806,11 @@ func (db *CobaltDB) PrefixScan(prefix string) (map[string][]byte, error) {
 		for i, key := range keysToScan {
 			if strings.HasPrefix(key, prefix) {
 				if valuesToScan[i] != nil {
-					result[key] = valuesToScan[i]
+					value, err := db.decodeStoredValue(key, valuesToScan[i])
+					if err != nil {
+						return nil, fmt.Errorf("prefix scan %q: %w", prefix, err)
+					}
+					result[key] = value
 				}
 			} else if key > prefix {
 				// Since keys are sorted, once we see a key > prefix that doesn't start with prefix,
@@ -851,7 +865,11 @@ func (db *CobaltDB) RangeScan(start, end string) (map[string][]byte, error) {
 					return result, nil
 				}
 				if node.values[i] != nil {
-					result[key] = node.values[i]
+					value, err := db.decodeStoredValue(key, node.values[i])
+					if err != nil {
+						return nil, fmt.Errorf("range scan [%q, %q): %w", start, end, err)
+					}
+					result[key] = value
 				}
 			}
 		}
@@ -999,6 +1017,10 @@ func insertNode(slice []*btreeNode, idx int, val *btreeNode) []*btreeNode {
 // newWALSeam is overwritten by tests to inject WAL creation failures.
 var newWALSeam = newWAL
 
+// recoverFromWALSeam is overwritten by tests to verify startup fails closed
+// when recovery cannot complete.
+var recoverFromWALSeam = func(db *CobaltDB) error { return db.recoverFromWAL() }
+
 func newWAL(path string) (*writeAheadLog, error) {
 	// G302: WAL contains committed judgments and may carry
 	// sensitive verdicts; 0600 keeps multi-user hosts from
@@ -1112,7 +1134,12 @@ func (w *writeAheadLog) currentSize() int64 {
 func (w *writeAheadLog) rewrite(entries []walEntry) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.rewriteLocked(entries)
+}
 
+// rewriteLocked performs rewrite while the caller holds w.mu. Recovery uses
+// this form because it already owns the WAL and B+Tree locks during replay.
+func (w *writeAheadLog) rewriteLocked(entries []walEntry) error {
 	tmpPath := w.path + ".compact"
 	// G302: same 0600 rationale as the primary WAL.
 	tmp, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
@@ -1197,7 +1224,7 @@ type walEntry struct {
 
 // logWALTornTail records that WAL replay stopped early at a malformed tail
 // entry. This is expected after a crash mid-write; entries before this point
-// were recovered and the WAL is reset afterwards.
+// are recovered and atomically checkpointed into a clean WAL generation.
 func (db *CobaltDB) logWALTornTail(where string, err error) {
 	if db.logger != nil {
 		db.logger.Warn("WAL torn tail detected, stopping replay at last good entry",
@@ -1222,12 +1249,10 @@ func (db *CobaltDB) recoverFromWAL() error {
 	// Read entries. A crash can leave a torn tail (a partial length prefix,
 	// a truncated body, or an entry whose fsync did not complete). That is a
 	// normal recovery scenario, not corruption of the whole log: every entry
-	// read cleanly before the torn tail has already been applied to memory,
-	// and the WAL is reset to empty at the end of recovery regardless. So we
-	// treat any malformed tail as end-of-log (break + warn) instead of
-	// aborting the entire replay, which previously discarded every entry that
-	// preceded the torn one and left the un-truncated WAL to fail again on the
-	// next restart.
+	// read cleanly before the torn tail is applied to memory and then written
+	// into the clean recovery checkpoint. Treat a malformed tail as end-of-log
+	// (break + warn) instead of aborting the entire replay; aborting would discard
+	// every good entry that preceded it and make startup fail repeatedly.
 	buf := make([]byte, 4)
 	for {
 		// Read length prefix — use io.ReadFull to ensure we get all 4 bytes
@@ -1290,23 +1315,38 @@ func (db *CobaltDB) recoverFromWAL() error {
 		}
 	}
 
-	// Truncate WAL after successful recovery — entries have been replayed.
-	// On Windows, File.Truncate may fail with "Access denied" when the file
-	// was opened with O_APPEND. Close, remove, and recreate to work around this.
-	walPath := db.wal.file.Name()
-	walFile := db.wal.file
-	if err := walFile.Close(); err != nil {
-		return fmt.Errorf("failed to close WAL before truncate: %w", err)
+	// The WAL is CobaltDB's only durable representation: the B+Tree rebuilt
+	// above exists only in memory. Never truncate the successfully replayed log,
+	// or a second restart with no intervening writes would start from an empty
+	// database. Instead, atomically rewrite the recovered live state as a clean
+	// WAL generation. This also removes superseded entries, tombstones, and any
+	// malformed/corrupt entries that recovery deliberately skipped.
+	recovered := make([]walEntry, 0)
+	now := time.Now().UnixNano()
+	node := db.data.root
+	for node != nil && !node.isLeaf {
+		if len(node.children) == 0 {
+			node = nil
+			break
+		}
+		node = node.children[0]
 	}
-	if err := os.Remove(walPath); err != nil {
-		return fmt.Errorf("failed to remove WAL after recovery: %w", err)
+	for node != nil {
+		for i, key := range node.keys {
+			if node.values[i] != nil {
+				recovered = append(recovered, walEntry{
+					Op:    "PUT",
+					Key:   key,
+					Value: node.values[i],
+					Time:  now,
+				})
+			}
+		}
+		node = node.next
 	}
-	// G302: see newWAL above — same rationale.
-	newFile, err := os.OpenFile(walPath, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to recreate WAL: %w", err)
+	if err := db.wal.rewriteLocked(recovered); err != nil {
+		return fmt.Errorf("failed to checkpoint recovered WAL: %w", err)
 	}
-	db.wal.file = newFile
 
 	return nil
 }
