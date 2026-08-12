@@ -665,22 +665,25 @@ func (s *RESTServer) handleReady(ctx *Context) error {
 		}
 	}
 
-	// Check if any dependency has an error
+	// Readiness is a fail-closed admission signal. Any dependency marked as an
+	// error or unhealthy must remove the pod from service endpoints.
 	hasError := false
 	for _, status := range checks {
-		if strings.HasPrefix(status, "error") {
+		if strings.HasPrefix(status, "error") || strings.HasPrefix(status, "unhealthy") {
 			hasError = true
 			break
 		}
 	}
 
 	statusCode := http.StatusOK
+	readinessStatus := "ready"
 	if hasError {
 		statusCode = http.StatusServiceUnavailable
+		readinessStatus = "not_ready"
 	}
 
 	return ctx.JSON(statusCode, map[string]interface{}{
-		"status":    "ready",
+		"status":    readinessStatus,
 		"timestamp": time.Now().UTC(),
 		"checks":    checks,
 	})
@@ -2530,14 +2533,11 @@ func (s *RESTServer) requireAuth(handler Handler) Handler {
 			}
 		}
 
-		// EventSource cannot set custom headers, so the SSE endpoint alone accepts
-		// a query token. Other GET endpoints must not turn URLs into bearer-token
-		// carriers because URLs leak through history, referrers and proxy logs.
-		if token == "" && ctx.Request.Method == http.MethodGet && ctx.Request.URL.Path == "/api/v1/events" {
-			if q := ctx.Request.URL.Query().Get("token"); q != "" {
-				token = q
-			}
-		}
+		// NOTE: Bearer tokens must never be accepted via query parameters.
+		// Query strings leak through browser history, Referer headers,
+		// reverse-proxy access logs, and shared links. EventSource (which
+		// cannot set custom headers) is instead authenticated via the
+		// httpOnly "auth_token" cookie checked above.
 
 		if token == "" {
 			return ctx.Error(http.StatusUnauthorized, "missing authorization token")

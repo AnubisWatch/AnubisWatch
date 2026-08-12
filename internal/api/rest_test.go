@@ -726,6 +726,20 @@ type mockClusterManager struct {
 	isLeader bool
 }
 
+type readinessStorage struct {
+	*mockStorage
+	err error
+}
+
+func (s *readinessStorage) Ping() error { return s.err }
+
+type readinessClusterManager struct {
+	*mockClusterManager
+	status *ClusterStatus
+}
+
+func (m *readinessClusterManager) GetStatus() *ClusterStatus { return m.status }
+
 func (m *mockClusterManager) IsLeader() bool {
 	// If isLeader field exists and is false, return false
 	// Otherwise default to true
@@ -2658,33 +2672,80 @@ func TestContext_Bind(t *testing.T) {
 }
 
 func TestHandleReady(t *testing.T) {
-	storage := newMockStorage()
-	router := &Router{routes: make(map[string]map[string]Handler)}
-	server := &RESTServer{
-		config:     core.ServerConfig{Host: "localhost", Port: 8080},
-		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
-		store:      storage,
-		router:     router,
-		auth:       &mockAuthenticator{},
-		logger:     newTestLogger(),
-		cluster:    &mockClusterManager{},
+	tests := []struct {
+		name        string
+		store       Storage
+		cluster     ClusterManager
+		wantCode    int
+		wantStatus  string
+		wantCheck   string
+		checkPrefix string
+	}{
+		{
+			name:       "healthy standalone",
+			store:      &readinessStorage{mockStorage: newMockStorage()},
+			cluster:    &mockClusterManager{},
+			wantCode:   http.StatusOK,
+			wantStatus: "ready",
+			wantCheck:  "storage",
+		},
+		{
+			name:        "storage unavailable",
+			store:       &readinessStorage{mockStorage: newMockStorage(), err: errors.New("disk unavailable")},
+			cluster:     &mockClusterManager{},
+			wantCode:    http.StatusServiceUnavailable,
+			wantStatus:  "not_ready",
+			wantCheck:   "storage",
+			checkPrefix: "error:",
+		},
+		{
+			name:  "cluster has no ready role",
+			store: &readinessStorage{mockStorage: newMockStorage()},
+			cluster: &readinessClusterManager{
+				mockClusterManager: &mockClusterManager{},
+				status:             &ClusterStatus{IsClustered: true, NodeID: "node-1", State: "candidate"},
+			},
+			wantCode:    http.StatusServiceUnavailable,
+			wantStatus:  "not_ready",
+			wantCheck:   "cluster",
+			checkPrefix: "unhealthy:",
+		},
 	}
 
-	router.Handle("GET", "/ready", server.handleReady)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			router := &Router{routes: make(map[string]map[string]Handler)}
+			server := &RESTServer{
+				config:     core.ServerConfig{Host: "localhost", Port: 8080},
+				authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+				store:      tt.store,
+				router:     router,
+				auth:       &mockAuthenticator{},
+				logger:     newTestLogger(),
+				cluster:    tt.cluster,
+			}
+			router.Handle("GET", "/ready", server.handleReady)
 
-	req := httptest.NewRequest("GET", "/ready", nil)
-	w := httptest.NewRecorder()
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, httptest.NewRequest("GET", "/ready", nil))
+			if w.Code != tt.wantCode {
+				t.Fatalf("status = %d, want %d; body=%s", w.Code, tt.wantCode, w.Body.String())
+			}
 
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", w.Code)
-	}
-
-	var response map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&response)
-	if response["status"] != "ready" {
-		t.Errorf("expected status 'ready', got '%v'", response["status"])
+			var response struct {
+				Status string            `json:"status"`
+				Checks map[string]string `json:"checks"`
+			}
+			if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+				t.Fatalf("decode readiness response: %v", err)
+			}
+			if response.Status != tt.wantStatus {
+				t.Fatalf("status body = %q, want %q", response.Status, tt.wantStatus)
+			}
+			if tt.checkPrefix != "" && !strings.HasPrefix(response.Checks[tt.wantCheck], tt.checkPrefix) {
+				t.Fatalf("check %q = %q, want prefix %q", tt.wantCheck, response.Checks[tt.wantCheck], tt.checkPrefix)
+			}
+		})
 	}
 }
 
@@ -5723,10 +5784,20 @@ func TestHandleSSE_RequiresAuth(t *testing.T) {
 		t.Fatalf("expected query token on ordinary GET route to be rejected, got %d", ordinaryRec.Code)
 	}
 
-	// Valid token via query parameter — uses a cancellable context so the
-	// SSE loop does not hang.
+	// Query tokens must be rejected on the SSE endpoint as well — bearer
+	// tokens in URLs leak through history, referrers, and proxy logs.
+	queryReq := httptest.NewRequest("GET", "/api/v1/events?token=valid-token", nil)
+	queryW := httptest.NewRecorder()
+	router.ServeHTTP(queryW, queryReq)
+	if queryW.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for SSE with query-param token, got %d", queryW.Code)
+	}
+
+	// Cookie-based auth (the secure EventSource path) — uses a cancellable
+	// context so the SSE loop does not hang.
 	ctx, cancel := context.WithCancel(context.Background())
-	req = httptest.NewRequest("GET", "/api/v1/events?token=valid-token", nil)
+	req = httptest.NewRequest("GET", "/api/v1/events", nil)
+	req.AddCookie(&http.Cookie{Name: "auth_token", Value: "valid-token"})
 	req = req.WithContext(ctx)
 	w = httptest.NewRecorder()
 	go router.ServeHTTP(w, req)
@@ -5734,7 +5805,7 @@ func TestHandleSSE_RequiresAuth(t *testing.T) {
 	cancel()
 	time.Sleep(50 * time.Millisecond) // let handler exit
 	if w.Code != http.StatusOK {
-		t.Errorf("expected 200 with valid token query param, got %d", w.Code)
+		t.Errorf("expected 200 with valid cookie auth, got %d", w.Code)
 	}
 }
 
