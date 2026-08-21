@@ -287,7 +287,8 @@ func (h *Handler) showPasswordForm(w http.ResponseWriter, r *http.Request, page 
 	)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write([]byte(html))
+	// Write failure past this point means the client is gone; not actionable.
+	_, _ = w.Write([]byte(html))
 }
 
 // buildStatusPageDataFn can be overwritten by tests to inject build errors.
@@ -427,7 +428,8 @@ func (h *Handler) buildUptimeData(page *core.StatusPage, souls []core.SoulStatus
 func (h *Handler) serveJSON(w http.ResponseWriter, r *http.Request, data *core.StatusPageData) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	json.NewEncoder(w).Encode(data)
+	// Client is gone on write failure; nothing actionable remains.
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 // serveHTML serves the rendered status page HTML
@@ -442,7 +444,8 @@ func (h *Handler) serveHTML(w http.ResponseWriter, r *http.Request, page *core.S
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "public, max-age=60")
-	w.Write([]byte(html))
+	// Write failure past this point means the client is gone; not actionable.
+	_, _ = w.Write([]byte(html))
 }
 
 // renderStatusPage renders the status page HTML
@@ -832,7 +835,8 @@ func (h *Handler) SubscribeHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Return success
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	// Client is gone on write failure; nothing actionable remains.
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"success":               true,
 		"message":               "Subscription created. Please confirm your subscription.",
 		"subscription_id":       sub.ID,
@@ -893,7 +897,8 @@ func (h *Handler) BadgeHandler(w http.ResponseWriter, r *http.Request) {
 	if format == "json" {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		// Client is gone on write failure; nothing actionable remains.
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"status": overallStatus.Status,
 			"color":  color,
 		})
@@ -937,7 +942,8 @@ func (h *Handler) BadgeHandler(w http.ResponseWriter, r *http.Request) {
   </g>
 </svg>`, color, badgeText, badgeText, statusText, statusText)
 
-	w.Write([]byte(svg))
+	// Write failure past this point means the client is gone; not actionable.
+	_, _ = w.Write([]byte(svg))
 }
 
 // WidgetHandler serves an embeddable HTML/JS status badge widget
@@ -996,7 +1002,7 @@ func (h *Handler) WidgetHandler(w http.ResponseWriter, r *http.Request) {
 	if showDetails {
 		soulRows := ""
 		for _, soul := range souls {
-			dotColor := statusColor
+			var dotColor string
 			switch soul.Status {
 			case "alive", "operational":
 				dotColor = "#22c55e"
@@ -1047,7 +1053,8 @@ tbody tr:hover{background:#f3f4f6}
 </body>
 </html>`, statusColor, statusColor, html.EscapeString(page.Name), strings.ToTitle(string(overallStatus.Status[0]))+overallStatus.Status[1:], soulRows)
 
-		w.Write([]byte(html))
+		// Client is gone on write failure; nothing actionable remains.
+		_, _ = w.Write([]byte(html))
 	} else {
 		// Compact badge style
 		html := fmt.Sprintf(`<!DOCTYPE html>
@@ -1072,7 +1079,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 </body>
 </html>`, statusColor, html.EscapeString(pageID), html.EscapeString(page.Name), strings.ToTitle(string(overallStatus.Status[0]))+overallStatus.Status[1:])
 
-		w.Write([]byte(html))
+		// Client is gone on write failure; nothing actionable remains.
+		_, _ = w.Write([]byte(html))
 	}
 }
 
@@ -1128,7 +1136,8 @@ func (h *Handler) RSSFeedHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/rss+xml")
 	w.Header().Set("Cache-Control", "public, max-age=300")
-	w.Write([]byte(rss))
+	// Client is gone on write failure; nothing actionable remains.
+	_, _ = w.Write([]byte(rss))
 }
 
 // Router returns the status page router

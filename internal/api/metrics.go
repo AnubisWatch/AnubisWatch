@@ -5,6 +5,7 @@ import (
 	"math"
 	"runtime"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
@@ -31,7 +32,9 @@ func (s *RESTServer) handleMetrics(ctx *Context) error {
 	output += s.buildLatencyMetrics()
 
 	ctx.Response.Header().Set("Content-Type", "text/plain; version=0.0.4")
-	ctx.Response.Write([]byte(output))
+	if _, err := ctx.Response.Write([]byte(output)); err != nil {
+		s.logger.Warn("failed to write metrics response", "err", err)
+	}
 	return nil
 }
 
@@ -128,13 +131,14 @@ func (s *RESTServer) buildSoulMetrics() string {
 	out += "# TYPE anubis_soul_uptime_ratio gauge\n"
 
 	for _, soul := range souls {
+		label := prometheusLabelValue(soul.Name)
 		// Get recent judgments for latency, uptime, and status
 		judgments, err := s.store.ListJudgmentsNoCtx(soul.ID, time.Now().Add(-24*time.Hour), time.Now(), 1000)
 		if err != nil || len(judgments) == 0 {
 			statusCounts["unknown"]++
 			statusValue := 3 // unknown
-			out += fmt.Sprintf("anubis_soul_status{soul=\"%s\"} %d\n", soul.Name, statusValue)
-			out += fmt.Sprintf("anubis_soul_uptime_ratio{soul=\"%s\"} -1\n", soul.Name)
+			out += fmt.Sprintf("anubis_soul_status{soul=\"%s\"} %d\n", label, statusValue)
+			out += fmt.Sprintf("anubis_soul_uptime_ratio{soul=\"%s\"} -1\n", label)
 			continue
 		}
 
@@ -143,15 +147,15 @@ func (s *RESTServer) buildSoulMetrics() string {
 		// Status metric
 		statusValue := statusNumeric(latest.Status)
 		statusCounts[string(latest.Status)]++
-		out += fmt.Sprintf("anubis_soul_status{soul=\"%s\"} %d\n", soul.Name, statusValue)
+		out += fmt.Sprintf("anubis_soul_status{soul=\"%s\"} %d\n", label, statusValue)
 
 		// Latency metric
 		latencySeconds := float64(latest.Duration) / float64(time.Second)
-		out += fmt.Sprintf("anubis_soul_latency_seconds{soul=\"%s\"} %f\n", soul.Name, latencySeconds)
+		out += fmt.Sprintf("anubis_soul_latency_seconds{soul=\"%s\"} %f\n", label, latencySeconds)
 
 		// Uptime ratio: percentage of alive/degraded judgments in recent history
 		uptimeRatio := computeUptimeRatio(judgments)
-		out += fmt.Sprintf("anubis_soul_uptime_ratio{soul=\"%s\"} %.4f\n", soul.Name, uptimeRatio)
+		out += fmt.Sprintf("anubis_soul_uptime_ratio{soul=\"%s\"} %.4f\n", label, uptimeRatio)
 	}
 
 	for status, count := range statusCounts {
@@ -330,6 +334,14 @@ func (s *RESTServer) buildLatencyMetrics() string {
 	out += fmt.Sprintf("anubis_latency_samples_total %d\n", len(latencies))
 
 	return out
+}
+
+// prometheusLabelValue escapes the three characters that have special meaning
+// inside the Prometheus text exposition format's quoted label values.
+func prometheusLabelValue(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, "\n", `\n`)
+	return strings.ReplaceAll(value, `"`, `\"`)
 }
 
 func (s *RESTServer) metricsSouls() ([]*core.Soul, error) {

@@ -624,8 +624,8 @@ func mergeChannelSecrets(existing, incoming *core.AlertChannel) error {
 func channelDestinationChanged(existing, incoming map[string]any) bool {
 	for _, key := range []string{"url", "webhook_url"} {
 		old, oldOk := existing[key].(string)
-		new, newOk := incoming[key].(string)
-		if oldOk && newOk && old != new && !isRedactedSecretString(new) {
+		newVal, newOk := incoming[key].(string)
+		if oldOk && newOk && old != newVal && !isRedactedSecretString(newVal) {
 			return true
 		}
 	}

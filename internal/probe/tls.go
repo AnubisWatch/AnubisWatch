@@ -15,6 +15,13 @@ import (
 // TLSChecker implements TLS certificate checks
 type TLSChecker struct{}
 
+func tlsServerName(target string) string {
+	if host, _, err := net.SplitHostPort(target); err == nil {
+		return host
+	}
+	return strings.Trim(target, "[]")
+}
+
 // NewTLSChecker creates a new TLS checker
 func NewTLSChecker() *TLSChecker {
 	return &TLSChecker{}
@@ -70,14 +77,13 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 	if timeout == 0 {
 		timeout = 10 * time.Second
 	}
+	opCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
 	start := time.Now()
 
-	// Extract hostname from target
-	host, _, err := net.SplitHostPort(soul.Target)
-	if err != nil {
-		host = soul.Target
-	}
+	// Extract hostname from target for SNI and certificate verification.
+	host := tlsServerName(soul.Target)
 
 	// Configure TLS with proper verification
 	tlsConfig := &tls.Config{
@@ -93,12 +99,24 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 		}
 	}
 
-	// Connect and perform handshake with verification enabled
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", soul.Target, tlsConfig)
+	// SSRF protection: dial the pinned literal IP so DNS rebinding between
+	// Validate() and Judge() cannot redirect the connection, then perform
+	// the TLS handshake with the original ServerName for SNI/verification.
+	pinnedDial := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+	rawConn, err := pinnedDial(opCtx, "tcp", soul.Target)
 	if err != nil {
-		// If connection fails due to certificate issues, try to get certificate info for diagnostics
-		// but still return a failure judgment
-		return c.diagnoseTLSFailure(soul, err, timeout), nil
+		return failJudgment(soul, fmt.Errorf("TLS connection failed: %w", err)), nil
+	}
+	stopDeadline, deadlineErr := bindConnDeadline(opCtx, rawConn, timeout)
+	if deadlineErr != nil {
+		rawConn.Close()
+		return failJudgment(soul, fmt.Errorf("TLS deadline setup failed: %w", deadlineErr)), nil
+	}
+	defer stopDeadline()
+	conn := tls.Client(rawConn, tlsConfig)
+	if err := conn.HandshakeContext(opCtx); err != nil {
+		rawConn.Close()
+		return c.diagnoseTLSFailure(opCtx, soul, err, timeout), nil
 	}
 	defer conn.Close()
 
@@ -300,7 +318,7 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 }
 
 // diagnoseTLSFailure attempts to get certificate info even when TLS verification fails
-func (c *TLSChecker) diagnoseTLSFailure(soul *core.Soul, dialErr error, timeout time.Duration) *core.Judgment {
+func (c *TLSChecker) diagnoseTLSFailure(ctx context.Context, soul *core.Soul, dialErr error, timeout time.Duration) *core.Judgment {
 	// HIGH-06: this runs only on the error path — Judge (above) already
 	// attempted a secure dial and the handshake failed. We re-dial with
 	// skip-verify so VerifyPeerCertificate can intercept the raw cert
@@ -336,12 +354,27 @@ func (c *TLSChecker) diagnoseTLSFailure(soul *core.Soul, dialErr error, timeout 
 		},
 	}
 
-	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: timeout}, "tcp", soul.Target, tlsConfig)
-	if err != nil {
-		// Can't even connect, return the original error
+	// SSRF: use pinned-IP dial for diagnostic TLS connections too.
+	// The handshake uses the original hostname for SNI.
+	tlsConfig.ServerName = tlsServerName(soul.Target)
+	var diagConn net.Conn
+	pinnedDiagDial := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+	rawDiagConn, dialDiagErr := pinnedDiagDial(ctx, "tcp", soul.Target)
+	if dialDiagErr != nil {
 		return failJudgment(soul, fmt.Errorf("TLS connection failed: %w", dialErr))
 	}
-	defer conn.Close()
+	stopDeadline, deadlineErr := bindConnDeadline(ctx, rawDiagConn, timeout)
+	if deadlineErr != nil {
+		rawDiagConn.Close()
+		return failJudgment(soul, fmt.Errorf("TLS diagnostic deadline failed: %w", deadlineErr))
+	}
+	defer stopDeadline()
+	diagConn = tls.Client(rawDiagConn, tlsConfig)
+	if err := diagConn.(*tls.Conn).HandshakeContext(ctx); err != nil {
+		rawDiagConn.Close()
+		return failJudgment(soul, fmt.Errorf("TLS diagnostic connection failed: %w", dialErr))
+	}
+	defer diagConn.Close()
 
 	// Build TLSInfo from captured certificates
 	var tlsInfo *core.TLSInfo

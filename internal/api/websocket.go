@@ -133,7 +133,8 @@ func (s *WebSocketServer) Stop() {
 			client.cancel()
 		}
 		if client.Conn != nil {
-			client.Conn.CloseNow()
+			// CloseNow is teardown; the socket is going away regardless.
+			_ = client.Conn.CloseNow()
 		}
 	}
 	s.clients = make(map[string]*WSClient)
@@ -329,7 +330,7 @@ func (c *WSClient) LeaveRoom(room string) {
 func (c *WSClient) readPump(ctx context.Context) {
 	defer func() {
 		c.server.removeClient(c.ID)
-		c.Conn.CloseNow()
+		_ = c.Conn.CloseNow()
 	}()
 
 	c.Conn.SetReadLimit(512 * 1024) // 512KB max message size
@@ -412,7 +413,7 @@ func (c *WSClient) writePump(ctx context.Context) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer func() {
 		ticker.Stop()
-		c.Conn.CloseNow()
+		_ = c.Conn.CloseNow()
 	}()
 
 	for {
@@ -509,7 +510,7 @@ func (s *WebSocketServer) removeClient(clientID string) {
 	}
 	// Use sync.Once to prevent double-close if Stop() already closed it
 	client.sendOnce.Do(func() { close(client.send) })
-	client.Conn.CloseNow()
+	_ = client.Conn.CloseNow()
 
 	s.logger.Info("Client disconnected", "client_id", clientID)
 }
@@ -577,7 +578,7 @@ func safeSend(ctx context.Context, ch chan []byte, data []byte) error {
 	// client.sendOnce.Do(close) in Stop() — the panic from sending
 	// on a closed channel can still occur in a race window, so a
 	// narrow defer/recover is kept as a safety net.
-	defer func() { recover() }()
+	defer func() { _ = recover() }()
 	select {
 	case ch <- data:
 		return nil
@@ -865,40 +866,10 @@ func generateClientID() string {
 	return fmt.Sprintf("ws_%d", time.Now().UnixNano())
 }
 
-// checkRateLimit checks if the IP has exceeded the connection rate limit
-// Returns true if connection is allowed, false if rate limited
-func (s *WebSocketServer) checkRateLimit(ip string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	now := time.Now()
-	limiter, exists := s.ipLimits[ip]
-	if !exists {
-		// First connection from this IP
-		s.ipLimits[ip] = &connectionLimiter{
-			lastConnect:  now,
-			connectCount: 1,
-			windowReset:  now.Add(s.rateLimitWindow),
-			messageReset: now.Add(s.messageWindow), // Initialize message window
-		}
-		return true
-	}
-
-	// Reset window if expired
-	if now.After(limiter.windowReset) {
-		limiter.connectCount = 0
-		limiter.windowReset = now.Add(s.rateLimitWindow)
-	}
-
-	// Check rate limit
-	if limiter.connectCount >= s.connRateLimit {
-		return false
-	}
-
-	limiter.connectCount++
-	limiter.lastConnect = now
-	return true
-}
+// checkRateLimit was removed — reserveConnection (the TOCTOU-safe
+// admission path used by HandleConnection) subsumes it: it checks both
+// the per-window connect rate and concurrent connections under one
+// lock and reserves the slot atomically.
 
 // reserveConnection atomically checks and reserves a connection slot for an IP
 // under the write lock, closing the TOCTOU window between check and increment.

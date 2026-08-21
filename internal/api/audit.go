@@ -97,7 +97,9 @@ func (al *AuditLogger) Log(eventType, userID, resource, action, status string, d
 			"resource", resource,
 			"action", action)
 		if al.backend != nil {
-			al.backend.Write(event)
+			if err := al.backend.Write(event); err != nil {
+				al.logger.Warn("audit backend write failed", "err", err)
+			}
 		}
 	}
 }
@@ -115,7 +117,7 @@ func (al *AuditLogger) LogRequest(r *http.Request, userID string, status int, du
 	details := map[string]any{
 		"method":       r.Method,
 		"path":         r.URL.Path,
-		"query":        r.URL.RawQuery,
+		"query":        sanitizeQueryString(r.URL.RawQuery),
 		"status_code":  status,
 		"duration_ms":  duration.Milliseconds(),
 		"content_type": r.Header.Get("Content-Type"),
@@ -147,7 +149,9 @@ func (al *AuditLogger) LogAuth(userID, ipAddress, action, status string, details
 	case al.buffer <- event:
 	default:
 		if al.backend != nil {
-			al.backend.Write(event)
+			if err := al.backend.Write(event); err != nil {
+				al.logger.Warn("audit backend write failed", "err", err)
+			}
 		}
 	}
 }

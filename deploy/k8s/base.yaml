@@ -1,3 +1,10 @@
+# Standalone AnubisWatch bundle.
+#
+# This aggregate mirrors the maintained split manifests in deploy/k8s/. It is
+# intentionally single-node: the embedded store uses one ReadWriteOnce PVC and
+# must not be mounted by concurrent standalone writers. Create the Secret data
+# from a secret manager before applying this bundle; the empty Secret below
+# makes missing credentials fail closed.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -5,7 +12,6 @@ metadata:
   labels:
     app.kubernetes.io/name: anubiswatch
     app.kubernetes.io/managed-by: kubectl
-
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -14,41 +20,54 @@ metadata:
   namespace: anubiswatch
 data:
   anubis.yaml: |
+    environment: production-proxied
     server:
       host: 0.0.0.0
       port: 8080
+      grpc_port: 0
       tls:
         enabled: false
+      allowed_origins:
+        - "http://localhost:8080"
+        - "http://127.0.0.1:8080"
+    auth:
+      enabled: true
+      type: local
+      local:
+        admin_email: admin@anubiswatch.local
+    dashboard:
+      enabled: true
     storage:
       path: /data
       encryption:
         enabled: true
         key: ${ANUBIS_ENCRYPTION_KEY}
     necropolis:
-      enabled: true
-      bind_addr: 0.0.0.0:7946
-      raft:
-        bind_addr: 0.0.0.0:7946
-        election_timeout: 1s
-        heartbeat_timeout: 500ms
-    auth:
-      type: local
+      enabled: false
     logging:
       level: info
       format: json
       output: stdout
-
 ---
 apiVersion: v1
 kind: Secret
 metadata:
   name: anubiswatch-secrets
   namespace: anubiswatch
-  labels:
-    app.kubernetes.io/name: anubiswatch
 type: Opaque
 # Populate admin-password and encryption-key from a secret manager before use.
-
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: anubiswatch-data
+  namespace: anubiswatch
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
 ---
 apiVersion: v1
 kind: Service
@@ -60,49 +79,25 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-    - port: 8080
-      targetPort: 8080
+    - name: http
+      port: 8080
+      targetPort: http
       protocol: TCP
-      name: http
   selector:
     app.kubernetes.io/name: anubiswatch
-
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: anubiswatch-headless
-  namespace: anubiswatch
-  labels:
-    app.kubernetes.io/name: anubiswatch
-spec:
-  type: ClusterIP
-  clusterIP: None
-  publishNotReadyAddresses: true
-  ports:
-    - port: 8080
-      targetPort: 8080
-      protocol: TCP
-      name: http
-    - port: 7946
-      targetPort: 7946
-      protocol: TCP
-      name: raft
-  selector:
-    app.kubernetes.io/name: anubiswatch
-
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: anubiswatch
   namespace: anubiswatch
   labels:
     app.kubernetes.io/name: anubiswatch
+    app.kubernetes.io/component: server
 spec:
-  serviceName: anubiswatch-headless
-  replicas: 3
-  podManagementPolicy: Parallel
+  replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: anubiswatch
@@ -110,65 +105,42 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: anubiswatch
+        app.kubernetes.io/component: server
     spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
       securityContext:
         fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
-        - name: anubis
+        - name: anubiswatch
+          image: ghcr.io/anubiswatch/anubiswatch:v0.1.4
+          imagePullPolicy: IfNotPresent
+          args:
+            - serve
+            - --config
+            - /etc/anubis/anubis.yaml
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
             runAsGroup: 1000
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
-          image: ghcr.io/anubiswatch/anubiswatch:v0.1.0
-          imagePullPolicy: IfNotPresent
-          command:
-            - /bin/anubis
-          args:
-            - serve
-            - --cluster
-            - --config
-            - /etc/anubis/anubis.yaml
           ports:
             - name: http
               containerPort: 8080
               protocol: TCP
-            - name: raft
-              containerPort: 7946
-              protocol: TCP
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: http
-            initialDelaySeconds: 30
-            periodSeconds: 10
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: http
-            initialDelaySeconds: 5
-            periodSeconds: 5
-          resources:
-            limits:
-              cpu: 1000m
-              memory: 1Gi
-            requests:
-              cpu: 250m
-              memory: 256Mi
-          volumeMounts:
-            - name: config
-              mountPath: /etc/anubis
-              readOnly: true
-            - name: data
-              mountPath: /data
           env:
-            - name: ANUBIS_NODE_ID
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
+            - name: ANUBIS_CONFIG
+              value: /etc/anubis/anubis.yaml
+            - name: ANUBIS_DATA_DIR
+              value: /data
+            - name: ANUBIS_LOG_LEVEL
+              value: info
             - name: ANUBIS_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
@@ -179,28 +151,54 @@ spec:
                 secretKeyRef:
                   name: anubiswatch-secrets
                   key: encryption-key
+          volumeMounts:
+            - name: config
+              mountPath: /etc/anubis
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: runtime
+              mountPath: /var/lib/anubis
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 2
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
       volumes:
         - name: config
           configMap:
             name: anubiswatch-config
-  volumeClaimTemplates:
-    - metadata:
-        name: data
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        resources:
-          requests:
-            storage: 10Gi
-
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: anubiswatch
-  namespace: anubiswatch
-spec:
-  minAvailable: 2
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: anubiswatch
+        - name: runtime
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: data
+          persistentVolumeClaim:
+            claimName: anubiswatch-data

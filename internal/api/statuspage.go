@@ -50,13 +50,11 @@ func (s *RESTServer) handleStatusPage(ctx *Context) error {
 		}
 
 		component := StatusComponent{
-			ID:          soul.ID,
-			Name:        soul.Name,
-			Status:      status,
-			Type:        string(soul.Type),
-			Target:      soul.Target,
-			UpdatedAt:   soul.UpdatedAt,
-			Description: soul.Target,
+			ID:        soul.ID,
+			Name:      soul.Name,
+			Status:    status,
+			Type:      string(soul.Type),
+			UpdatedAt: soul.UpdatedAt,
 		}
 
 		if len(judgments) > 0 {
@@ -96,8 +94,8 @@ type StatusComponent struct {
 	Name        string    `json:"name"`
 	Status      string    `json:"status"`
 	Type        string    `json:"type"`
-	Target      string    `json:"target"`
-	Description string    `json:"description"`
+	Target      string    `json:"target,omitempty"`
+	Description string    `json:"description,omitempty"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	LastChecked time.Time `json:"last_checked,omitempty"`
 	Latency     string    `json:"latency,omitempty"`
@@ -244,9 +242,10 @@ func (s *RESTServer) handleStatusPageHTML(ctx *Context) error {
 	for _, soul := range souls {
 		judgments, _ := s.store.ListJudgmentsNoCtx(soul.ID, time.Now().Add(-1*time.Hour), time.Now(), 1)
 		if len(judgments) > 0 {
-			if judgments[0].Status == core.SoulAlive {
+			switch judgments[0].Status {
+			case core.SoulAlive:
 				operational++
-			} else if judgments[0].Status == core.SoulDead {
+			case core.SoulDead:
 				outage++
 			}
 		}
@@ -288,7 +287,6 @@ func (s *RESTServer) handleStatusPageHTML(ctx *Context) error {
 		htmlOut += `<div class="component">
             <div>
                 <div class="component-name">` + html.EscapeString(soul.Name) + `</div>
-                <div class="component-target">` + html.EscapeString(soul.Target) + `</div>
             </div>
             <div class="component-status">
                 <div class="status-dot ` + dotClass + `"></div>
@@ -307,6 +305,8 @@ func (s *RESTServer) handleStatusPageHTML(ctx *Context) error {
 </html>`
 
 	ctx.Response.Header().Set("Content-Type", "text/html; charset=utf-8")
-	ctx.Response.Write([]byte(htmlOut))
+	if _, err := ctx.Response.Write([]byte(htmlOut)); err != nil {
+		s.logger.Warn("failed to write status page preview", "err", err)
+	}
 	return nil
 }

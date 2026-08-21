@@ -334,7 +334,9 @@ func importSouls(store *storage.CobaltDB, ctx context.Context) {
 	if replace {
 		existing, _ := store.ListSouls(ctx, "default", 0, 10000)
 		for _, s := range existing {
-			store.DeleteSoul(ctx, "default", s.ID)
+			if err := store.DeleteSoul(ctx, "default", s.ID); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: failed to delete soul %s: %v\n", s.ID, err)
+			}
 		}
 	}
 

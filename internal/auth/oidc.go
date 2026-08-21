@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -114,7 +115,7 @@ func normalizedIssuer(raw string) (*url.URL, string, error) {
 	if issuer.Host == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" {
 		return nil, "", fmt.Errorf("invalid OIDC issuer URL")
 	}
-	if issuer.Scheme != "https" && !(issuer.Scheme == "http" && issuerLoopback(issuer)) {
+	if issuer.Scheme != "https" && (issuer.Scheme != "http" || !issuerLoopback(issuer)) {
 		return nil, "", fmt.Errorf("OIDC issuer must use HTTPS (HTTP is only allowed for loopback)")
 	}
 	issuer.Path = strings.TrimRight(issuer.Path, "/")
@@ -173,7 +174,7 @@ func oidcHTTPClient(trustedOrigin *url.URL) *http.Client {
 			if len(via) >= 10 {
 				return fmt.Errorf("too many OIDC redirects")
 			}
-			if req.URL.Scheme != "https" && !(trustedOrigin.Scheme == "http" && issuerLoopback(trustedOrigin) && req.URL.Scheme == "http" && issuerLoopback(req.URL)) {
+			if req.URL.Scheme != "https" && (trustedOrigin.Scheme != "http" || !issuerLoopback(trustedOrigin) || req.URL.Scheme != "http" || !issuerLoopback(req.URL)) {
 				return fmt.Errorf("OIDC redirect must use HTTPS")
 			}
 			if !sameOrigin(trustedOrigin, req.URL) {
@@ -391,7 +392,11 @@ func (o *OIDCAuthenticator) fetchOIDCConfig() (*oidcConfig, error) {
 	}
 	wellKnownURL := issuer + "/.well-known/openid-configuration"
 
-	resp, err := oidcHTTPClient(issuerURL).Get(wellKnownURL)
+	wkReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, wellKnownURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create discovery request: %w", err)
+	}
+	resp, err := oidcHTTPClient(issuerURL).Do(wkReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch OIDC config from %s: %w", wellKnownURL, err)
 	}
@@ -458,7 +463,7 @@ func (o *OIDCAuthenticator) exchangeCode(code string) (*tokenResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPost, cfg.TokenURL, strings.NewReader(data.Encode()))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, cfg.TokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token request: %w", err)
 	}
@@ -493,7 +498,7 @@ func (o *OIDCAuthenticator) getUserInfo(accessToken string) (*userInfoResponse, 
 		return nil, fmt.Errorf("no userinfo endpoint in OIDC config")
 	}
 
-	req, err := http.NewRequest("GET", cfg.UserInfoURL, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, cfg.UserInfoURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -559,7 +564,11 @@ func (o *OIDCAuthenticator) fetchJWKs() (*jwkSet, error) {
 	if err != nil {
 		return nil, err
 	}
-	resp, err := oidcHTTPClient(jwksURL).Get(cfg.JWKSURI)
+	jwksReq, err := http.NewRequestWithContext(context.Background(), http.MethodGet, cfg.JWKSURI, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create JWKS request: %w", err)
+	}
+	resp, err := oidcHTTPClient(jwksURL).Do(jwksReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch JWKs from %s: %w", cfg.JWKSURI, err)
 	}

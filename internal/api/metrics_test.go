@@ -192,6 +192,24 @@ func TestBuildSoulMetrics_WithSouls(t *testing.T) {
 	}
 }
 
+func TestBuildSoulMetrics_EscapesPrometheusLabelValues(t *testing.T) {
+	store := newMockStorage()
+	store.SaveSoul(context.Background(), &core.Soul{
+		ID:   "soul-injection",
+		Name: "quoted\"\\line\nforged_metric 1",
+		Type: core.CheckHTTP,
+	})
+	server := NewRESTServer(core.ServerConfig{Port: 8080}, core.AuthConfig{Enabled: core.BoolPtr(true)}, store, &mockProbeEngine{}, &mockAlertManager{}, &mockAuthenticator{}, &mockClusterManager{}, nil, nil, nil, nil, newTestLogger())
+
+	metrics := server.buildSoulMetrics()
+	if strings.Contains(metrics, "\nforged_metric 1") {
+		t.Fatalf("soul name injected a metric line:\n%s", metrics)
+	}
+	if !strings.Contains(metrics, `soul="quoted\"\\line\nforged_metric 1"`) {
+		t.Fatalf("escaped label missing from metrics:\n%s", metrics)
+	}
+}
+
 func TestBuildMetrics_IncludesNonDefaultWorkspaceSouls(t *testing.T) {
 	store := &workspaceAwareMetricsStorage{
 		mockStorage: newMockStorage(),

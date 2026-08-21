@@ -16,7 +16,7 @@ type failingStorage struct {
 	failSetKey      string
 }
 
-func (s *failingStorage) Get(key string) ([]byte, error)          { return s.data[key], nil }
+func (s *failingStorage) Get(key string) ([]byte, error) { return s.data[key], nil }
 func (s *failingStorage) Set(key string, value []byte) error {
 	if s.setErr != nil && (s.failSetKey == "" || s.failSetKey == key) {
 		return s.setErr

@@ -105,11 +105,11 @@ func failJudgment(soul *core.Soul, err error) *core.Judgment {
 }
 
 // truncateString truncates a string to max length
-func truncateString(s string, max int) string {
-	if len(s) <= max {
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
 		return s
 	}
-	return s[:max] + "..."
+	return s[:maxLen] + "..."
 }
 
 // boolToString converts bool to string

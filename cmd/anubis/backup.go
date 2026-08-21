@@ -307,7 +307,9 @@ func restoreCommand() {
 		fmt.Println("⚠️  Warning: This will overwrite existing data!")
 		fmt.Print("Continue? [y/N]: ")
 		var response string
-		fmt.Scanln(&response)
+		// A scan failure (EOF, no input) leaves response empty, which
+		// the confirmation check below already treats as "no".
+		_, _ = fmt.Scanln(&response)
 		if response != "y" && response != "Y" {
 			fmt.Println("Restore cancelled.")
 			return

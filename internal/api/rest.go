@@ -696,7 +696,9 @@ func (s *RESTServer) handleOpenAPIJSON(ctx *Context) error {
 	ctx.Response.Header().Set("Content-Type", "application/json")
 	ctx.Response.Header().Set("Cache-Control", "public, max-age=3600")
 	ctx.Response.WriteHeader(http.StatusOK)
-	ctx.Response.Write(buildOpenAPIJSON())
+	if _, err := ctx.Response.Write(buildOpenAPIJSON()); err != nil {
+		s.logger.Warn("failed to write OpenAPI response", "err", err)
+	}
 	return nil
 }
 
@@ -823,7 +825,9 @@ window.addEventListener('load', function() {
 			"connect-src 'self'")
 	ctx.Response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	ctx.Response.WriteHeader(http.StatusOK)
-	ctx.Response.Write([]byte(html))
+	if _, err := ctx.Response.Write([]byte(html)); err != nil {
+		s.logger.Warn("failed to write status page HTML", "err", err)
+	}
 	return nil
 }
 
@@ -2780,7 +2784,9 @@ func (s *RESTServer) recoveryMiddleware(handler Handler) Handler {
 		defer func() {
 			if r := recover(); r != nil {
 				s.logger.Error("Panic recovered", "error", r)
-				ctx.Error(http.StatusInternalServerError, "internal server error")
+				if err := ctx.Error(http.StatusInternalServerError, "internal server error"); err != nil {
+					s.logger.Warn("failed to write panic response", "err", err)
+				}
 			}
 		}()
 		return handler(ctx)
@@ -3158,7 +3164,9 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 				Response: w,
 				Params:   make(map[string]string),
 			}
-			handler(ctx)
+			if err := handler(ctx); err != nil {
+				slog.Error("handler error", "path", path, "method", method, "err", err)
+			}
 			return
 		}
 	}
@@ -3172,7 +3180,9 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 					Response: w,
 					Params:   params,
 				}
-				handler(ctx)
+				if err := handler(ctx); err != nil {
+					slog.Error("handler error", "path", path, "method", method, "err", err)
+				}
 				return
 			}
 		}
@@ -3205,7 +3215,9 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	// No route found
 	w.WriteHeader(http.StatusNotFound)
-	json.NewEncoder(w).Encode(map[string]string{"error": "not found"})
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": "not found"}); err != nil {
+		slog.Warn("failed to encode 404 response", "err", err)
+	}
 }
 
 func matchRoute(pattern, path string) (map[string]string, bool) {

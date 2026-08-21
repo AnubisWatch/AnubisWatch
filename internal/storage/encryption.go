@@ -144,9 +144,3 @@ func (e *encryptor) decrypt(data []byte) ([]byte, error) {
 
 	return plaintext, nil
 }
-
-// isEncrypted checks if data looks encrypted.
-// We check that data is at least saltSize + nonceSize + tagSize bytes.
-func (e *encryptor) isEncrypted(data []byte) bool {
-	return len(data) >= encryptionSaltLen+12+16 // salt + min nonce + GCM tag
-}

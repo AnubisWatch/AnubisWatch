@@ -1,7 +1,7 @@
 # Production Readiness Checklist
 
-**Date:** 2026-07-15  
-**Status:** Production-ready for single/multi-node deployment
+**Date:** 2026-07-24  
+**Status:** Single-node production candidate; requires environment-specific preflight, backup/restore rehearsal, rollout smoke evidence, and capacity validation. Multi-node deployment is not supported by the production chart.
 
 ## Build Verification
 
@@ -14,8 +14,7 @@
 
 - [x] `go test -short ./...` — all packages pass
 - [x] `go test -race -short ./...` — all packages pass with race detector
-- [x] `go test -coverprofile=coverage.out ./...` — coverage report generated
-- [x] Coverage: ~86% (excluding generated protobuf code)
+- [x] `scripts/check-go-coverage.sh` — measured 88.9% statement coverage; enforced minimum is 80% (generated protobuf excluded)
 - [x] Frontend tests: `pnpm test` — all pass
 
 ## Security Fixes Applied
@@ -48,7 +47,7 @@
 ## CI Pipeline
 
 - [x] `.github/workflows/ci.yml` runs full test suite with `-race` flag
-- [x] Coverage threshold enforced at 80% (codecov.yml)
+- [x] Coverage threshold enforced at 80% (`scripts/check-go-coverage.sh` + `codecov.yml`), with current Go coverage at 88.9%
 - [x] Static analysis (gofmt, govet, gosec, govulncheck) gates merges
 - [x] Frontend tests and E2E tests run on every PR
 
@@ -62,9 +61,9 @@
 
 ## Known Limitations
 
-1. **On-disk index**: CobaltDB B+Tree lives entirely in memory; WAL replay is the sole recovery mechanism. For datasets with millions of judgments, startup time increases linearly. Tracked as F-002.
-2. **Multi-node cluster**: Raft `InstallSnapshot` is a stub — cluster log compaction not functional. Single-node mode is fully supported and recommended.
-3. **gRPC authorization**: REST API enforces fine-grained RBAC. gRPC layer has basic auth but lacks resource-scoped permission checks.
+1. **WAL replay scale**: CobaltDB rebuilds its in-memory B+Tree from the WAL at startup. Recovery now checkpoints live state atomically and survives repeated restarts, but startup time and memory still grow with retained data; capacity-test the expected dataset.
+2. **Multi-node deployment**: Raft persistence, snapshots, mutation replication, and method-level gRPC permissions exist, but the production chart intentionally rejects cluster mode because deterministic ordinal formation and Raft mTLS material are not yet packaged or environment-validated.
+3. **Environment evidence**: Repository gates cannot prove DNS, certificates, ingress proxy ranges, storage latency/durability, backup restoration, alert delivery, or SLO capacity. Capture preflight, rollout, smoke, restore, and load evidence in the target environment before promotion.
 
 ## Deployment Instructions
 
@@ -100,10 +99,11 @@ curl -X POST http://localhost:8080/api/v1/auth/login \
 
 ```bash
 helm install anubiswatch deploy/helm/anubiswatch \
-  --set secrets.adminPassword='YourStrongPass123!' \
-  --set config.server.tls.enabled=false \
-  --set ingress.enabled=true \
-  --set ingress.hosts[0].host=anubiswatch.example.com
+  -f values-production.yaml \
+  --set-string secrets.adminPassword="$ANUBIS_ADMIN_PASSWORD" \
+  --set-string secrets.encryptionKey="$ANUBIS_ENCRYPTION_KEY" \
+  --atomic \
+  --timeout 10m
 ```
 
 ### Smoke Test
@@ -112,13 +112,16 @@ helm install anubiswatch deploy/helm/anubiswatch \
 # Health check
 curl -s http://localhost:8080/health | jq .
 
-# Create a monitor
-TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/auth/login \
+# Authenticate into an HttpOnly cookie jar, then create a monitor.
+COOKIE_JAR=$(mktemp)
+curl -fsS -X POST http://localhost:8080/api/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"email":"admin@anubis.watch","password":"YourStrongPass123!"}' | jq -r .token)
+  --cookie-jar "$COOKIE_JAR" \
+  -d '{"email":"admin@anubis.watch","password":"YourStrongPass123!"}'
 
-curl -X POST http://localhost:8080/api/v1/souls \
-  -H "Authorization: Bearer $TOKEN" \
+curl -fsS -X POST http://localhost:8080/api/v1/souls \
+  --cookie "$COOKIE_JAR" \
   -H "Content-Type: application/json" \
   -d '{"name":"Example","type":"http","target":"https://example.com","weight":"60s","timeout":"10s","http":{"method":"GET","valid_status":[200]}}'
+rm -f "$COOKIE_JAR"
 ```

@@ -2,11 +2,13 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -332,6 +334,28 @@ func TestValidateSecureHeaders(t *testing.T) {
 				t.Errorf("ValidateSecureHeaders() returned %d issues, expected %d: %v", len(result), tt.expected, result)
 			}
 		})
+	}
+}
+
+func TestAuditLogger_LogRequestRedactsEncodedQueryToken(t *testing.T) {
+	backend := &mockAuditBackend{}
+	al := NewAuditLogger(slog.New(slog.NewTextHandler(io.Discard, nil)), backend)
+
+	req := httptest.NewRequest("GET", "/api/v1/events?t%6fken=secret-value&cursor=next", nil)
+	al.LogRequest(req, "user-1", http.StatusOK, time.Millisecond)
+	al.Stop() // shutdown flushes the buffered event deterministically
+
+	events := backend.GetEvents()
+	if len(events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(events))
+	}
+	var details map[string]any
+	if err := json.Unmarshal(events[0].Details, &details); err != nil {
+		t.Fatalf("decode audit details: %v", err)
+	}
+	query, _ := details["query"].(string)
+	if strings.Contains(query, "secret-value") || !strings.Contains(query, "***") {
+		t.Fatalf("audit query was not redacted: %q", query)
 	}
 }
 

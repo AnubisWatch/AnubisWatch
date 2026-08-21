@@ -249,8 +249,11 @@ func (a *LocalAuthenticator) saveSessionsLocked() {
 		os.Remove(tmpPath)
 		return
 	}
-	// Ensure final file has correct permissions (defense in depth)
-	os.Chmod(a.sessionPath, 0600)
+	// Ensure final file has correct permissions (defense in depth).
+	// A failed chmod leaves the file with the umask default; surfaced
+	// nowhere because the authenticator has no logger — acceptable as
+	// the write itself already used 0600 creation semantics.
+	_ = os.Chmod(a.sessionPath, 0600)
 }
 
 // cleanupInterval is the interval between session cleanup runs.

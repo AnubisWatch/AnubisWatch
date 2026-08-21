@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"fmt"
 	"math/big"
@@ -379,7 +380,7 @@ func findAvailablePort(startPort int) int {
 }
 
 func isPortInUse(port int) bool {
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return true
 	}

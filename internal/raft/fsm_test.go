@@ -14,6 +14,12 @@ type mockStorageListError struct {
 	storage map[string][]byte
 }
 
+// encodeCommand is a test-only convenience wrapper mirroring how the
+// production code serializes FSM commands (json.Marshal on *core.FSMCommand).
+func (f *StorageFSM) encodeCommand(cmd *core.FSMCommand) ([]byte, error) {
+	return json.Marshal(cmd)
+}
+
 func (m *mockStorageListError) Get(key string) ([]byte, error) {
 	v, ok := m.storage[key]
 	if !ok {

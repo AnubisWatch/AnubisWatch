@@ -280,7 +280,7 @@ describe('Journeys', () => {
     await renderLoaded()
     const save = deferred<object>()
     apiMocks.post.mockReturnValueOnce(save.promise)
-    let dialog = openCreate()
+    const dialog = openCreate()
     fireEvent.change(within(dialog).getByLabelText('Name'), { target: { value: 'Slow' } })
     addStep(dialog)
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create Journey' }))

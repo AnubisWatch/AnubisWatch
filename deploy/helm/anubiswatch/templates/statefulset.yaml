@@ -1,4 +1,5 @@
 {{- if .Values.config.necropolis.enabled }}
+{{- fail "config.necropolis.enabled is not supported by this production chart: ordinal bootstrap/join and Raft mTLS are not configured; deploy the supported single-node topology or provide a separately validated cluster manifest" }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -19,6 +20,9 @@ spec:
       labels:
         {{- include "anubiswatch.selectorLabels" . | nindent 8 }}
     spec:
+      serviceAccountName: {{ include "anubiswatch.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -44,17 +48,25 @@ spec:
             - name: http
               containerPort: {{ .Values.service.httpPort }}
               protocol: TCP
+            {{- if gt (int .Values.service.grpcPort) 0 }}
             - name: grpc
               containerPort: {{ .Values.service.grpcPort }}
               protocol: TCP
+            {{- end }}
             - name: raft
               containerPort: {{ .Values.service.clusterPort }}
               protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
           livenessProbe:
             httpGet:
               path: /health
               port: http
-            initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3

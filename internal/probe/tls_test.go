@@ -21,6 +21,33 @@ func init() {
 	DefaultValidator = NewSSRFValidator()
 }
 
+func TestTLSServerNameExcludesPort(t *testing.T) {
+	for input, want := range map[string]string{
+		"example.com:443":   "example.com",
+		"[2001:db8::1]:443": "2001:db8::1",
+		"example.com":       "example.com",
+	} {
+		if got := tlsServerName(input); got != want {
+			t.Errorf("tlsServerName(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestTLSChecker_DiagnosticHonorsCancelledContext(t *testing.T) {
+	checker := NewTLSChecker()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	soul := &core.Soul{ID: "tls-cancelled", Target: "example.com:443"}
+	started := time.Now()
+	judgment := checker.diagnoseTLSFailure(ctx, soul, context.Canceled, time.Second)
+	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+		t.Fatalf("diagnostic ignored cancelled context: %v", elapsed)
+	}
+	if judgment == nil || judgment.Status != core.SoulDead {
+		t.Fatalf("expected failed diagnostic judgment, got %#v", judgment)
+	}
+}
+
 func TestTLSChecker_Validate_MissingTarget(t *testing.T) {
 	checker := NewTLSChecker()
 

@@ -27,7 +27,7 @@ func skipUnlessChaosEnv(t *testing.T) {
 // chaosStoreBundle holds persistent stores for a single node so a
 // Start/Stop/Start restart cycle preserves durable state.
 type chaosStoreBundle struct {
-	logStore *InMemoryLogStore
+	logStore  *InMemoryLogStore
 	snapStore *InMemorySnapshotStore
 	stable    *InMemoryStableStore
 	storage   *InMemoryStorage
@@ -490,7 +490,9 @@ func createPersistentChaosCluster(t *testing.T, nodeCount int) ([]*Node, []*chao
 		}
 		peers := make([]core.RaftPeer, 0, nodeCount-1)
 		for j := 0; j < nodeCount; j++ {
-			if j == i { continue }
+			if j == i {
+				continue
+			}
 			peers = append(peers, core.RaftPeer{
 				ID:      fmt.Sprintf("chaos-node-%d", j),
 				Address: fmt.Sprintf("127.0.0.1:%d", 17100+j),
@@ -500,7 +502,7 @@ func createPersistentChaosCluster(t *testing.T, nodeCount int) ([]*Node, []*chao
 		cfg.Peers = peers
 
 		b := &chaosStoreBundle{
-			logStore: NewInMemoryLogStore(),
+			logStore:  NewInMemoryLogStore(),
 			snapStore: NewInMemorySnapshotStore(),
 			stable:    NewInMemoryStableStore(),
 			storage:   NewInMemoryStorage(),
@@ -508,7 +510,9 @@ func createPersistentChaosCluster(t *testing.T, nodeCount int) ([]*Node, []*chao
 		b.fsm = NewStorageFSM(b.storage)
 
 		transport, err := NewTCPTransport(cfg.BindAddr, cfg.AdvertiseAddr, nil, newTestRaftLogger())
-		if err != nil { t.Fatalf("transport %d: %v", i, err) }
+		if err != nil {
+			t.Fatalf("transport %d: %v", i, err)
+		}
 		transports[i] = transport
 
 		bundles[i] = b
@@ -532,11 +536,13 @@ func createPersistentChaosCluster(t *testing.T, nodeCount int) ([]*Node, []*chao
 				Peers: func() []core.RaftPeer {
 					pp := make([]core.RaftPeer, 0, nodeCount-1)
 					for j := 0; j < nodeCount; j++ {
-						if j == i { continue }
+						if j == i {
+							continue
+						}
 						pp = append(pp, core.RaftPeer{
-							ID: fmt.Sprintf("chaos-node-%d", j),
+							ID:      fmt.Sprintf("chaos-node-%d", j),
 							Address: fmt.Sprintf("127.0.0.1:%d", 17100+j),
-							Region: "default", Role: core.RoleVoter,
+							Region:  "default", Role: core.RoleVoter,
 						})
 					}
 					return pp
@@ -545,7 +551,9 @@ func createPersistentChaosCluster(t *testing.T, nodeCount int) ([]*Node, []*chao
 			bundles[i].logStore, bundles[i].stable, bundles[i].snapStore, bundles[i].fsm,
 			newTestRaftLogger(),
 		)
-		if err != nil { t.Fatalf("NewNodeWithStableStore %d: %v", i, err) }
+		if err != nil {
+			t.Fatalf("NewNodeWithStableStore %d: %v", i, err)
+		}
 		node.SetTransport(transports[i])
 		nodes[i] = node
 		cleanups[i] = func(n *Node, tr *TCPTransport) func() {
@@ -553,7 +561,11 @@ func createPersistentChaosCluster(t *testing.T, nodeCount int) ([]*Node, []*chao
 		}(node, transports[i])
 	}
 
-	cleanup := func() { for _, c := range cleanups { c() } }
+	cleanup := func() {
+		for _, c := range cleanups {
+			c()
+		}
+	}
 	return nodes, bundles, cleanup
 }
 
@@ -567,7 +579,9 @@ func TestChaos_RestartRecovery_Real(t *testing.T) {
 	defer cleanup()
 
 	for _, n := range nodes {
-		if err := n.Start(); err != nil { t.Fatalf("start: %v", err) }
+		if err := n.Start(); err != nil {
+			t.Fatalf("start: %v", err)
+		}
 	}
 	leader := waitForStableLeader(t, nodes, 10*time.Second)
 	waitForAllNodes(t, nodes, 5*time.Second)
@@ -578,7 +592,9 @@ func TestChaos_RestartRecovery_Real(t *testing.T) {
 	t.Logf("Pre-restart: term=%d commit=%d logIndex=%d", preTerm, preCommit, preLogIndex)
 
 	// Stop all nodes and wait for ports to be released.
-	for _, n := range nodes { n.Stop() }
+	for _, n := range nodes {
+		n.Stop()
+	}
 	time.Sleep(500 * time.Millisecond)
 
 	// Create fresh Node instances with the SAME persistent stores.
@@ -597,32 +613,44 @@ func TestChaos_RestartRecovery_Real(t *testing.T) {
 			Peers: func() []core.RaftPeer {
 				pp := make([]core.RaftPeer, 0, 2)
 				for j := 0; j < 3; j++ {
-					if j == i { continue }
+					if j == i {
+						continue
+					}
 					pp = append(pp, core.RaftPeer{
-						ID: fmt.Sprintf("chaos-node-%d", j),
+						ID:      fmt.Sprintf("chaos-node-%d", j),
 						Address: fmt.Sprintf("127.0.0.1:%d", 17100+j),
-						Region: "default", Role: core.RoleVoter,
+						Region:  "default", Role: core.RoleVoter,
 					})
 				}
 				return pp
 			}(),
 		}
 		node, err := NewNodeWithStableStore(cfg, bundles[i].logStore, bundles[i].stable, bundles[i].snapStore, bundles[i].fsm, newTestRaftLogger())
-		if err != nil { t.Fatalf("recreate node %d: %v", i, err) }
+		if err != nil {
+			t.Fatalf("recreate node %d: %v", i, err)
+		}
 		tr, err := NewTCPTransport(cfg.BindAddr, cfg.AdvertiseAddr, nil, newTestRaftLogger())
-		if err != nil { t.Fatalf("transport %d: %v", i, err) }
+		if err != nil {
+			t.Fatalf("transport %d: %v", i, err)
+		}
 		node.SetTransport(tr)
 		newNodes[i] = node
 		newTransports[i] = tr
 	}
 	defer func() {
-		for _, n := range newNodes { n.Stop() }
-		for _, tr := range newTransports { tr.Stop() }
+		for _, n := range newNodes {
+			n.Stop()
+		}
+		for _, tr := range newTransports {
+			tr.Stop()
+		}
 	}()
 
 	// Start the recreated nodes.
 	for _, n := range newNodes {
-		if err := n.Start(); err != nil { t.Fatalf("restart: %v", err) }
+		if err := n.Start(); err != nil {
+			t.Fatalf("restart: %v", err)
+		}
 	}
 	_ = waitForStableLeader(t, newNodes, 15*time.Second)
 	t.Logf("Stable leader elected after restart")
@@ -665,7 +693,9 @@ func TestChaos_LeaderFailover_Real(t *testing.T) {
 	defer cleanup()
 
 	for _, n := range nodes {
-		if err := n.Start(); err != nil { t.Fatalf("start: %v", err) }
+		if err := n.Start(); err != nil {
+			t.Fatalf("start: %v", err)
+		}
 	}
 	originalLeader := waitForStableLeader(t, nodes, 10*time.Second)
 	t.Logf("Original leader: %s", originalLeader.nodeID)

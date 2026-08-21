@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed (multi-node Raft was non-functional)
+
+Re-enabling the six chaos tests in `internal/raft/chaos_test.go` — which carried unconditional `t.Skip("flaky …")` calls, making the CI `chaos-tests` job a green no-op — exposed that multi-node clustering had never actually worked. Five interlocking bugs, each masked by the skipped tests:
+
+- **Inbound Raft RPCs were never wired to the node**: nothing called `TCPTransport.RegisterHandler`, and nothing produced into `Node.rpcCh`, so every incoming `AppendEntries`/`RequestVote`/`PreVote`/`InstallSnapshot`/`Heartbeat` was rejected with "unknown method". Followers could never hear from a leader or candidate. `Node.SetTransport` now registers a handler that feeds the node's RPC loop
+- **`startElection` double-unlocked `n.mu`** on the election-win path (manual `Unlock` before `becomeLeader` plus a `defer Unlock`), crashing with `fatal error: sync: Unlock of unlocked RWMutex` the first time a real multi-node election was won. Lock discipline in the election path rewritten; vote RPCs no longer issued while holding the lock
+- **`becomeLeader` called `sendHeartbeats` while holding `n.mu`**, which (after the data-race fix below) self-deadlocked the entire node — `LeaderID()`/`IsLeader()` callers then hung forever
+- **Heartbeat requests were built off-lock** in per-peer goroutines, racing with `handleAppendEntriesResponse` writing `peer.matchIndex`/`nextIndex` (caught by `-race`). Requests are now built under `n.mu.RLock` before the send goroutines spawn
+- **Leader anchored `AppendEntries` on `matchIndex` instead of `nextIndex-1`**: after any leader change (`nextIndex != matchIndex+1`) followers spliced entries at wrong log positions, truncated committed entries, and `processCommitted` span forever on the position/Index mismatch — pegging a core and making the node unresponsive. `PrevLogIndex` is now `nextIndex-1` per the Raft paper, and `processCommitted` advances by log position so a replication bug can no longer become an infinite spin
+- **Pre-vote had no leader-stickiness check** (Raft §4.2.3): any follower whose election timer fired could depose a healthy leader, causing perpetual leadership churn — the original "flakiness" that motivated skipping the tests. `handlePreVote` now denies pre-votes while a live leader is known; `startElection` skips campaigning when leader contact is fresh
+
+### Changed
+
+- Chaos tests are gated behind `ANUBIS_RUN_CHAOS_TESTS=1` instead of unconditional skips; the CI job sets the variable, runs them under `-race`, and asserts at least 6 tests actually passed so the job can never silently regress to a no-op. Test assertions rewritten to wait for convergence (stable single leader, equal terms) instead of sampling instants; full suite passes 10/10 consecutive runs under `-race`
+
 ### Fixed (business-critical)
 
 End-to-end test of the actual uptime-monitoring workflow (target up → down → up) exposed four interlocking bugs in the alert → incident pipeline. CI was green, audit was green, docs claimed it worked — but no incident had ever actually been created from a failure event. Each bug masked the next:

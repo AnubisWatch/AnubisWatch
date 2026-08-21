@@ -58,14 +58,16 @@ storage:
 |-------|------|---------|----------|-------------|
 | `host` | string | `"0.0.0.0"` | No | Bind address for HTTP server |
 | `port` | integer | `8080` from `anubis init` | No | HTTP server port; use `443` or another HTTPS port when TLS is enabled |
-| `grpc_port` | integer | `9090` | No | gRPC API port |
+| `grpc_port` | integer | `0` | No | Management gRPC port. `0` disables gRPC; a positive value explicitly enables it |
 | `tls` | object | - | No | TLS configuration |
 | `allowed_origins` | string[] | `[]` | No | Origins permitted to open WebSocket/CORS connections. Empty = none allowed |
 | `trusted_proxies` | string[] | `[]` | No | Proxy IPs whose `X-Forwarded-For` is trusted for the real client IP (REST + WebSocket rate limiting). Empty = trust none (use `RemoteAddr`) |
 | `grpc_reflection` | boolean | `false` | No | Enable gRPC server reflection (leave off in production) |
 | `metrics_auth` | boolean | `false` | No | Require a bearer token on `/metrics`. Default is open for Prometheus scraping; enable in multi-tenant or internet-exposed deployments, since `/metrics` exposes monitor names/latencies across all workspaces |
 
-> **Note on `environment`:** setting the top-level `environment: "production"` rejects any config with TLS disabled. When TLS is terminated upstream (ingress/reverse proxy), use `environment: "production-proxied"` so the instance may serve plain HTTP behind the proxy.
+> **Note on `environment`:** setting the top-level `environment: "production"` rejects any config with TLS disabled. When HTTP TLS is terminated upstream (ingress/reverse proxy), use `environment: "production-proxied"` so the instance may serve plain HTTP behind the proxy.
+>
+> **Management gRPC security:** `grpc_port: 0` is the secure default. In `production` and `production-proxied`, enabling gRPC requires process TLS because the API carries bearer tokens, unless `server.host` is an explicit loopback IP (`127.0.0.1` or `::1`) for a local-only tunnel. An HTTP ingress does not automatically protect the separate gRPC listener. gRPC binds to the same configured `server.host`, and unreadable/invalid TLS certificate files abort startup rather than falling back to plaintext.
 
 ### `server.tls` Block
 

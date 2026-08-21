@@ -14,6 +14,30 @@ import (
 // DNSChecker implements DNS resolution checks
 type DNSChecker struct{}
 
+func normalizeNameserverAddress(nameserver string) (string, error) {
+	nameserver = strings.TrimSpace(nameserver)
+	if nameserver == "" {
+		return "", fmt.Errorf("nameserver is empty")
+	}
+	if host, port, err := net.SplitHostPort(nameserver); err == nil {
+		if host == "" || port == "" {
+			return "", fmt.Errorf("invalid nameserver address %q", nameserver)
+		}
+		return net.JoinHostPort(strings.Trim(host, "[]"), port), nil
+	}
+	if strings.ContainsAny(nameserver, "[]") {
+		return "", fmt.Errorf("invalid nameserver address %q", nameserver)
+	}
+	bare := nameserver
+	if ip := net.ParseIP(bare); ip != nil {
+		return net.JoinHostPort(ip.String(), "53"), nil
+	}
+	if strings.ContainsAny(bare, "[]") || strings.Contains(bare, ":") {
+		return "", fmt.Errorf("invalid nameserver address %q", nameserver)
+	}
+	return net.JoinHostPort(bare, "53"), nil
+}
+
 // NewDNSChecker creates a new DNS checker
 func NewDNSChecker() *DNSChecker {
 	return &DNSChecker{}
@@ -41,7 +65,11 @@ func (c *DNSChecker) Validate(soul *core.Soul) error {
 	// to internal/private/link-local addresses.
 	if soul.DNS != nil {
 		for _, ns := range soul.DNS.Nameservers {
-			if err := ValidateAddress(ns); err != nil {
+			normalized, err := normalizeNameserverAddress(ns)
+			if err != nil {
+				return configError("dns.nameservers", err.Error())
+			}
+			if err := ValidateAddress(normalized); err != nil {
 				return configError("dns.nameservers", fmt.Sprintf("SSRF validation failed for nameserver %q: %v", ns, err))
 			}
 		}
@@ -291,21 +319,26 @@ func (c *DNSChecker) judgePropagation(ctx context.Context, soul *core.Soul, cfg 
 // queryDNSSEC queries a nameserver with DNSSEC (DO bit set) and returns
 // RRSIG records found and whether the AD (Authenticated Data) flag is set.
 func (c *DNSChecker) queryDNSSEC(ctx context.Context, domain, nameserver string) (rrsigRecords []string, adFlag bool, err error) {
-	if !strings.Contains(nameserver, ":") {
-		nameserver += ":53"
+	nameserver, err = normalizeNameserverAddress(nameserver)
+	if err != nil {
+		return nil, false, err
 	}
 
 	// Build DNS query with EDNS0 DO bit for the target domain
 	// Query for the original record type, not RRSIG, since AD flag is what matters
 	msg := buildDNSQueryWithEDNS0(domain, 0x01 /* A record */, true /* DO bit */)
 
-	conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "udp", nameserver)
+	dnsDial := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: 5 * time.Second}).DialContext)
+	conn, err := dnsDial(ctx, "udp", nameserver)
 	if err != nil {
 		return nil, false, err
 	}
 	defer conn.Close()
-
-	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	stopDeadline, err := bindConnDeadline(ctx, conn, 5*time.Second)
+	if err != nil {
+		return nil, false, err
+	}
+	defer stopDeadline()
 
 	// Prefix with 2-byte length for TCP-style, but for UDP just send raw
 	_, err = conn.Write(msg)
@@ -621,17 +654,19 @@ func encodeDNSName(name string) []byte {
 
 // resolve performs DNS resolution using a custom resolver
 func (c *DNSChecker) resolve(ctx context.Context, domain, recordType, nameserver string) ([]string, error) {
-	// Ensure nameserver has port
-	if !strings.Contains(nameserver, ":") {
-		nameserver += ":53"
+	nameserver, err := normalizeNameserverAddress(nameserver)
+	if err != nil {
+		return nil, err
 	}
+	dnsDial := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: 5 * time.Second}).DialContext)
 
-	// Create resolver with custom nameserver
+	// Create resolver with custom nameserver. Preserve the resolver-requested
+	// network so UDP truncation can fall back to TCP while still pinning the
+	// configured nameserver to a validated literal IP.
 	resolver := &net.Resolver{
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-			d := net.Dialer{Timeout: 5 * time.Second}
-			return d.DialContext(ctx, "udp", nameserver)
+			return dnsDial(ctx, network, nameserver)
 		},
 	}
 

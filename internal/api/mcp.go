@@ -126,10 +126,11 @@ func (s *MCPServer) registerBuiltinTools() {
 
 	// Tool: force_check
 	s.tools["force_check"] = MCPTool{
-		Name:           "force_check",
-		Description:    "Force an immediate health check on a soul",
-		InputSchema:    json.RawMessage(`{"type":"object","properties":{"soul_id":{"type":"string","description":"The soul ID to check"}},"required":["soul_id"]}`),
-		ContextHandler: s.handleForceCheck,
+		Name:               "force_check",
+		Description:        "Force an immediate health check on a soul",
+		InputSchema:        json.RawMessage(`{"type":"object","properties":{"soul_id":{"type":"string","description":"The soul ID to check"}},"required":["soul_id"]}`),
+		ContextHandler:     s.handleForceCheck,
+		RequiredPermission: "souls:*", // mirrors REST POST /api/v1/souls/:id/check
 	}
 
 	// Tool: get_judgments
@@ -248,7 +249,8 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	resp := s.handleRequest(r.Context(), &req)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	// Client is gone on write failure; nothing actionable remains.
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // handleRequest processes an MCP request
@@ -359,7 +361,7 @@ func (s *MCPServer) handleCallTool(ctx context.Context, req *MCPRequest) *MCPRes
 	return &MCPResponse{
 		JSONRPC: "2.0",
 		ID:      req.ID,
-		Result:  map[string]interface{}{"content": []interface{}{map[string]string{"type": "text", "text": fmt.Sprintf("%v", result)}}},
+		Result:  map[string]interface{}{"content": []interface{}{map[string]string{"type": "text", "text": mcpTextResult(result)}}},
 	}
 }
 
@@ -485,7 +487,10 @@ func (s *MCPServer) errorResponse(id interface{}, code int, message string) *MCP
 func (s *MCPServer) writeError(w http.ResponseWriter, id interface{}, code int, message string) {
 	resp := s.errorResponse(id, code, message)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		// The response is already committed; nothing actionable remains.
+		s.logger.Warn("failed to write MCP error response", "err", err)
+	}
 }
 
 // Tool handlers
@@ -495,7 +500,11 @@ func (s *MCPServer) handleListSouls(ctx context.Context, args json.RawMessage) (
 		Workspace string `json:"workspace"`
 		Status    string `json:"status"`
 	}
-	json.Unmarshal(args, &params)
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &params); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+	}
 
 	workspace := mcpScopedWorkspace(ctx, params.Workspace)
 	souls, err := s.store.ListSoulsNoCtx(workspace, 0, 100)
@@ -513,7 +522,11 @@ func (s *MCPServer) handleListSouls(ctx context.Context, args json.RawMessage) (
 		souls = filtered
 	}
 
-	return souls, nil
+	redacted := make([]*redactedSoulDTO, 0, len(souls))
+	for _, soul := range souls {
+		redacted = append(redacted, redactedSoulDTOFromCore(soul))
+	}
+	return redacted, nil
 }
 
 func (s *MCPServer) handleGetSoul(ctx context.Context, args json.RawMessage) (interface{}, error) {
@@ -531,7 +544,7 @@ func (s *MCPServer) handleGetSoul(ctx context.Context, args json.RawMessage) (in
 	if !mcpCanAccessWorkspace(ctx, soul.WorkspaceID) {
 		return nil, errAccessDenied
 	}
-	return soul, nil
+	return redactedSoulDTOFromCore(soul), nil
 }
 
 func (s *MCPServer) handleForceCheck(ctx context.Context, args json.RawMessage) (interface{}, error) {
@@ -557,7 +570,11 @@ func (s *MCPServer) handleGetJudgments(ctx context.Context, args json.RawMessage
 		SoulID string `json:"soul_id"`
 		Limit  int    `json:"limit"`
 	}
-	json.Unmarshal(args, &params)
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &params); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+	}
 	if params.Limit == 0 {
 		params.Limit = 10
 	}
@@ -583,7 +600,11 @@ func (s *MCPServer) handleGetStats(ctx context.Context, args json.RawMessage) (i
 	var params struct {
 		Workspace string `json:"workspace"`
 	}
-	json.Unmarshal(args, &params)
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &params); err != nil {
+			return nil, fmt.Errorf("invalid arguments: %w", err)
+		}
+	}
 
 	workspace := mcpScopedWorkspace(ctx, params.Workspace)
 	end := time.Now()

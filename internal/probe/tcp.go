@@ -56,10 +56,11 @@ func (c *TCPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 		timeout = 10 * time.Second
 	}
 
-	// SSRF: wrap dialer with DNS-rebinding protection
+	// SSRF: wrap dialer with DNS-rebinding protection (re-resolves hostname
+	// and dials the validated literal IP, preventing TOCTOU attacks)
 	start := time.Now()
-	dialer := &net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", soul.Target)
+	dialCtx := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+	conn, err := dialCtx(ctx, "tcp", soul.Target)
 	duration := time.Since(start)
 
 	if err != nil {
@@ -88,7 +89,8 @@ func (c *TCPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 
 	// Banner grab / send-expect
 	if cfg.BannerMatch != "" || cfg.ExpectRegex != "" || cfg.Send != "" {
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		// Deadline is a hint; a failed set surfaces via the read below.
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		reader := bufio.NewReader(conn)
 
 		// Send payload if configured
@@ -201,13 +203,20 @@ func (c *UDPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 		timeout = 10 * time.Second
 	}
 
-	// Resolve address
+	// Resolve address and validate the resolved IP against the SSRF blocklist
+	// so an attacker that changes DNS between Validate() and Judge() cannot
+	// redirect the packet to an internal/metadata address.
 	addr, err := net.ResolveUDPAddr("udp", soul.Target)
 	if err != nil {
 		return failJudgment(soul, fmt.Errorf("failed to resolve address: %w", err)), nil
 	}
+	if !addr.IP.IsUnspecified() {
+		if err := DefaultValidator.ValidateAddress(net.JoinHostPort(addr.IP.String(), "0")); err != nil {
+			return failJudgment(soul, fmt.Errorf("UDP SSRF validation failed: %w", err)), nil
+		}
+	}
 
-	// Create UDP connection
+	// Create UDP connection to the validated, resolved address
 	conn, err := net.DialUDP("udp", nil, addr)
 	if err != nil {
 		return failJudgment(soul, fmt.Errorf("failed to create UDP socket: %w", err)), nil
@@ -223,7 +232,8 @@ func (c *UDPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 			deadline = d
 		}
 	}
-	conn.SetDeadline(deadline)
+	// Deadline is a hint; a failed set surfaces via the first read/write.
+	_ = conn.SetDeadline(deadline)
 
 	// Build payload
 	var payload []byte

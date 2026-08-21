@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api, ApiResponse, Soul, Judgment, AlertChannel, AlertRule, Incident, Stats, ClusterStatus, StatusPage, User, CustomDashboard } from './client'
+import { useRealtimeRefresh } from '../hooks/useRealtimeRefresh'
 import {
   AUTH_SESSION_CHANGED_EVENT,
   dispatchAuthSessionChanged,
@@ -53,6 +54,43 @@ function useApi<T>(
   return { data, loading, error, refetch: fetchData }
 }
 
+const listPageLimit = 100
+const maxListPages = 1000
+
+// Fetch every page for screens that render a complete client-side collection.
+// A non-advancing/missing next_offset is rejected so a malformed response can
+// never trap the dashboard in an infinite pagination loop.
+async function fetchAllPaginated<T>(path: string): Promise<ApiResponse<T[]>> {
+  let offset = 0
+  let firstResponse: ApiResponse<T[]> | null = null
+  const data: T[] = []
+
+  for (let page = 0; page < maxListPages; page += 1) {
+    const response = await api.get<ApiResponse<T[]>>(`${path}?offset=${offset}&limit=${listPageLimit}`)
+    firstResponse ??= response
+    data.push(...(response.data || []))
+
+    if (!response.pagination?.has_more) {
+      if (page === 0) return response
+      return {
+        ...firstResponse,
+        data,
+        pagination: firstResponse.pagination
+          ? { ...firstResponse.pagination, offset: 0, limit: data.length, has_more: false }
+          : undefined,
+      }
+    }
+
+    const nextOffset = response.pagination.next_offset
+    if (typeof nextOffset !== 'number' || nextOffset <= offset) {
+      throw new Error(`Invalid pagination from ${path}: next_offset must advance`)
+    }
+    offset = nextOffset
+  }
+
+  throw new Error(`Pagination limit exceeded for ${path}`)
+}
+
 // Souls API hooks
 export function useSouls() {
   const [data, setData] = useState<ApiResponse<Soul[]> | null>(null)
@@ -62,7 +100,7 @@ export function useSouls() {
   const fetchSouls = useCallback(async () => {
     setLoading(true)
     try {
-      const result = await api.get<ApiResponse<Soul[]>>('/souls')
+      const result = await fetchAllPaginated<Soul>('/souls')
       setData(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
@@ -74,6 +112,9 @@ export function useSouls() {
   useEffect(() => {
     fetchSouls()
   }, [fetchSouls])
+
+  // Keep the list live: refresh on soul lifecycle and judgment events
+  useRealtimeRefresh(['soul_update', 'judgment', 'status'], fetchSouls)
 
   const createSoul = async (soul: Omit<Soul, 'id'>) => {
     const result = await api.post<Soul>('/souls', soul)
@@ -158,7 +199,10 @@ export function useSoulJudgments(soulId: string | undefined) {
 
 // Judgments API hooks
 export function useJudgments() {
-  return useApi<Judgment[]>(() => api.get<Judgment[]>('/judgments'))
+  const result = useApi<Judgment[]>(() => api.get<Judgment[]>('/judgments'))
+  // Keep charts and recent-judgment lists live
+  useRealtimeRefresh(['judgment'], result.refetch)
+  return result
 }
 
 // Alerts API hooks
@@ -170,7 +214,7 @@ export function useChannels() {
   const fetchChannels = useCallback(async () => {
     setLoading(true)
     try {
-      const result = await api.get<ApiResponse<AlertChannel[]>>('/channels')
+      const result = await fetchAllPaginated<AlertChannel>('/channels')
       setData(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
@@ -226,7 +270,7 @@ export function useRules() {
   const fetchRules = useCallback(async () => {
     setLoading(true)
     try {
-      const result = await api.get<ApiResponse<AlertRule[]>>('/rules')
+      const result = await fetchAllPaginated<AlertRule>('/rules')
       setData(result)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
@@ -271,7 +315,10 @@ export function useRules() {
 
 // Stats API hook
 export function useStats() {
-  return useApi<Stats>(() => api.get<Stats>('/stats/overview'))
+  const result = useApi<Stats>(() => api.get<Stats>('/stats/overview'))
+  // Keep overview numbers live as judgments and soul states stream in
+  useRealtimeRefresh(['judgment', 'stats', 'status', 'soul_update'], result.refetch)
+  return result
 }
 
 // Incidents API hooks
@@ -300,6 +347,9 @@ export function useIncidents() {
       // Error state is set by fetchIncidents.
     })
   }, [fetchIncidents])
+
+  // Keep incident list live: refresh when alerts fire or incidents change
+  useRealtimeRefresh(['incident', 'alert'], fetchIncidents)
 
   const acknowledgeIncident = async (id: string) => {
     await api.post(`/incidents/${id}/acknowledge`)

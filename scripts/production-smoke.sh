@@ -52,6 +52,7 @@ expect_status() {
     local path="$2"
     local expected="$3"
     local label="$4"
+    shift 4
     local body_file="$TMP_DIR/body"
     local status
 
@@ -65,19 +66,28 @@ expect_status() {
         fail "$label returned HTTP $status, expected $expected"
     fi
 
+    local pattern
+    for pattern in "$@"; do
+        if ! grep -Eq "$pattern" "$body_file"; then
+            cat "$body_file" >&2 2>/dev/null || true
+            fail "$label response did not match expected content: $pattern"
+        fi
+    done
+
     log "ok: $label ($method $path -> $status)"
 }
 
 expect_authenticated_status() {
-    local token="$1"
+    local cookie_jar="$1"
     local path="$2"
     local expected="$3"
     local label="$4"
+    shift 4
     local body_file="$TMP_DIR/body-auth"
     local status
 
     status="$(curl "${CURL_FLAGS[@]}" \
-        -H "Authorization: Bearer $token" \
+        --cookie "$cookie_jar" \
         -o "$body_file" \
         -w '%{http_code}' \
         "$BASE_URL$path")" || {
@@ -90,16 +100,15 @@ expect_authenticated_status() {
         fail "$label returned HTTP $status, expected $expected"
     fi
 
+    local pattern
+    for pattern in "$@"; do
+        if ! grep -Eq "$pattern" "$body_file"; then
+            cat "$body_file" >&2 2>/dev/null || true
+            fail "$label response did not match expected content: $pattern"
+        fi
+    done
+
     log "ok: $label (GET $path -> $status)"
-}
-
-extract_token() {
-    if command -v jq >/dev/null 2>&1; then
-        jq -r '.token // empty'
-        return
-    fi
-
-    sed -n 's/.*"token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1
 }
 
 json_escape() {
@@ -128,11 +137,15 @@ run_kubernetes_check() {
 }
 
 run_public_checks() {
-    expect_status GET /health 200 "health endpoint"
-    expect_status GET /ready 200 "readiness endpoint"
-    expect_status GET /metrics 200 "metrics endpoint"
-    expect_status GET /api/openapi.json 200 "OpenAPI document"
-    expect_status GET / 200 "dashboard shell"
+    expect_status GET /health 200 "health endpoint" '"status"[[:space:]]*:[[:space:]]*"healthy"'
+    expect_status GET /ready 200 "readiness endpoint" \
+        '"status"[[:space:]]*:[[:space:]]*"ready"' \
+        '"checks"[[:space:]]*:'
+    expect_status GET /metrics 200 "metrics endpoint" 'anubis_build_info'
+    expect_status GET /api/openapi.json 200 "OpenAPI document" \
+        '"openapi"[[:space:]]*:[[:space:]]*"3\.[0-9]+\.[0-9]+"' \
+        '"/api/v1/auth/login"[[:space:]]*:'
+    expect_status GET / 200 "dashboard shell" '<(html|!doctype html)'
 }
 
 run_authenticated_checks() {
@@ -140,8 +153,8 @@ run_authenticated_checks() {
     local password="${ANUBIS_SMOKE_PASSWORD:-}"
     local login_body="$TMP_DIR/login.json"
     local login_response="$TMP_DIR/login-response.json"
+    local cookie_jar="$TMP_DIR/cookies.txt"
     local status
-    local token
 
     if [[ -z "$email" && -z "$password" ]]; then
         log "skipping authenticated checks; ANUBIS_SMOKE_EMAIL and ANUBIS_SMOKE_PASSWORD are not set"
@@ -156,6 +169,7 @@ run_authenticated_checks() {
         -H 'Content-Type: application/json' \
         -X POST \
         --data-binary "@$login_body" \
+        --cookie-jar "$cookie_jar" \
         -o "$login_response" \
         -w '%{http_code}' \
         "$BASE_URL/api/v1/auth/login")" || {
@@ -168,15 +182,24 @@ run_authenticated_checks() {
         fail "login returned HTTP $status, expected 200"
     fi
 
-    token="$(extract_token < "$login_response")"
-    if [[ -z "$token" || "$token" == "null" ]]; then
-        fail "login succeeded but token was not found in response"
+    if ! grep -Eq '"user"[[:space:]]*:' "$login_response"; then
+        cat "$login_response" >&2 2>/dev/null || true
+        fail "login succeeded but the response did not contain a user"
+    fi
+    if ! awk '$6 == "auth_token" && length($7) > 0 { found = 1 } END { exit !found }' "$cookie_jar"; then
+        fail "login succeeded but no auth_token session cookie was issued"
     fi
 
     log "ok: authenticated login"
-    expect_authenticated_status "$token" /api/v1/auth/me 200 "current user endpoint"
-    expect_authenticated_status "$token" '/api/v1/souls?offset=0&limit=1' 200 "souls list endpoint"
-    expect_authenticated_status "$token" /api/v1/stats/overview 200 "stats overview endpoint"
+    expect_authenticated_status "$cookie_jar" /api/v1/auth/me 200 "current user endpoint" \
+        '"email"[[:space:]]*:' \
+        '"workspace"[[:space:]]*:'
+    expect_authenticated_status "$cookie_jar" '/api/v1/souls?offset=0&limit=1' 200 "souls list endpoint" \
+        '"data"[[:space:]]*:' \
+        '"pagination"[[:space:]]*:'
+    expect_authenticated_status "$cookie_jar" /api/v1/stats/overview 200 "stats overview endpoint" \
+        '"souls"[[:space:]]*:' \
+        '"judgments"[[:space:]]*:'
 }
 
 if [[ "$BASE_URL" != http://* && "$BASE_URL" != https://* ]]; then

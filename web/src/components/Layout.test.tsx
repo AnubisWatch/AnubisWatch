@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { Layout } from "../components/Layout";
@@ -61,5 +61,33 @@ describe("Layout", () => {
     expect(aside).toBeInTheDocument();
 
     expect(screen.getByTestId("dashboard-content")).toBeInTheDocument();
+  });
+
+  it("opens and closes the mobile navigation drawer", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => jsonResponse([])),
+    );
+
+    const { container } = render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route path="/" element={<Layout />}>
+            <Route index element={<MockDashboard />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+    const aside = container.querySelector("aside");
+    expect(aside?.className).toContain("-translate-x-full");
+
+    fireEvent.click(screen.getByLabelText("Open navigation menu"));
+    expect(aside?.className).toContain("translate-x-0");
+
+    fireEvent.click(screen.getByLabelText("Close navigation menu"));
+    expect(aside?.className).toContain("-translate-x-full");
   });
 });

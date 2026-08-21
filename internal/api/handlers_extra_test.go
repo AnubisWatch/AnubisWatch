@@ -1175,7 +1175,7 @@ func TestSecurityHeadersMiddleware(t *testing.T) {
 		{"X-Frame-Options", "DENY"},
 		{"X-XSS-Protection", "1; mode=block"},
 		{"Referrer-Policy", "strict-origin-when-cross-origin"},
-		{"Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws: wss:; font-src 'self' data:"},
+		{"Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws: wss:; font-src 'self'; base-uri 'self'; form-action 'self'"},
 	}
 
 	for _, tt := range tests {

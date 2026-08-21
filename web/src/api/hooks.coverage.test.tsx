@@ -57,11 +57,11 @@ describe('API hooks coverage', () => {
   })
 
   it('runs every souls operation and both update payload paths', async () => {
-    mocks.get.mockResolvedValue({ data: [soul], pagination: { total: 1 } })
+    mocks.get.mockResolvedValue({ data: [soul], pagination: { total: 1, offset: 0, limit: 100, has_more: false } })
     const hook = renderHook(() => useSouls())
     await settled(hook.result)
     expect(hook.result.current.souls).toEqual([soul])
-    expect(hook.result.current.pagination).toEqual({ total: 1 })
+    expect(hook.result.current.pagination).toEqual({ total: 1, offset: 0, limit: 100, has_more: false })
 
     await act(async () => {
       expect(await hook.result.current.createSoul({ ...soul, id: undefined } as never)).toEqual({ id: 'created' })
@@ -76,6 +76,24 @@ describe('API hooks coverage', () => {
     await act(async () => { await hook.result.current.refetch() })
     await act(async () => { await hook.result.current.updateSoul('missing', { name: 'Only partial' }) })
     expect(mocks.put).toHaveBeenLastCalledWith('/souls/missing', { name: 'Only partial' })
+  })
+
+  it('loads every soul page and rejects non-advancing pagination', async () => {
+    mocks.get
+      .mockResolvedValueOnce({ data: [soul], pagination: { total: 2, offset: 0, limit: 100, has_more: true, next_offset: 100 } })
+      .mockResolvedValueOnce({ data: [{ ...soul, id: 's2' }], pagination: { total: 2, offset: 100, limit: 100, has_more: false } })
+    const hook = renderHook(() => useSouls())
+    await settled(hook.result)
+    expect(hook.result.current.souls.map((item) => item.id)).toEqual(['s1', 's2'])
+    expect(mocks.get).toHaveBeenNthCalledWith(1, '/souls?offset=0&limit=100')
+    expect(mocks.get).toHaveBeenNthCalledWith(2, '/souls?offset=100&limit=100')
+    hook.unmount()
+
+    mocks.get.mockResolvedValueOnce({ data: [soul], pagination: { total: 2, offset: 0, limit: 100, has_more: true, next_offset: 0 } })
+    const invalid = renderHook(() => useSouls())
+    await settled(invalid.result)
+    expect(invalid.result.current.error).toContain('next_offset must advance')
+    invalid.unmount()
   })
 
   it.each([

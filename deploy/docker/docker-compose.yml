@@ -8,16 +8,16 @@ services:
       - --bootstrap
     ports:
       - "8080:8080"
-      - "7946:7946"
     environment:
-      ANUBIS_CONFIG: /etc/anubis/anubis.yaml
+      ANUBIS_CONFIG: /etc/anubis/anubis.json
       ANUBIS_NODE_ID: anubis-1
       ANUBIS_DATA_DIR: /data
-      ANUBIS_ADMIN_PASSWORD: ${ANUBIS_ADMIN_PASSWORD}
+      ANUBIS_ADMIN_PASSWORD: ${ANUBIS_ADMIN_PASSWORD:?set a strong admin password}
+      ANUBIS_CLUSTER_SECRET: ${ANUBIS_CLUSTER_SECRET:?set a shared random cluster secret}
       ANUBIS_LOG_LEVEL: info
     volumes:
       - anubis-data-1:/data
-      - ../../configs/anubis.yaml:/etc/anubis/anubis.yaml:ro
+      - ../../configs/container.anubis.json:/etc/anubis/anubis.json:ro
     networks:
       - anubis-network
     healthcheck:
@@ -38,16 +38,16 @@ services:
       - "anubis-1:7946"
     ports:
       - "8081:8080"
-      - "7947:7946"
     environment:
-      ANUBIS_CONFIG: /etc/anubis/anubis.yaml
+      ANUBIS_CONFIG: /etc/anubis/anubis.json
       ANUBIS_NODE_ID: anubis-2
       ANUBIS_DATA_DIR: /data
-      ANUBIS_ADMIN_PASSWORD: ${ANUBIS_ADMIN_PASSWORD}
+      ANUBIS_ADMIN_PASSWORD: ${ANUBIS_ADMIN_PASSWORD:?set a strong admin password}
+      ANUBIS_CLUSTER_SECRET: ${ANUBIS_CLUSTER_SECRET:?set a shared random cluster secret}
       ANUBIS_LOG_LEVEL: info
     volumes:
       - anubis-data-2:/data
-      - ../../configs/anubis.yaml:/etc/anubis/anubis.yaml:ro
+      - ../../configs/container.anubis.json:/etc/anubis/anubis.json:ro
     networks:
       - anubis-network
     depends_on:
@@ -71,16 +71,16 @@ services:
       - "anubis-1:7946"
     ports:
       - "8082:8080"
-      - "7948:7946"
     environment:
-      ANUBIS_CONFIG: /etc/anubis/anubis.yaml
+      ANUBIS_CONFIG: /etc/anubis/anubis.json
       ANUBIS_NODE_ID: anubis-3
       ANUBIS_DATA_DIR: /data
-      ANUBIS_ADMIN_PASSWORD: ${ANUBIS_ADMIN_PASSWORD}
+      ANUBIS_ADMIN_PASSWORD: ${ANUBIS_ADMIN_PASSWORD:?set a strong admin password}
+      ANUBIS_CLUSTER_SECRET: ${ANUBIS_CLUSTER_SECRET:?set a shared random cluster secret}
       ANUBIS_LOG_LEVEL: info
     volumes:
       - anubis-data-3:/data
-      - ../../configs/anubis.yaml:/etc/anubis/anubis.yaml:ro
+      - ../../configs/container.anubis.json:/etc/anubis/anubis.json:ro
     networks:
       - anubis-network
     depends_on:
@@ -100,7 +100,7 @@ services:
     container_name: anubis-postgres
     environment:
       POSTGRES_USER: anubis
-      POSTGRES_PASSWORD: anubis_secret
+      POSTGRES_PASSWORD: ${ANUBIS_POSTGRES_PASSWORD:?set a strong PostgreSQL password}
       POSTGRES_DB: anubis
     volumes:
       - postgres-data:/var/lib/postgresql/data

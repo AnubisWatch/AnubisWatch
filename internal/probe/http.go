@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -142,6 +143,67 @@ func (c *HTTPChecker) TransportCacheStats() (hits, misses uint64, hitRatio float
 	}
 	return hits, misses, hitRatio
 }
+
+var sensitiveResponseHeaders = map[string]struct{}{
+	"authorization":       {},
+	"proxy-authorization": {},
+	"set-cookie":          {},
+	"www-authenticate":    {},
+	"proxy-authenticate":  {},
+	"x-api-key":           {},
+	"x-auth-token":        {},
+}
+
+var sensitiveRedirectHeaders = map[string]struct{}{
+	"authorization":       {},
+	"proxy-authorization": {},
+	"cookie":              {},
+	"x-api-key":           {},
+	"x-auth-token":        {},
+}
+
+func isSensitiveResponseHeader(name string) bool {
+	_, sensitive := sensitiveResponseHeaders[strings.ToLower(strings.TrimSpace(name))]
+	return sensitive
+}
+
+func isSensitiveRedirectHeader(name string) bool {
+	_, sensitive := sensitiveRedirectHeaders[strings.ToLower(strings.TrimSpace(name))]
+	return sensitive
+}
+
+func safeRedirectTarget(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	out := *u
+	out.User = nil
+	out.RawQuery = ""
+	out.Fragment = ""
+	return out.String()
+}
+
+func sameOrigin(a, b *url.URL) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Hostname(), b.Hostname()) && effectivePort(a) == effectivePort(b)
+}
+
+func effectivePort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
+}
+
 func (c *HTTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment, error) {
 	cfg := soul.HTTP
 	if cfg == nil {
@@ -190,7 +252,10 @@ func (c *HTTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		client.Jar = jar
 	}
 
-	// Handle redirects with SSRF validation
+	// Handle redirects with SSRF validation. net/http preserves custom headers
+	// across redirects, including across origins; explicitly remove credentials
+	// whenever the redirect crosses an origin boundary.
+	redirectChain := make([]string, 0, cfg.MaxRedirects)
 	if !cfg.FollowRedirects {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -204,11 +269,20 @@ func (c *HTTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 			if len(via) >= maxRedir {
 				return fmt.Errorf("stopped after %d redirects", maxRedir)
 			}
-			// SSRF check on every redirect target
-			redirectURL := req.URL.String()
-			if err := ValidateTarget(redirectURL); err != nil {
+			// SSRF check on every redirect target.
+			if err := ValidateTarget(req.URL.String()); err != nil {
 				return fmt.Errorf("redirect target blocked by SSRF: %w", err)
 			}
+			if len(via) > 0 && !sameOrigin(via[len(via)-1].URL, req.URL) {
+				for name := range req.Header {
+					if isSensitiveRedirectHeader(name) {
+						req.Header.Del(name)
+					}
+				}
+				req.SetBasicAuth("", "")
+				req.Header.Del("Authorization")
+			}
+			redirectChain = append(redirectChain, safeRedirectTarget(req.URL))
 			return nil
 		}
 	}
@@ -229,6 +303,11 @@ func (c *HTTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		return failJudgment(soul, fmt.Errorf("failed to read body: %w", err)), nil
 	}
 
+	// Journey checks are not persisted by the probe engine and need the raw
+	// response briefly for extraction. Scheduled/API checks have no cookie jar
+	// and keep only non-sensitive metadata.
+	captureResponseMaterial := cfg.CookieJar != nil
+
 	// Build judgment
 	judgment := &core.Judgment{
 		ID:         core.GenerateID(),
@@ -238,15 +317,20 @@ func (c *HTTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		StatusCode: resp.StatusCode,
 		Details: &core.JudgmentDetails{
 			ResponseHeaders: make(map[string]string),
-			ResponseBody:    string(bodyBytes),
+			RedirectChain:   redirectChain,
 		},
 	}
 
-	// Copy response headers
+	// Persist only non-sensitive response metadata. Assertions are evaluated
+	// against the live response below, so credentials never need to enter the
+	// durable judgment object.
 	for k, v := range resp.Header {
-		if len(v) > 0 {
+		if len(v) > 0 && (captureResponseMaterial || !isSensitiveResponseHeader(k)) {
 			judgment.Details.ResponseHeaders[k] = v[0]
 		}
+	}
+	if captureResponseMaterial {
+		judgment.Details.ResponseBody = string(bodyBytes)
 	}
 
 	// Extract TLS info
@@ -329,7 +413,7 @@ func (c *HTTPChecker) evaluateAssertions(cfg *core.HTTPConfig, bodyBytes []byte,
 		assertions = append(assertions, core.AssertionResult{
 			Type:     "body_contains",
 			Expected: cfg.BodyContains,
-			Actual:   truncateString(string(bodyBytes), 200),
+			Actual:   boolToString(contains, "matched", "not matched"),
 			Passed:   contains,
 		})
 		if !contains {
@@ -344,7 +428,7 @@ func (c *HTTPChecker) evaluateAssertions(cfg *core.HTTPConfig, bodyBytes []byte,
 		assertions = append(assertions, core.AssertionResult{
 			Type:     "body_regex",
 			Expected: cfg.BodyRegex,
-			Actual:   truncateString(string(bodyBytes), 200),
+			Actual:   boolToString(matched, "matched", "not matched"),
 			Passed:   matched,
 		})
 		if !matched {
@@ -359,8 +443,8 @@ func (c *HTTPChecker) evaluateAssertions(cfg *core.HTTPConfig, bodyBytes []byte,
 			passed := actual == expected
 			assertions = append(assertions, core.AssertionResult{
 				Type:     "json_path",
-				Expected: path + "=" + expected,
-				Actual:   actual,
+				Expected: path,
+				Actual:   boolToString(passed, "matched", "not matched"),
 				Passed:   passed,
 			})
 			if !passed {
@@ -390,8 +474,8 @@ func (c *HTTPChecker) evaluateAssertions(cfg *core.HTTPConfig, bodyBytes []byte,
 			passed := actualValue == expectedValue
 			assertions = append(assertions, core.AssertionResult{
 				Type:     "response_header",
-				Expected: headerName + ": " + expectedValue,
-				Actual:   headerName + ": " + actualValue,
+				Expected: headerName,
+				Actual:   boolToString(passed, "matched", "not matched"),
 				Passed:   passed,
 			})
 			if !passed {

@@ -18,7 +18,7 @@ storage:
   path: "/var/lib/anubis/data"
   encryption:
     enabled: true
-    key: "${ANUBIS_ENCRYPTION_KEY:-replace-with-32-byte-key}"  # 32-byte AES-256 key from env
+    key: "${ANUBIS_ENCRYPTION_KEY}"  # Required: strong key material supplied via environment
   timeseries:
     compaction:
       raw_to_minute: 48h

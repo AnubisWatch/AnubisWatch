@@ -200,23 +200,35 @@ helm install anubiswatch anubiswatch/anubiswatch \
 
 ### Using Raw Manifests
 
+The raw manifests support one standalone replica. Create the credentials from a
+secret manager before applying the workload; do not edit or commit plaintext
+secrets.
+
 ```bash
-# First edit deploy/k8s/secret.yaml and replace admin-password: "CHANGE_ME"
-# with a strong password that satisfies the local auth policy.
-kubectl apply -f deploy/k8s/base.yaml
+kubectl apply -f deploy/k8s/namespace.yaml
+kubectl apply -f deploy/k8s/configmap.yaml
+kubectl create secret generic anubiswatch-secrets \
+  --namespace anubiswatch \
+  --from-literal=admin-password="$ANUBIS_ADMIN_PASSWORD" \
+  --from-literal=encryption-key="$ANUBIS_ENCRYPTION_KEY" \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f deploy/k8s/pvc.yaml \
+  -f deploy/k8s/service.yaml \
+  -f deploy/k8s/deployment.yaml
 ```
+
+`deploy/k8s/base.yaml` is an equivalent aggregate bundle, but its intentionally
+empty Secret must be populated before the Deployment can start.
 
 ### Production Helm Values
 
 Start from `deploy/helm/anubiswatch/values-production.example.yaml`, copy it
 to `values-production.yaml`, and keep the filled file out of version control.
 Populate `secrets.*` from your deployment secret store before running preflight
-or deploy.
+or deploy. The supported chart topology is one standalone replica:
 
 ```yaml
-# values-production.yaml
-statefulSet:
-  replicas: 5
+replicaCount: 1
 
 resources:
   limits:
@@ -234,18 +246,15 @@ config:
   logging:
     level: warn
   storage:
-    path: /var/lib/anubis/data
+    path: /data
+    encryption:
+      enabled: true
   necropolis:
-    enabled: true
-
-monitoring:
-  enabled: true
-  serviceMonitor:
-    enabled: true
+    enabled: false
 
 secrets:
   adminPassword: ""
-  clusterSecret: ""
+  encryptionKey: ""
 
 ingress:
   enabled: true
@@ -260,20 +269,15 @@ ingress:
       secretName: anubiswatch-tls
 ```
 
-### Scaling
+### Scaling Boundary
 
-```bash
-# Scale StatefulSet when config.necropolis.enabled=true
-kubectl scale statefulset anubiswatch --replicas=5 -n anubiswatch
-
-# Or via Helm
-helm upgrade anubiswatch anubiswatch/anubiswatch \
-  --namespace anubiswatch \
-  --set config.necropolis.enabled=true \
-  --set statefulSet.replicas=5 \
-  --set secrets.adminPassword="$ANUBIS_ADMIN_PASSWORD" \
-  --set secrets.clusterSecret="$ANUBIS_CLUSTER_SECRET"
-```
+Do not scale the standalone Deployment above one replica and do not enable its
+HPA: multiple processes cannot safely mutate the same embedded database/PVC.
+The chart enforces this invariant and currently rejects
+`config.necropolis.enabled=true` because deterministic ordinal bootstrap/join
+and Raft mTLS are not yet supplied by the chart. Use a separately reviewed
+cluster manifest only after target-environment formation, failover,
+backup/restore, and peer-security validation.
 
 ## Production Checklist
 
@@ -293,20 +297,20 @@ For an operator-focused deployment, smoke-test, and rollback flow, use the
 
 ### Reliability
 
-- [ ] Deploy at least 3 nodes for HA
-- [ ] Configure PodDisruptionBudget
-- [ ] Set up health checks
-- [ ] Configure backup strategy
-- [ ] Test failover scenarios
-- [ ] Set up monitoring and alerting
+- [ ] Keep the supported standalone Deployment at exactly one replica
+- [ ] Snapshot and restore-test the `/data` PVC and encryption key together
+- [ ] Verify startup, readiness, liveness, and graceful SIGTERM behavior
+- [ ] Rehearse Helm rollback with the production smoke script
+- [ ] Capacity-test WAL replay time and steady-state load against the target PVC
+- [ ] Set up monitoring and alerting for readiness, restarts, disk, and latency
 
 ### Performance
 
 - [ ] Use SSD storage
 - [ ] Allocate sufficient CPU/memory
 - [ ] Configure appropriate retention
-- [ ] Enable connection pooling
-- [ ] Tune Raft timeouts for network latency
+- [ ] Validate outbound connection limits for the configured probe mix
+- [ ] Measure startup WAL replay against the expected retained dataset
 - [ ] Load test with expected traffic
 
 ### Monitoring

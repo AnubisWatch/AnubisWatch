@@ -16,8 +16,12 @@ func (db *CobaltDB) SaveJudgment(ctx context.Context, j *core.Judgment) error {
 		j.ID = core.GenerateID()
 	}
 
-	workspaceID := core.WorkspaceIDFromContext(ctx)
-	if j.WorkspaceID == "" {
+	workspaceID := j.WorkspaceID
+	if workspaceID == "" {
+		workspaceID = "default"
+		if ctx != nil {
+			workspaceID = core.WorkspaceIDFromContext(ctx)
+		}
 		j.WorkspaceID = workspaceID
 	}
 

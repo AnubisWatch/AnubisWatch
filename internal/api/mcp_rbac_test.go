@@ -36,6 +36,8 @@ func TestMCPCallToolRBAC(t *testing.T) {
 		wantDenied bool
 	}{
 		{"viewer denied create_soul", string(core.RoleViewer), "create_soul", `{"name":"x","type":"http","target":"https://a.example"}`, true},
+		{"viewer denied force_check", string(core.RoleViewer), "force_check", `{"soul_id":"s1"}`, true},
+		{"editor allowed force_check", string(core.RoleEditor), "force_check", `{"soul_id":"s1"}`, false},
 		{"viewer denied acknowledge", string(core.RoleViewer), "acknowledge_incident", `{"incident_id":"i1"}`, true},
 		{"no role denied create_soul", "", "create_soul", `{"name":"x","type":"http","target":"https://a.example"}`, true},
 		{"editor allowed create_soul", string(core.RoleEditor), "create_soul", `{"name":"x","type":"http","target":"https://a.example"}`, false},

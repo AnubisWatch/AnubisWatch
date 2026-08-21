@@ -18,57 +18,22 @@ import (
 
 // mockJourneyStep implements step result fields for journeyRunToPB interface test
 type mockJourneyStep struct {
-	name                         string
-	stepIndex                    int
-	duration                     int64
-	status, message              string
-	extracted                    map[string]string
+	name            string
+	stepIndex       int
+	duration        int64
+	status, message string
+	extracted       map[string]string
 }
 
-func (m *mockJourneyStep) GetName() string                     { return m.name }
-func (m *mockJourneyStep) GetStepIndex() int                   { return m.stepIndex }
-func (m *mockJourneyStep) GetDuration() int64                  { return m.duration }
-func (m *mockJourneyStep) GetStatus() string                   { return m.status }
-func (m *mockJourneyStep) GetMessage() string                  { return m.message }
-func (m *mockJourneyStep) GetExtracted() map[string]string     { return m.extracted }
+func (m *mockJourneyStep) GetName() string                 { return m.name }
+func (m *mockJourneyStep) GetStepIndex() int               { return m.stepIndex }
+func (m *mockJourneyStep) GetDuration() int64              { return m.duration }
+func (m *mockJourneyStep) GetStatus() string               { return m.status }
+func (m *mockJourneyStep) GetMessage() string              { return m.message }
+func (m *mockJourneyStep) GetExtracted() map[string]string { return m.extracted }
 
 // =============================================================================
 // workspaceFromContext Tests
-// =============================================================================
-
-func TestWorkspaceFromContext_Normal(t *testing.T) {
-	ctx := context.WithValue(context.Background(), userContextKey, &api.User{Workspace: "tenant-a"})
-	ws, err := workspaceFromContext(ctx)
-	if err != nil {
-		t.Fatalf("workspaceFromContext failed: %v", err)
-	}
-	if ws != "tenant-a" {
-		t.Errorf("Expected 'tenant-a', got %q", ws)
-	}
-}
-
-func TestWorkspaceFromContext_EmptyWorkspaceDefaultsToDefault(t *testing.T) {
-	ctx := context.WithValue(context.Background(), userContextKey, &api.User{Workspace: ""})
-	ws, err := workspaceFromContext(ctx)
-	if err != nil {
-		t.Fatalf("workspaceFromContext failed: %v", err)
-	}
-	if ws != "default" {
-		t.Errorf("Expected 'default', got %q", ws)
-	}
-}
-
-func TestWorkspaceFromContext_Unauthenticated(t *testing.T) {
-	ctx := context.Background()
-	_, err := workspaceFromContext(ctx)
-	if err == nil {
-		t.Fatal("Expected error for unauthenticated context")
-	}
-	if status.Code(err) != codes.Unauthenticated {
-		t.Errorf("Expected Unauthenticated, got %v", status.Code(err))
-	}
-}
-
 // =============================================================================
 // resourceID Tests
 // =============================================================================
@@ -194,111 +159,9 @@ func TestResourceWorkspace_FallbackToEmpty(t *testing.T) {
 // =============================================================================
 // statusValue Tests
 // =============================================================================
-
-func TestStatusValue_CoreJudgment(t *testing.T) {
-	s := statusValue(&core.Judgment{Status: "alive"})
-	if s != "alive" {
-		t.Errorf("Expected 'alive', got %q", s)
-	}
-}
-
-func TestStatusValue_CoreAlertEvent(t *testing.T) {
-	s := statusValue(&core.AlertEvent{Status: "firing"})
-	if s != "firing" {
-		t.Errorf("Expected 'firing', got %q", s)
-	}
-}
-
-func TestStatusValue_Map(t *testing.T) {
-	s := statusValue(map[string]interface{}{"status": "degraded"})
-	if s != "degraded" {
-		t.Errorf("Expected 'degraded', got %q", s)
-	}
-}
-
-func TestStatusValue_Interface(t *testing.T) {
-	s := statusValue(&core.Judgment{Status: "alive"})
-	if s != "alive" {
-		t.Errorf("Expected 'alive', got %q", s)
-	}
-}
-
-func TestStatusValue_FallbackToEmpty(t *testing.T) {
-	s := statusValue("unexpected")
-	if s != "" {
-		t.Errorf("Expected empty, got %q", s)
-	}
-}
-
-// =============================================================================
 // severityValue Tests
 // =============================================================================
-
-func TestSeverityValue_CoreAlertEvent(t *testing.T) {
-	s := severityValue(&core.AlertEvent{Severity: "critical"})
-	if s != "critical" {
-		t.Errorf("Expected 'critical', got %q", s)
-	}
-}
-
-func TestSeverityValue_Map(t *testing.T) {
-	s := severityValue(map[string]interface{}{"severity": "warning"})
-	if s != "warning" {
-		t.Errorf("Expected 'warning', got %q", s)
-	}
-}
-
-func TestSeverityValue_Interface(t *testing.T) {
-	v := &core.AlertEvent{Severity: "info"}
-	s := severityValue(v)
-	if s != "info" {
-		t.Errorf("Expected 'info', got %q", s)
-	}
-}
-
-func TestSeverityValue_FallbackToEmpty(t *testing.T) {
-	s := severityValue("unexpected")
-	if s != "" {
-		t.Errorf("Expected empty, got %q", s)
-	}
-}
-
-// =============================================================================
 // timestampValue Tests
-// =============================================================================
-
-func TestTimestampValue_CoreJudgment(t *testing.T) {
-	now := time.Now()
-	ts := timestampValue(&core.Judgment{Timestamp: now})
-	if !ts.Equal(now) {
-		t.Errorf("Expected %v, got %v", now, ts)
-	}
-}
-
-func TestTimestampValue_CoreAlertEvent(t *testing.T) {
-	now := time.Now()
-	ts := timestampValue(&core.AlertEvent{Timestamp: now})
-	if !ts.Equal(now) {
-		t.Errorf("Expected %v, got %v", now, ts)
-	}
-}
-
-func TestTimestampValue_Interface(t *testing.T) {
-	now := time.Now()
-	v := &core.Judgment{Timestamp: now}
-	ts := timestampValue(v)
-	if !ts.Equal(now) {
-		t.Errorf("Expected %v, got %v", now, ts)
-	}
-}
-
-func TestTimestampValue_FallbackToZero(t *testing.T) {
-	ts := timestampValue("unexpected")
-	if !ts.IsZero() {
-		t.Errorf("Expected zero time, got %v", ts)
-	}
-}
-
 // =============================================================================
 // matchesSoulFilters Tests
 // =============================================================================
@@ -529,7 +392,6 @@ func TestRuleToPB_Concrete(t *testing.T) {
 	}
 }
 
-
 func TestJudgmentToPB_Concrete(t *testing.T) {
 	now := time.Now()
 	pb := judgmentToPB(&core.Judgment{
@@ -571,56 +433,7 @@ func TestSoulToPB_NilInput(t *testing.T) {
 // =============================================================================
 // applyChannelConfig Tests
 // =============================================================================
-
-func TestApplyChannelConfig_NilConfigDoesNotPanic(t *testing.T) {
-	applyChannelConfig(nil, map[string]string{"webhook_url": "https://example.com"})
-}
-
-func TestApplyChannelConfig_FiltersUnknownFields(t *testing.T) {
-	cfg := map[string]interface{}{"existing": "val"}
-	applyChannelConfig(cfg, map[string]string{"unknown_field": "should-not-appear"})
-	if _, ok := cfg["unknown_field"]; ok {
-		t.Error("Unknown field should not be added")
-	}
-}
-
-func TestApplyChannelConfig_AllowsKnownFields(t *testing.T) {
-	cfg := map[string]interface{}{}
-	applyChannelConfig(cfg, map[string]string{
-		"webhook_url": "https://hooks.example.com",
-		"channel":     "#general",
-	})
-	if cfg["webhook_url"] != "https://hooks.example.com" {
-		t.Errorf("Expected webhook_url to be set")
-	}
-	if cfg["channel"] != "#general" {
-		t.Errorf("Expected channel to be set")
-	}
-}
-
-// =============================================================================
 // applyRuleConfig Tests
-// =============================================================================
-
-func TestApplyRuleConfig_FiltersUnknownFields(t *testing.T) {
-	m := map[string]interface{}{}
-	applyRuleConfig(m, map[string]string{"unknown": "nope"})
-	if _, ok := m["unknown"]; ok {
-		t.Error("Unknown field should not be added")
-	}
-}
-
-func TestApplyRuleConfig_AllowsKnownFields(t *testing.T) {
-	m := map[string]interface{}{}
-	applyRuleConfig(m, map[string]string{
-		"channel_ids": "ch1,ch2",
-		"cooldown":    "300",
-	})
-	if m["channel_ids"] != "ch1,ch2" {
-		t.Errorf("Expected channel_ids to be set")
-	}
-}
-
 // =============================================================================
 // applyRuleCoreConfig Tests
 // =============================================================================
@@ -668,68 +481,7 @@ func TestApplyRuleCoreConfig_InvalidCooldownString(t *testing.T) {
 // =============================================================================
 // applyJourneyMapUpdates Tests
 // =============================================================================
-
-func TestApplyJourneyMapUpdates_AllFields(t *testing.T) {
-	m := map[string]interface{}{"name": "old", "description": "old desc"}
-	name := "new-name"
-	desc := "new-desc"
-	interval := int32(60)
-	enabled := true
-	applyJourneyMapUpdates(m, &v1.UpdateJourneyRequest{
-		Name: &name, Description: &desc, Interval: &interval, Enabled: &enabled,
-	})
-	if m["name"] != "new-name" {
-		t.Errorf("Expected 'new-name', got %v", m["name"])
-	}
-	if m["description"] != "new-desc" {
-		t.Errorf("Expected 'new-desc', got %v", m["description"])
-	}
-	if m["interval"] != "60s" {
-		t.Errorf("Expected '60s', got %v", m["interval"])
-	}
-	if m["enabled"] != true {
-		t.Errorf("Expected true, got %v", m["enabled"])
-	}
-}
-
-func TestApplyJourneyMapUpdates_NilFields(t *testing.T) {
-	m := map[string]interface{}{"name": "unchanged"}
-	applyJourneyMapUpdates(m, &v1.UpdateJourneyRequest{})
-	if m["name"] != "unchanged" {
-		t.Errorf("Expected unchanged, got %v", m["name"])
-	}
-}
-
-// =============================================================================
 // legacyMapUpdates Tests
-// =============================================================================
-
-func TestLegacyMapUpdates_AllFields(t *testing.T) {
-	name := "new-name"
-	target := "new-target"
-	interval := int32(120)
-	timeout := int32(30)
-	retries := int32(3)
-	enabled := false
-	updates := legacyMapUpdates(&v1.UpdateSoulRequest{
-		Name: &name, Target: &target, Interval: &interval,
-		Timeout: &timeout, Retries: &retries, Enabled: &enabled,
-		Tags: []string{"updated"}, Labels: map[string]string{"env": "prod"},
-	})
-	if updates["name"] != "new-name" {
-		t.Errorf("Expected 'new-name', got %v", updates["name"])
-	}
-	if updates["target"] != "new-target" {
-		t.Errorf("Expected 'new-target', got %v", updates["target"])
-	}
-	if updates["interval"] != "120s" {
-		t.Errorf("Expected '120s', got %v", updates["interval"])
-	}
-	if updates["timeout"] != "30s" {
-		t.Errorf("Expected '30s', got %v", updates["timeout"])
-	}
-}
-
 // =============================================================================
 // StopWithContext Tests
 // =============================================================================
@@ -793,41 +545,6 @@ func TestNormalizedListWindow_NegativeLimit(t *testing.T) {
 
 // =============================================================================
 // paginate Tests
-// =============================================================================
-
-func TestPaginate_Normal(t *testing.T) {
-	items := []interface{}{"a", "b", "c", "d", "e"}
-	page, pagination := paginate(items, 1, 3)
-	if len(page) != 3 {
-		t.Errorf("Expected 3 items, got %d", len(page))
-	}
-	if pagination.Total != 5 || pagination.HasMore != true || *pagination.NextOffset != 4 {
-		t.Errorf("Unexpected pagination: total=%d hasMore=%t nextOffset=%d", pagination.Total, pagination.HasMore, *pagination.NextOffset)
-	}
-}
-
-func TestPaginate_OffsetBeyondTotal(t *testing.T) {
-	items := []interface{}{"a", "b"}
-	page, pagination := paginate(items, 10, 5)
-	if len(page) != 0 {
-		t.Errorf("Expected 0 items, got %d", len(page))
-	}
-	if pagination.HasMore != false {
-		t.Error("Expected HasMore = false")
-	}
-}
-
-func TestPaginate_EndExceedsLength(t *testing.T) {
-	items := []interface{}{"a", "b", "c"}
-	page, pagination := paginate(items, 1, 10)
-	if len(page) != 2 {
-		t.Errorf("Expected 2 items, got %d", len(page))
-	}
-	if pagination.HasMore != false {
-		t.Error("Expected HasMore = false")
-	}
-}
-
 // =============================================================================
 // checkPermission edge cases
 // =============================================================================

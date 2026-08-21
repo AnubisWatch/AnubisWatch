@@ -40,7 +40,9 @@ func (s *CobaltDBLogStore) FirstIndex() (uint64, error) {
 	for key := range results {
 		idxStr := key[len(prefix):]
 		var idx uint64
-		fmt.Sscanf(idxStr, "%d", &idx)
+		// Keys are written as raft/log/%d; a parse failure yields idx 0,
+		// which sorts to the front and is caught by FirstIndex's caller.
+		_, _ = fmt.Sscanf(idxStr, "%d", &idx)
 		indices = append(indices, idx)
 	}
 
@@ -69,7 +71,9 @@ func (s *CobaltDBLogStore) LastIndex() (uint64, error) {
 	for key := range results {
 		idxStr := key[len(prefix):]
 		var idx uint64
-		fmt.Sscanf(idxStr, "%d", &idx)
+		// Keys are written as raft/log/%d; a parse failure yields idx 0,
+		// which is a no-op for LastIndex (max is what matters).
+		_, _ = fmt.Sscanf(idxStr, "%d", &idx)
 		indices = append(indices, idx)
 	}
 
@@ -141,8 +145,8 @@ func (s *CobaltDBLogStore) StoreLogs(logs []core.RaftLogEntry) error {
 }
 
 // DeleteRange deletes all log entries in the given range (inclusive)
-func (s *CobaltDBLogStore) DeleteRange(min, max uint64) error {
-	for i := min; i <= max; i++ {
+func (s *CobaltDBLogStore) DeleteRange(minIdx, maxIdx uint64) error {
+	for i := minIdx; i <= maxIdx; i++ {
 		key := fmt.Sprintf("raft/log/%d", i)
 		if err := s.db.Delete(key); err != nil {
 			return err

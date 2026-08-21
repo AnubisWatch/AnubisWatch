@@ -46,7 +46,9 @@ func getHTTPClient() *http.Client {
 // and prevent resource leaks. This helper should be used instead of defer resp.Body.Close()
 func closeResponseBody(resp *http.Response) {
 	if resp != nil && resp.Body != nil {
-		io.Copy(io.Discard, resp.Body)
+		// Best-effort drain so the connection can be reused; the body is
+		// closed regardless and a partial drain is not actionable.
+		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 	}
 }
@@ -396,7 +398,7 @@ func (d *EmailDispatcher) buildEmailBody(event *core.AlertEvent) string {
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf(`<!DOCTYPE html>
+	fmt.Fprintf(&b, `<!DOCTYPE html>
 <html>
 <head><title>AnubisWatch Alert</title></head>
 <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
@@ -406,7 +408,7 @@ func (d *EmailDispatcher) buildEmailBody(event *core.AlertEvent) string {
 <p><strong>Time:</strong> %s</p>
 <p><strong>Message:</strong> %s</p>
 <h3>Details:</h3>
-<ul>`, statusColor, event.Status, event.SoulName, event.Status, event.Timestamp.Format(time.RFC3339), event.Message))
+<ul>`, statusColor, event.Status, event.SoulName, event.Status, event.Timestamp.Format(time.RFC3339), event.Message)
 
 	for key, value := range event.Details {
 		b.WriteString("<li><strong>")
@@ -757,7 +759,7 @@ func (d *TelegramDispatcher) Send(ctx context.Context, event *core.AlertEvent, c
 		var detailsBuilder strings.Builder
 		detailsBuilder.WriteString("\n\n*Details:*\n")
 		for key, value := range event.Details {
-			detailsBuilder.WriteString(fmt.Sprintf("• *%s:* %s\n", key, value))
+			fmt.Fprintf(&detailsBuilder, "• *%s:* %s\n", key, value)
 		}
 		message += detailsBuilder.String()
 	}

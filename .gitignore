@@ -20,6 +20,10 @@
 # Output of go coverage
 coverage.out
 coverage.html
+coverage.summary
+coverage.baseline.out
+/coverage-filtered.out
+/coverage/
 *.cover
 
 # Go vendor directory
@@ -36,10 +40,15 @@ go.work
 *~
 .DS_Store
 
-# Environment files
+# Environment and secret files
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+/secrets/
 
 # Data directories
 /data/
@@ -65,7 +74,13 @@ go.work
 /web/.cache/
 /web/build/
 /web/test-results/
+/web/playwright-report/
 /web/coverage/
+/web/.journeys-coverage/
+/web/.tmp-status/
+/web/*.tsbuildinfo
+/web/vite.config.js
+/web/vite.config.d.ts
 node_modules/
 *.log
 npm-debug.log*
@@ -97,8 +112,13 @@ Thumbs.db
 __debug_bin
 *.debug
 
-# Release artifacts
+# CI and release artifacts
 /release/
+/artifacts/
+/anubis-image.tar
+/benchmark.txt
+/*.sarif
+/helm-deploy*.yaml
 *.tar.gz
 *.zip
 *.deb
@@ -127,3 +147,6 @@ __debug_bin
 
 *.out
 .dfmt/
+!/.wrongstack/
+/.wrongstack/*
+!/.wrongstack/project.json

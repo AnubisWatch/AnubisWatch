@@ -305,6 +305,30 @@ func TestCobaltDB_SaveJudgment(t *testing.T) {
 	}
 }
 
+func TestCobaltDB_SaveJudgmentPrefersExplicitWorkspaceOverContext(t *testing.T) {
+	db := newTestDB(t)
+	defer db.Close()
+
+	ctx := core.ContextWithWorkspaceID(context.Background(), "default")
+	judgment := &core.Judgment{
+		ID:          "tenant-judgment",
+		WorkspaceID: "tenant-a",
+		SoulID:      "tenant-soul",
+		Timestamp:   time.Now().UTC(),
+		Status:      core.SoulAlive,
+	}
+	if err := db.SaveJudgment(ctx, judgment); err != nil {
+		t.Fatalf("SaveJudgment failed: %v", err)
+	}
+
+	if _, err := db.GetJudgment(context.Background(), "tenant-a", judgment.SoulID, judgment.Timestamp); err != nil {
+		t.Fatalf("explicit tenant judgment was not stored under tenant-a: %v", err)
+	}
+	if _, err := db.GetJudgment(context.Background(), "default", judgment.SoulID, judgment.Timestamp); err == nil {
+		t.Fatal("explicit tenant judgment leaked into context default workspace")
+	}
+}
+
 func TestCobaltDB_GetStats(t *testing.T) {
 	db := newTestDB(t)
 	defer db.Close()

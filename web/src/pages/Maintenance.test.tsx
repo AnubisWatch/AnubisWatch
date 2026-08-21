@@ -29,12 +29,13 @@ describe("Maintenance", () => {
 		vi.clearAllMocks();
 
 		mocks.get.mockImplementation((endpoint: string) => {
-			if (endpoint === "/souls") {
+			if (endpoint.startsWith("/souls?")) {
 				return Promise.resolve({
 					data: [
 						{ id: "soul-1", name: "API", type: "http", enabled: true },
 						{ id: "soul-2", name: "Database", type: "tcp", enabled: true },
 					],
+					pagination: { total: 2, offset: 0, limit: 100, has_more: false },
 				});
 			}
 			return Promise.resolve([]);
@@ -193,7 +194,7 @@ describe("Maintenance", () => {
 	});
 
 	it("handles null data, non-Error fetch/save failures, empty souls, close controls, and canceled deletion", async () => {
-		mocks.get.mockImplementation((endpoint: string) => endpoint === "/souls" ? Promise.resolve({ data: [] }) : Promise.resolve(null));
+		mocks.get.mockImplementation((endpoint: string) => endpoint.startsWith("/souls?") ? Promise.resolve({ data: [], pagination: { total: 0, offset: 0, limit: 100, has_more: false } }) : Promise.resolve(null));
 		render(<Maintenance />);
 		await screen.findByText("No maintenance windows");
 		fireEvent.click(screen.getByRole("button", { name: /create maintenance window/i }));
@@ -227,9 +228,10 @@ describe("Maintenance", () => {
 
 	it("renders existing windows, filters them, toggles enabled state, edits, deletes, and shows API errors", async () => {
 		mocks.get.mockImplementation((endpoint: string) => {
-			if (endpoint === "/souls") {
+			if (endpoint.startsWith("/souls?")) {
 				return Promise.resolve({
 					data: [{ id: "soul-1", name: "API", type: "http", enabled: true }],
+					pagination: { total: 1, offset: 0, limit: 100, has_more: false },
 				});
 			}
 			if (endpoint === "/maintenance") {

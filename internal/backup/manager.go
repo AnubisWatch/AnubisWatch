@@ -657,8 +657,10 @@ func isBackupFile(name string) bool {
 
 func isGzipped(file *os.File) bool {
 	buf := make([]byte, 2)
-	file.Read(buf)
-	file.Seek(0, 0)
+	// Best-effort sniff: a read/seek failure just means "not gzip",
+	// which the caller handles by treating the file as plain data.
+	_, _ = file.Read(buf)
+	_, _ = file.Seek(0, 0)
 	return buf[0] == 0x1f && buf[1] == 0x8b
 }
 

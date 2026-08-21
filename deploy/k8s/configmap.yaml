@@ -5,9 +5,13 @@ metadata:
   namespace: anubiswatch
 data:
   anubis.yaml: |
+    environment: production-proxied
     server:
       host: 0.0.0.0
       port: 8080
+      # Management gRPC is opt-in. A positive port requires TLS unless the
+      # process is explicitly bound to a loopback IP.
+      grpc_port: 0
       tls:
         enabled: false
       allowed_origins:

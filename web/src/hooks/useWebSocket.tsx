@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, ReactNode, useCallback } from 'react'
+import { useEffect, useMemo, useRef, useState, ReactNode, useCallback } from 'react'
 import { WebSocketContext, type WebSocketMessage } from './webSocketContext'
 import {
   AUTH_SESSION_CHANGED_EVENT,
@@ -141,15 +141,17 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     }
   }, [connect, disconnect])
 
+  // Memoize the context value so it only changes when the data consumers
+  // actually observe (connection state / messages) changes. Without this a
+  // fresh object is created on every provider render, re-rendering every
+  // consumer — costly now that data hooks subscribe for live refresh.
+  const contextValue = useMemo(
+    () => ({ connected, messages, send, lastMessage, connect, disconnect }),
+    [connected, messages, send, lastMessage, connect, disconnect]
+  )
+
   return (
-    <WebSocketContext.Provider value={{
-      connected,
-      messages,
-      send,
-      lastMessage,
-      connect,
-      disconnect
-    }}>
+    <WebSocketContext.Provider value={contextValue}>
       {children}
       {/* Connection Status Indicator */}
       <div className={`fixed bottom-4 right-4 z-50 flex items-center gap-2 px-3 py-2 rounded-full text-xs font-medium transition-all duration-300 ${

@@ -1,4 +1,4 @@
-import { Bell, Search, LogOut, Moon, Sun } from 'lucide-react'
+import { Bell, Search, LogOut, Moon, Sun, Menu } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../api/hooks'
@@ -18,7 +18,12 @@ const EyeOfHorus = () => (
   </svg>
 )
 
-export function Header() {
+interface HeaderProps {
+  /** Opens the mobile navigation drawer; the trigger is hidden at md: and above. */
+  onMenuClick?: () => void
+}
+
+export function Header({ onMenuClick }: HeaderProps = {}) {
   const [showNotifications, setShowNotifications] = useState(false)
   const [scrolled, setScrolled] = useState(false)
   const { theme, setTheme } = useThemeStore()
@@ -56,7 +61,15 @@ export function Header() {
       scrolled ? 'bg-gray-950/90 backdrop-blur-xl border-b border-[#D4AF37]/20 shadow-lg shadow-black/20' : 'bg-transparent'
     }`}>
       {/* Search with Egyptian styling */}
-      <div className="flex items-center gap-4 flex-1 max-w-md">
+      <div className="flex items-center gap-2 sm:gap-4 flex-1 max-w-md">
+        {/* Mobile nav toggle */}
+        <button
+          onClick={onMenuClick}
+          className="md:hidden p-2.5 text-gray-400 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10 rounded-xl transition-all border border-transparent hover:border-[#D4AF37]/20"
+          aria-label="Open navigation menu"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
         <div className="relative flex-1 group">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 group-focus-within:text-[#D4AF37] transition-colors" />
           <input

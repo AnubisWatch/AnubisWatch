@@ -293,7 +293,8 @@ func logsCommand() {
 		switch os.Args[i] {
 		case "-n", "--lines":
 			if i+1 < len(os.Args) {
-				fmt.Sscanf(os.Args[i+1], "%d", &lines)
+				// Unparseable input leaves lines at 0; the default below applies.
+				_, _ = fmt.Sscanf(os.Args[i+1], "%d", &lines)
 				i++
 			}
 		case "-f", "--follow":

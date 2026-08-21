@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -19,6 +20,15 @@ import (
 
 // gRPCChecker implements gRPC health checks
 type gRPCChecker struct{}
+
+func hasNonEmptyStringValue(values map[string]string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
+}
 
 // NewGRPCChecker creates a new gRPC checker
 func NewGRPCChecker() *gRPCChecker {
@@ -43,6 +53,9 @@ func (c *gRPCChecker) Validate(soul *core.Soul) error {
 	if err := ValidateAddress(soul.Target); err != nil {
 		return configError("target", fmt.Sprintf("SSRF validation failed: %v", err))
 	}
+	if soul.GRPC != nil && !soul.GRPC.TLS && hasNonEmptyStringValue(soul.GRPC.Metadata) {
+		return configError("grpc.metadata", "metadata credentials require TLS")
+	}
 
 	// Security warning for disabled TLS verification
 	if soul.GRPC != nil && soul.GRPC.InsecureSkipVerify {
@@ -61,6 +74,9 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	if cfg == nil {
 		cfg = &core.GRPCConfig{}
 	}
+	if !cfg.TLS && hasNonEmptyStringValue(cfg.Metadata) {
+		return failJudgment(soul, fmt.Errorf("gRPC metadata credentials require TLS")), nil
+	}
 
 	timeout := soul.Timeout.Duration
 	if timeout == 0 {
@@ -68,17 +84,51 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	}
 
 	start := time.Now()
+	grpcHost, _, splitErr := net.SplitHostPort(soul.Target)
+	if splitErr != nil {
+		return failJudgment(soul, fmt.Errorf("invalid gRPC target: %w", splitErr)), nil
+	}
 
 	// Use HTTP/2 transport (handles both h2 and h2c). G402
 	// suppress: cfg.InsecureSkipVerify is gated by K7's
 	// applySecurityGate at the engine level.
+	grpcTLSConfig := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: cfg.InsecureSkipVerify, // #nosec G402 -- see K7 gate
+		ServerName:         grpcHost,
+	}
+	// SSRF: intercept the HTTP/2 transport's dial with pinned-IP protection.
+	// WrapDialerContext resolves the hostname, validates all IPs, and dials
+	// the literal IP so an attacker who changes DNS between Validate() and
+	// Judge() cannot redirect the connection to an internal address.
+	grpcDialCtx := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
 	transport := &http2.Transport{
-		TLSClientConfig: &tls.Config{
-			MinVersion:         tls.VersionTLS12,
-			InsecureSkipVerify: cfg.InsecureSkipVerify, // #nosec G402 -- see K7 gate
-			ServerName:         soul.Target,
+		TLSClientConfig: grpcTLSConfig,
+		AllowHTTP:       true,
+		DialTLSContext: func(ctx context.Context, network, addr string, tlsCfg *tls.Config) (net.Conn, error) {
+			raw, err := grpcDialCtx(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			if tlsCfg == nil {
+				return raw, nil // h2c (plaintext HTTP/2)
+			}
+			handshakeConfig := tlsCfg.Clone()
+			if handshakeConfig.ServerName == "" {
+				host, _, splitErr := net.SplitHostPort(addr)
+				if splitErr != nil {
+					raw.Close()
+					return nil, splitErr
+				}
+				handshakeConfig.ServerName = host
+			}
+			tlsConn := tls.Client(raw, handshakeConfig)
+			if err := tlsConn.HandshakeContext(ctx); err != nil {
+				raw.Close()
+				return nil, err
+			}
+			return tlsConn, nil
 		},
-		AllowHTTP: true, // Allow h2c (HTTP/2 over cleartext)
 	}
 
 	client := &http.Client{

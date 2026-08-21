@@ -26,15 +26,12 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"      # HTTP API
-      - "7946:7946"      # Raft
-      - "7946:7946/udp"  # Gossip
-      - "9090:9090"      # gRPC
     volumes:
       - anubis-data:/data
       - ./configs/container.anubis.json:/etc/anubis/anubis.json:ro
     environment:
       - ANUBIS_CONFIG=/etc/anubis/anubis.json
-      - ANUBIS_ADMIN_PASSWORD=${ANUBIS_ADMIN_PASSWORD}
+      - ANUBIS_ADMIN_PASSWORD=${ANUBIS_ADMIN_PASSWORD:?set a strong admin password}
       - ANUBIS_LOG_LEVEL=info
       - ANUBIS_DATA_DIR=/data
     networks:
@@ -59,13 +56,13 @@ services:
       - cluster
     ports:
       - "8081:8080"
-      - "7947:7946"
     volumes:
       - anubis-data-1:/data
       - ./configs/container.anubis.json:/etc/anubis/anubis.json:ro
     environment:
       - ANUBIS_CONFIG=/etc/anubis/anubis.json
-      - ANUBIS_ADMIN_PASSWORD=${ANUBIS_ADMIN_PASSWORD}
+      - ANUBIS_ADMIN_PASSWORD=${ANUBIS_ADMIN_PASSWORD:?set a strong admin password}
+      - ANUBIS_CLUSTER_SECRET=${ANUBIS_CLUSTER_SECRET:?set ANUBIS_CLUSTER_SECRET to a shared random value for cluster gossip auth}
       - ANUBIS_NODE_ID=anubis-1
       - ANUBIS_BIND_ADDR=0.0.0.0:7946
       - ANUBIS_RAFT_PORT=7946
@@ -88,13 +85,13 @@ services:
       - cluster
     ports:
       - "8082:8080"
-      - "7948:7946"
     volumes:
       - anubis-data-2:/data
       - ./configs/container.anubis.json:/etc/anubis/anubis.json:ro
     environment:
       - ANUBIS_CONFIG=/etc/anubis/anubis.json
-      - ANUBIS_ADMIN_PASSWORD=${ANUBIS_ADMIN_PASSWORD}
+      - ANUBIS_ADMIN_PASSWORD=${ANUBIS_ADMIN_PASSWORD:?set a strong admin password}
+      - ANUBIS_CLUSTER_SECRET=${ANUBIS_CLUSTER_SECRET:?set ANUBIS_CLUSTER_SECRET to a shared random value for cluster gossip auth}
       - ANUBIS_NODE_ID=anubis-2
       - ANUBIS_BIND_ADDR=0.0.0.0:7946
       - ANUBIS_RAFT_PORT=7946
@@ -119,13 +116,13 @@ services:
       - cluster
     ports:
       - "8083:8080"
-      - "7949:7946"
     volumes:
       - anubis-data-3:/data
       - ./configs/container.anubis.json:/etc/anubis/anubis.json:ro
     environment:
       - ANUBIS_CONFIG=/etc/anubis/anubis.json
-      - ANUBIS_ADMIN_PASSWORD=${ANUBIS_ADMIN_PASSWORD}
+      - ANUBIS_ADMIN_PASSWORD=${ANUBIS_ADMIN_PASSWORD:?set a strong admin password}
+      - ANUBIS_CLUSTER_SECRET=${ANUBIS_CLUSTER_SECRET:?set ANUBIS_CLUSTER_SECRET to a shared random value for cluster gossip auth}
       - ANUBIS_NODE_ID=anubis-3
       - ANUBIS_BIND_ADDR=0.0.0.0:7946
       - ANUBIS_RAFT_PORT=7946

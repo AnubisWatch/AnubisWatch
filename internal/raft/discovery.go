@@ -3,6 +3,7 @@ package raft
 import (
 	"context"
 	"crypto/hmac"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -41,6 +42,14 @@ type Discovery struct {
 	// to survive clock skew in a small cluster, short enough to
 	// invalidate a captured packet before an attacker can replay it.
 	messageFreshness time.Duration
+
+	// seenHMACs closes the replay gap *inside* the freshness window:
+	// the timestamp check alone lets a captured packet be re-sent for up
+	// to messageFreshness. Each accepted signature is remembered until it
+	// ages out of the window, so a duplicate is dropped. Entries are
+	// bounded by seenHMACsMax to keep a flood from growing the map.
+	seenMu    sync.Mutex
+	seenHMACs map[string]time.Time
 
 	// mDNS
 	mdnsServer *MDNSServer
@@ -95,6 +104,13 @@ type GossipMessage struct {
 	Version   string           `json:"version"`
 	Peers     []GossipPeerInfo `json:"peers"`
 	Timestamp int64            `json:"timestamp"`
+
+	// Nonce is random per-message entropy. Two gossips with identical
+	// content in the same second would otherwise produce an identical
+	// HMAC, which the replay cache would reject as a duplicate. Signed
+	// along with the rest of the body. `omitempty` keeps the canonical
+	// form identical for peers that don't send one.
+	Nonce string `json:"nonce,omitempty"`
 
 	// HMAC is the hex-encoded HMAC-SHA256 signature of the canonical
 	// message body, keyed by the cluster secret. Empty HMAC means
@@ -173,10 +189,14 @@ func NewDiscovery(config core.RaftConfig, logger *slog.Logger) (*Discovery, erro
 		logger:           logger.With("component", "discovery"),
 	}
 
-	if config.ClusterSecret == "" {
-		logger.Warn("K9: ANUBIS_CLUSTER_SECRET is empty — gossip messages will be accepted without HMAC authentication. Set the secret for any non-test deployment.",
-			"node_id", config.NodeID,
-		)
+	// K9: without a secret, verifyGossip accepts unsigned messages, so anyone
+	// who can reach the gossip port can inject peers into the cluster. Refuse
+	// to start the gossip layer rather than run it unauthenticated. Callers
+	// that don't want gossip at all use discovery mode "manual", which never
+	// constructs a Discovery.
+	if strings.TrimSpace(config.ClusterSecret) == "" {
+		cancel()
+		return nil, fmt.Errorf("raft: cluster secret is required for peer discovery (set ANUBIS_CLUSTER_SECRET, or use discovery mode \"manual\" to disable gossip)")
 	}
 
 	// Initialize mDNS
@@ -285,6 +305,9 @@ func (d *Discovery) gossipLoop() {
 			return
 		case <-ticker.C:
 			d.doGossip()
+			// Prune stale peers on the same cadence so the onPeerLost
+			// callback (Raft RemovePeer) fires when a node goes away.
+			d.checkPeerHealth()
 		}
 	}
 }
@@ -378,7 +401,11 @@ func (d *Discovery) sendGossip(peer *DiscoveredPeer, msg GossipMessage) {
 
 	// Send via UDP if we have a connection
 	if d.gossipConn != nil {
-		d.gossipConn.WriteToUDP(data, addr)
+		// Gossip is periodic and lossy by design; a failed send is
+		// retried on the next tick, so log at debug and move on.
+		if _, err := d.gossipConn.WriteToUDP(data, addr); err != nil {
+			d.logger.Debug("gossip send failed", "addr", addr, "err", err)
+		}
 	}
 
 	// Update local tracking
@@ -411,8 +438,19 @@ func (d *Discovery) gossipListen() {
 		// fails the check is dropped silently (besides a single
 		// warning at WARN level the first few times per source) so an
 		// attacker cannot spam the log.
-		if err := verifyGossip(msg, d.clusterSecret, d.messageFreshness, time.Now()); err != nil {
+		now := time.Now()
+		if err := verifyGossip(msg, d.clusterSecret, d.messageFreshness, now); err != nil {
 			d.logger.Warn("K9: rejected gossip from untrusted source",
+				"from_addr", addr.String(),
+				"claimed_node_id", msg.NodeID,
+				"reason", err.Error(),
+			)
+			continue
+		}
+
+		// Signature is authentic; reject a re-send of it within the window.
+		if err := d.checkReplay(msg.HMAC, now); err != nil {
+			d.logger.Warn("K9: rejected replayed gossip",
 				"from_addr", addr.String(),
 				"claimed_node_id", msg.NodeID,
 				"reason", err.Error(),
@@ -651,7 +689,8 @@ func (s *MDNSServer) Start() error {
 func (s *MDNSServer) listenAndServe() {
 	buf := make([]byte, 1024)
 	for !s.shutdown.Load() {
-		s.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+		// Deadline is a poll-loop hint; a failed set surfaces via ReadFromUDP.
+		_ = s.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
 		n, addr, err := s.conn.ReadFromUDP(buf)
 		if err != nil {
 			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
@@ -665,7 +704,8 @@ func (s *MDNSServer) listenAndServe() {
 		if strings.Contains(msg, "_anubiswatch") {
 			// Respond with our info
 			response := fmt.Sprintf("%s|%d|%s", s.instance, s.port, strings.Join(s.txt, ";"))
-			s.conn.WriteToUDP([]byte(response), addr)
+			// Best-effort response; the querier retries on its next tick.
+			_, _ = s.conn.WriteToUDP([]byte(response), addr)
 		}
 	}
 }
@@ -688,7 +728,8 @@ func (s *MDNSServer) broadcastPresence() {
 		s.connMu.Unlock()
 
 		if conn != nil {
-			conn.WriteToUDP([]byte(msg), broadcastAddr)
+			// Announcement is periodic; a dropped broadcast retries next tick.
+			_, _ = conn.WriteToUDP([]byte(msg), broadcastAddr)
 		}
 
 		<-ticker.C
@@ -746,7 +787,8 @@ func (c *MDNSClient) Start() error {
 func (c *MDNSClient) listenForResponses() {
 	buf := make([]byte, 1024)
 	for !c.shutdown.Load() {
-		c.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+		// Deadline is a poll-loop hint; a failed set surfaces via ReadFromUDP.
+		_ = c.conn.SetReadDeadline(time.Now().Add(1 * time.Second))
 		n, addr, err := c.conn.ReadFromUDP(buf)
 		if err != nil {
 			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
@@ -782,7 +824,10 @@ func (c *MDNSClient) parseResponse(msg string, addr *net.UDPAddr) *MDNSService {
 	}
 
 	// Parse port
-	fmt.Sscanf(parts[2], "%d", &svc.Port)
+	if _, err := fmt.Sscanf(parts[2], "%d", &svc.Port); err != nil {
+		// Malformed TXT record; fall back to the default port below.
+		svc.Port = 0
+	}
 	if svc.Port == 0 {
 		svc.Port = 7946
 	}
@@ -824,7 +869,9 @@ func (c *MDNSClient) Query(service string) []*MDNSService {
 	c.connMu.Unlock()
 
 	if conn != nil {
-		conn.WriteToUDP([]byte(queryMsg), broadcastAddr)
+		// Query is retried on the next discovery tick; a dropped
+		// broadcast is not fatal.
+		_, _ = conn.WriteToUDP([]byte(queryMsg), broadcastAddr)
 	}
 
 	// Collect responses
@@ -870,6 +917,12 @@ func signGossip(msg *GossipMessage, secret []byte) *GossipMessage {
 		msg.HMAC = ""
 		return msg
 	}
+	// Fresh entropy per message so the signature is unique even when two
+	// gossips carry byte-identical content within the same second.
+	var nonce [16]byte
+	if _, err := cryptorand.Read(nonce[:]); err == nil {
+		msg.Nonce = hex.EncodeToString(nonce[:])
+	}
 	body, err := json.Marshal(msg)
 	if err != nil {
 		// Should never happen for a well-formed GossipMessage.
@@ -897,6 +950,51 @@ func signGossip(msg *GossipMessage, secret []byte) *GossipMessage {
 //     messages to a process that doesn't expect them; likely misconfig)
 //   - secret set,   msg.HMAC empty → reject
 //   - secret set,   msg.HMAC set   → verify HMAC, check timestamp
+//
+// seenHMACsMax bounds the replay cache. At the default 1s gossip interval and
+// 5m window a healthy cluster holds ~300 entries per peer, so this leaves room
+// for a large cluster while capping memory if an attacker floods valid-looking
+// signatures.
+const seenHMACsMax = 8192
+
+// checkReplay records an accepted signature and reports whether it was already
+// seen inside the freshness window. Callers must only invoke it after the HMAC
+// itself verifies, so an attacker cannot poison the cache with forged entries.
+func (d *Discovery) checkReplay(sig string, now time.Time) error {
+	if sig == "" {
+		return nil
+	}
+
+	d.seenMu.Lock()
+	defer d.seenMu.Unlock()
+
+	if d.seenHMACs == nil {
+		d.seenHMACs = make(map[string]time.Time)
+	}
+
+	if seen, ok := d.seenHMACs[sig]; ok && now.Sub(seen) <= d.messageFreshness {
+		return fmt.Errorf("%w: duplicate signature", ErrMessageStale)
+	}
+
+	// Drop anything that has aged out; a replay of it fails the timestamp
+	// check in verifyGossip anyway, so the entry is no longer load-bearing.
+	for k, ts := range d.seenHMACs {
+		if now.Sub(ts) > d.messageFreshness {
+			delete(d.seenHMACs, k)
+		}
+	}
+
+	// Still oversized after pruning means a flood of distinct valid
+	// signatures. Reset rather than grow without bound: the timestamp
+	// window remains as the outer defense.
+	if len(d.seenHMACs) >= seenHMACsMax {
+		d.seenHMACs = make(map[string]time.Time)
+	}
+
+	d.seenHMACs[sig] = now
+	return nil
+}
+
 func verifyGossip(msg *GossipMessage, secret []byte, freshness time.Duration, now time.Time) error {
 	if len(secret) == 0 {
 		if msg.HMAC != "" {

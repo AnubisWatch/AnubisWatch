@@ -212,6 +212,9 @@ func TestGenerateDefaultConfig(t *testing.T) {
 	if config.Server.TLS.Enabled {
 		t.Error("Expected Server.TLS.Enabled to be false by default")
 	}
+	if config.Server.GRPCPort != 0 {
+		t.Errorf("Expected gRPC to be disabled by default, got port %d", config.Server.GRPCPort)
+	}
 
 	if config.Storage.Path == "" {
 		t.Error("Expected Storage.Path to be set")
@@ -1055,6 +1058,21 @@ func TestServerConfigValidate(t *testing.T) {
 			wantError: true,
 		},
 		{
+			name:      "gRPC disabled with zero port",
+			config:    ServerConfig{Host: "0.0.0.0", Port: 8080, GRPCPort: 0},
+			wantError: false,
+		},
+		{
+			name:      "gRPC port too low",
+			config:    ServerConfig{Host: "0.0.0.0", Port: 8080, GRPCPort: -1},
+			wantError: true,
+		},
+		{
+			name:      "gRPC port too high",
+			config:    ServerConfig{Host: "0.0.0.0", Port: 8080, GRPCPort: 70000},
+			wantError: true,
+		},
+		{
 			name:      "TLS without cert or autocert",
 			config:    ServerConfig{Host: "0.0.0.0", Port: 8443, TLS: TLSServerConfig{Enabled: true}},
 			wantError: true,
@@ -1111,6 +1129,14 @@ func TestStorageConfigValidate(t *testing.T) {
 				Encryption: EncryptionConfig{Enabled: true, Key: "secret"},
 			},
 			wantError: false,
+		},
+		{
+			name: "encryption enabled with placeholder key",
+			config: StorageConfig{
+				Path:       "/data",
+				Encryption: EncryptionConfig{Enabled: true, Key: "replace-with-32-byte-key"},
+			},
+			wantError: true,
 		},
 		{
 			name: "invalid btree order",
@@ -1739,39 +1765,49 @@ func TestValidate_ProductionRequiresTLS(t *testing.T) {
 	tests := []struct {
 		name        string
 		environment string
+		host        string
 		tlsEnabled  bool
-		wantError   bool
+		grpcPort    int
+		wantError   string
 	}{
-		{name: "production without TLS rejected", environment: "production", tlsEnabled: false, wantError: true},
-		{name: "production with TLS accepted", environment: "production", tlsEnabled: true, wantError: false},
-		{name: "Production casing accepted", environment: "Production", tlsEnabled: true, wantError: false},
-		{name: "production casing rejected without TLS", environment: "PRODUCTION", tlsEnabled: false, wantError: true},
-		{name: "with surrounding whitespace", environment: "  production ", tlsEnabled: false, wantError: true},
-		{name: "staging without TLS accepted", environment: "staging", tlsEnabled: false, wantError: false},
-		{name: "empty environment without TLS accepted", environment: "", tlsEnabled: false, wantError: false},
-		{name: "dev without TLS accepted", environment: "dev", tlsEnabled: false, wantError: false},
+		{name: "production without TLS rejected", environment: "production", wantError: "tls.enabled must be true"},
+		{name: "production with TLS accepted", environment: "production", tlsEnabled: true},
+		{name: "Production casing accepted", environment: "Production", tlsEnabled: true},
+		{name: "production casing rejected without TLS", environment: "PRODUCTION", wantError: "tls.enabled must be true"},
+		{name: "with surrounding whitespace", environment: "  production ", wantError: "tls.enabled must be true"},
+		{name: "production proxied HTTP accepted with gRPC disabled", environment: "production-proxied"},
+		{name: "production proxied rejects plaintext gRPC", environment: "production-proxied", grpcPort: 9090, wantError: "bearer-token gRPC"},
+		{name: "production proxied rejects ambiguous localhost policy", environment: "production-proxied", host: "localhost", grpcPort: 9090, wantError: "bearer-token gRPC"},
+		{name: "production proxied accepts explicit IPv4 loopback policy", environment: "production-proxied", host: "127.0.0.1", grpcPort: 9090},
+		{name: "production proxied accepts explicit IPv6 loopback policy", environment: "production-proxied", host: "::1", grpcPort: 9090},
+		{name: "production proxied accepts TLS gRPC", environment: "production-proxied", grpcPort: 9090, tlsEnabled: true},
+		{name: "staging allows explicitly enabled plaintext gRPC", environment: "staging", grpcPort: 9090},
+		{name: "empty environment without TLS accepted", environment: ""},
+		{name: "dev without TLS accepted", environment: "dev"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tls := TLSServerConfig{Enabled: tt.tlsEnabled}
 			if tt.tlsEnabled {
-				// TLS-enabled paths need cert/key to satisfy the unrelated
-				// server.tls validator; supply dummy paths so we isolate
-				// the production-mode-requires-TLS check.
+				// Config validation checks presence; certificate parsing is a
+				// startup concern tested in cmd/anubis.
 				tls.Cert = "/tmp/test.crt"
 				tls.Key = "/tmp/test.key"
 			}
 			cfg := &Config{
 				Environment: tt.environment,
-				Server:      ServerConfig{TLS: tls},
+				Server:      ServerConfig{Host: tt.host, GRPCPort: tt.grpcPort, TLS: tls},
 			}
 			err := cfg.validate()
-			if (err != nil) != tt.wantError {
-				t.Errorf("validate() error = %v, wantError = %v", err, tt.wantError)
+			if tt.wantError == "" {
+				if err != nil {
+					t.Fatalf("validate() unexpected error: %v", err)
+				}
+				return
 			}
-			if tt.wantError && err != nil && !strings.Contains(err.Error(), "tls.enabled must be true") {
-				t.Errorf("expected TLS-related error, got: %v", err)
+			if err == nil || !strings.Contains(err.Error(), tt.wantError) {
+				t.Fatalf("validate() error = %v, want substring %q", err, tt.wantError)
 			}
 		})
 	}

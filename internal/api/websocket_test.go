@@ -138,9 +138,10 @@ func TestWebSocketServer_DefaultConnectionRateLimitAllowsRouteSmoke(t *testing.T
 	server := NewWebSocketServer(logger, &mockAuthenticator{}, nil)
 
 	for i := 0; i < 30; i++ {
-		if !server.checkRateLimit("127.0.0.1") {
+		if !server.reserveConnection("127.0.0.1") {
 			t.Fatalf("connection attempt %d should be allowed by default rate limit", i+1)
 		}
+		server.decrementConnectionCount("127.0.0.1")
 	}
 }
 

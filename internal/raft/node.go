@@ -107,6 +107,10 @@ type Node struct {
 	rpcCh      chan *rpcWrapper
 	shutdownCh chan struct{}
 	doneCh     chan struct{}
+	// electionResetCh signals `run()` to reset the follower election
+	// timer when a valid AppendEntries arrives. Buffered so the sender
+	// never blocks — multiple resets before `run()` drains coalesce.
+	electionResetCh chan struct{}
 
 	// Timing
 	electionTimeout  time.Duration
@@ -163,10 +167,6 @@ type FSM interface {
 	Restore(snapshot []byte) error
 }
 
-type indexedFSM interface {
-	SetLastApplied(index uint64)
-}
-
 // LogStore is the interface for log storage
 type LogStore interface {
 	FirstIndex() (uint64, error)
@@ -174,7 +174,7 @@ type LogStore interface {
 	GetLog(index uint64, log *core.RaftLogEntry) error
 	StoreLog(log *core.RaftLogEntry) error
 	StoreLogs(logs []core.RaftLogEntry) error
-	DeleteRange(min, max uint64) error
+	DeleteRange(minIdx, maxIdx uint64) error
 }
 
 // StableStore persists the Raft hard state that must survive a crash before a
@@ -272,6 +272,7 @@ func NewNodeWithStableStore(config core.RaftConfig, storage LogStore, stable Sta
 		rpcCh:             make(chan *rpcWrapper, 256),
 		shutdownCh:        make(chan struct{}),
 		doneCh:            make(chan struct{}),
+		electionResetCh:   make(chan struct{}, 1),
 		electionTimeout:   config.ElectionTimeout.Duration,
 		heartbeatTimeout:  config.HeartbeatTimeout.Duration,
 		commitTimeout:     config.CommitTimeout.Duration,
@@ -389,7 +390,9 @@ func (n *Node) Stop() error {
 	close(n.shutdownCh)
 
 	if n.transport != nil {
-		n.transport.Stop()
+		if err := n.transport.Stop(); err != nil {
+			n.logger.Warn("failed to stop transport", "err", err)
+		}
 	}
 
 	// Wait for goroutines to finish
@@ -450,11 +453,11 @@ func (n *Node) CommitIndex() uint64 {
 func (n *Node) Peers() map[string]*Peer {
 	n.peerMu.RLock()
 	defer n.peerMu.RUnlock()
-	copy := make(map[string]*Peer, len(n.peers))
+	peersCopy := make(map[string]*Peer, len(n.peers))
 	for k, v := range n.peers {
-		copy[k] = v
+		peersCopy[k] = v
 	}
-	return copy
+	return peersCopy
 }
 
 // Done returns the shutdown channel
@@ -464,7 +467,9 @@ func (n *Node) Done() <-chan struct{} {
 
 // Shutdown initiates graceful shutdown (alias for Stop)
 func (n *Node) Shutdown() {
-	n.Stop()
+	if err := n.Stop(); err != nil {
+		n.logger.Warn("failed to stop Raft node", "err", err)
+	}
 }
 
 // Apply applies a command to the FSM through Raft
@@ -847,6 +852,19 @@ func (n *Node) run() {
 	commitTimer := time.NewTimer(n.commitTimeout)
 	defer commitTimer.Stop()
 
+	// Heartbeat ticker — the leader must broadcast AppendEntries at
+	// roughly heartbeatTimeout/2 intervals so followers reset their
+	// election timers before they start a competing election. Without
+	// this ticker, sendHeartbeats fires exactly once inside becomeLeader
+	// and never again: followers time out, become candidates, and the
+	// cluster never stabilises.
+	heartbeatInterval := n.heartbeatTimeout / 2
+	if heartbeatInterval <= 0 {
+		heartbeatInterval = 50 * time.Millisecond
+	}
+	heartbeatTicker := time.NewTicker(heartbeatInterval)
+	defer heartbeatTicker.Stop()
+
 	for {
 		select {
 		case <-n.shutdownCh:
@@ -865,6 +883,21 @@ func (n *Node) run() {
 				n.mu.Unlock()
 			}
 			commitTimer.Reset(n.commitTimeout)
+
+		case <-heartbeatTicker.C:
+			if n.state.Load().(core.RaftState) == core.StateLeader {
+				n.mu.RLock()
+				commitIndex := n.commitIndex
+				n.mu.RUnlock()
+				n.sendHeartbeats(commitIndex)
+			}
+
+		case <-n.electionResetCh:
+			// Follower heard from a live leader; defer the election
+			// timer by the full randomized window so it doesn't race
+			// against the next heartbeat.
+			electionTimer.Stop()
+			electionTimer = n.newElectionTimer()
 
 		case rpc := <-n.rpcCh:
 			n.handleRPC(rpc)
@@ -1304,6 +1337,15 @@ func (n *Node) handleAppendEntries(req *core.AppendEntriesRequest) *core.AppendE
 	// Valid heartbeat from leader
 	n.lastContact = time.Now()
 	n.leaderID = req.LeaderID
+	// Reset the follower's election timer. Without this, the peer's
+	// election timer fires at its scheduled instant regardless of how
+	// recently we heard from the leader; combined with the time it
+	// takes to acquire the leader-stickiness lock, that lets a
+	// healthy leader be displaced by a stale-term campaign.
+	select {
+	case n.electionResetCh <- struct{}{}:
+	default:
+	}
 
 	// Check log consistency with leader
 	if resp := n.checkLogConsistency(req); resp != nil {
@@ -1970,8 +2012,8 @@ func (n *Node) getLogTerm(index uint64) uint64 {
 	return entry.Term
 }
 
-func (n *Node) getEntriesAfter(start uint64, max int) []core.RaftLogEntry {
-	if max <= 0 {
+func (n *Node) getEntriesAfter(start uint64, maxCount int) []core.RaftLogEntry {
+	if maxCount <= 0 {
 		return []core.RaftLogEntry{}
 	}
 	if start <= n.logBase {
@@ -1984,7 +2026,7 @@ func (n *Node) getEntriesAfter(start uint64, max int) []core.RaftLogEntry {
 		}
 		return nil
 	}
-	end := pos + max
+	end := pos + maxCount
 	if end > len(n.log) {
 		end = len(n.log)
 	}

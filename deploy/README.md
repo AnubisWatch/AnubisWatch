@@ -48,49 +48,23 @@ helm install anubiswatch deploy/helm/anubiswatch \
 For production promotion, rollback, and smoke-test steps, use
 [`docs/deployment/production-runbook.md`](../docs/deployment/production-runbook.md).
 
-## Scaling
+## Supported Topology and Scaling
 
-### Docker Compose
+The production Kubernetes artifacts support one standalone replica backed by
+one ReadWriteOnce PVC. Do not scale the Deployment or enable HPA: concurrent
+standalone writers cannot safely share the embedded store. The Helm chart
+rejects unsafe replica counts and cluster mode until deterministic bootstrap /
+join wiring and Raft mTLS are supplied and validated.
 
-Edit `docker-compose.yml` and add more nodes:
-
-```yaml
-anubis-4:
-  extends:
-    file: docker-compose.yml
-    service: anubis-2
-  container_name: anubis-4
-  ports:
-    - "8083:8080"
-```
-
-### Kubernetes
-
-Scale the StatefulSet:
-
-```bash
-kubectl scale statefulset anubiswatch --replicas=5 -n anubiswatch
-```
-
-Or update Helm values:
-
-```yaml
-statefulSet:
-  replicas: 5
-```
+Docker Compose includes a cluster profile for controlled development and
+failure testing. Do not promote that profile to production without a separate
+formation, failover, peer-security, backup, and restore review.
 
 ## Storage
 
-### Docker Compose
-
-Data is stored in named volumes:
-- `anubis-data-1`
-- `anubis-data-2`
-- `anubis-data-3`
-
-### Kubernetes
-
-Uses PersistentVolumeClaims with StatefulSet. Each pod gets its own storage.
+Docker Compose uses named volumes. The supported Kubernetes Deployment uses
+`anubiswatch-data`, mounted at `/data`. Back up the data volume and the
+corresponding encryption key together; neither is useful without the other.
 
 ## Networking
 
@@ -99,12 +73,12 @@ Uses PersistentVolumeClaims with StatefulSet. Each pod gets its own storage.
 | Port | Protocol | Description |
 |------|----------|-------------|
 | 8080 | HTTP | Web UI and API |
-| 7946 | TCP | Raft cluster communication |
+| 7946 | TCP | Raft cluster communication (development cluster profile only) |
 
 ### Service Discovery
 
-- Docker Compose: Service names resolve to container IPs
-- Kubernetes: Headless service for pod-to-pod communication
+- Docker Compose cluster profile: service names resolve to container IPs.
+- Supported Kubernetes deployment: no peer discovery is required.
 
 ## Monitoring
 
@@ -120,51 +94,54 @@ Metrics endpoint: `/metrics`
 
 ### Data Backup
 
-```bash
-# Kubernetes
-kubectl exec -it anubiswatch-0 -n anubiswatch -- /bin/anubis backup > backup.db
+Run backup/restore with the server stopped so the CLI can open the embedded
+store exclusively. For Kubernetes, scale the standalone Deployment to zero,
+mount its PVC in a one-shot maintenance Pod that uses the same image and secret,
+and run:
 
-# Docker
-docker exec anubis-1 /bin/anubis backup > backup.db
+```bash
+/bin/anubis backup create --include-history --output /data/backups/anubis.json.gz
+/bin/anubis backup info /data/backups/anubis.json.gz
 ```
+
+Copy the verified backup off-cluster, then restart the Deployment. Keep the
+matching encryption key in the secret manager.
 
 ### Restore
 
-```bash
-# Kubernetes
-kubectl cp backup.db anubiswatch-0:/data/anubis.db -n anubiswatch
+With the server still stopped and the same PVC/key mounted in a maintenance
+Pod, restore and verify before starting traffic:
 
-# Docker
-docker cp backup.db anubis-1:/data/anubis.db
+```bash
+/bin/anubis restore /data/backups/anubis.json.gz --force
+/bin/anubis backup info /data/backups/anubis.json.gz
 ```
+
+Rehearse this procedure in staging and record the backup checksum, restore
+result, startup readiness time, and post-restore smoke result.
 
 ## Troubleshooting
 
-### Check cluster status
+### Check runtime status
 
 ```bash
-# Kubernetes
-kubectl exec -it anubiswatch-0 -n anubiswatch -- /bin/anubis necropolis
-
-# Docker
-docker exec anubis-1 /bin/anubis necropolis
+kubectl -n anubiswatch get deploy,pod,svc,pvc
+kubectl -n anubiswatch port-forward svc/anubiswatch 8080:8080
+curl -fsS http://127.0.0.1:8080/ready
 ```
 
 ### View logs
 
 ```bash
-# Kubernetes
-kubectl logs -f anubiswatch-0 -n anubiswatch
+kubectl logs -f deployment/anubiswatch -n anubiswatch
 
-# Docker
+# Development cluster profile only
 docker logs -f anubis-1
 ```
 
 ### Health check
 
 ```bash
-# All nodes
-curl http://localhost:8080/health
-curl http://localhost:8081/health
-curl http://localhost:8082/health
+curl -fsS http://localhost:8080/health
+curl -fsS http://localhost:8080/ready
 ```

@@ -18,7 +18,6 @@ const mockGet = vi.fn();
 const mockPut = vi.fn();
 const setTheme = vi.fn();
 const applyTheme = vi.fn();
-const writeText = vi.fn();
 
 vi.mock("../api/hooks", async () => {
 	const actual = await vi.importActual("../api/hooks");
@@ -72,10 +71,6 @@ describe("Settings", () => {
 		});
 		mockGet.mockResolvedValue(config);
 		mockPut.mockResolvedValue(undefined);
-		Object.defineProperty(navigator, "clipboard", {
-			value: { writeText },
-			configurable: true,
-		});
 		Object.defineProperty(window, "location", {
 			value: {
 				origin: "https://anubis.watch",
@@ -108,11 +103,10 @@ describe("Settings", () => {
 		});
 
 		fireEvent.click(screen.getByRole("tab", { name: /integrations/i }));
-		fireEvent.click(screen.getByRole("button", { name: /show api key/i }));
-		fireEvent.click(screen.getByRole("button", { name: /copy api key/i }));
-		expect(writeText).toHaveBeenCalledWith("anb_live_user-1");
+		expect(screen.getByText(/does not issue standalone API keys/i)).toBeInTheDocument();
+		expect(screen.queryByDisplayValue(/anb_live_/i)).not.toBeInTheDocument();
 		expect(
-			screen.getByDisplayValue("https://anubis.watch/mcp"),
+			screen.getByDisplayValue("https://anubis.watch/api/v1/mcp"),
 		).toBeInTheDocument();
 		expect(
 			screen.getByDisplayValue("wss://anubis.watch/ws"),
@@ -138,7 +132,7 @@ describe("Settings", () => {
 		expect(applyTheme).toHaveBeenCalledWith("light");
 	});
 
-	it("changes every general and security control, refreshes, and hides the API key", async () => {
+	it("changes every general and security control and refreshes configuration", async () => {
 		render(<MemoryRouter><Settings /></MemoryRouter>);
 		await screen.findByDisplayValue("AnubisWatch");
 		fireEvent.change(screen.getByDisplayValue("UTC"), { target: { value: "Europe/Istanbul" } });
@@ -149,8 +143,7 @@ describe("Settings", () => {
 		fireEvent.click(screen.getByRole("tab", { name: /storage/i }));
 		fireEvent.change(screen.getByDisplayValue("30"), { target: { value: "45" } });
 		fireEvent.click(screen.getByRole("tab", { name: /integrations/i }));
-		fireEvent.click(screen.getByLabelText("Show API key"));
-		fireEvent.click(screen.getByLabelText("Hide API key"));
+		expect(screen.getByText(/does not issue standalone API keys/i)).toBeInTheDocument();
 		fireEvent.click(screen.getByLabelText("Refresh configuration"));
 		await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2));
 	});
@@ -170,9 +163,7 @@ describe("Settings", () => {
 		expect(screen.getByText("Not logged in")).toBeInTheDocument();
 		expect(screen.getByText("Unknown")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("tab", { name: /integrations/i }));
-		expect(screen.getByDisplayValue("Not available")).toBeInTheDocument();
-		fireEvent.click(screen.getByLabelText("Copy API key"));
-		expect(writeText).not.toHaveBeenCalled();
+		expect(screen.getByText(/does not issue standalone API keys/i)).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("tab", { name: /general/i }));
 		fireEvent.change(screen.getByDisplayValue("AnubisWatch"), { target: { value: "Changed" } });
 		fireEvent.click(screen.getByRole("button", { name: /save changes/i }));

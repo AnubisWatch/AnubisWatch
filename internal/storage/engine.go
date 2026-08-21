@@ -1309,9 +1309,13 @@ func (db *CobaltDB) recoverFromWAL() error {
 		case "PUT":
 			// WAL values use the same representation as the B+Tree: ciphertext
 			// when encryption is enabled. Get is the single decryption boundary.
-			db.data.insert(entry.Key, entry.Value)
+			if err := db.data.insert(entry.Key, entry.Value); err != nil {
+				db.logger.Error("WAL replay: failed to reinsert key", "key", entry.Key, "err", err)
+			}
 		case "DELETE":
-			db.data.insert(entry.Key, nil)
+			if err := db.data.insert(entry.Key, nil); err != nil {
+				db.logger.Error("WAL replay: failed to apply tombstone", "key", entry.Key, "err", err)
+			}
 		}
 	}
 

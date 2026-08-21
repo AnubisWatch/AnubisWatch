@@ -284,8 +284,11 @@ func TestCoreTypesToPB(t *testing.T) {
 		Config:      map[string]interface{}{"channel": "#ops"},
 		CreatedAt:   now,
 	})
-	if channel == nil || channel.Id != "channel-1" || channel.Config["channel"] != "#ops" {
+	if channel == nil || channel.Id != "channel-1" {
 		t.Fatalf("unexpected channel pb: %+v", channel)
+	}
+	if channel.Config["channel"] != redactedSecretValue {
+		t.Fatalf("expected redacted channel config, got %+v", channel)
 	}
 
 	rule := ruleToPB(&core.AlertRule{
@@ -971,6 +974,8 @@ type errorMockGRPCProbe struct{}
 func (m *errorMockGRPCProbe) ForceCheck(soulID string) (*core.Judgment, error) {
 	return nil, errors.New("probe error")
 }
+func (m *errorMockGRPCProbe) UpsertSoul(soul *core.Soul) {}
+func (m *errorMockGRPCProbe) RemoveSoul(soulID string)   {}
 
 func TestJudgeSoul_ProbeError(t *testing.T) {
 	srv := NewServer(":0", newMockGRPCStore(), &errorMockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)

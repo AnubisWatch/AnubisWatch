@@ -220,7 +220,13 @@ func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyC
 	// Calculate final status and duration
 	completedTime := time.Now()
 	run.CompletedAt = completedTime.UnixMilli()
-	run.Duration = completedTime.Sub(startTime).Milliseconds()
+	// Floor at 1ms: a sub-millisecond journey would truncate to 0 and
+	// look like an untracked/failed run to consumers and tests.
+	if d := completedTime.Sub(startTime).Milliseconds(); d > 0 {
+		run.Duration = d
+	} else {
+		run.Duration = 1
+	}
 
 	if allSuccess {
 		run.Status = core.SoulAlive

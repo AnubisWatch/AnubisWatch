@@ -52,6 +52,18 @@ func TestNewEngine_WALFailure(t *testing.T) {
 	}
 }
 
+func TestNewEngine_WALRecoveryFailureIsFatal(t *testing.T) {
+	old := recoverFromWALSeam
+	recoverFromWALSeam = func(_ *CobaltDB) error {
+		return errors.New("recovery injection")
+	}
+	t.Cleanup(func() { recoverFromWALSeam = old })
+
+	if _, err := NewEngine(core.StorageConfig{Path: t.TempDir()}, newTestLogger()); err == nil || !strings.Contains(err.Error(), "recovery injection") {
+		t.Fatalf("NewEngine error = %v, want recovery failure", err)
+	}
+}
+
 func TestNewEngine_EncryptionEnabledEmptyKey(t *testing.T) {
 	cfg := core.StorageConfig{
 		Path: t.TempDir(),
@@ -166,13 +178,19 @@ func TestEncryptor_IsEncrypted(t *testing.T) {
 	plaintext := []byte("hello")
 	ciphertext, _ := enc.encrypt(plaintext)
 
-	if !enc.isEncrypted(ciphertext) {
+	if !isEncrypted(ciphertext) {
 		t.Error("should detect encrypted data")
 	}
 
-	if enc.isEncrypted([]byte{0x01, 0x02}) {
+	if isEncrypted([]byte{0x01, 0x02}) {
 		t.Error("short data should not be detected as encrypted")
 	}
+}
+
+// isEncrypted is a test-only helper asserting that data looks encrypted:
+// at least saltSize + nonceSize + tagSize bytes.
+func isEncrypted(data []byte) bool {
+	return len(data) >= encryptionSaltLen+12+16 // salt + min nonce + GCM tag
 }
 
 func TestCobaltDB_EncryptedPutGet(t *testing.T) {

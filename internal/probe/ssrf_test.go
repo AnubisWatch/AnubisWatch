@@ -136,9 +136,26 @@ func TestSSRFValidator_IsBlockedIP_Private(t *testing.T) {
 func TestSSRFValidator_IsBlockedIP_AllowPrivate(t *testing.T) {
 	v := NewSSRFValidator()
 	v.AllowPrivate = true
-	ip := net.ParseIP("10.0.0.1")
-	if v.isBlockedIP(ip) {
-		t.Error("10.0.0.1 should not be blocked when AllowPrivate is true")
+	for _, ipStr := range []string{"10.0.0.1", "172.16.0.1", "192.168.1.1", "fc00::1"} {
+		if v.isBlockedIP(net.ParseIP(ipStr)) {
+			t.Errorf("%s should not be blocked when AllowPrivate is true", ipStr)
+		}
+	}
+}
+
+func TestSSRFValidator_HardBlockedNetworksCannotBeOverridden(t *testing.T) {
+	_, metadataAllowed, _ := net.ParseCIDR("169.254.0.0/16")
+	v := NewSSRFValidator()
+	v.AllowPrivate = true
+	v.AllowedNetworks = []*net.IPNet{metadataAllowed}
+
+	for _, ipStr := range []string{
+		"0.0.0.0", "169.254.169.254", "100.100.100.200", "224.0.0.1",
+		"240.0.0.1", "255.255.255.255", "::", "fe80::1", "ff02::1",
+	} {
+		if !v.isBlockedIP(net.ParseIP(ipStr)) {
+			t.Errorf("hard-blocked IP %s was allowed", ipStr)
+		}
 	}
 }
 
@@ -411,39 +428,36 @@ func TestWrapDialerContext_HostnameBlocksResolution(t *testing.T) {
 func TestWrapDialer_AllowPrivateHostname(t *testing.T) {
 	v := NewSSRFValidator()
 	v.AllowPrivate = true
-	dialed := false
+	var dialedAddr string
 	dial := func(network, addr string) (net.Conn, error) {
-		dialed = true
+		dialedAddr = addr
 		return nil, nil
 	}
 
-	wrapped := v.WrapDialer(dial)
-	_, err := wrapped("tcp", "localhost:8080")
-	if err != nil {
-		t.Errorf("Expected no error when AllowPrivate: %v", err)
+	if _, err := v.WrapDialer(dial)("tcp", "localhost:8080"); err != nil {
+		t.Fatalf("AllowPrivate should allow loopback hostname: %v", err)
 	}
-	if !dialed {
-		t.Error("Dial should have been called")
+	host, _, err := net.SplitHostPort(dialedAddr)
+	if err != nil || net.ParseIP(host) == nil {
+		t.Fatalf("dial was not pinned to a literal IP: %q", dialedAddr)
 	}
 }
 
 func TestWrapDialerContext_AllowPrivateHostname(t *testing.T) {
 	v := NewSSRFValidator()
 	v.AllowPrivate = true
-	dialed := false
+	var dialedAddr string
 	dial := func(ctx context.Context, network, addr string) (net.Conn, error) {
-		dialed = true
+		dialedAddr = addr
 		return nil, nil
 	}
 
-	wrapped := v.WrapDialerContext(dial)
-	ctx := context.Background()
-	_, err := wrapped(ctx, "tcp", "localhost:8080")
-	if err != nil {
-		t.Errorf("Expected no error when AllowPrivate: %v", err)
+	if _, err := v.WrapDialerContext(dial)(context.Background(), "tcp", "localhost:8080"); err != nil {
+		t.Fatalf("AllowPrivate should allow loopback hostname: %v", err)
 	}
-	if !dialed {
-		t.Error("Dial should have been called")
+	host, _, err := net.SplitHostPort(dialedAddr)
+	if err != nil || net.ParseIP(host) == nil {
+		t.Fatalf("context dial was not pinned to a literal IP: %q", dialedAddr)
 	}
 }
 

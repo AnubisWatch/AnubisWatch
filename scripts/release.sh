@@ -127,7 +127,7 @@ fi
 command -v go >/dev/null 2>&1 || { echo -e "${RED}Error: Go is required${NC}"; exit 1; }
 command -v git >/dev/null 2>&1 || { echo -e "${RED}Error: Git is required${NC}"; exit 1; }
 command -v make >/dev/null 2>&1 || { echo -e "${RED}Error: make is required${NC}"; exit 1; }
-command -v npm >/dev/null 2>&1 || { echo -e "${RED}Error: npm is required${NC}"; exit 1; }
+command -v pnpm >/dev/null 2>&1 || { echo -e "${RED}Error: pnpm is required${NC}"; exit 1; }
 
 echo -e "${GREEN}✓ Prerequisites OK${NC}"
 echo ""
@@ -136,7 +136,7 @@ echo ""
 if [[ "$SKIP_TESTS" == false ]]; then
     echo "🧪 Running tests..."
     cd "$PROJECT_ROOT"
-    (cd web && npm ci && npm run build:embed && npm run test -- --run && npm run lint)
+    (cd web && pnpm install --frozen-lockfile && pnpm run build:embed && pnpm run test && pnpm run lint)
     if ! go test -race -short ./...; then
         echo -e "${RED}Error: Tests failed${NC}"
         exit 1
@@ -149,7 +149,7 @@ fi
 if [[ "$SKIP_BUILD" == false ]]; then
     echo "🔨 Building binaries..."
     cd "$PROJECT_ROOT"
-    (cd web && npm ci && npm run build:embed)
+    (cd web && pnpm install --frozen-lockfile && pnpm run build:embed)
 
     # Build for all platforms
     make build-all || {

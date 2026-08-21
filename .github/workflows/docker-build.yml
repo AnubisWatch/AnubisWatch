@@ -1,22 +1,28 @@
 name: Build and Push Container
 
 on:
-  push:
-    branches:
-      - main
-    tags:
-      - 'v*'
+  # PRs build and scan without publishing. Main images are published only after
+  # the canonical CI workflow has completed successfully for that exact commit.
   pull_request:
     branches:
       - main
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: anubiswatch/anubiswatch
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  SOURCE_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
 jobs:
   build:
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -26,6 +32,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_SHA }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -44,12 +52,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=branch
             type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=sha,prefix=sha-
+            type=raw,value=main,enable=${{ github.event_name == 'workflow_run' }}
+            type=raw,value=sha-${{ env.SOURCE_SHA }},enable=${{ github.event_name == 'workflow_run' }}
 
       # Build one native-platform candidate locally so Trivy can block before
       # any registry mutation. The multi-platform image is published only after
@@ -62,7 +67,7 @@ jobs:
           platforms: linux/amd64
           load: true
           push: false
-          tags: anubiswatch-scan:${{ github.sha }}
+          tags: anubiswatch-scan:${{ env.SOURCE_SHA }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -70,7 +75,7 @@ jobs:
       - name: Run blocking Trivy vulnerability scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: anubiswatch-scan:${{ github.sha }}
+          image-ref: anubiswatch-scan:${{ env.SOURCE_SHA }}
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'

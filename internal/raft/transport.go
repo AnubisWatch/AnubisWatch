@@ -2,6 +2,7 @@ package raft
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -75,7 +76,8 @@ func (t *TCPTransport) Start() error {
 	if t.tlsConfig != nil {
 		listener, err = tls.Listen("tcp", t.bindAddr, t.tlsConfig)
 	} else {
-		listener, err = net.Listen("tcp", t.bindAddr)
+		var lc net.ListenConfig
+		listener, err = lc.Listen(context.Background(), "tcp", t.bindAddr)
 	}
 
 	if err != nil {
@@ -420,11 +422,14 @@ func (t *TCPTransport) getConnection(peerID string) (net.Conn, error) {
 	const connectionTimeout = 5 * time.Second
 	var conn net.Conn
 	var err error
+	ctx := context.Background()
 	if t.tlsConfig != nil {
-		dialer := &net.Dialer{Timeout: connectionTimeout}
-		conn, err = tls.DialWithDialer(dialer, "tcp", addr, t.tlsConfig)
+		dialer := &tls.Dialer{NetDialer: &net.Dialer{Timeout: connectionTimeout}, Config: t.tlsConfig}
+		conn, err = dialer.DialContext(ctx, "tcp", addr)
 	} else {
-		conn, err = net.DialTimeout("tcp", addr, connectionTimeout)
+		var nd net.Dialer
+		nd.Timeout = connectionTimeout
+		conn, err = nd.DialContext(ctx, "tcp", addr)
 	}
 
 	if err != nil {
@@ -456,18 +461,6 @@ func (t *TCPTransport) releaseConnection(peerID string, conn net.Conn) {
 	}
 }
 
-// removeConnection removes a connection from the pool
-func (t *TCPTransport) removeConnection(peerID string) {
-	t.connMu.Lock()
-	defer t.connMu.Unlock()
-
-	if conn, ok := t.connections[peerID]; ok {
-		conn.Close()
-		delete(t.connections, peerID)
-		t.logger.Debug("Removed connection to peer", "peer_id", peerID)
-	}
-}
-
 // removeConnectionIfMatch avoids a failed old RPC closing a replacement connection.
 func (t *TCPTransport) removeConnectionIfMatch(peerID string, failed net.Conn) {
 	t.connMu.Lock()
@@ -495,11 +488,14 @@ func (t *TCPTransport) AddPeerConnection(peerID string, address string) error {
 	// Create new connection
 	var conn net.Conn
 	var err error
+	ctx := context.Background()
 
 	if t.tlsConfig != nil {
-		conn, err = tls.Dial("tcp", address, t.tlsConfig)
+		dialer := &tls.Dialer{Config: t.tlsConfig}
+		conn, err = dialer.DialContext(ctx, "tcp", address)
 	} else {
-		conn, err = net.Dial("tcp", address)
+		var nd net.Dialer
+		conn, err = nd.DialContext(ctx, "tcp", address)
 	}
 
 	if err != nil {

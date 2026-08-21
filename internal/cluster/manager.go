@@ -186,7 +186,9 @@ func (m *Manager) Start(ctx context.Context) error {
 					// Check both node and stopped flag under read lock
 					if !m.stopped && m.node != nil {
 						m.logger.Info("peer discovered", "id", peer.ID, "addr", peer.Address)
-						m.node.AddPeer(peer)
+						if err := m.node.AddPeer(peer); err != nil {
+							m.logger.Warn("failed to add discovered peer", "id", peer.ID, "err", err)
+						}
 					}
 				},
 				func(nodeID string) {
@@ -195,7 +197,9 @@ func (m *Manager) Start(ctx context.Context) error {
 					// Check both node and stopped flag under read lock
 					if !m.stopped && m.node != nil {
 						m.logger.Info("peer lost", "id", nodeID)
-						m.node.RemovePeer(nodeID)
+						if err := m.node.RemovePeer(nodeID); err != nil {
+							m.logger.Warn("failed to remove lost peer", "id", nodeID, "err", err)
+						}
 					}
 				},
 			)
@@ -234,7 +238,9 @@ func (m *Manager) Stop(ctx context.Context) error {
 	m.stopped = true
 	if m.node != nil {
 		m.logger.Info("stopping Raft node")
-		m.node.Stop()
+		if err := m.node.Stop(); err != nil {
+			m.logger.Warn("failed to stop Raft node", "err", err)
+		}
 	}
 	m.mu.Unlock()
 
@@ -246,7 +252,9 @@ func (m *Manager) Stop(ctx context.Context) error {
 
 	if m.discovery != nil {
 		m.logger.Info("stopping discovery")
-		m.discovery.Stop()
+		if err := m.discovery.Stop(); err != nil {
+			m.logger.Warn("failed to stop discovery", "err", err)
+		}
 	}
 
 	return nil

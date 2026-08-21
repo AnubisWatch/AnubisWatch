@@ -76,6 +76,8 @@ type Store interface {
 // ProbeEngine interface for probe operations
 type ProbeEngine interface {
 	ForceCheck(soulID string) (*core.Judgment, error)
+	UpsertSoul(soul *core.Soul)
+	RemoveSoul(soulID string)
 }
 
 // AlertManager interface (reserved for future use)
@@ -136,7 +138,7 @@ func NewServer(addr string, store Store, probe ProbeEngine, auth Authenticator, 
 
 // Start starts the gRPC server
 func (s *Server) Start() error {
-	lis, err := net.Listen("tcp", s.addr)
+	lis, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", s.addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", s.addr, err)
 	}
@@ -223,61 +225,6 @@ func newPagination(total, offset, limit, returned int) *v1.Pagination {
 	}
 }
 
-func paginate(items []interface{}, offset, limit int) ([]interface{}, *v1.Pagination) {
-	total := len(items)
-	start := offset
-	if start > total {
-		start = total
-	}
-	end := start + limit
-	if end > total {
-		end = total
-	}
-	page := items[start:end]
-	return page, newPagination(total, offset, limit, len(page))
-}
-
-func statusValue(v interface{}) string {
-	switch typed := v.(type) {
-	case *core.Judgment:
-		return string(typed.Status)
-	case *core.AlertEvent:
-		return string(typed.Status)
-	case map[string]interface{}:
-		return fmt.Sprintf("%v", typed["status"])
-	}
-	if hf, ok := v.(interface{ GetStatus() string }); ok {
-		return hf.GetStatus()
-	}
-	return ""
-}
-
-func severityValue(v interface{}) string {
-	switch typed := v.(type) {
-	case *core.AlertEvent:
-		return string(typed.Severity)
-	case map[string]interface{}:
-		return fmt.Sprintf("%v", typed["severity"])
-	}
-	if hf, ok := v.(interface{ GetSeverity() string }); ok {
-		return hf.GetSeverity()
-	}
-	return ""
-}
-
-func timestampValue(v interface{}) time.Time {
-	switch typed := v.(type) {
-	case *core.Judgment:
-		return typed.Timestamp
-	case *core.AlertEvent:
-		return typed.Timestamp
-	}
-	if hf, ok := v.(interface{ GetTimestamp() time.Time }); ok {
-		return hf.GetTimestamp()
-	}
-	return time.Time{}
-}
-
 func matchesOptionalString(value, expected string) bool {
 	return expected == "" || strings.EqualFold(value, expected)
 }
@@ -336,19 +283,32 @@ func soulToPB(soul *core.Soul) *v1.Soul {
 	if soul == nil {
 		return nil
 	}
-	return &v1.Soul{
+	pb := &v1.Soul{
 		Id:        soul.ID,
 		Name:      soul.Name,
 		Type:      string(soul.Type),
 		Target:    soul.Target,
-		Interval:  int32(soul.Weight.Duration.Seconds()),
-		Timeout:   int32(soul.Timeout.Duration.Seconds()),
+		Interval:  int32(soul.Weight.Seconds()),
+		Timeout:   int32(soul.Timeout.Seconds()),
 		Enabled:   soul.Enabled,
 		Tags:      soul.Tags,
 		Workspace: soul.WorkspaceID,
 		CreatedAt: ts(soul.CreatedAt),
 		UpdatedAt: ts(soul.UpdatedAt),
 	}
+	switch soul.Type {
+	case core.CheckHTTP:
+		pb.CheckConfig = &v1.Soul_Http{Http: grpcHTTPCheck(soul.HTTP)}
+	case core.CheckTCP:
+		pb.CheckConfig = &v1.Soul_Tcp{Tcp: grpcTCPCheck(soul.TCP)}
+	case core.CheckDNS:
+		pb.CheckConfig = &v1.Soul_Dns{Dns: grpcDNSCheck(soul.DNS)}
+	case core.CheckTLS:
+		pb.CheckConfig = &v1.Soul_Tls{Tls: grpcTLSCheck(soul.TLS)}
+	case core.CheckGRPC:
+		pb.CheckConfig = &v1.Soul_Grpc{Grpc: grpcGRPCCheck(soul.GRPC)}
+	}
+	return pb
 }
 
 // judgmentToPB converts a core.Judgment to protobuf Judgment
@@ -373,16 +333,12 @@ func channelToPB(ch *core.AlertChannel) *v1.Channel {
 	if ch == nil {
 		return nil
 	}
-	strCfg := make(map[string]string, len(ch.Config))
-	for k, v := range ch.Config {
-		strCfg[k] = fmt.Sprintf("%v", v)
-	}
 	return &v1.Channel{
 		Id:        ch.ID,
 		Name:      ch.Name,
 		Type:      string(ch.Type),
 		Enabled:   ch.Enabled,
-		Config:    strCfg,
+		Config:    redactAnyMapForGRPC(ch.Config),
 		Workspace: ch.WorkspaceID,
 		CreatedAt: ts(ch.CreatedAt),
 	}
@@ -456,14 +412,14 @@ func journeyToPB(j *core.JourneyConfig) *v1.Journey {
 			Name:    step.Name,
 			Type:    string(step.Type),
 			Target:  step.Target,
-			Timeout: int32(step.Timeout.Duration.Seconds()),
+			Timeout: int32(step.Timeout.Seconds()),
 		})
 	}
 	return &v1.Journey{
 		Id:          j.ID,
 		Name:        j.Name,
 		Description: j.Description,
-		Interval:    int32(j.Weight.Duration.Seconds()),
+		Interval:    int32(j.Weight.Seconds()),
 		Enabled:     j.Enabled,
 		Workspace:   j.WorkspaceID,
 		Steps:       steps,
@@ -499,16 +455,120 @@ func eventToVerdict(event *core.AlertEvent) *v1.Verdict {
 // --- PB Conversion: protobuf → core (for mutations) ---
 
 func pbToSoulConfig(req *v1.CreateSoulRequest) *core.Soul {
-	return &core.Soul{
-		ID:       core.GenerateID(),
-		Name:     req.Name,
-		Type:     core.CheckType(req.Type),
-		Target:   req.Target,
-		Weight:   core.Duration{Duration: time.Duration(req.Interval) * time.Second},
-		Timeout:  core.Duration{Duration: time.Duration(req.Timeout) * time.Second},
-		Enabled:  req.Enabled,
-		Tags:     req.Tags,
+	soul := &core.Soul{
+		ID:      core.GenerateID(),
+		Name:    req.Name,
+		Type:    core.CheckType(req.Type),
+		Target:  req.Target,
+		Weight:  core.Duration{Duration: time.Duration(req.Interval) * time.Second},
+		Timeout: core.Duration{Duration: time.Duration(req.Timeout) * time.Second},
+		Enabled: req.Enabled,
+		Tags:    req.Tags,
 	}
+	switch soul.Type {
+	case core.CheckHTTP:
+		soul.HTTP = pbHTTPCheck(req.GetHttp())
+	case core.CheckTCP:
+		soul.TCP = pbTCPCheck(req.GetTcp())
+	case core.CheckDNS:
+		soul.DNS = pbDNSCheck(req.GetDns())
+	case core.CheckTLS:
+		soul.TLS = pbTLSCheck(req.GetTls())
+	case core.CheckGRPC:
+		soul.GRPC = pbGRPCCheck(req.GetGrpc())
+	}
+	return soul
+}
+
+func pbHTTPCheck(cfg *v1.HTTPCheck) *core.HTTPConfig {
+	if cfg == nil {
+		return nil
+	}
+	bodyContains := ""
+	if len(cfg.BodyContains) > 0 {
+		bodyContains = cfg.BodyContains[0]
+	}
+	responseHeaders := make(map[string]string, len(cfg.ResponseHeaders))
+	for _, header := range cfg.ResponseHeaders {
+		key, value, ok := strings.Cut(header, ":")
+		if ok {
+			responseHeaders[key] = value
+		}
+	}
+	return &core.HTTPConfig{
+		Method:          cfg.Method,
+		Headers:         cloneStringMap(cfg.Headers),
+		Body:            cfg.Body,
+		BodyContains:    bodyContains,
+		BodyRegex:       cfg.BodyRegex,
+		JSONSchema:      cfg.JsonSchema,
+		ResponseHeaders: responseHeaders,
+		FollowRedirects: cfg.FollowRedirects,
+		Feather:         parseOptionalDuration(cfg.Feather),
+	}
+}
+
+func pbTCPCheck(cfg *v1.TCPCheck) *core.TCPConfig {
+	if cfg == nil {
+		return nil
+	}
+	return &core.TCPConfig{BannerMatch: cfg.BannerMatch, Send: cfg.Send, ExpectRegex: cfg.ExpectRegex}
+}
+
+func pbDNSCheck(cfg *v1.DNSCheck) *core.DNSConfig {
+	if cfg == nil {
+		return nil
+	}
+	var expected []string
+	if cfg.Expected != "" {
+		expected = strings.Split(cfg.Expected, ",")
+	}
+	return &core.DNSConfig{
+		RecordType:       cfg.RecordType,
+		Nameservers:      append([]string(nil), cfg.Nameservers...),
+		Expected:         expected,
+		PropagationCheck: cfg.PropagationCheck,
+	}
+}
+
+func pbTLSCheck(cfg *v1.TLSCheck) *core.TLSConfig {
+	if cfg == nil {
+		return nil
+	}
+	var expectedSAN []string
+	if cfg.ExpectedSan != "" {
+		expectedSAN = strings.Split(cfg.ExpectedSan, ",")
+	}
+	return &core.TLSConfig{
+		MinProtocol:    cfg.MinProtocol,
+		ExpectedIssuer: cfg.ExpectedIssuer,
+		ExpectedSAN:    expectedSAN,
+		ExpiryWarnDays: int(cfg.MinDaysBeforeExpiry),
+		CheckOCSP:      cfg.CheckChain,
+	}
+}
+
+func pbGRPCCheck(cfg *v1.GRPCCheck) *core.GRPCConfig {
+	if cfg == nil {
+		return nil
+	}
+	return &core.GRPCConfig{
+		Service:  cfg.Service,
+		TLS:      cfg.Tls,
+		TLSCA:    cfg.TlsCa,
+		Metadata: cloneStringMap(cfg.Metadata),
+	}
+}
+
+func parseOptionalDuration(value *string) core.Duration {
+	if value == nil {
+		return core.Duration{}
+	}
+	duration, err := time.ParseDuration(*value)
+	if err != nil {
+		return core.Duration{}
+	}
+	return core.Duration{Duration: duration}
 }
 
 func pbToChannelConfig(req *v1.CreateChannelRequest) *core.AlertChannel {
@@ -552,17 +612,6 @@ func pbToJourneyConfig(req *v1.CreateJourneyRequest) *core.JourneyConfig {
 		Enabled:     req.Enabled,
 		CreatedAt:   now,
 	}
-}
-
-func workspaceFromContext(ctx context.Context) (string, error) {
-	user, ok := GetUserFromContext(ctx)
-	if !ok {
-		return "", status.Error(codes.Unauthenticated, "unauthenticated")
-	}
-	if user.Workspace == "" {
-		return "default", nil
-	}
-	return user.Workspace, nil
 }
 
 func resourceWorkspace(v interface{}) string {
@@ -639,57 +688,6 @@ func (s *Server) ensureSoulAccess(soulID, workspace string) error {
 	return ensureResourceWorkspace(soul, workspace, "soul")
 }
 
-func applyChannelConfig(config map[string]interface{}, updates map[string]string) {
-	if config == nil {
-		return
-	}
-	allowedConfigFields := map[string]bool{
-		"webhook_url":     true,
-		"channel":         true,
-		"bot_token":       true,
-		"chat_id":         true,
-		"api_key":         true,
-		"region":          true,
-		"integration_key": true,
-		"server":          true,
-		"topic":           true,
-		"to":              true,
-		"from":            true,
-		"subject":         true,
-		"smtp_host":       true,
-		"smtp_port":       true,
-		"username":        true,
-		"password":        true,
-		"use_tls":         true,
-		"template":        true,
-		"headers":         true,
-		"secret":          true,
-		"method":          true,
-		"url":             true,
-	}
-	for k, v := range updates {
-		if allowedConfigFields[k] {
-			config[k] = v
-		}
-	}
-}
-
-func applyRuleConfig(m map[string]interface{}, updates map[string]string) {
-	allowedConfigKeys := map[string]bool{
-		"channel_ids":        true,
-		"cooldown":           true,
-		"severity":           true,
-		"notification_delay": true,
-		"recovery_delay":     true,
-		"aggregation_window": true,
-	}
-	for k, v := range updates {
-		if allowedConfigKeys[k] {
-			m[k] = v
-		}
-	}
-}
-
 func applyRuleCoreConfig(rule *core.AlertRule, updates map[string]string) {
 	for k, v := range updates {
 		switch k {
@@ -753,12 +751,46 @@ func applyChannelUpdates(channel *core.AlertChannel, req *v1.UpdateChannelReques
 		channel.Enabled = *req.Enabled
 	}
 	if req.Config != nil {
-		if channel.Config == nil {
-			channel.Config = make(map[string]interface{})
-		}
-		applyChannelConfig(channel.Config, req.Config)
+		allowed := make(map[string]string, len(req.Config))
+		applyChannelConfigToStringMap(allowed, req.Config)
+		channel.Config = mergeGRPCChannelConfig(channel.Config, allowed)
 	}
 	channel.UpdatedAt = time.Now()
+}
+
+func applyChannelConfigToStringMap(config map[string]string, updates map[string]string) {
+	allowedConfigFields := map[string]bool{
+		"webhook_url":     true,
+		"url":             true,
+		"endpoint":        true,
+		"address":         true,
+		"host":            true,
+		"channel":         true,
+		"bot_token":       true,
+		"chat_id":         true,
+		"api_key":         true,
+		"region":          true,
+		"integration_key": true,
+		"server":          true,
+		"topic":           true,
+		"to":              true,
+		"from":            true,
+		"subject":         true,
+		"smtp_host":       true,
+		"smtp_port":       true,
+		"username":        true,
+		"password":        true,
+		"use_tls":         true,
+		"template":        true,
+		"headers":         true,
+		"secret":          true,
+		"method":          true,
+	}
+	for key, value := range updates {
+		if allowedConfigFields[key] {
+			config[key] = value
+		}
+	}
 }
 
 func applyRuleUpdates(rule *core.AlertRule, req *v1.UpdateRuleRequest) {
@@ -770,47 +802,6 @@ func applyRuleUpdates(rule *core.AlertRule, req *v1.UpdateRuleRequest) {
 	}
 	if req.Config != nil {
 		applyRuleCoreConfig(rule, req.Config)
-	}
-}
-
-func legacyMapUpdates(req *v1.UpdateSoulRequest) map[string]interface{} {
-	updates := make(map[string]interface{})
-	if req.Name != nil {
-		updates["name"] = *req.Name
-	}
-	if req.Target != nil {
-		updates["target"] = *req.Target
-	}
-	if req.Interval != nil {
-		updates["interval"] = fmt.Sprintf("%ds", *req.Interval)
-	}
-	if req.Timeout != nil {
-		updates["timeout"] = fmt.Sprintf("%ds", *req.Timeout)
-	}
-	if req.Enabled != nil {
-		updates["enabled"] = *req.Enabled
-	}
-	if req.Tags != nil {
-		updates["tags"] = req.Tags
-	}
-	if req.Labels != nil {
-		updates["labels"] = req.Labels
-	}
-	return updates
-}
-
-func applyJourneyMapUpdates(m map[string]interface{}, req *v1.UpdateJourneyRequest) {
-	if req.Name != nil {
-		m["name"] = *req.Name
-	}
-	if req.Description != nil {
-		m["description"] = *req.Description
-	}
-	if req.Interval != nil {
-		m["interval"] = fmt.Sprintf("%ds", *req.Interval)
-	}
-	if req.Enabled != nil {
-		m["enabled"] = *req.Enabled
 	}
 }
 
@@ -929,11 +920,14 @@ func (s *Server) CreateSoul(ctx context.Context, req *v1.CreateSoulRequest) (*v1
 	if err := s.store.SaveSoulNoCtx(soul); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create soul: %v", err)
 	}
+	if s.probe != nil {
+		s.probe.UpsertSoul(soul)
+	}
 
-	// Retrieve the created soul directly using the generated ID
+	// Retrieve the created soul directly using the generated ID.
 	created, err := s.store.GetSoulNoCtx(soul.ID)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "soul created but could not be retrieved: %v", err)
+	if err != nil || created == nil {
+		return nil, status.Errorf(codes.Internal, "soul created but could not be retrieved")
 	}
 	return soulToPB(created), nil
 }
@@ -955,13 +949,22 @@ func (s *Server) UpdateSoul(ctx context.Context, req *v1.UpdateSoulRequest) (*v1
 	if existing.WorkspaceID != "" && existing.WorkspaceID != user.Workspace {
 		return nil, status.Error(codes.PermissionDenied, "access denied: soul belongs to another workspace")
 	}
+	if req.Target != nil && *req.Target != existing.Target && grpcSoulHasSecrets(existing) {
+		return nil, status.Error(codes.FailedPrecondition, "cannot change a soul destination while preserving hidden credentials; re-enter the full soul configuration")
+	}
 
 	applySoulUpdates(existing, req)
 	if err := s.store.SaveSoulNoCtx(existing); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update soul: %v", err)
 	}
+	if s.probe != nil {
+		s.probe.UpsertSoul(existing)
+	}
 
-	updated, _ := s.store.GetSoulNoCtx(req.Id)
+	updated, err := s.store.GetSoulNoCtx(req.Id)
+	if err != nil || updated == nil {
+		return nil, status.Errorf(codes.Internal, "soul updated but could not be retrieved")
+	}
 	return soulToPB(updated), nil
 }
 
@@ -982,6 +985,9 @@ func (s *Server) DeleteSoul(ctx context.Context, req *v1.DeleteSoulRequest) (*em
 	}
 	if err := s.store.DeleteSoulNoCtx(req.Id); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete soul: %v", err)
+	}
+	if s.probe != nil {
+		s.probe.RemoveSoul(req.Id)
 	}
 	return &emptypb.Empty{}, nil
 }
@@ -1291,6 +1297,14 @@ func (s *Server) UpdateChannel(ctx context.Context, req *v1.UpdateChannelRequest
 	existing, err := s.store.GetChannelNoCtx(req.Id, workspace)
 	if err != nil || existing == nil {
 		return nil, status.Errorf(codes.NotFound, "channel not found: %s", req.Id)
+	}
+	allowedUpdates := make(map[string]string, len(req.Config))
+	applyChannelConfigToStringMap(allowedUpdates, req.Config)
+	if grpcChannelUpdateHasUnresolvedPlaceholder(existing.Config, allowedUpdates) {
+		return nil, status.Error(codes.InvalidArgument, "redacted channel value has no existing secret to preserve")
+	}
+	if grpcChannelDestinationChanged(existing.Config, allowedUpdates) && grpcChannelUpdateHasPreservedSecrets(existing.Config, allowedUpdates) {
+		return nil, status.Error(codes.FailedPrecondition, "changing a channel destination requires re-entering all channel secrets")
 	}
 
 	applyChannelUpdates(existing, req)
@@ -1836,9 +1850,7 @@ func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grp
 
 	// Extract token (Bearer token)
 	token := authHeader[0]
-	if strings.HasPrefix(token, "Bearer ") {
-		token = strings.TrimPrefix(token, "Bearer ")
-	}
+	token = strings.TrimPrefix(token, "Bearer ")
 
 	// Validate token
 	user, err := s.auth.Authenticate(token)
@@ -1872,9 +1884,7 @@ func (s *Server) authStreamInterceptor(srv interface{}, ss grpc.ServerStream, in
 
 	// Extract token (Bearer token)
 	token := authHeader[0]
-	if strings.HasPrefix(token, "Bearer ") {
-		token = strings.TrimPrefix(token, "Bearer ")
-	}
+	token = strings.TrimPrefix(token, "Bearer ")
 
 	// Validate token
 	user, err := s.auth.Authenticate(token)

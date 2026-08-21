@@ -123,11 +123,6 @@ func (f *StorageFSM) decodeCommand(data []byte) (*core.FSMCommand, error) {
 	return &cmd, nil
 }
 
-// encodeCommand encodes a command to bytes
-func (f *StorageFSM) encodeCommand(cmd *core.FSMCommand) ([]byte, error) {
-	return json.Marshal(cmd)
-}
-
 // Snapshot creates a snapshot of the FSM
 func (f *StorageFSM) Snapshot() (core.FSMCommand, error) {
 	f.mu.RLock()
@@ -360,15 +355,15 @@ func (s *InMemoryLogStore) StoreLogs(logs []core.RaftLogEntry) error {
 }
 
 // DeleteRange deletes log entries in a range
-func (s *InMemoryLogStore) DeleteRange(min, max uint64) error {
+func (s *InMemoryLogStore) DeleteRange(minIdx, maxIdx uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if max >= uint64(len(s.entries)) {
-		max = uint64(len(s.entries) - 1)
+	if maxIdx >= uint64(len(s.entries)) {
+		maxIdx = uint64(len(s.entries) - 1)
 	}
 
-	for i := min; i <= max && i < uint64(len(s.entries)); i++ {
+	for i := minIdx; i <= maxIdx && i < uint64(len(s.entries)); i++ {
 		s.entries[i] = core.RaftLogEntry{}
 	}
 	return nil

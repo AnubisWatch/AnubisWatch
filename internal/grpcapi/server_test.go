@@ -39,16 +39,17 @@ func (m *mockAuthenticator) Authenticate(token string) (*api.User, error) {
 
 // mockGRPCStore implements Store with in-memory data using concrete types
 type mockGRPCStore struct {
-	souls         map[string]*core.Soul
-	judgments     []*core.Judgment
-	channels      map[string]*core.AlertChannel
-	rules         map[string]*core.AlertRule
-	journeys      map[string]*core.JourneyConfig
-	journeyRuns   []*core.JourneyRun
-	events        []*core.AlertEvent
-	nextID        int
-	saveSoulErr   error
-	deleteSoulErr error
+	souls           map[string]*core.Soul
+	judgments       []*core.Judgment
+	channels        map[string]*core.AlertChannel
+	rules           map[string]*core.AlertRule
+	journeys        map[string]*core.JourneyConfig
+	journeyRuns     []*core.JourneyRun
+	events          []*core.AlertEvent
+	nextID          int
+	saveSoulErr     error
+	deleteSoulErr   error
+	getSoulAfterErr error
 }
 
 func newMockGRPCStore() *mockGRPCStore {
@@ -71,7 +72,12 @@ func sortedMockKeys[T any](items map[string]T) []string {
 	return keys
 }
 
-func (m *mockGRPCStore) GetSoulNoCtx(id string) (*core.Soul, error) { return m.souls[id], nil }
+func (m *mockGRPCStore) GetSoulNoCtx(id string) (*core.Soul, error) {
+	if m.getSoulAfterErr != nil && m.nextID > 0 {
+		return nil, m.getSoulAfterErr
+	}
+	return m.souls[id], nil
+}
 func (m *mockGRPCStore) ListSoulsNoCtx(ws string, o, l int) ([]*core.Soul, error) {
 	keys := sortedMockKeys(m.souls)
 	result := make([]*core.Soul, 0, len(keys))
@@ -156,8 +162,10 @@ func (m *mockGRPCStore) SaveRuleNoCtx(rule *core.AlertRule) error {
 	m.rules[rule.ID] = rule
 	return nil
 }
-func (m *mockGRPCStore) DeleteRuleNoCtx(id string, ws string) error       { delete(m.rules, id); return nil }
-func (m *mockGRPCStore) GetJourneyNoCtx(id string) (*core.JourneyConfig, error) { return m.journeys[id], nil }
+func (m *mockGRPCStore) DeleteRuleNoCtx(id string, ws string) error { delete(m.rules, id); return nil }
+func (m *mockGRPCStore) GetJourneyNoCtx(id string) (*core.JourneyConfig, error) {
+	return m.journeys[id], nil
+}
 func (m *mockGRPCStore) ListJourneysNoCtx(ws string, o, l int) ([]*core.JourneyConfig, error) {
 	keys := sortedMockKeys(m.journeys)
 	result := make([]*core.JourneyConfig, 0, len(keys))
@@ -230,7 +238,10 @@ func (m *mockGRPCStore) ListEvents(soulID string, limit int) ([]*core.AlertEvent
 	return result, nil
 }
 
-type mockGRPCProbe struct{}
+type mockGRPCProbe struct {
+	upserted []*core.Soul
+	removed  []string
+}
 
 func (m *mockGRPCProbe) ForceCheck(soulID string) (*core.Judgment, error) {
 	return &core.Judgment{
@@ -241,6 +252,120 @@ func (m *mockGRPCProbe) ForceCheck(soulID string) (*core.Judgment, error) {
 		Message:   "forced check",
 		Timestamp: time.Now(),
 	}, nil
+}
+
+func (m *mockGRPCProbe) UpsertSoul(soul *core.Soul) {
+	m.upserted = append(m.upserted, soul)
+}
+
+func (m *mockGRPCProbe) RemoveSoul(soulID string) {
+	m.removed = append(m.removed, soulID)
+}
+
+func TestPBToSoulConfig_PreservesCreateSecrets(t *testing.T) {
+	feather := "250ms"
+	soul := pbToSoulConfig(&v1.CreateSoulRequest{
+		Name:   "API",
+		Type:   "http",
+		Target: "https://example.com",
+		CheckConfig: &v1.CreateSoulRequest_Http{Http: &v1.HTTPCheck{
+			Method:          "POST",
+			Headers:         map[string]string{"Authorization": "Bearer secret"},
+			Body:            "secret body",
+			BodyContains:    []string{"healthy"},
+			ResponseHeaders: []string{"X-Trace:present"},
+			Feather:         &feather,
+		}},
+	})
+
+	if soul.HTTP == nil {
+		t.Fatal("expected HTTP config")
+	}
+	if soul.HTTP.Headers["Authorization"] != "Bearer secret" || soul.HTTP.Body != "secret body" {
+		t.Fatalf("create credentials were not preserved: %#v", soul.HTTP)
+	}
+	if soul.HTTP.BodyContains != "healthy" || soul.HTTP.ResponseHeaders["X-Trace"] != "present" {
+		t.Fatalf("create check config was not converted: %#v", soul.HTTP)
+	}
+	if soul.HTTP.Feather.Duration != 250*time.Millisecond {
+		t.Fatalf("unexpected feather duration: %v", soul.HTTP.Feather.Duration)
+	}
+}
+
+func TestServer_SoulMutationsSynchronizeProbe(t *testing.T) {
+	store := newMockGRPCStore()
+	probe := &mockGRPCProbe{}
+	srv := NewServer(":0", store, probe, &mockAuthenticator{}, nil, nil, false)
+
+	created, err := srv.CreateSoul(testUserContext(), &v1.CreateSoulRequest{
+		Name: "API", Type: "http", Target: "https://example.com", Enabled: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateSoul failed: %v", err)
+	}
+	if len(probe.upserted) != 1 || probe.upserted[0].ID != created.Id {
+		t.Fatalf("create did not upsert the stored soul: %#v", probe.upserted)
+	}
+
+	name := "API updated"
+	if _, err := srv.UpdateSoul(testUserContext(), &v1.UpdateSoulRequest{Id: created.Id, Name: &name}); err != nil {
+		t.Fatalf("UpdateSoul failed: %v", err)
+	}
+	if len(probe.upserted) != 2 || probe.upserted[1].Name != name {
+		t.Fatalf("update did not upsert the updated soul: %#v", probe.upserted)
+	}
+
+	if _, err := srv.DeleteSoul(testUserContext(), &v1.DeleteSoulRequest{Id: created.Id}); err != nil {
+		t.Fatalf("DeleteSoul failed: %v", err)
+	}
+	if len(probe.removed) != 1 || probe.removed[0] != created.Id {
+		t.Fatalf("delete did not remove the soul from the probe: %#v", probe.removed)
+	}
+}
+
+func TestServer_CreateSoulSynchronizesProbeWhenResponseReloadFails(t *testing.T) {
+	store := newMockGRPCStore()
+	store.getSoulAfterErr = fmt.Errorf("reload failed")
+	probe := &mockGRPCProbe{}
+	srv := NewServer(":0", store, probe, &mockAuthenticator{}, nil, nil, false)
+
+	_, err := srv.CreateSoul(testUserContext(), &v1.CreateSoulRequest{
+		Name: "API", Type: "http", Target: "https://example.com", Enabled: true,
+	})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected Internal reload error, got %v", err)
+	}
+	if len(probe.upserted) != 1 {
+		t.Fatalf("persisted create was not synchronized before response reload: %#v", probe.upserted)
+	}
+}
+
+func TestServer_UpdateSoulRejectsSecretCarryoverToNewTarget(t *testing.T) {
+	store := newMockGRPCStore()
+	store.souls["soul-1"] = &core.Soul{
+		ID:          "soul-1",
+		WorkspaceID: "default",
+		Name:        "API",
+		Type:        core.CheckHTTP,
+		Target:      "https://old.example.com",
+		HTTP: &core.HTTPConfig{
+			Headers: map[string]string{"Authorization": "Bearer secret"},
+		},
+	}
+	probe := &mockGRPCProbe{}
+	srv := NewServer(":0", store, probe, &mockAuthenticator{}, nil, nil, false)
+	newTarget := "https://new.example.com"
+
+	_, err := srv.UpdateSoul(testUserContext(), &v1.UpdateSoulRequest{Id: "soul-1", Target: &newTarget})
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected FailedPrecondition, got %v", err)
+	}
+	if store.souls["soul-1"].Target != "https://old.example.com" {
+		t.Fatalf("rejected update mutated target: %q", store.souls["soul-1"].Target)
+	}
+	if len(probe.upserted) != 0 {
+		t.Fatalf("rejected update synchronized probe: %#v", probe.upserted)
+	}
 }
 
 // mockAlertEvent implements a minimal alert event for verdict conversion

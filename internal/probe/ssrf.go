@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var (
@@ -35,35 +36,44 @@ var (
 		"169.254.169.254",
 	}
 
-	// blockedNetworks contains CIDR ranges that should never be accessed
-	blockedNetworks = func() []*net.IPNet {
-		networks := []*net.IPNet{}
-		cidrs := []string{
-			// Private IPv4 ranges
-			"10.0.0.0/8",
-			"172.16.0.0/12",
-			"192.168.0.0/16",
-			"127.0.0.0/8",
-			"0.0.0.0/8",
-			"169.254.0.0/16", // Link-local
-			"224.0.0.0/4",    // Multicast
-			"240.0.0.0/4",    // Reserved
-			"255.255.255.255/32",
-			// Private IPv6 ranges
-			"::1/128",
-			"fe80::/10",
-			"fc00::/7",
-			"ff00::/8",
-		}
-		for _, cidr := range cidrs {
-			_, ipNet, err := net.ParseCIDR(cidr)
-			if err == nil {
-				networks = append(networks, ipNet)
-			}
-		}
-		return networks
-	}()
+	// hardBlockedNetworks are never reachable through probes, even when private
+	// monitoring is enabled. They cover local host, metadata/link-local,
+	// unspecified, multicast, broadcast, and reserved address space.
+	hardBlockedNetworks = mustParseCIDRs([]string{
+		"0.0.0.0/8",
+		"169.254.0.0/16",
+		"100.100.100.200/32",
+		"224.0.0.0/4",
+		"240.0.0.0/4",
+		"255.255.255.255/32",
+		"::/128",
+		"fe80::/10",
+		"ff00::/8",
+	})
+
+	// privateNetworks may be reached only when explicitly enabled (or when a
+	// narrower AllowedNetworks entry permits the address).
+	privateNetworks = mustParseCIDRs([]string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"127.0.0.0/8",
+		"fc00::/7",
+		"::1/128",
+	})
 )
+
+func mustParseCIDRs(cidrs []string) []*net.IPNet {
+	networks := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic("invalid built-in SSRF network " + cidr)
+		}
+		networks = append(networks, network)
+	}
+	return networks
+}
 
 // SSRFValidator provides SSRF protection for probe targets
 type SSRFValidator struct {
@@ -121,7 +131,7 @@ func (v *SSRFValidator) ValidateTarget(target string) error {
 	}
 
 	// It's a hostname - resolve it and check all IPs
-	addrs, err := net.LookupHost(host)
+	addrs, err := net.DefaultResolver.LookupHost(context.Background(), host)
 	if err != nil {
 		// If we can't resolve, we can't validate - block it
 		return fmt.Errorf("cannot resolve hostname %q: %w", host, err)
@@ -189,24 +199,30 @@ func (v *SSRFValidator) isBlockedHost(host string) bool {
 // We do NOT re-read the env var here — it never changes at runtime and
 // os.Getenv has non-trivial overhead on every probe check hot path.
 func (v *SSRFValidator) isBlockedIP(ip net.IP) bool {
-	if v.AllowPrivate {
-		return false
+	if ip == nil {
+		return true
+	}
+	// Normalize IPv4-mapped IPv6 addresses before CIDR checks so ::ffff:127.0.0.1
+	// cannot bypass IPv4 hard-deny ranges.
+	if ipv4 := ip.To4(); ipv4 != nil {
+		ip = ipv4
 	}
 
-	// Check allowed networks
+	for _, network := range hardBlockedNetworks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
 	for _, network := range v.AllowedNetworks {
 		if network.Contains(ip) {
 			return false
 		}
 	}
-
-	// Check blocked networks
-	for _, network := range blockedNetworks {
+	for _, network := range privateNetworks {
 		if network.Contains(ip) {
-			return true
+			return !v.AllowPrivate
 		}
 	}
-
 	return false
 }
 
@@ -230,8 +246,8 @@ func (v *SSRFValidator) ValidateAddress(address string) error {
 		return fmt.Errorf("target address %q is blocked", host)
 	}
 
-	// Check if it's an IP
-	ip := net.ParseIP(host)
+	// Check if it's an IP, including alternate numeric representations.
+	ip := v.parseIP(host)
 	if ip != nil {
 		if v.isBlockedIP(ip) {
 			return fmt.Errorf("target IP %q is blocked", ip)
@@ -240,7 +256,7 @@ func (v *SSRFValidator) ValidateAddress(address string) error {
 	}
 
 	// Resolve hostname
-	addrs, err := net.LookupHost(host)
+	addrs, err := net.DefaultResolver.LookupHost(context.Background(), host)
 	if err != nil {
 		return fmt.Errorf("cannot resolve hostname %q: %w", host, err)
 	}
@@ -274,6 +290,26 @@ func ResetDefaultForTest() {
 	DefaultValidator = NewSSRFValidator()
 }
 
+// bindConnDeadline bounds connection I/O by both the configured timeout and
+// caller cancellation. SetDeadline alone does not react to cancellation when
+// the context has no deadline, so context.AfterFunc forces blocked I/O awake.
+func bindConnDeadline(ctx context.Context, conn net.Conn, timeout time.Duration) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return func() {}, err
+	}
+	deadline := time.Now().Add(timeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return func() {}, err
+	}
+	stop := context.AfterFunc(ctx, func() {
+		_ = conn.SetDeadline(time.Now())
+	})
+	return func() { stop() }, nil
+}
+
 // DialContextFunc is a function that dials a network address.
 type DialContextFunc = func(network, addr string) (net.Conn, error)
 
@@ -295,19 +331,34 @@ func (v *SSRFValidator) WrapDialer(dial func(network, addr string) (net.Conn, er
 			return dial(network, addr)
 		}
 
-		// Re-resolve hostname and validate all IPs (prevents DNS rebinding)
-		addrs, err := net.LookupHost(host)
+		// Re-resolve hostname, validate every answer, and pin the connection to
+		// the first validated literal IP. Passing the hostname back to dial would
+		// trigger a second, attacker-controlled DNS lookup.
+		addrs, err := net.DefaultResolver.LookupHost(context.Background(), host)
 		if err != nil {
 			return nil, fmt.Errorf("SSRF: cannot resolve hostname %q: %w", host, err)
 		}
+		var pinned net.IP
 		for _, resolved := range addrs {
 			ip := v.parseIP(resolved)
-			if ip != nil && v.isBlockedIP(ip) {
+			if ip == nil {
+				return nil, fmt.Errorf("SSRF: hostname %q resolved to unparseable address %q", host, resolved)
+			}
+			if v.isBlockedIP(ip) {
 				return nil, fmt.Errorf("SSRF: hostname %q resolves to blocked IP %q", host, resolved)
 			}
+			if pinned == nil {
+				pinned = ip
+			}
 		}
-
-		return dial(network, addr)
+		if pinned == nil {
+			return nil, fmt.Errorf("SSRF: hostname %q resolved to no addresses", host)
+		}
+		pinnedAddr := pinned.String()
+		if _, port, splitErr := net.SplitHostPort(addr); splitErr == nil {
+			pinnedAddr = net.JoinHostPort(pinned.String(), port)
+		}
+		return dial(network, pinnedAddr)
 	}
 }
 

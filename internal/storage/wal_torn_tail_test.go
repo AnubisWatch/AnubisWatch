@@ -42,20 +42,27 @@ func TestWALTornTailRecovery(t *testing.T) {
 	}
 	f.Close()
 
-	// Reopen: recovery must succeed and preserve a, b, c.
-	db2, err := NewEngine(cfg, newTestLogger())
-	if err != nil {
-		t.Fatalf("reopen after torn tail: %v", err)
-	}
-	defer db2.Close()
-
-	for _, k := range []string{"a", "b", "c"} {
-		got, err := db2.Get(k)
-		if err != nil {
-			t.Fatalf("key %s lost after torn-tail recovery: %v", k, err)
+	// Reopen twice: the first recovery must preserve a, b, c and atomically
+	// checkpoint them so a later restart does not depend on new writes.
+	for restart := 1; restart <= 2; restart++ {
+		recovered, openErr := NewEngine(cfg, newTestLogger())
+		if openErr != nil {
+			t.Fatalf("reopen %d after torn tail: %v", restart, openErr)
 		}
-		if string(got) != "v-"+k {
-			t.Fatalf("key %s = %q, want v-%s", k, got, k)
+
+		for _, k := range []string{"a", "b", "c"} {
+			got, getErr := recovered.Get(k)
+			if getErr != nil {
+				recovered.Close()
+				t.Fatalf("key %s lost after torn-tail recovery restart %d: %v", k, restart, getErr)
+			}
+			if string(got) != "v-"+k {
+				recovered.Close()
+				t.Fatalf("key %s after restart %d = %q, want v-%s", k, restart, got, k)
+			}
+		}
+		if err := recovered.Close(); err != nil {
+			t.Fatalf("close after restart %d: %v", restart, err)
 		}
 	}
 }

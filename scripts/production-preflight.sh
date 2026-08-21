@@ -13,7 +13,7 @@ Environment:
   RELEASE                           Helm release, default anubiswatch.
   CHART                             Helm chart path, default deploy/helm/anubiswatch.
   VALUES                            Production Helm values file. Required.
-  ANUBIS_PREFLIGHT_RENDERED         Rendered manifest path, default /tmp/anubiswatch-rendered.yaml.
+  ANUBIS_PREFLIGHT_RENDERED         Optional rendered manifest path. If unset, a private temporary file is deleted on exit.
   ANUBIS_PREFLIGHT_CREATE_NAMESPACE Create namespace when missing, default false.
   ANUBIS_PREFLIGHT_SKIP_CLUSTER     Run Helm-only checks without kubectl, default false.
   ANUBIS_PREFLIGHT_TIMEOUT          Kubernetes server dry-run timeout, default 120s.
@@ -37,7 +37,13 @@ NAMESPACE="${NAMESPACE:-anubiswatch}"
 RELEASE="${RELEASE:-anubiswatch}"
 CHART="${CHART:-deploy/helm/anubiswatch}"
 VALUES="${VALUES:-${ANUBIS_PREFLIGHT_VALUES:-}}"
-RENDERED="${ANUBIS_PREFLIGHT_RENDERED:-/tmp/anubiswatch-rendered.yaml}"
+umask 077
+if [[ -n "${ANUBIS_PREFLIGHT_RENDERED:-}" ]]; then
+    RENDERED="$ANUBIS_PREFLIGHT_RENDERED"
+else
+    RENDERED="$(mktemp "${TMPDIR:-/tmp}/anubiswatch-rendered.XXXXXX.yaml")"
+    trap 'rm -f "$RENDERED"' EXIT
+fi
 CREATE_NAMESPACE="${ANUBIS_PREFLIGHT_CREATE_NAMESPACE:-false}"
 SKIP_CLUSTER="${ANUBIS_PREFLIGHT_SKIP_CLUSTER:-false}"
 TIMEOUT="${ANUBIS_PREFLIGHT_TIMEOUT:-120s}"

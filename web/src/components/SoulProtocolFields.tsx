@@ -1,9 +1,8 @@
-import type { Dispatch, SetStateAction } from 'react'
 import { soulTypeOptions, type SoulFormData } from '../utils/soulForm'
 
 interface SoulProtocolFieldsProps {
   formData: SoulFormData
-  setFormData: Dispatch<SetStateAction<SoulFormData>>
+  setFormData: (data: SoulFormData) => void
 }
 
 export function SoulProtocolFields({ formData, setFormData }: SoulProtocolFieldsProps) {

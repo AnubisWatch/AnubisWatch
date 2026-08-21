@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -507,6 +508,49 @@ func TestBuildServerDependencies_NoGRPC(t *testing.T) {
 	}
 }
 
+func TestGRPCListenAddressUsesConfiguredHost(t *testing.T) {
+	tests := []struct {
+		name string
+		host string
+		want string
+	}{
+		{name: "IPv4", host: "127.0.0.1", want: "127.0.0.1:9090"},
+		{name: "IPv6", host: "::1", want: "[::1]:9090"},
+		{name: "bracketed IPv6", host: "[::1]", want: "[::1]:9090"},
+		{name: "configured interface", host: "10.0.0.12", want: "10.0.0.12:9090"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := grpcListenAddress(core.ServerConfig{Host: tt.host, GRPCPort: 9090})
+			if got != tt.want {
+				t.Fatalf("grpcListenAddress() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildServerDependencies_GRPCTLSLoadFailureFailsClosed(t *testing.T) {
+	tempDir := t.TempDir()
+	configContent := `{
+		"storage": {"path": "` + filepath.ToSlash(filepath.Join(tempDir, "data")) + `"},
+		"server": {
+			"host": "127.0.0.1",
+			"port": 8080,
+			"grpc_port": 9090,
+			"tls": {"enabled": true, "cert": "` + filepath.ToSlash(filepath.Join(tempDir, "missing.crt")) + `", "key": "` + filepath.ToSlash(filepath.Join(tempDir, "missing.key")) + `"}
+		}
+	}`
+	configPath := filepath.Join(tempDir, "bad-grpc-tls.json")
+	if err := os.WriteFile(configPath, []byte(configContent), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := BuildServerDependencies(ServerOptions{ConfigPath: configPath, Logger: slog.Default()})
+	if err == nil || !strings.Contains(err.Error(), "failed to load gRPC TLS certificate") {
+		t.Fatalf("BuildServerDependencies() error = %v, want gRPC TLS load failure", err)
+	}
+}
+
 func TestStatusPageRepository_GetIncidentsByPage_PageNotFound(t *testing.T) {
 	store := setupTestStore(t)
 	repo := &statusPageRepository{store: store}
@@ -530,6 +574,12 @@ func TestGrpcProbeAdapter_ForceCheck(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for nonexistent soul")
 	}
+
+	// Lifecycle methods must satisfy grpcapi.ProbeEngine and forward without
+	// panicking; detailed runner behavior belongs to internal/probe tests.
+	soul := &core.Soul{ID: "grpc-adapter-soul", Name: "Adapter", Type: core.CheckHTTP, Target: "https://example.com", Enabled: true}
+	adapter.UpsertSoul(soul)
+	adapter.RemoveSoul(soul.ID)
 }
 
 func TestServer_Start_JourneyAlreadyRunning(t *testing.T) {
@@ -632,7 +682,7 @@ func TestServer_Start_GRPCServerError(t *testing.T) {
 
 	configContent := `{
 		"storage": {"path": "` + filepath.ToSlash(dataDir) + `"},
-		"server": {"host": "127.0.0.1", "port": 0, "grpc_port": 0}
+		"server": {"host": "127.0.0.1", "port": 8080, "grpc_port": 9090}
 	}`
 	configPath := filepath.Join(tempDir, "test-config.json")
 	os.WriteFile(configPath, []byte(configContent), 0644)
@@ -642,21 +692,42 @@ func TestServer_Start_GRPCServerError(t *testing.T) {
 		t.Fatalf("BuildServerDependencies failed: %v", err)
 	}
 
-	// Override gRPC server with invalid address to force start error
+	// Override gRPC server with an invalid address to force a synchronous bind
+	// failure, then verify the enabled subsystem fails startup closed.
 	grpcStore := &grpcStorageAdapter{inner: &restStorageAdapter{store: deps.Store}}
 	deps.GRPCServer = grpcapi.NewServer("invalid://:abc", grpcStore, &mockGRPCProbe{}, &mockAuthenticator{}, logger, nil, true)
-	// Avoid REST server port conflicts with other tests
 	deps.RESTServer = nil
 
 	server := NewServer(deps)
-	ctx := context.Background()
-	if err := server.Start(ctx); err != nil {
-		t.Fatalf("Server.Start failed: %v", err)
+	err = server.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "failed to start gRPC server") {
+		t.Fatalf("Server.Start() error = %v, want gRPC startup failure", err)
 	}
+	server.Stop(context.Background())
+}
 
-	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	server.Stop(shutdownCtx)
+func TestServer_Start_EnabledGRPCRequiresInitializedServer(t *testing.T) {
+	server := NewServer(&ServerDependencies{
+		Config: &core.Config{Server: core.ServerConfig{Host: "127.0.0.1", GRPCPort: 9090}},
+		Logger: slog.Default(),
+	})
+
+	err := server.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "was not initialized") {
+		t.Fatalf("Server.Start() error = %v, want missing gRPC server failure", err)
+	}
+}
+
+func TestServer_Start_EnabledClusterRequiresInitializedManager(t *testing.T) {
+	server := NewServer(&ServerDependencies{
+		Config: &core.Config{Necropolis: core.NecropolisConfig{Enabled: true}},
+		Logger: slog.Default(),
+	})
+
+	err := server.Start(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "cluster manager was not initialized") {
+		t.Fatalf("Server.Start() error = %v, want missing cluster manager failure", err)
+	}
 }
 
 type mockGRPCProbe struct{}
@@ -664,6 +735,10 @@ type mockGRPCProbe struct{}
 func (m *mockGRPCProbe) ForceCheck(soulID string) (*core.Judgment, error) {
 	return nil, fmt.Errorf("mock error")
 }
+
+func (m *mockGRPCProbe) UpsertSoul(_ *core.Soul) {}
+
+func (m *mockGRPCProbe) RemoveSoul(_ string) {}
 
 type mockAuthenticator struct{}
 

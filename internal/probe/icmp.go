@@ -64,10 +64,16 @@ func (c *ICMPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		timeout = 5 * time.Second
 	}
 
-	// Resolve target
+	// Resolve target and validate the resolved IP against the SSRF blocklist,
+	// closing the DNS-rebinding window between Validate() and Judge().
 	addr, err := net.ResolveIPAddr("ip", soul.Target)
 	if err != nil {
 		return failJudgment(soul, fmt.Errorf("DNS resolution failed: %w", err)), nil
+	}
+	if !addr.IP.IsUnspecified() {
+		if err := DefaultValidator.ValidateAddress(net.JoinHostPort(addr.IP.String(), "0")); err != nil {
+			return failJudgment(soul, fmt.Errorf("ICMP SSRF validation failed: %w", err)), nil
+		}
 	}
 
 	isIPv6 := addr.IP.To4() == nil
@@ -146,7 +152,8 @@ func (c *ICMPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		}
 
 		// Wait for reply
-		conn.SetReadDeadline(time.Now().Add(timeout))
+		// Deadline is a hint; if it fails the subsequent Read errors anyway.
+		_ = conn.SetReadDeadline(time.Now().Add(timeout))
 		reply := make([]byte, 1500)
 		n, peer, err := conn.ReadFrom(reply)
 		duration := time.Since(start)

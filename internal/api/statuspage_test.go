@@ -51,6 +51,36 @@ func TestHandleStatusPage(t *testing.T) {
 }
 
 // TestHandleStatusPage_WithJudgments tests status page with judgment data
+func TestHandleStatusPage_DoesNotExposeMonitorTarget(t *testing.T) {
+	store := newMockStorage()
+	store.SaveSoul(nil, &core.Soul{
+		ID:     "soul-private",
+		Name:   "Private Service",
+		Type:   core.CheckHTTP,
+		Target: "http://internal-api.service.local:8080/health",
+	})
+	server := &RESTServer{store: store, router: &Router{routes: make(map[string]map[string]Handler)}, logger: newTestLogger()}
+
+	for _, tc := range []struct {
+		name    string
+		handler func(*Context) error
+	}{
+		{name: "json", handler: server.handleStatusPage},
+		{name: "html", handler: server.handleStatusPageHTML},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			ctx := &Context{Request: httptest.NewRequest("GET", "/status", nil), Response: rec}
+			if err := tc.handler(ctx); err != nil {
+				t.Fatalf("status handler failed: %v", err)
+			}
+			if strings.Contains(rec.Body.String(), "internal-api.service.local") {
+				t.Fatalf("public status exposed private target: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestHandleStatusPage_WithJudgments(t *testing.T) {
 	store := newMockStorage()
 	store.SaveSoul(nil, &core.Soul{

@@ -16,6 +16,7 @@ Environment:
   ANUBIS_EVIDENCE_IMAGE           Optional expected image tag or digest to record.
   ANUBIS_EVIDENCE_BASE_URL        Optional URL to run production smoke checks against.
   ANUBIS_EVIDENCE_RUN_SMOKE=true  Run smoke checks when ANUBIS_EVIDENCE_BASE_URL is set.
+  ANUBIS_EVIDENCE_CAPTURE_CLUSTER Set false for an explicit local-only capture, default true.
   ANUBIS_EVIDENCE_ROLLOUT_TIMEOUT Rollout timeout, default 120s.
 
 Smoke test environment is forwarded to scripts/production-smoke.sh:
@@ -45,6 +46,7 @@ VALUES_FILE="${ANUBIS_EVIDENCE_VALUES:-}"
 IMAGE_REF="${ANUBIS_EVIDENCE_IMAGE:-}"
 BASE_URL="${ANUBIS_EVIDENCE_BASE_URL:-}"
 RUN_SMOKE="${ANUBIS_EVIDENCE_RUN_SMOKE:-false}"
+CAPTURE_CLUSTER="${ANUBIS_EVIDENCE_CAPTURE_CLUSTER:-true}"
 ROLLOUT_TIMEOUT="${ANUBIS_EVIDENCE_ROLLOUT_TIMEOUT:-120s}"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 OUTPUT_DIR="${1:-deployment-evidence/$TIMESTAMP}"
@@ -55,6 +57,13 @@ log() {
 
 warn() {
     printf '[evidence] WARN: %s\n' "$*" >&2
+}
+
+EVIDENCE_FAILURES=0
+
+record_failure() {
+    EVIDENCE_FAILURES=$((EVIDENCE_FAILURES + 1))
+    warn "$*"
 }
 
 capture_cmd() {
@@ -70,7 +79,7 @@ capture_cmd() {
     } >"$output" 2>&1 || {
         local status=$?
         printf '\n[command exited with status %s]\n' "$status" >>"$output"
-        warn "$name failed with status $status; see $output"
+        record_failure "$name failed with status $status; see $output"
         return 0
     }
 
@@ -88,7 +97,7 @@ capture_shell() {
     } >"$output" 2>&1 || {
         local status=$?
         printf '\n[command exited with status %s]\n' "$status" >>"$output"
-        warn "$name failed with status $status; see $output"
+        record_failure "$name failed with status $status; see $output"
         return 0
     }
 
@@ -98,7 +107,7 @@ capture_shell() {
 require_cmd() {
     local command="$1"
     if ! command -v "$command" >/dev/null 2>&1; then
-        warn "$command is not available; Kubernetes/Helm evidence may be incomplete"
+        record_failure "$command is not available; Kubernetes/Helm evidence is incomplete"
         return 1
     fi
 }
@@ -128,39 +137,41 @@ if [[ -n "$VALUES_FILE" ]]; then
         fi
         log "captured values checksum for $VALUES_FILE"
     else
-        warn "ANUBIS_EVIDENCE_VALUES points to a missing file: $VALUES_FILE"
+        record_failure "ANUBIS_EVIDENCE_VALUES points to a missing file: $VALUES_FILE"
     fi
 fi
 
-if require_cmd kubectl; then
-    capture_cmd kubectl-context kubectl config current-context
-    capture_cmd rollout-status kubectl -n "$NAMESPACE" rollout status "$WORKLOAD" "--timeout=$ROLLOUT_TIMEOUT"
-    capture_cmd pods kubectl -n "$NAMESPACE" get pods -o wide
-    capture_cmd services kubectl -n "$NAMESPACE" get svc -o wide
-    capture_cmd ingress kubectl -n "$NAMESPACE" get ingress -o wide
-    capture_cmd workload-yaml kubectl -n "$NAMESPACE" get "$WORKLOAD" -o yaml
-    capture_shell events "kubectl -n $(printf '%q' "$NAMESPACE") get events --sort-by=.lastTimestamp"
-fi
+if [[ "$CAPTURE_CLUSTER" == "true" ]]; then
+    if require_cmd kubectl; then
+        capture_cmd kubectl-context kubectl config current-context
+        capture_cmd rollout-status kubectl -n "$NAMESPACE" rollout status "$WORKLOAD" "--timeout=$ROLLOUT_TIMEOUT"
+        capture_cmd pods kubectl -n "$NAMESPACE" get pods -o wide
+        capture_cmd services kubectl -n "$NAMESPACE" get svc -o wide
+        capture_cmd ingress kubectl -n "$NAMESPACE" get ingress -o wide
+        capture_cmd workload-yaml kubectl -n "$NAMESPACE" get "$WORKLOAD" -o yaml
+        capture_shell events "kubectl -n $(printf '%q' "$NAMESPACE") get events --sort-by=.lastTimestamp"
+    fi
 
-if require_cmd helm; then
-    capture_cmd helm-history helm history "$RELEASE" --namespace "$NAMESPACE"
-    capture_cmd helm-status helm status "$RELEASE" --namespace "$NAMESPACE"
+    if require_cmd helm; then
+        capture_cmd helm-history helm history "$RELEASE" --namespace "$NAMESPACE"
+        capture_cmd helm-status helm status "$RELEASE" --namespace "$NAMESPACE"
+    fi
 fi
 
 if [[ "$RUN_SMOKE" == "true" ]]; then
     if [[ -z "$BASE_URL" ]]; then
-        warn "ANUBIS_EVIDENCE_RUN_SMOKE=true but ANUBIS_EVIDENCE_BASE_URL is not set"
+        record_failure "ANUBIS_EVIDENCE_RUN_SMOKE=true but ANUBIS_EVIDENCE_BASE_URL is not set"
     elif [[ -x scripts/production-smoke.sh ]]; then
         ANUBIS_SMOKE_NAMESPACE="${ANUBIS_SMOKE_NAMESPACE:-$NAMESPACE}" \
         ANUBIS_SMOKE_WORKLOAD="${ANUBIS_SMOKE_WORKLOAD:-$WORKLOAD}" \
             scripts/production-smoke.sh "$BASE_URL" >"$OUTPUT_DIR/smoke.txt" 2>&1 || {
                 status=$?
                 printf '\n[smoke exited with status %s]\n' "$status" >>"$OUTPUT_DIR/smoke.txt"
-                warn "smoke checks failed with status $status; see $OUTPUT_DIR/smoke.txt"
+                record_failure "smoke checks failed with status $status; see $OUTPUT_DIR/smoke.txt"
             }
         log "captured smoke result"
     else
-        warn "scripts/production-smoke.sh is not executable"
+        record_failure "scripts/production-smoke.sh is not executable"
     fi
 fi
 
@@ -181,3 +192,7 @@ file contents, because production values may include secrets.
 README
 
 log "evidence written to $OUTPUT_DIR"
+if (( EVIDENCE_FAILURES > 0 )); then
+    printf '[evidence] FAIL: %d required capture(s) failed\n' "$EVIDENCE_FAILURES" >&2
+    exit 1
+fi

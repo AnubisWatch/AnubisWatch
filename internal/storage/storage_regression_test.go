@@ -34,18 +34,24 @@ func TestEncryptedWALRestartPreservesCiphertextInTree(t *testing.T) {
 		t.Fatalf("Close before restart: %v", err)
 	}
 
-	db, err = NewEngine(cfg, newTestLogger())
-	if err != nil {
-		t.Fatalf("NewEngine after restart: %v", err)
-	}
-	defer db.Close()
+	for restart := 1; restart <= 2; restart++ {
+		db, err = NewEngine(cfg, newTestLogger())
+		if err != nil {
+			t.Fatalf("NewEngine after restart %d: %v", restart, err)
+		}
 
-	got, err := db.Get(key)
-	if err != nil {
-		t.Fatalf("Get after restart: %v", err)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("Get after restart = %q, want %q", got, want)
+		got, getErr := db.Get(key)
+		if getErr != nil {
+			db.Close()
+			t.Fatalf("Get after restart %d: %v", restart, getErr)
+		}
+		if !bytes.Equal(got, want) {
+			db.Close()
+			t.Fatalf("Get after restart %d = %q, want %q", restart, got, want)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatalf("Close after restart %d: %v", restart, err)
+		}
 	}
 }
 

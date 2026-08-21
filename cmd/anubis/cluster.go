@@ -92,7 +92,7 @@ func banishNode() {
 	token := getAPIToken()
 
 	if token != "" {
-		req, err := http.NewRequest("DELETE", apiURL+"/api/v1/cluster/nodes/"+nodeID, nil)
+		req, err := http.NewRequestWithContext(context.Background(), "DELETE", apiURL+"/api/v1/cluster/nodes/"+nodeID, nil)
 		if err == nil {
 			req.Header.Set("Authorization", "Bearer "+token)
 			resp, err := http.DefaultClient.Do(req)

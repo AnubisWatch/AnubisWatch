@@ -12,19 +12,15 @@ import {
   XCircle,
   Clock,
   RefreshCw,
-  Wifi,
-  CheckCircle2
+  Wifi
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { useSoulStore } from '../stores/soulStore'
+import { useRealtimeRefresh } from '../hooks/useRealtimeRefresh'
 import type { Soul } from '../api/client'
-import { SoulProtocolFields } from '../components/SoulProtocolFields'
 import {
   buildSoulPayload,
   defaultSoulFormData,
-  nextSoulFormDataForType,
-  soulTargetHints,
-  soulTypeOptions,
   type SoulFormData,
   type SoulType,
 } from '../utils/soulForm'
@@ -73,6 +69,9 @@ export function Souls() {
   useEffect(() => {
     fetchSouls()
   }, [fetchSouls])
+
+  // Keep the list live as judgments and soul updates stream in over WebSocket
+  useRealtimeRefresh(['soul_update', 'judgment', 'status'], fetchSouls)
 
   const handleRefresh = async () => {
     setRefreshing(true)

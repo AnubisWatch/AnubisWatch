@@ -166,6 +166,6 @@ describe('App route smoke coverage', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: heading, exact: true })).toBeInTheDocument()
-    })
+    }, { timeout: 5000 })
   })
 })

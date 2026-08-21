@@ -12,7 +12,7 @@ permissions:
   id-token: write
 
 env:
-  GO_VERSION: '1.26.5'
+  GO_VERSION: '1.26.6'
   NODE_VERSION: '22'
   ANUBIS_DATA_DIR: /tmp/anubis
   ANUBIS_CONFIG: /tmp/anubis.json
@@ -48,7 +48,7 @@ jobs:
           mkdir -p /tmp/anubis-data
           chmod 700 /tmp/anubis-data
 
-      - name: Run tests and enforce exact coverage
+      - name: Run tests and enforce coverage threshold
         run: ./scripts/check-go-coverage.sh
         env:
           ANUBIS_DATA_DIR: /tmp/anubis-data
@@ -89,7 +89,7 @@ jobs:
         working-directory: web
         run: pnpm run lint
 
-      - name: Run tests and enforce exact coverage
+      - name: Run tests and enforce coverage threshold
         working-directory: web
         run: pnpm run test:coverage
 
@@ -185,19 +185,25 @@ jobs:
       - name: Download dependencies
         run: go mod download
 
-      # golangci-lint config sanity — catches YAML drift and
-      # references to linters/options that don't exist in the
-      # pinned version. Fast (~1s) and runs before any linter
-      # work would, so a bad config fails the job with a clear
-      # "unknown linter" message instead of a half-broken lint
-      # run. The full `golangci-lint run` is not gated here
-      # (add it as a separate job if/when the team wants it).
-      - name: Verify golangci-lint config
-        uses: golangci/golangci-lint-action@v9.2.1
-        with:
-          version: v2.12.2
-          args: config verify
-          only-new-issues: false
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+
+      - name: Migrate and verify golangci-lint config
+        run: |
+          cp .golangci.yml /tmp/golangci.yml
+          "$(go env GOPATH)/bin/golangci-lint" migrate \
+            --skip-validation \
+            --config /tmp/golangci.yml
+          # v2's migrator preserves this removed legacy linter in `disable`.
+          sed -i '/^[[:space:]]*disable:$/,+1d' /tmp/golangci.yml
+          "$(go env GOPATH)/bin/golangci-lint" config verify \
+            --config /tmp/golangci.yml
+
+      - name: Run golangci-lint
+        run: |
+          "$(go env GOPATH)/bin/golangci-lint" run \
+            --config /tmp/golangci.yml \
+            --timeout=5m
 
       - name: Run go vet
         run: go vet ./...
@@ -247,36 +253,25 @@ jobs:
         with:
           sarif_file: gosec.sarif
 
-      # govulncheck — exit 1 on any CVE in our call graph. We
-      # install at the same Go version the test matrix uses, so
-      # the vuln DB matches. The output grep below is the gating
-      # check; govulncheck's own exit code is a backstop.
       - name: Run govulncheck
         id: vuln
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          # set +e so we can inspect the output even on non-zero exit
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           set +e
-          "$(go env GOPATH)/bin/govulncheck" ./... | tee /tmp/vuln.out
+          "$(go env GOPATH)/bin/govulncheck" ./... 2>&1 | tee /tmp/vuln.out
           EXIT=$?
           set -e
           echo "govulncheck exit code: $EXIT"
-          echo "----- summary -----"
-          grep -E "Your code is affected by ([0-9]+) vulnerabilities" /tmp/vuln.out || echo "summary line not found"
-          if [ $EXIT -ne 0 ]; then
+          if [ "$EXIT" -ne 0 ]; then
             echo "govulncheck failed — see step log"
-            exit $EXIT
+            exit "$EXIT"
           fi
 
-      - name: Assert govulncheck count is zero
-        # Belt-and-braces: the govulncheck exit code already gates
-        # this job, but the explicit grep catches any future tool
-        # release that changes the exit-code semantics (e.g. adds
-        # warnings without changing the code).
+      - name: Assert govulncheck reported a clean scan
         run: |
-          COUNT=$(grep -oE "Your code is affected by [0-9]+ vulnerabilities" /tmp/vuln.out | grep -oE "[0-9]+" || echo "?")
-          if [ -z "$COUNT" ] || [ "$COUNT" != "0" ]; then
-            echo "govulncheck reported $COUNT vulnerability class(es) — see step log"
+          if ! grep -Eq '^(No vulnerabilities found\.|Your code is affected by 0 vulnerabilities\.)' /tmp/vuln.out; then
+            echo "govulncheck exited successfully without its documented clean-result message"
+            cat /tmp/vuln.out
             exit 1
           fi
 
@@ -296,13 +291,16 @@ jobs:
           ./scripts/production-preflight.sh --help >/tmp/anubis-preflight-help.txt
           ./scripts/production-smoke.sh --help >/tmp/anubis-smoke-help.txt
           ./scripts/capture-deployment-evidence.sh --help >/tmp/anubis-evidence-help.txt
+          ./scripts/downloaded-binary-smoke.sh --help >/tmp/anubis-binary-smoke-help.txt
           test -s /tmp/anubis-preflight-help.txt
           test -s /tmp/anubis-smoke-help.txt
           test -s /tmp/anubis-evidence-help.txt
+          test -s /tmp/anubis-binary-smoke-help.txt
 
       - name: Exercise deployment evidence dry run
         run: |
           rm -rf /tmp/anubis-evidence-ci
+          ANUBIS_EVIDENCE_CAPTURE_CLUSTER=false \
           ANUBIS_EVIDENCE_VALUES=deploy/helm/anubiswatch/values.yaml \
             ./scripts/capture-deployment-evidence.sh /tmp/anubis-evidence-ci
           test -s /tmp/anubis-evidence-ci/metadata.env
@@ -400,8 +398,23 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Run chaos tests
-        run: go test -v -run TestChaos_ ./internal/raft/...
+        run: go test -race -v -run TestChaos_ ./internal/raft/...
+        env:
+          ANUBIS_RUN_CHAOS_TESTS: "1"
         timeout-minutes: 10
+
+      # The chaos tests skip themselves unless ANUBIS_RUN_CHAOS_TESTS is set,
+      # so assert they actually ran to prevent this job from silently becoming
+      # a no-op again.
+      - name: Verify chaos tests actually ran
+        run: |
+          OUTPUT=$(ANUBIS_RUN_CHAOS_TESTS=1 go test -run TestChaos_ -v ./internal/raft/... 2>&1)
+          PASS_COUNT=$(echo "$OUTPUT" | grep -c -- "--- PASS: TestChaos_" || true)
+          echo "Chaos tests passed: $PASS_COUNT"
+          if [ "$PASS_COUNT" -lt 6 ]; then
+            echo "::error::Expected at least 6 chaos tests to run and pass, got $PASS_COUNT"
+            exit 1
+          fi
 
   # Load Tests
   load-tests:
@@ -468,24 +481,11 @@ jobs:
       - name: Make executable
         run: chmod +x anubis
 
-      - name: Start server
-        run: |
-          mkdir -p /tmp/anubis-data
-          ./anubis init
-          ./anubis serve --single &
-          sleep 5
-        env:
-          ANUBIS_DATA_DIR: /tmp/anubis-data
-          ANUBIS_CONFIG: /tmp/anubis-test.json
+      - name: Smoke downloaded binary
+        run: ./scripts/downloaded-binary-smoke.sh "$PWD/anubis"
 
       - name: Run integration tests
         run: go test -v -tags=integration ./internal/api/... ./internal/probe/...
-        env:
-          ANUBIS_TEST_ENDPOINT: http://localhost:8080
-
-      - name: Stop server
-        if: always()
-        run: pkill anubis || true
 
   helm-tests:
     name: Helm Chart Tests
@@ -506,22 +506,17 @@ jobs:
           helm lint deploy/helm/anubiswatch \
             -f deploy/helm/anubiswatch/values-production.example.yaml \
             --set secrets.adminPassword='StrongPass123!' \
-            --set secrets.clusterSecret='ClusterSecret123!'
+            --set secrets.encryptionKey='StrongEncryptionKey123!'
 
       - name: Template Helm charts
         run: |
           helm template anubiswatch deploy/helm/anubiswatch \
             --set secrets.adminPassword='StrongPass123!' \
             > helm-deploy.yaml
-          helm template anubiswatch-cluster deploy/helm/anubiswatch \
-            --set secrets.adminPassword='StrongPass123!' \
-            --set config.necropolis.enabled=true \
-            --set secrets.clusterSecret='ClusterSecret123!' \
-            > helm-deploy-cluster.yaml
           helm template anubiswatch-production-example deploy/helm/anubiswatch \
             -f deploy/helm/anubiswatch/values-production.example.yaml \
             --set secrets.adminPassword='StrongPass123!' \
-            --set secrets.clusterSecret='ClusterSecret123!' \
+            --set secrets.encryptionKey='StrongEncryptionKey123!' \
             > helm-deploy-production-example.yaml
 
       - name: Validate rendered Kubernetes manifests
@@ -530,7 +525,6 @@ jobs:
             -strict \
             -summary \
             /work/helm-deploy.yaml \
-            /work/helm-deploy-cluster.yaml \
             /work/helm-deploy-production-example.yaml
 
       - name: Verify Helm secret guardrails
@@ -563,11 +557,21 @@ jobs:
             if helm template anubiswatch "$chart" \
               --set secrets.adminPassword='StrongPass123!' \
               --set config.necropolis.enabled=true \
-              >/tmp/missing-cluster-secret.yaml 2>/tmp/missing-cluster-secret.err; then
-              echo "Expected $chart to fail without secrets.clusterSecret in cluster mode"
+              --set secrets.clusterSecret='StrongClusterSecret123!' \
+              >/tmp/unsupported-cluster.yaml 2>/tmp/unsupported-cluster.err; then
+              echo "Expected $chart to reject unsupported cluster topology"
               exit 1
             fi
-            grep -q "secrets.clusterSecret is required" /tmp/missing-cluster-secret.err
+            grep -q "config.necropolis.enabled is not supported by this production chart" /tmp/unsupported-cluster.err
+
+            if helm template anubiswatch "$chart" \
+              --set secrets.adminPassword='StrongPass123!' \
+              --set replicaCount=2 \
+              >/tmp/unsafe-replicas.yaml 2>/tmp/unsafe-replicas.err; then
+              echo "Expected $chart to reject multiple standalone replicas"
+              exit 1
+            fi
+            grep -q "replicaCount must be 1" /tmp/unsafe-replicas.err
           done
 
   # Docker Security Scan
@@ -587,12 +591,15 @@ jobs:
       - name: Load Docker image
         run: docker load < anubis-image.tar
 
-      - name: Run Trivy vulnerability scanner
+      - name: Run blocking Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: anubiswatch/anubis:${{ github.sha }}
           format: 'sarif'
           output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: false
+          exit-code: '1'
 
       - name: Upload SARIF to GitHub
         uses: github/codeql-action/upload-sarif@v4

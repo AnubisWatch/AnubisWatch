@@ -6,9 +6,15 @@ metadata:
   labels:
     {{- include "anubiswatch.labels" . | nindent 4 }}
 spec:
-  {{- if not .Values.autoscaling.enabled }}
-  replicas: {{ .Values.replicaCount }}
+  {{- if gt (int .Values.replicaCount) 1 }}
+  {{- fail "replicaCount must be 1 when config.necropolis.enabled=false; a standalone embedded store cannot safely share one PVC across replicas" }}
   {{- end }}
+  {{- if .Values.autoscaling.enabled }}
+  {{- fail "autoscaling.enabled must be false when config.necropolis.enabled=false; use an explicitly formed and validated cluster instead" }}
+  {{- end }}
+  replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       {{- include "anubiswatch.selectorLabels" . | nindent 6 }}
@@ -26,6 +32,8 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "anubiswatch.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -45,9 +53,11 @@ spec:
             - name: http
               containerPort: {{ .Values.service.httpPort }}
               protocol: TCP
+            {{- if gt (int .Values.service.grpcPort) 0 }}
             - name: grpc
               containerPort: {{ .Values.service.grpcPort }}
               protocol: TCP
+            {{- end }}
             {{- if .Values.config.necropolis.enabled }}
             - name: raft
               containerPort: {{ .Values.service.clusterPort }}
@@ -82,13 +92,24 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/anubis
+              readOnly: true
             - name: data
               mountPath: /data
+            - name: runtime
+              mountPath: /var/lib/anubis
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60
           livenessProbe:
             httpGet:
               path: /health
               port: http
-            initialDelaySeconds: 10
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
@@ -106,6 +127,12 @@ spec:
         - name: config
           configMap:
             name: {{ include "anubiswatch.fullname" . }}-config
+        - name: runtime
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
         - name: data
           {{- if .Values.persistence.enabled }}
           persistentVolumeClaim:

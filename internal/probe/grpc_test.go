@@ -21,6 +21,23 @@ func init() {
 	DefaultValidator = NewSSRFValidator()
 }
 
+func TestGRPCChecker_ValidateRejectsPlaintextMetadata(t *testing.T) {
+	checker := NewGRPCChecker()
+	soul := &core.Soul{Target: "example.com:443", GRPC: &core.GRPCConfig{Metadata: map[string]string{"authorization": "Bearer secret"}}}
+	if err := checker.Validate(soul); err == nil {
+		t.Fatal("plaintext gRPC metadata was accepted")
+	}
+	soul.GRPC.Metadata["authorization"] = ""
+	if err := checker.Validate(soul); err != nil {
+		t.Fatalf("empty plaintext metadata was rejected: %v", err)
+	}
+	soul.GRPC.Metadata["authorization"] = "Bearer secret"
+	soul.GRPC.TLS = true
+	if err := checker.Validate(soul); err != nil {
+		t.Fatalf("TLS-protected metadata was rejected: %v", err)
+	}
+}
+
 func TestGRPCChecker_Validate_MissingTarget(t *testing.T) {
 	checker := NewGRPCChecker()
 

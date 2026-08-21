@@ -1,8 +1,8 @@
 # Build stage. Pin both the Go version and the Alpine minor so the
-# build is reproducible — `golang:1.26.5-alpine` would float the
+# build is reproducible — `golang:1.26.6-alpine` would float the
 # underlying musl libc across rebuilds. The Go team publishes
 # `golang:X.Y.Z-alpineN.M` tags for each stable Alpine.
-FROM golang:1.26.5-alpine3.24 AS builder
+FROM golang:1.26.6-alpine3.24 AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git nodejs npm

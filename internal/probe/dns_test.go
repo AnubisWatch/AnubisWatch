@@ -18,6 +18,30 @@ func init() {
 	DefaultValidator = NewSSRFValidator()
 }
 
+func TestNormalizeNameserverAddress(t *testing.T) {
+	tests := map[string]string{
+		"8.8.8.8":                     "8.8.8.8:53",
+		"8.8.8.8:5353":                "8.8.8.8:5353",
+		"2001:4860:4860::8888":        "[2001:4860:4860::8888]:53",
+		"[2001:4860:4860::8888]:5353": "[2001:4860:4860::8888]:5353",
+		"dns.example.com":             "dns.example.com:53",
+	}
+	for input, want := range tests {
+		got, err := normalizeNameserverAddress(input)
+		if err != nil {
+			t.Fatalf("normalizeNameserverAddress(%q): %v", input, err)
+		}
+		if got != want {
+			t.Errorf("normalizeNameserverAddress(%q) = %q, want %q", input, got, want)
+		}
+	}
+	for _, input := range []string{"", "[broken", "host:"} {
+		if _, err := normalizeNameserverAddress(input); err == nil {
+			t.Errorf("normalizeNameserverAddress(%q) unexpectedly succeeded", input)
+		}
+	}
+}
+
 func TestDNSChecker_Validate_MissingTarget(t *testing.T) {
 	checker := NewDNSChecker()
 

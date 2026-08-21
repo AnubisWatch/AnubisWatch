@@ -421,8 +421,8 @@ func TestGrpcStorageAdapter_SaveMapPayloads(t *testing.T) {
 	if err := adapter.SaveSoulNoCtx(&core.Soul{
 		ID: "map-soul", WorkspaceID: "tenant-a",
 		Name: "Map Soul", Type: "http",
-		Target: "https://example.com",
-		Weight: core.Duration{Duration: 30 * time.Second},
+		Target:  "https://example.com",
+		Weight:  core.Duration{Duration: 30 * time.Second},
 		Timeout: core.Duration{Duration: 5 * time.Second},
 		Enabled: true,
 		Tags:    []string{"api"},
@@ -472,7 +472,7 @@ func TestGrpcStorageAdapter_SaveMapPayloads(t *testing.T) {
 	if err := adapter.SaveJourneyNoCtx(&core.JourneyConfig{
 		ID: "map-journey", WorkspaceID: "tenant-a",
 		Name: "Journey", Description: "Synthetic flow",
-		Weight: core.Duration{Duration: 45 * time.Second},
+		Weight:  core.Duration{Duration: 45 * time.Second},
 		Timeout: core.Duration{Duration: 20 * time.Second},
 		Enabled: true,
 	}); err != nil {

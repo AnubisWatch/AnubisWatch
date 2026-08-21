@@ -578,7 +578,13 @@ func (s *RESTServer) queryJudgments(q core.WidgetQuery, workspace string) (inter
 		if !sameWorkspace(soul.WorkspaceID, workspace) {
 			return nil, errAccessDenied
 		}
-		judgments, err = s.store.ListJudgmentsNoCtx(soulID, start, end, 1000)
+		// Note: err here shadows the outer declaration; handle it locally
+		// so a failed list doesn't fall through the (always-nil) outer check.
+		listed, listErr := s.store.ListJudgmentsNoCtx(soulID, start, end, 1000)
+		if listErr != nil {
+			return nil, listErr
+		}
+		judgments = listed
 	} else {
 		// List all souls and get their judgments
 		souls, err := s.store.ListSoulsNoCtx(workspace, 0, 100)

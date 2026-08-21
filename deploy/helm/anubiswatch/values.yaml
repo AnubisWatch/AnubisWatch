@@ -17,21 +17,30 @@ serviceAccount:
 
 podAnnotations: {}
 
+automountServiceAccountToken: false
+terminationGracePeriodSeconds: 30
+
 podSecurityContext:
   fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
 
 securityContext:
+  allowPrivilegeEscalation: false
   capabilities:
     drop:
       - ALL
   readOnlyRootFilesystem: true
   runAsNonRoot: true
   runAsUser: 1000
+  runAsGroup: 1000
 
 service:
   type: ClusterIP
   httpPort: 8080
-  grpcPort: 9090
+  # Management gRPC is disabled when 0. If set to a positive port, use
+  # config.server.tls or bind config.server.host to an explicit loopback IP.
+  grpcPort: 0
   clusterPort: 7946
 
 ingress:
@@ -85,7 +94,11 @@ statefulSet:
     type: RollingUpdate
 
 config:
+  # Shipped manifests run behind an ingress/reverse proxy when promoted to
+  # production. This permits internal HTTP while retaining the gRPC TLS gate.
+  environment: production-proxied
   server:
+    host: 0.0.0.0
     port: 8080
     tls:
       enabled: false
@@ -94,9 +107,9 @@ config:
       min_version: 3    # TLS 1.2 minimum (3=TLS1.2, 4=TLS1.3)
       prefer_server: true
     trustedProxies: []
-    # REQUIRED in production. Set to the public DNS name of your ingress
-    # (e.g. ["https://anubiswatch.example.com"]). Leaving this empty or
-    # using localhost values will reject browser requests in production.
+    # REQUIRED for browser access outside localhost. Set this to the exact
+    # public origin of your ingress (for example https://anubiswatch.example.com).
+    # The defaults below support only local port-forwarding.
     allowedOrigins:
       - "http://localhost:8080"
       - "http://127.0.0.1:8080"

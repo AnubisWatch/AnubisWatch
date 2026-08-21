@@ -27,6 +27,23 @@ func init() {
 	DefaultValidator = NewSSRFValidator()
 }
 
+func TestWebSocketChecker_ValidateRejectsPlaintextCredentials(t *testing.T) {
+	checker := NewWebSocketChecker()
+	cases := []*core.Soul{
+		{Target: "ws://example.com/socket", WebSocket: &core.WebSocketConfig{Headers: map[string]string{"Authorization": "Bearer secret"}}},
+		{Target: "ws://user:pass@example.com/socket", WebSocket: &core.WebSocketConfig{}},
+	}
+	for _, soul := range cases {
+		if err := checker.Validate(soul); err == nil {
+			t.Fatalf("plaintext WebSocket credentials were accepted for %q", soul.Target)
+		}
+		soul.Target = strings.Replace(soul.Target, "ws://", "wss://", 1)
+		if err := checker.Validate(soul); err != nil {
+			t.Fatalf("WSS credentials were rejected for %q: %v", soul.Target, err)
+		}
+	}
+}
+
 func TestWebSocketChecker_Validate_MissingTarget(t *testing.T) {
 	checker := NewWebSocketChecker()
 
@@ -803,12 +820,12 @@ func TestWebSocketChecker_Judge_CustomHeaders(t *testing.T) {
 	ctx := context.Background()
 	judgment, _ := checker.Judge(ctx, soul)
 
-	if judgment.Status != core.SoulAlive {
-		t.Errorf("Expected status Alive, got %s", judgment.Status)
+	if judgment.Status != core.SoulDead || !strings.Contains(judgment.Message, "credentials require wss") {
+		t.Errorf("expected plaintext credential rejection, got status=%s message=%q", judgment.Status, judgment.Message)
 	}
 
-	if !receivedAuth {
-		t.Error("Expected Authorization header to be sent")
+	if receivedAuth {
+		t.Error("Authorization header was sent over plaintext WebSocket")
 	}
 }
 

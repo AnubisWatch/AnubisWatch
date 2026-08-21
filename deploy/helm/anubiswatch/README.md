@@ -38,15 +38,16 @@ helm install anubiswatch anubiswatch/anubiswatch \
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `image.repository` | Image repository | `anubiswatch/anubis` |
-| `image.tag` | Image tag | `3.0.0` |
-| `statefulSet.replicas` | Number of cluster nodes | `3` |
+| `image.repository` | Image repository | `ghcr.io/anubiswatch/anubiswatch` |
+| `image.tag` | Image tag (defaults to chart `appVersion`) | `""` |
+| `replicaCount` | Standalone replica count; must remain `1` | `1` |
+| `statefulSet.replicas` | Reserved for a separately validated cluster manifest | `3` |
 | `config.logging.level` | Log level (debug/info/warn/error) | `info` |
 | `config.storage.path` | Data directory mounted in the container | `/data` |
 | `config.necropolis.enabled` | Enable cluster mode | `false` |
 | `service.type` | Service type | `ClusterIP` |
 | `service.httpPort` | HTTP service port | `8080` |
-| `service.grpcPort` | gRPC service port | `9090` |
+| `service.grpcPort` | Management gRPC service port; `0` disables the listener and omits it from Pods/Services | `0` |
 | `service.clusterPort` | Raft service port | `7946` |
 | `ingress.enabled` | Enable ingress | `false` |
 | `persistence.enabled` | Enable persistent storage | `true` |
@@ -60,8 +61,7 @@ source secret values from your deployment secret store. A production-shaped
 example is included with the chart:
 
 ```yaml
-statefulSet:
-  replicas: 5
+replicaCount: 1
 
 resources:
   limits:
@@ -84,12 +84,12 @@ config:
   storage:
     path: /data
   necropolis:
-    enabled: true
+    enabled: false
 
 secrets:
   # Fill from your deployment secret store before running preflight or deploy.
   adminPassword: ""
-  clusterSecret: ""
+  encryptionKey: ""
 
 monitoring:
   enabled: true
@@ -115,20 +115,23 @@ helm upgrade anubiswatch anubiswatch/anubiswatch \
 helm uninstall anubiswatch -n anubiswatch
 ```
 
-## Cluster Formation
+## Supported Topology
 
-AnubisWatch uses Raft consensus for clustering. When deploying with multiple replicas:
+The production chart supports one standalone AnubisWatch replica with one PVC.
+`replicaCount` must remain `1` and autoscaling must remain disabled because the
+embedded store cannot be mounted and mutated by multiple standalone processes.
+The Deployment uses `Recreate` so upgrades do not overlap two writers.
 
-1. The first pod (anubiswatch-0) bootstraps the cluster
-2. Subsequent pods join automatically
-3. Cluster requires majority (n/2+1) nodes for consensus
+The codebase contains Raft clustering primitives, but this chart intentionally
+refuses `config.necropolis.enabled=true`: it does not yet provide deterministic
+ordinal bootstrap/join wiring or Raft mTLS material. Use a separately reviewed
+cluster manifest only after validating formation, failover, backup/restore, and
+peer transport security in the target environment.
 
 ## Storage
 
-StatefulSet uses persistent volumes for data. Each pod gets its own PVC:
-- `anubiswatch-data-anubiswatch-0`
-- `anubiswatch-data-anubiswatch-1`
-- `anubiswatch-data-anubiswatch-2`
+The supported Deployment mounts one persistent volume at `/data`. Retain and
+back up that PVC; deleting it deletes the embedded database.
 
 ## Monitoring
 
@@ -142,6 +145,16 @@ monitoring:
 ```
 
 Metrics available at `/metrics` endpoint.
+
+## Management gRPC
+
+The management gRPC API is disabled by default because it authenticates with
+bearer tokens. `service.grpcPort: 0` omits the listener and the corresponding
+Pod/Service ports. To enable it, set a positive port and either configure
+`config.server.tls` with certificate files available inside the container or
+bind `config.server.host` to a literal loopback IP for a local-only tunnel.
+TLS termination on the chart's HTTP ingress does **not** protect the separate
+gRPC listener.
 
 ## TLS
 

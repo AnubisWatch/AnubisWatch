@@ -36,7 +36,9 @@ persistence:
   size: 50Gi
 
 config:
+  environment: production-proxied
   server:
+    host: 0.0.0.0
     port: 8080
     # TLS terminates at the ingress configured below. Pod traffic is HTTP
     # inside the cluster, so no nonexistent certificate paths are advertised.
@@ -79,7 +81,8 @@ config:
 service:
   type: ClusterIP
   httpPort: 8080
-  grpcPort: 9090
+  # Keep management gRPC disabled when TLS terminates only at the HTTP ingress.
+  grpcPort: 0
   clusterPort: 7946
 
 ingress:

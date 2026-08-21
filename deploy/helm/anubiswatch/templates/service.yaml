@@ -11,10 +11,12 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+    {{- if gt (int .Values.service.grpcPort) 0 }}
     - port: {{ .Values.service.grpcPort }}
       targetPort: grpc
       protocol: TCP
       name: grpc
+    {{- end }}
   selector:
     {{- include "anubiswatch.selectorLabels" . | nindent 4 }}
 
@@ -35,10 +37,12 @@ spec:
       targetPort: http
       protocol: TCP
       name: http
+    {{- if gt (int .Values.service.grpcPort) 0 }}
     - port: {{ .Values.service.grpcPort }}
       targetPort: grpc
       protocol: TCP
       name: grpc
+    {{- end }}
     - port: {{ .Values.service.clusterPort }}
       targetPort: raft
       protocol: TCP

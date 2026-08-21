@@ -22,6 +22,10 @@ import (
 // WebSocketChecker implements WebSocket health checks
 type WebSocketChecker struct{}
 
+func hasWebSocketCredentials(target *url.URL, cfg *core.WebSocketConfig) bool {
+	return target != nil && (target.User != nil || (cfg != nil && hasNonEmptyStringValue(cfg.Headers)))
+}
+
 // NewWebSocketChecker creates a new WebSocket checker
 func NewWebSocketChecker() *WebSocketChecker {
 	return &WebSocketChecker{}
@@ -43,6 +47,9 @@ func (c *WebSocketChecker) Validate(soul *core.Soul) error {
 	}
 	if u.Scheme != "ws" && u.Scheme != "wss" {
 		return configError("target", "URL must use ws:// or wss:// scheme")
+	}
+	if u.Scheme == "ws" && hasWebSocketCredentials(u, soul.WebSocket) {
+		return configError("websocket.headers", "credentials require wss")
 	}
 
 	// SSRF protection - validate target URL
@@ -72,10 +79,16 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 		timeout = 10 * time.Second
 	}
 
+	opCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
 	// Parse URL
 	u, err := url.Parse(soul.Target)
 	if err != nil {
 		return failJudgment(soul, fmt.Errorf("invalid URL: %w", err)), nil
+	}
+	if u.Scheme == "ws" && hasWebSocketCredentials(u, cfg) {
+		return failJudgment(soul, fmt.Errorf("WebSocket credentials require wss")), nil
 	}
 
 	// Determine host and port
@@ -106,15 +119,28 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 			InsecureSkipVerify: cfg.InsecureSkipVerify, // Default: false (secure)
 			ServerName:         u.Hostname(),
 		}
-		// Pre-resolve hostname and validate with SSRF validator before connecting.
-		// tls.DialWithDialer resolves internally, so we validate first to prevent
-		// DNS rebinding attacks.
-		if err := DefaultValidator.ValidateTarget(soul.Target); err != nil {
-			return failJudgment(soul, fmt.Errorf("SSRF validation failed: %v", err)), nil
+		// SSRF: dial the pinned literal IP via WrapDialerContext, then perform
+		// the TLS handshake with the original hostname for SNI/verification.
+		// This closes the DNS-rebinding TOCTOU between Validate() and Judge().
+		pinnedWSSDial := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+		rawWSSConn, wssErr := pinnedWSSDial(opCtx, "tcp", host)
+		if wssErr != nil {
+			return failJudgment(soul, fmt.Errorf("WSS connection failed: %w", wssErr)), nil
 		}
-		conn, err = tls.DialWithDialer(dialer, "tcp", host, tlsConfig)
+		stopHandshakeDeadline, deadlineErr := bindConnDeadline(opCtx, rawWSSConn, timeout)
+		if deadlineErr != nil {
+			rawWSSConn.Close()
+			return failJudgment(soul, fmt.Errorf("WSS deadline setup failed: %w", deadlineErr)), nil
+		}
+		conn = tls.Client(rawWSSConn, tlsConfig)
+		if err := conn.(*tls.Conn).HandshakeContext(opCtx); err != nil {
+			stopHandshakeDeadline()
+			rawWSSConn.Close()
+			return failJudgment(soul, fmt.Errorf("WSS TLS handshake failed: %w", err)), nil
+		}
+		stopHandshakeDeadline()
 	} else {
-		conn, err = dialCtx(context.Background(), "tcp", host)
+		conn, err = dialCtx(opCtx, "tcp", host)
 	}
 
 	if err != nil {
@@ -122,7 +148,11 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 	}
 	defer conn.Close()
 
-	conn.SetDeadline(time.Now().Add(timeout))
+	stopDeadline, deadlineErr := bindConnDeadline(opCtx, conn, timeout)
+	if deadlineErr != nil {
+		return failJudgment(soul, fmt.Errorf("connection deadline setup failed: %w", deadlineErr)), nil
+	}
+	defer stopDeadline()
 
 	// Generate WebSocket key
 	wsKey := generateWebSocketKey()
@@ -161,8 +191,8 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 	if err != nil {
 		return failJudgment(soul, fmt.Errorf("failed to read upgrade response: %w", err)), nil
 	}
-	// Drain and close body to ensure connection reuse
-	io.Copy(io.Discard, resp.Body)
+	// Drain and close body to ensure connection reuse (best-effort).
+	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 
 	duration := time.Since(start)
@@ -205,7 +235,8 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 		}
 
 		// Read response (limited to maxMessageSize)
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		// Deadline is a hint; a failed set surfaces via the read below.
+		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 		responseBuf := make([]byte, maxMessageSize)
 		n, err := conn.Read(responseBuf)
 		if err != nil {
@@ -260,7 +291,8 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 				pingTimeout = d
 			}
 		}
-		conn.SetReadDeadline(time.Now().Add(pingTimeout))
+		// Deadline is a hint; a failed set surfaces via the read below.
+		_ = conn.SetReadDeadline(time.Now().Add(pingTimeout))
 		pongBuf := make([]byte, 10)
 		n, err := conn.Read(pongBuf)
 		if err != nil || n < 2 {

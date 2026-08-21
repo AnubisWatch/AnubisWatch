@@ -2,10 +2,16 @@ package raft
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +27,7 @@ func newTestDiscoveryLogger() *slog.Logger {
 
 func TestDiscovery_NewDiscovery(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:7000",
 		AdvertiseAddr: "127.0.0.1:7000",
@@ -47,6 +54,7 @@ func TestDiscovery_NewDiscovery(t *testing.T) {
 
 func TestDiscovery_GetPeers(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:7000",
 		AdvertiseAddr: "127.0.0.1:7000",
@@ -62,6 +70,7 @@ func TestDiscovery_GetPeers(t *testing.T) {
 
 func TestDiscovery_GetPeers_WithPeers(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:7000",
 		AdvertiseAddr: "127.0.0.1:7000",
@@ -96,6 +105,7 @@ func TestDiscovery_GetPeers_WithPeers(t *testing.T) {
 
 func TestDiscovery_RegisterPeerCallback(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:7000",
 		AdvertiseAddr: "127.0.0.1:7000",
@@ -121,6 +131,7 @@ func TestDiscovery_RegisterPeerCallback(t *testing.T) {
 
 func TestDiscovery_StartStop(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:0",
 		AdvertiseAddr: "127.0.0.1:0",
@@ -143,6 +154,7 @@ func TestDiscovery_StartStop(t *testing.T) {
 
 func TestDiscovery_Stop(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node-2",
 		BindAddr:      "127.0.0.1:0",
 		AdvertiseAddr: "127.0.0.1:0",
@@ -156,6 +168,7 @@ func TestDiscovery_Stop(t *testing.T) {
 
 func TestSelectGossipPeers(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:7000",
 		AdvertiseAddr: "127.0.0.1:7000",
@@ -225,6 +238,7 @@ func TestEncodeDecodeGossip(t *testing.T) {
 
 func TestMDNSServer_New(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:0",
 		AdvertiseAddr: "127.0.0.1:0",
@@ -239,6 +253,7 @@ func TestMDNSServer_New(t *testing.T) {
 
 func TestMDNSClient_New(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:0",
 		AdvertiseAddr: "127.0.0.1:0",
@@ -386,6 +401,7 @@ func TestMDNSService_Structure(t *testing.T) {
 
 func TestDiscovery_handleGossip_NewPeer(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:7000",
 		AdvertiseAddr: "127.0.0.1:7000",
@@ -440,6 +456,7 @@ func TestDiscovery_handleGossip_NewPeer(t *testing.T) {
 
 func TestDiscovery_handleGossip_ExistingPeer(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:7000",
 		AdvertiseAddr: "127.0.0.1:7000",
@@ -483,6 +500,7 @@ func TestDiscovery_handleGossip_ExistingPeer(t *testing.T) {
 
 func TestDiscovery_handleGossip_MergePeers(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:7000",
 		AdvertiseAddr: "127.0.0.1:7000",
@@ -527,6 +545,7 @@ func TestDiscovery_handleGossip_MergePeers(t *testing.T) {
 
 func TestDiscovery_handleMDNSDiscovery(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:7000",
 		AdvertiseAddr: "127.0.0.1:7000",
@@ -582,6 +601,7 @@ func TestDiscovery_handleMDNSDiscovery(t *testing.T) {
 
 func TestDiscovery_handleMDNSDiscovery_Self(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:7000",
 		AdvertiseAddr: "127.0.0.1:7000",
@@ -610,6 +630,7 @@ func TestDiscovery_handleMDNSDiscovery_Self(t *testing.T) {
 
 func TestDiscovery_checkPeerHealth(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:7000",
 		AdvertiseAddr: "127.0.0.1:7000",
@@ -688,6 +709,7 @@ func TestDiscovery_checkPeerHealth(t *testing.T) {
 
 func TestDiscovery_doGossip_NoPeers(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:7000",
 		AdvertiseAddr: "127.0.0.1:7000",
@@ -703,6 +725,7 @@ func TestDiscovery_doGossip_NoPeers(t *testing.T) {
 
 func TestDiscovery_doGossip_WithPeers(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:7000",
 		AdvertiseAddr: "127.0.0.1:7000",
@@ -735,6 +758,7 @@ func TestDiscovery_doGossip_WithPeers(t *testing.T) {
 
 func TestDiscovery_sendGossip(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:7000",
 		AdvertiseAddr: "127.0.0.1:7000",
@@ -872,6 +896,7 @@ func TestMDNSClient_QueryTimeout(t *testing.T) {
 // Test queryMDNS - tests that it doesn't panic when called
 func TestDiscovery_queryMDNS(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:0",
 		AdvertiseAddr: "127.0.0.1:0",
@@ -888,6 +913,7 @@ func TestDiscovery_queryMDNS(t *testing.T) {
 
 func TestDiscovery_handleMDNSDiscovery_MissingTXT(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:0",
 		AdvertiseAddr: "127.0.0.1:0",
@@ -918,6 +944,7 @@ func TestDiscovery_handleMDNSDiscovery_MissingTXT(t *testing.T) {
 
 func TestDiscovery_handleMDNSDiscovery_PartialTXT(t *testing.T) {
 	cfg := core.RaftConfig{
+		ClusterSecret: "test-cluster-secret",
 		NodeID:        "test-node",
 		BindAddr:      "127.0.0.1:0",
 		AdvertiseAddr: "127.0.0.1:0",
@@ -1137,25 +1164,178 @@ func TestSignGossip_NoOpWithoutSecret(t *testing.T) {
 	}
 }
 
-// TestDiscovery_NewDiscovery_WarnsOnEmptySecret asserts the
-// operator-visible warning fires when ANUBIS_CLUSTER_SECRET is
-// unset in a deployment that would normally be authenticated.
-func TestDiscovery_NewDiscovery_WarnsOnEmptySecret(t *testing.T) {
-	// K9: we can't easily assert log output here, but the call must
-	// not panic and the secret must end up empty in the struct.
-	cfg := core.RaftConfig{
-		NodeID:   "warn-test",
-		BindAddr: "127.0.0.1:7000",
+// TestDiscovery_NewDiscovery_RejectsEmptySecret: an empty secret makes
+// verifyGossip accept unsigned messages, so anyone able to reach the gossip
+// port could inject peers. Starting the gossip layer must fail rather than
+// silently run unauthenticated (it previously only logged a warning).
+func TestDiscovery_NewDiscovery_RejectsEmptySecret(t *testing.T) {
+	for _, secret := range []string{"", "   "} {
+		cfg := core.RaftConfig{
+			NodeID:        "no-secret",
+			BindAddr:      "127.0.0.1:7000",
+			ClusterSecret: secret,
+		}
+
+		d, err := NewDiscovery(cfg, newTestDiscoveryLogger())
+		if err == nil {
+			d.Stop()
+			t.Fatalf("K9: NewDiscovery with secret %q must fail", secret)
+		}
+		if d != nil {
+			t.Errorf("K9: failed NewDiscovery must not return a discovery, got %v", d)
+		}
+		if !strings.Contains(err.Error(), "cluster secret is required") {
+			t.Errorf("K9: error should name the missing secret, got %v", err)
+		}
 	}
-	d, err := NewDiscovery(cfg, newTestDiscoveryLogger())
+}
+
+// TestSignGossip_AddsUniqueNonce ensures byte-identical messages signed in the
+// same second produce different signatures, so the replay cache can key on the
+// HMAC without rejecting legitimate back-to-back gossip.
+func TestSignGossip_AddsUniqueNonce(t *testing.T) {
+	secret := []byte("cluster-secret")
+	ts := time.Now().Unix()
+
+	a := &GossipMessage{Type: "gossip", NodeID: "alice", Timestamp: ts}
+	b := &GossipMessage{Type: "gossip", NodeID: "alice", Timestamp: ts}
+	signGossip(a, secret)
+	signGossip(b, secret)
+
+	if a.Nonce == "" || b.Nonce == "" {
+		t.Fatal("K9: signed messages must carry a nonce")
+	}
+	if a.Nonce == b.Nonce {
+		t.Error("K9: nonces must differ between messages")
+	}
+	if a.HMAC == b.HMAC {
+		t.Error("K9: identical-content messages must not share an HMAC")
+	}
+	// Both must still verify against the same secret.
+	for name, msg := range map[string]*GossipMessage{"a": a, "b": b} {
+		if err := verifyGossip(msg, secret, 5*time.Minute, time.Now()); err != nil {
+			t.Errorf("K9: message %s failed verification: %v", name, err)
+		}
+	}
+}
+
+// TestSignGossip_NoNonceWithoutSecret keeps the unauthenticated path unchanged.
+func TestSignGossip_NoNonceWithoutSecret(t *testing.T) {
+	msg := &GossipMessage{Type: "gossip", NodeID: "alice", Timestamp: time.Now().Unix()}
+	signGossip(msg, nil)
+
+	if msg.Nonce != "" {
+		t.Errorf("K9: unsigned message must not carry a nonce, got %q", msg.Nonce)
+	}
+	if msg.HMAC != "" {
+		t.Errorf("K9: unsigned message must not carry an HMAC, got %q", msg.HMAC)
+	}
+}
+
+// TestVerifyGossip_UnsignedPeerStillVerifies confirms the `omitempty` nonce
+// keeps the canonical body identical for peers that don't send one, so a
+// node running an older build still interoperates.
+func TestVerifyGossip_LegacyPeerWithoutNonceVerifies(t *testing.T) {
+	secret := []byte("cluster-secret")
+	msg := &GossipMessage{Type: "gossip", NodeID: "legacy", Timestamp: time.Now().Unix()}
+
+	// Sign exactly as an older build would: no nonce field at all.
+	body, err := json.Marshal(msg)
 	if err != nil {
-		t.Fatalf("NewDiscovery: %v", err)
+		t.Fatalf("marshal: %v", err)
 	}
-	// authEnabled was removed from production code; the check is now
-	// inlined here. See refactor.md #17 — the function had no
-	// non-test callers.
-	if len(d.clusterSecret) > 0 {
-		t.Error("K9: empty ClusterSecret should leave the discovery layer unauthenticated")
+	mac := hmac.New(sha256.New, secret)
+	mac.Write(body)
+	msg.HMAC = hex.EncodeToString(mac.Sum(nil))
+
+	if err := verifyGossip(msg, secret, 5*time.Minute, time.Now()); err != nil {
+		t.Errorf("K9: message from a peer without a nonce must verify, got %v", err)
 	}
-	defer d.Stop()
+}
+
+// TestCheckReplay_RejectsDuplicateWithinWindow closes the gap the timestamp
+// check leaves open: a captured packet re-sent inside the freshness window.
+func TestCheckReplay_RejectsDuplicateWithinWindow(t *testing.T) {
+	d := &Discovery{messageFreshness: 5 * time.Minute}
+	now := time.Now()
+
+	if err := d.checkReplay("sig-a", now); err != nil {
+		t.Fatalf("K9: first sighting must be accepted, got %v", err)
+	}
+
+	err := d.checkReplay("sig-a", now.Add(time.Second))
+	if err == nil {
+		t.Fatal("K9: replayed signature within the window must be rejected")
+	}
+	if !errors.Is(err, ErrMessageStale) {
+		t.Errorf("K9: replay error should wrap ErrMessageStale, got %v", err)
+	}
+}
+
+// TestCheckReplay_AcceptsAfterWindow — once a signature ages out, the
+// timestamp check in verifyGossip is the defense, so the cache may forget it.
+func TestCheckReplay_AcceptsAfterWindow(t *testing.T) {
+	d := &Discovery{messageFreshness: time.Minute}
+	now := time.Now()
+
+	if err := d.checkReplay("sig-a", now); err != nil {
+		t.Fatalf("K9: first sighting must be accepted, got %v", err)
+	}
+	if err := d.checkReplay("sig-a", now.Add(2*time.Minute)); err != nil {
+		t.Errorf("K9: signature outside the window must not be treated as a replay, got %v", err)
+	}
+}
+
+// TestCheckReplay_PrunesAgedEntries verifies the cache doesn't retain
+// signatures that can no longer be replayed.
+func TestCheckReplay_PrunesAgedEntries(t *testing.T) {
+	d := &Discovery{messageFreshness: time.Minute}
+	now := time.Now()
+
+	if err := d.checkReplay("old", now); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := d.checkReplay("new", now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	d.seenMu.Lock()
+	_, oldPresent := d.seenHMACs["old"]
+	d.seenMu.Unlock()
+	if oldPresent {
+		t.Error("K9: aged-out signature should have been pruned")
+	}
+}
+
+// TestCheckReplay_BoundsMemoryUnderFlood ensures a flood of distinct valid
+// signatures cannot grow the cache without bound.
+func TestCheckReplay_BoundsMemoryUnderFlood(t *testing.T) {
+	d := &Discovery{messageFreshness: time.Hour}
+	now := time.Now()
+
+	for i := 0; i < seenHMACsMax+100; i++ {
+		if err := d.checkReplay(fmt.Sprintf("sig-%d", i), now); err != nil {
+			t.Fatalf("distinct signature %d must be accepted, got %v", i, err)
+		}
+	}
+
+	d.seenMu.Lock()
+	size := len(d.seenHMACs)
+	d.seenMu.Unlock()
+	if size > seenHMACsMax {
+		t.Errorf("K9: replay cache grew past its bound: %d > %d", size, seenHMACsMax)
+	}
+}
+
+// TestCheckReplay_IgnoresEmptySignature — unsigned clusters have no HMAC to
+// key on, so the cache must not collapse every message onto the "" key.
+func TestCheckReplay_IgnoresEmptySignature(t *testing.T) {
+	d := &Discovery{messageFreshness: time.Minute}
+	now := time.Now()
+
+	for i := 0; i < 3; i++ {
+		if err := d.checkReplay("", now); err != nil {
+			t.Fatalf("K9: empty signature must never be treated as a replay, got %v", err)
+		}
+	}
 }

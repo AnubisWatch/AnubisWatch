@@ -130,7 +130,7 @@ func TestEncryptDecryptRoundTrip(t *testing.T) {
 	}
 
 	// Verify isEncrypted detects it
-	if !enc.isEncrypted(encrypted) {
+	if !isEncrypted(encrypted) {
 		t.Error("isEncrypted should return true for encrypted data")
 	}
 

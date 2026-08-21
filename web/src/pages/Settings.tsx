@@ -15,11 +15,8 @@ import {
   Clock,
   ChevronRight,
   RefreshCw,
-  Eye,
-  EyeOff,
   Loader2,
   AlertCircle,
-  Copy,
   X
 } from 'lucide-react'
 import { api } from '../api/client'
@@ -58,7 +55,6 @@ export function Settings() {
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-  const [showApiKey, setShowApiKey] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [config, setConfig] = useState<ConfigData>({})
@@ -115,12 +111,6 @@ export function Settings() {
       applyTheme(value as 'dark' | 'light' | 'system')
     }
     setEditedConfig(prev => ({ ...prev, [key]: value }))
-  }
-
-  const handleCopyApiKey = () => {
-    if (user?.id) {
-      navigator.clipboard.writeText(`anb_live_${user.id}`)
-    }
   }
 
   const tabs = [
@@ -512,39 +502,13 @@ export function Settings() {
             <div className="space-y-6" role="tabpanel" id="settings-panel-integrations" aria-labelledby="settings-tab-integrations">
               <div className="bg-gradient-to-br from-gray-900 to-gray-800/50 border border-gray-700/50 rounded-2xl p-6">
                 <h2 className="text-lg font-semibold text-white mb-1">API & Integrations</h2>
-                <p className="text-gray-400 text-sm mb-6">Manage API keys and external integrations</p>
+                <p className="text-gray-400 text-sm mb-6">Review API authentication and external integration endpoints</p>
 
                 <div className="space-y-6">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">
-                      API Key
-                    </label>
-                    <div className="flex gap-2">
-                      <div className="relative flex-1">
-                        <input
-                          type={showApiKey ? 'text' : 'password'}
-                          value={user ? `anb_live_${user.id}` : 'Not available'}
-                          readOnly
-                          className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50 font-mono"
-                        />
-                        <button
-                          onClick={() => setShowApiKey(!showApiKey)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
-                          aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
-                        >
-                          {showApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                      </div>
-                      <button
-                        onClick={handleCopyApiKey}
-                        className="px-4 py-3 bg-gray-800 text-white rounded-xl hover:bg-gray-700 transition-colors"
-                        aria-label="Copy API key"
-                      >
-                        <Copy className="w-4 h-4" />
-                      </button>
-                    </div>
-                    <p className="text-sm text-gray-500 mt-2">
-                      Use this key to authenticate API requests
+                  <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
+                    <p className="font-medium text-white">API authentication</p>
+                    <p className="mt-1 text-sm text-gray-400">
+                      This installation authenticates browser and API requests with the active session cookie or bearer token. It does not issue standalone API keys.
                     </p>
                   </div>
 
@@ -555,7 +519,7 @@ export function Settings() {
                       </label>
                       <input
                         type="text"
-                        value={`${window.location.origin}/mcp`}
+                        value={`${window.location.origin}/api/v1/mcp`}
                         readOnly
                         className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white font-mono text-sm"
                       />

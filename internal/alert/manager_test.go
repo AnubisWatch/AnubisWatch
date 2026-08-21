@@ -3629,34 +3629,6 @@ func TestManager_EvaluateCondition_DefaultType(t *testing.T) {
 	}
 }
 
-func TestSqrtApprox(t *testing.T) {
-	tests := []struct {
-		input    float64
-		expected float64
-	}{
-		{-1, 0},
-		{0, 0},
-		{1, 1},
-		{4, 2},
-		{9, 3},
-		{100, 10},
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("sqrt(%v)", tt.input), func(t *testing.T) {
-			result := sqrtApprox(tt.input)
-			// Allow small floating point error
-			diff := result - tt.expected
-			if diff < 0 {
-				diff = -diff
-			}
-			if diff > 0.1 {
-				t.Errorf("sqrtApprox(%v) = %v, want ~%v", tt.input, result, tt.expected)
-			}
-		})
-	}
-}
-
 func TestCheckCompound_Majority(t *testing.T) {
 	storage := &mockAlertStorage{
 		channels: make(map[string]*core.AlertChannel),

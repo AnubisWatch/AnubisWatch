@@ -34,11 +34,6 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/telemetry"
 )
 
-const (
-	// maxRequestBodySize limits JSON request body size to prevent DoS (1MB)
-	maxRequestBodySize = 1 << 20 // 1MB
-)
-
 // ServerDependencies holds all dependencies for the server
 type ServerDependencies struct {
 	Config            *core.Config
@@ -241,7 +236,9 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	// Stop REST server
 	if s.deps.RESTServer != nil {
-		s.deps.RESTServer.Stop(ctx)
+		if err := s.deps.RESTServer.Stop(ctx); err != nil {
+			logger.Warn("failed to stop REST server", "err", err)
+		}
 	}
 
 	// Stop gRPC server, bounded by the shutdown deadline so a long-lived
@@ -257,12 +254,16 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	// Stop alert manager
 	if s.deps.AlertManager != nil {
-		s.deps.AlertManager.Stop()
+		if err := s.deps.AlertManager.Stop(); err != nil {
+			logger.Warn("failed to stop alert manager", "err", err)
+		}
 	}
 
 	// Stop cluster manager
 	if s.deps.ClusterManager != nil {
-		s.deps.ClusterManager.Stop(ctx)
+		if err := s.deps.ClusterManager.Stop(ctx); err != nil {
+			logger.Warn("failed to stop cluster manager", "err", err)
+		}
 	}
 
 	// Stop probe engine

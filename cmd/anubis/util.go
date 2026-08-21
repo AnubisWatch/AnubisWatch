@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -75,7 +76,7 @@ func getAPIToken() string {
 }
 
 func httpGet(url, token string) (*http.Response, error) {
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +85,7 @@ func httpGet(url, token string) (*http.Response, error) {
 }
 
 func httpPost(url, contentType string, body []byte, token string) (*http.Response, error) {
-	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +178,9 @@ func getFileSize(path string) int64 {
 // dirSize calculates the total size of a directory
 func dirSize(path string) int64 {
 	var size int64
-	filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+	// Walk errors (permission-denied subtrees, vanished files) yield a
+	// partial size, which is acceptable for a stats display.
+	_ = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
 		if err == nil && !info.IsDir() {
 			size += info.Size()
 		}

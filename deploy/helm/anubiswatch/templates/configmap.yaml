@@ -6,8 +6,9 @@ metadata:
     {{- include "anubiswatch.labels" . | nindent 4 }}
 data:
   anubis.yaml: |
+    environment: {{ .Values.config.environment | quote }}
     server:
-      host: 0.0.0.0
+      host: {{ .Values.config.server.host | quote }}
       port: {{ .Values.config.server.port }}
       grpc_port: {{ .Values.service.grpcPort }}
       tls:

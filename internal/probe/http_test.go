@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,6 +47,68 @@ func TestHTTPChecker_Judge_Basic(t *testing.T) {
 
 	if judgment.StatusCode != 200 {
 		t.Errorf("Expected status code 200, got %d", judgment.StatusCode)
+	}
+}
+
+func TestHTTPChecker_Judge_DoesNotPersistSensitiveResponseMaterial(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Set-Cookie", "session=super-secret")
+		w.Header().Set("Authorization", "test-scheme response-value")
+		w.Header().Set("X-Request-ID", "req-123")
+		w.Write([]byte(`{"token":"body-secret"}`))
+	}))
+	defer ts.Close()
+
+	judgment, err := NewHTTPChecker().Judge(context.Background(), &core.Soul{
+		ID: "test-http", Type: core.CheckHTTP, Target: ts.URL,
+		Timeout: core.Duration{Duration: time.Second},
+		HTTP:    &core.HTTPConfig{Method: "GET", ValidStatus: []int{200}},
+	})
+	if err != nil {
+		t.Fatalf("Judge failed: %v", err)
+	}
+	if judgment.Details.ResponseBody != "" {
+		t.Fatalf("response body persisted: %q", judgment.Details.ResponseBody)
+	}
+	if judgment.Details.ResponseHeaders["Set-Cookie"] != "" || judgment.Details.ResponseHeaders["Authorization"] != "" {
+		t.Fatalf("sensitive headers persisted: %#v", judgment.Details.ResponseHeaders)
+	}
+	if judgment.Details.ResponseHeaders["X-Request-Id"] != "req-123" {
+		t.Fatalf("safe response header missing: %#v", judgment.Details.ResponseHeaders)
+	}
+}
+
+func TestHTTPChecker_Judge_CrossOriginRedirectDropsCredentials(t *testing.T) {
+	var received http.Header
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		received = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer destination.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL+"/final?token=redirect-secret", http.StatusFound)
+	}))
+	defer origin.Close()
+
+	judgment, err := NewHTTPChecker().Judge(context.Background(), &core.Soul{
+		ID: "test-http", Type: core.CheckHTTP, Target: origin.URL,
+		Timeout: core.Duration{Duration: time.Second},
+		HTTP: &core.HTTPConfig{Method: "GET", ValidStatus: []int{200}, FollowRedirects: true,
+			Headers: map[string]string{"Authorization": "test-scheme request-value", "Cookie": "session=request-secret", "X-API-Key": "request-secret", "X-Trace": "keep-me"}},
+	})
+	if err != nil {
+		t.Fatalf("Judge failed: %v", err)
+	}
+	for _, name := range []string{"Authorization", "Cookie", "X-API-Key"} {
+		if received.Get(name) != "" {
+			t.Fatalf("%s forwarded across origin: %#v", name, received)
+		}
+	}
+	if received.Get("X-Trace") != "keep-me" {
+		t.Fatalf("non-sensitive header was removed: %#v", received)
+	}
+	if len(judgment.Details.RedirectChain) != 1 || strings.Contains(judgment.Details.RedirectChain[0], "redirect-secret") {
+		t.Fatalf("redirect chain leaked query credentials: %#v", judgment.Details.RedirectChain)
 	}
 }
 

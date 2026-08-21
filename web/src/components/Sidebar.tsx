@@ -1,7 +1,13 @@
 import { NavLink, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Ghost, Scale, Bell, Route, Network, Globe, Settings, LogOut, LayoutGrid, AlertOctagon, Wrench } from 'lucide-react'
-import { useMemo } from 'react'
+import { LayoutDashboard, Ghost, Scale, Bell, Route, Network, Globe, Settings, LogOut, LayoutGrid, AlertOctagon, Wrench, X } from 'lucide-react'
+import { useEffect, useMemo } from 'react'
 import { useAuth } from '../api/hooks'
+
+interface SidebarProps {
+  /** Mobile drawer visibility; ignored at md: and above where the sidebar is always shown. */
+  open?: boolean
+  onClose?: () => void
+}
 
 const navItems = [
   { path: '/', icon: LayoutDashboard, label: 'Hall of Judgment' },
@@ -30,13 +36,47 @@ const LotusDecoration = () => (
   </svg>
 )
 
-export function Sidebar() {
+export function Sidebar({ open = false, onClose }: SidebarProps = {}) {
   const location = useLocation()
   const { logout } = useAuth()
   const currentPath = useMemo(() => location.pathname, [location])
 
+  // Close the mobile drawer with Escape
+  useEffect(() => {
+    if (!open || !onClose) return
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', handleKey)
+    return () => document.removeEventListener('keydown', handleKey)
+  }, [open, onClose])
+
   return (
-    <aside className="w-72 bg-gradient-to-b from-gray-950 via-[#0a0a15] to-gray-950 border-r border-[#D4AF37]/20 flex flex-col h-screen sticky top-0 backdrop-blur-xl hieroglyph-pattern">
+    <>
+      {/* Mobile backdrop */}
+      {open && (
+        <div
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm md:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      )}
+
+      <aside
+        aria-label="Main navigation"
+        className={`w-72 bg-gradient-to-b from-gray-950 via-[#0a0a15] to-gray-950 border-r border-[#D4AF37]/20 flex flex-col h-screen backdrop-blur-xl hieroglyph-pattern
+          fixed inset-y-0 left-0 z-50 transition-transform duration-300 ${open ? 'translate-x-0' : '-translate-x-full'}
+          md:translate-x-0 md:sticky md:top-0 md:z-auto`}
+      >
+      {/* Mobile close button */}
+      <button
+        onClick={onClose}
+        className="md:hidden absolute top-3 right-3 p-2 text-gray-400 hover:text-[#D4AF37] hover:bg-[#D4AF37]/10 rounded-lg transition-all"
+        aria-label="Close navigation menu"
+      >
+        <X className="w-5 h-5" />
+      </button>
+
       {/* Ancient Egypt decorative top border */}
       <div className="h-1 bg-gradient-to-r from-transparent via-[#D4AF37] to-transparent" />
 
@@ -86,6 +126,7 @@ export function Sidebar() {
             <NavLink
               key={item.path}
               to={item.path}
+              onClick={onClose}
               className={`group flex items-center gap-3 px-4 py-3 rounded-lg transition-all duration-300 relative overflow-hidden
                 ${isActive
                   ? 'bg-gradient-to-r from-[#D4AF37]/20 via-[#D4AF37]/10 to-transparent text-[#F4D03F] border-l-2 border-[#D4AF37]'
@@ -160,6 +201,7 @@ export function Sidebar() {
       <div className="p-3 text-center border-t border-[#D4AF37]/10">
         <p className="text-[10px] text-[#D4AF37]/40 font-cinzel tracking-widest">⚖ 𓃥 𓂀 ⚖</p>
       </div>
-    </aside>
+      </aside>
+    </>
   )
 }

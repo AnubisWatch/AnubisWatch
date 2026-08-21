@@ -64,6 +64,34 @@ func (s *mockSMTPServer) Addr() string {
 	return s.listener.Addr().String()
 }
 
+func TestSMTPChecker_ValidateRejectsPlaintextCredentials(t *testing.T) {
+	checker := NewSMTPChecker()
+	for _, auth := range []*core.AuthCreds{{Username: "user"}, {Password: "secret"}} {
+		soul := &core.Soul{Target: "example.com:25", SMTP: &core.SMTPConfig{Auth: auth}}
+		if err := checker.Validate(soul); err == nil {
+			t.Fatalf("plaintext SMTP credentials were accepted: %#v", auth)
+		}
+		soul.SMTP.StartTLS = true
+		if err := checker.Validate(soul); err != nil {
+			t.Fatalf("STARTTLS SMTP credentials were rejected: %v", err)
+		}
+	}
+}
+
+func TestIMAPChecker_ValidateRejectsPlaintextCredentials(t *testing.T) {
+	checker := NewIMAPChecker()
+	for _, auth := range []*core.AuthCreds{{Username: "user"}, {Password: "secret"}} {
+		soul := &core.Soul{Target: "example.com:993", IMAP: &core.IMAPConfig{Auth: auth}}
+		if err := checker.Validate(soul); err == nil {
+			t.Fatalf("plaintext IMAP credentials were accepted: %#v", auth)
+		}
+		soul.IMAP.TLS = true
+		if err := checker.Validate(soul); err != nil {
+			t.Fatalf("TLS IMAP credentials were rejected: %v", err)
+		}
+	}
+}
+
 func TestSMTPChecker_Validate_MissingTarget(t *testing.T) {
 	checker := NewSMTPChecker()
 
@@ -668,8 +696,8 @@ func TestIMAPChecker_Judge_Login(t *testing.T) {
 	ctx := context.Background()
 	judgment, _ := checker.Judge(ctx, soul)
 
-	if judgment.Status != core.SoulAlive {
-		t.Errorf("Expected status Alive, got %s", judgment.Status)
+	if judgment.Status != core.SoulDead || !strings.Contains(judgment.Message, "credentials require TLS") {
+		t.Errorf("expected plaintext credential rejection, got status=%s message=%q", judgment.Status, judgment.Message)
 	}
 }
 
@@ -959,9 +987,8 @@ func TestSMTPChecker_Judge_AUTHAvailable(t *testing.T) {
 	ctx := context.Background()
 	judgment, _ := checker.Judge(ctx, soul)
 
-	// AUTH is available and should succeed
-	if judgment.Status != core.SoulAlive {
-		t.Errorf("Expected status Alive, got %s", judgment.Status)
+	if judgment.Status != core.SoulDead || !strings.Contains(judgment.Message, "credentials require STARTTLS") {
+		t.Errorf("expected plaintext credential rejection, got status=%s message=%q", judgment.Status, judgment.Message)
 	}
 }
 
@@ -1154,9 +1181,8 @@ func TestSMTPChecker_Judge_AUTHPlain(t *testing.T) {
 	ctx := context.Background()
 	judgment, _ := checker.Judge(ctx, soul)
 
-	// AUTH PLAIN should succeed
-	if judgment.Status != core.SoulAlive {
-		t.Errorf("Expected status Alive, got %s", judgment.Status)
+	if judgment.Status != core.SoulDead || !strings.Contains(judgment.Message, "credentials require STARTTLS") {
+		t.Errorf("expected plaintext credential rejection, got status=%s message=%q", judgment.Status, judgment.Message)
 	}
 }
 

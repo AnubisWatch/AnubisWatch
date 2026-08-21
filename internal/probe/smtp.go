@@ -16,6 +16,10 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
+func hasAuthCredentials(auth *core.AuthCreds) bool {
+	return auth != nil && (strings.TrimSpace(auth.Username) != "" || strings.TrimSpace(auth.Password) != "")
+}
+
 // SMTPChecker implements SMTP health checks
 type SMTPChecker struct{}
 
@@ -42,6 +46,9 @@ func (c *SMTPChecker) Validate(soul *core.Soul) error {
 	if err := ValidateAddress(soul.Target); err != nil {
 		return configError("target", fmt.Sprintf("SSRF validation failed: %v", err))
 	}
+	if soul.SMTP != nil && hasAuthCredentials(soul.SMTP.Auth) && !soul.SMTP.StartTLS {
+		return configError("smtp.auth", "credentials require STARTTLS")
+	}
 
 	// Security warning for disabled TLS verification
 	if soul.SMTP != nil && soul.SMTP.InsecureSkipVerify {
@@ -59,28 +66,33 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	if cfg == nil {
 		cfg = &core.SMTPConfig{}
 	}
+	if hasAuthCredentials(cfg.Auth) && !cfg.StartTLS {
+		return failJudgment(soul, fmt.Errorf("SMTP credentials require STARTTLS")), nil
+	}
 
 	timeout := soul.Timeout.Duration
 	if timeout == 0 {
 		timeout = 10 * time.Second
 	}
+	opCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
-	// Connect to SMTP server. Use ctx-aware Dial so a 100ms test timeout
-	// (or any parent cancellation) is honoured within the dial itself
-	// — previously net.DialTimeout used only soul.Timeout and ignored ctx,
-	// which made Judge hang for the full timeout whenever the test passed
-	// a short context. The effective deadline is the smaller of ctx and
-	// soul.Timeout.
+	// Connect to SMTP server with SSRF DNS-rebinding protection.
+	// WrapDialerContext re-resolves the hostname and dials the validated
+	// literal IP, closing the TOCTOU window between config validation
+	// and connection time.
 	start := time.Now()
-	dialer := &net.Dialer{Timeout: timeout}
-	conn, err := dialer.DialContext(ctx, "tcp", soul.Target)
+	dialCtx := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+	conn, err := dialCtx(opCtx, "tcp", soul.Target)
 	if err != nil {
 		return failJudgment(soul, fmt.Errorf("SMTP connection failed: %w", err)), nil
 	}
 	defer conn.Close()
-
-	// Set deadlines
-	conn.SetDeadline(time.Now().Add(timeout))
+	stopDeadline, deadlineErr := bindConnDeadline(opCtx, conn, timeout)
+	if deadlineErr != nil {
+		return failJudgment(soul, fmt.Errorf("SMTP deadline setup failed: %w", deadlineErr)), nil
+	}
+	defer stopDeadline()
 
 	reader := bufio.NewReader(conn)
 	textReader := textproto.NewReader(reader)
@@ -123,6 +135,10 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	ehloDomain := cfg.EHLODomain
 	if ehloDomain == "" {
 		ehloDomain = "anubiswatch.local"
+	}
+	tlsServerName, _, splitErr := net.SplitHostPort(soul.Target)
+	if splitErr != nil {
+		return failJudgment(soul, fmt.Errorf("invalid SMTP target: %w", splitErr)), nil
 	}
 
 	fmt.Fprintf(conn, "EHLO %s\r\n", ehloDomain)
@@ -169,14 +185,15 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 			return failJudgment(soul, fmt.Errorf("STARTTLS rejected: %s", line)), nil
 		}
 
-		// Upgrade to TLS
+		// Upgrade to TLS. Certificate identity is the connection target, not the
+		// client-controlled EHLO identity.
 		tlsConfig := &tls.Config{
 			InsecureSkipVerify: cfg.InsecureSkipVerify, // Default: false (secure)
-			ServerName:         ehloDomain,
+			ServerName:         tlsServerName,
 			MinVersion:         tls.VersionTLS12,
 		}
 		tlsConn := tls.Client(conn, tlsConfig)
-		if err := tlsConn.Handshake(); err != nil {
+		if err := tlsConn.HandshakeContext(opCtx); err != nil {
 			return failJudgment(soul, fmt.Errorf("TLS handshake failed: %w", err)), nil
 		}
 		conn = tlsConn
@@ -199,17 +216,24 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		reader = bufio.NewReader(conn)
 		textReader = textproto.NewReader(reader)
 
-		// Send EHLO again over TLS
+		// Send EHLO again over TLS and use only capabilities advertised on the
+		// protected channel for subsequent AUTH mechanism selection.
+		capabilities = capabilities[:0]
 		fmt.Fprintf(conn, "EHLO %s\r\n", ehloDomain)
 		for {
 			line, err = textReader.ReadLine()
 			if err != nil {
 				return failJudgment(soul, fmt.Errorf("failed to read EHLO response over TLS: %w", err)), nil
 			}
+			capabilities = append(capabilities, line)
 			if !strings.HasPrefix(line, "250-") {
 				break
 			}
 		}
+		if !strings.HasPrefix(line, "250 ") {
+			return failJudgment(soul, fmt.Errorf("EHLO over TLS failed: %s", line)), nil
+		}
+		judgment.Details.Capabilities = capabilities
 	}
 
 	// AUTH if credentials provided
@@ -334,6 +358,9 @@ func (c *IMAPChecker) Validate(soul *core.Soul) error {
 	if err := ValidateAddress(soul.Target); err != nil {
 		return configError("target", fmt.Sprintf("SSRF validation failed: %v", err))
 	}
+	if soul.IMAP != nil && hasAuthCredentials(soul.IMAP.Auth) && !soul.IMAP.TLS {
+		return configError("imap.auth", "credentials require TLS")
+	}
 
 	// Security warning for disabled TLS verification
 	if soul.IMAP != nil && soul.IMAP.InsecureSkipVerify {
@@ -351,38 +378,58 @@ func (c *IMAPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	if cfg == nil {
 		cfg = &core.IMAPConfig{}
 	}
+	if hasAuthCredentials(cfg.Auth) && !cfg.TLS {
+		return failJudgment(soul, fmt.Errorf("IMAP credentials require TLS")), nil
+	}
 
 	timeout := soul.Timeout.Duration
 	if timeout == 0 {
 		timeout = 10 * time.Second
 	}
+	opCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 
 	start := time.Now()
 	var conn net.Conn
 	var err error
 
-	// Connect (with or without TLS). Use ctx-aware Dial so the parent
-	// context's deadline cancels the dial — previously net.DialTimeout
-	// only honoured soul.Timeout, which let a short test-context hang
-	// for the full soul.Timeout window.
-	dialer := &net.Dialer{Timeout: timeout}
+	// SSRF protection: resolve hostname, validate all IPs against the
+	// blocklist, and dial the pinned literal IP so an attacker that
+	// changes DNS between Validate() and Judge() cannot redirect the
+	// connection to an internal/metadata address.
 	if cfg.TLS {
-		// G402 suppress: cfg.InsecureSkipVerify is gated by K7's
-		// applySecurityGate at the engine level.
-		conn, err = tls.DialWithDialer(dialer, "tcp", soul.Target, &tls.Config{
+		host, _, splitErr := net.SplitHostPort(soul.Target)
+		if splitErr != nil {
+			host = soul.Target
+		}
+		pinnedDial := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+		rawConn, dialErr := pinnedDial(opCtx, "tcp", soul.Target)
+		if dialErr != nil {
+			return failJudgment(soul, fmt.Errorf("IMAP connection failed: %w", dialErr)), nil
+		}
+		conn = tls.Client(rawConn, &tls.Config{
+			ServerName:         host,
 			InsecureSkipVerify: cfg.InsecureSkipVerify, // #nosec G402 -- see K7 gate
 			MinVersion:         tls.VersionTLS12,
 		})
+		if err := conn.(*tls.Conn).HandshakeContext(opCtx); err != nil {
+			rawConn.Close()
+			return failJudgment(soul, fmt.Errorf("IMAP TLS handshake failed: %w", err)), nil
+		}
 	} else {
-		conn, err = dialer.DialContext(ctx, "tcp", soul.Target)
+		dialCtx := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+		conn, err = dialCtx(opCtx, "tcp", soul.Target)
 	}
 
 	if err != nil {
 		return failJudgment(soul, fmt.Errorf("IMAP connection failed: %w", err)), nil
 	}
 	defer conn.Close()
-
-	conn.SetDeadline(time.Now().Add(timeout))
+	stopDeadline, deadlineErr := bindConnDeadline(opCtx, conn, timeout)
+	if deadlineErr != nil {
+		return failJudgment(soul, fmt.Errorf("IMAP deadline setup failed: %w", deadlineErr)), nil
+	}
+	defer stopDeadline()
 
 	reader := bufio.NewReader(conn)
 

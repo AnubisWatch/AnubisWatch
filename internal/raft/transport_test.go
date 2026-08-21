@@ -225,27 +225,37 @@ func TestTCPTransport_AddPeerConnection_InvalidAddress(t *testing.T) {
 	}
 }
 
-func TestTCPTransport_RemoveConnection(t *testing.T) {
+func TestTCPTransport_RemoveConnectionIfMatch(t *testing.T) {
 	transport, _ := NewTCPTransport("127.0.0.1:0", "127.0.0.1:7000", nil, newTestTransportLogger())
 
 	// Add a mock connection
-	mockConn := &mockConn{}
+	liveConn := &mockConn{}
 	transport.connMu.Lock()
-	transport.connections["peer-1"] = mockConn
+	transport.connections["peer-1"] = liveConn
 	transport.connMu.Unlock()
 
-	transport.removeConnection("peer-1")
-
-	// Verify connection was removed
+	// Removing with a different conn must NOT close the live connection
+	// (a failed old RPC must not evict its replacement).
+	otherConn := &mockConn{}
+	transport.removeConnectionIfMatch("peer-1", otherConn)
 	transport.connMu.Lock()
 	_, exists := transport.connections["peer-1"]
+	transport.connMu.Unlock()
+	if !exists {
+		t.Fatal("Expected connection to survive mismatched removal")
+	}
+
+	// Removing with the matching conn closes and evicts it.
+	transport.removeConnectionIfMatch("peer-1", liveConn)
+	transport.connMu.Lock()
+	_, exists = transport.connections["peer-1"]
 	transport.connMu.Unlock()
 
 	if exists {
 		t.Error("Expected connection to be removed")
 	}
 
-	if !mockConn.closed {
+	if !liveConn.closed {
 		t.Error("Expected connection to be closed")
 	}
 }

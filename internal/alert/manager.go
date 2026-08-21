@@ -1231,18 +1231,6 @@ func (m *Manager) compareFloatValue(actual float64, operator string, expected fl
 	}
 }
 
-// sqrtApprox computes an approximate square root using Newton's method.
-func sqrtApprox(x float64) float64 {
-	if x <= 0 {
-		return 0
-	}
-	z := x
-	for i := 0; i < 10; i++ {
-		z = z - (z*z-x)/(2*z)
-	}
-	return z
-}
-
 // generateAlertID generates a unique alert ID
 func generateAlertID() string {
 	return fmt.Sprintf("alert_%d_%s", time.Now().Unix(), generateShortID())
