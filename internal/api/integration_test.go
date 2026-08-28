@@ -245,14 +245,39 @@ func TestIntegration_JudgmentStorage(t *testing.T) {
 		}
 	}
 
-	// Retrieve judgments
-	judgments, err := ts.storage.ListJudgments(ctx, soul.ID, time.Now().Add(-24*time.Hour), time.Now(), 10)
+	// Retrieve judgments through the path the REST API actually uses.
+	// ListJudgmentsNoCtx resolves the workspace from the soul; the plain
+	// ListJudgments takes it *only* from the context, so calling it with a
+	// bare context.Background() scans the "default" workspace and silently
+	// returns nothing for a soul that lives in "test-ws". This test used to
+	// do exactly that and had never run in CI to say so.
+	judgments, err := ts.storage.ListJudgmentsNoCtx(soul.ID, time.Now().Add(-24*time.Hour), time.Now(), 10)
 	if err != nil {
 		t.Fatalf("Failed to list judgments: %v", err)
 	}
 
 	if len(judgments) != 5 {
 		t.Errorf("Expected 5 judgments, got %d", len(judgments))
+	}
+
+	// And directly, with a correctly scoped context — same result.
+	scoped := core.ContextWithWorkspaceID(ctx, "test-ws")
+	scopedJudgments, err := ts.storage.ListJudgments(scoped, soul.ID, time.Now().Add(-24*time.Hour), time.Now(), 10)
+	if err != nil {
+		t.Fatalf("Failed to list judgments with a workspace-scoped context: %v", err)
+	}
+	if len(scopedJudgments) != 5 {
+		t.Errorf("Expected 5 judgments from the workspace-scoped context, got %d", len(scopedJudgments))
+	}
+
+	// A different workspace must not see them.
+	otherWS := core.ContextWithWorkspaceID(ctx, "other-ws")
+	leaked, err := ts.storage.ListJudgments(otherWS, soul.ID, time.Now().Add(-24*time.Hour), time.Now(), 10)
+	if err != nil {
+		t.Fatalf("Failed to list judgments for another workspace: %v", err)
+	}
+	if len(leaked) != 0 {
+		t.Errorf("workspace isolation broken: another workspace saw %d judgments", len(leaked))
 	}
 
 	// Verify judgments are in correct order (newest first)

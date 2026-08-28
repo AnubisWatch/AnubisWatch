@@ -48,6 +48,16 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 # "now my Go binary segfaults on startup because musl changed".
 FROM alpine:3.24
 
+# Apply the base image's pending security updates before anything else.
+# alpine:3.24 is pinned for reproducibility (see the note above), but a pinned
+# tag also freezes whatever package versions that tag shipped with — Trivy
+# blocks the build on CVE-2026-14456 (openssl QUIC DoS, HIGH), fixed in
+# libcrypto3/libssl3 3.5.8-r0 but not yet rolled into the tag. Taking the
+# security updates is the right side of that trade for a security product;
+# the Go binary is statically linked and CGO-free, so this only affects the
+# runtime image's own packages.
+RUN apk --no-cache upgrade
+
 # Install ca-certificates for HTTPS and create a non-root runtime user.
 RUN apk --no-cache add ca-certificates \
     && addgroup -g 1000 -S anubis \

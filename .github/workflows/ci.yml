@@ -391,8 +391,15 @@ jobs:
         run: ./scripts/check-dockerignore.sh
 
       - name: Build Docker image
+        # Stamped like every other build path, so the image the
+        # integration-tests job consumes reports a real version rather than
+        # "dev/unknown/unknown".
         run: |
-          docker build -t anubiswatch/anubis:${{ github.sha }} -f Dockerfile .
+          docker build \
+            --build-arg VERSION=${{ github.sha }} \
+            --build-arg COMMIT=${{ github.sha }} \
+            --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -t anubiswatch/anubis:${{ github.sha }} -f Dockerfile .
           docker save anubiswatch/anubis:${{ github.sha }} > anubis-image.tar
 
       - name: Upload Docker image artifact

@@ -9,11 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Base image now takes its pending security updates (`apk --no-cache upgrade`). `alpine:3.24` is pinned for reproducibility, but a pinned tag also freezes the package versions it shipped with: Trivy blocked the build on **CVE-2026-14456** (HIGH — OpenSSL QUIC unbounded memory growth) in `libcrypto3`/`libssl3` `3.5.7-r0`, fixed in `3.5.8-r0`. Image rescans clean; the Go binary itself had zero findings
+
+
 - **`.dockerignore` excluded nothing on four pattern lines.** Docker does not strip a trailing `# comment` from a `.dockerignore` line, so `anubis.json         # local config with secrets` was parsed as a literal pattern matching no file. The root `anubis.json` — which carries a plaintext `auth.local.admin_password` — therefore reached the builder stage through `COPY . .`, along with `anubis`, `*.test`, and `.wrongstack/`. Comments moved onto their own lines; verified with a `COPY . /ctx` probe before and after
 - `scripts/check-dockerignore.sh` had codified the same wrong assumption: its lint regex ended in `(#.*)?$`, explicitly accepting trailing comments, and it only inspected the **final** image — which in a multi-stage build can never observe a builder-stage leak. It now rejects inline comments and probes the build context directly
 - Bumped `react-router-dom` 7.18.1 → 7.18.2 (GHSA-qwww-vcr4-c8h2, HIGH). The dashboard uses `BrowserRouter`, not the affected RSC mode, so it was not exploitable here
 
 ### Fixed
+
+- `TestIntegration_JudgmentStorage` asserted through `ListJudgments(context.Background(), ...)`, which takes the workspace **only** from the context and so scanned `default` while the fixture wrote to `test-ws` — it read back 0 of 5 judgments. Rewritten to go through `ListJudgmentsNoCtx` (the path the REST API actually uses, which resolves the workspace from the soul) plus an explicitly scoped context, and extended to assert that a different workspace sees none of them. The production API was never affected; the test had simply never run in CI to say it was wrong
+- The CI `build` job produced its Docker image without the version build args, so the image handed to `integration-tests` reported `dev`/`unknown`. Stamped like every other build path
+
 
 - **`server.tls.min_version` was parsed but never read.** Both listeners hardcoded TLS 1.2, so an operator who set `min_version: 4` silently got TLS 1.2. `configs/anubis-prod.json`, the Helm chart's default `values.yaml`, and `values-production.example.yaml` all set it, and the chart templated it into the ConfigMap. It is now resolved through `TLSServerConfig.ResolveMinVersion()` and applied to the REST and gRPC listeners. Selectors `1` (TLS 1.0) and `2` (TLS 1.1) are rejected at config load rather than honoured, so the change can only raise the floor
 - **Docker images reported `anubis version` = `dev`/`unknown`/`unknown`.** `Dockerfile` built with `-ldflags "-s -w"` and no `-X main.Version`, and `docker-build.yml` passed no `build-args` — so every published `ghcr.io/anubiswatch/anubiswatch:vX.Y.Z` was unidentifiable at runtime, while `SECURITY.md` asks vulnerability reporters for exactly that output. Added `VERSION`/`COMMIT`/`BUILD_DATE` build args, wired through `docker-build.yml` (both the scan candidate and the published image), and `make docker`
