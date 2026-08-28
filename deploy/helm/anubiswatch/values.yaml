@@ -104,8 +104,9 @@ config:
       enabled: false
       cert: ""
       key: ""
-      min_version: 3    # TLS 1.2 minimum (3=TLS1.2, 4=TLS1.3)
-      prefer_server: true
+      # Minimum TLS version for the HTTP and gRPC listeners.
+      # 3 = TLS 1.2 (default), 4 = TLS 1.3. TLS 1.0/1.1 are rejected.
+      min_version: 3
     trustedProxies: []
     # REQUIRED for browser access outside localhost. Set this to the exact
     # public origin of your ingress (for example https://anubiswatch.example.com).

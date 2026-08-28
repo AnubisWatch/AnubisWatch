@@ -20,7 +20,8 @@
 *.key
 *.crt
 *.p12
-anubis.json         # local config with secrets
+# local config with secrets
+anubis.json
 configs/anubis.yaml
 configs/anubis.json
 configs/*.local.*
@@ -29,9 +30,11 @@ secrets/
 # ───── Local build output ─────
 bin/
 dist/
-anubis              # dev binary, ~27 MB
+# dev binary, ~27 MB
+anubis
 anubis.exe
-*.test              # go test -c output
+# go test -c output
+*.test
 
 # ───── Node / frontend artifacts ─────
 # (re-installed inside the builder — pulling them from the host
@@ -88,7 +91,8 @@ CODE_OF_CONDUCT.md
 # ───── CI/CD and project-meta ─────
 .github/
 .claude/
-.wrongstack/         # project-local agent mailbox
+# project-local agent mailbox
+.wrongstack/
 CLAUDE.md
 AGENTS.md
 .goreleaser.yml
@@ -105,6 +109,9 @@ run.sh
 install.sh
 install.ps1
 tmp/
+.tmp/
+.temp_files/
+.design/
 scratch/
 *.log
 nohup.out

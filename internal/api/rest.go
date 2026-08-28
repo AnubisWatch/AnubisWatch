@@ -133,6 +133,9 @@ type RESTServer struct {
 
 	// Rate limiter cleanup channel
 	rateLimitStopCh chan struct{}
+	// stopRateLimitOnce guards the close of rateLimitStopCh so Stop is
+	// idempotent.
+	stopRateLimitOnce sync.Once
 
 	// Trusted proxies for X-Forwarded-For validation (nil/empty = trust none)
 	trustedProxies []string
@@ -599,9 +602,14 @@ func (s *RESTServer) Start() error {
 	s.logger.Info("REST server starting", "addr", addr)
 
 	if s.config.TLS.Enabled {
+		// Honour server.tls.min_version. It floors at TLS 1.2 (validation
+		// rejects the TLS 1.0/1.1 selectors), so this can only ever raise the
+		// bar relative to the version that used to be hardcoded here.
+		//
+		// PreferServerCipherSuites is deliberately not set: Go has ignored it
+		// since 1.17, and setting it implied a control that does not exist.
 		tlsConfig := &tls.Config{
-			MinVersion:               tls.VersionTLS12,
-			PreferServerCipherSuites: true,
+			MinVersion: s.config.TLS.ResolveMinVersion(),
 		}
 		server.TLSConfig = tlsConfig
 		return server.ListenAndServeTLS(s.config.TLS.Cert, s.config.TLS.Key)
@@ -609,12 +617,16 @@ func (s *RESTServer) Start() error {
 	return server.ListenAndServe()
 }
 
-// Stop stops the REST server
+// Stop stops the REST server. It is safe to call more than once: a second
+// close of rateLimitStopCh would panic, and shutdown paths are exactly where
+// a duplicate call is likely (signal handler racing a component failure).
 func (s *RESTServer) Stop(ctx context.Context) error {
 	// Stop rate limiter cleanup goroutine
-	if s.rateLimitStopCh != nil {
-		close(s.rateLimitStopCh)
-	}
+	s.stopRateLimitOnce.Do(func() {
+		if s.rateLimitStopCh != nil {
+			close(s.rateLimitStopCh)
+		}
+	})
 	s.mu.Lock()
 	http := s.http
 	s.mu.Unlock()

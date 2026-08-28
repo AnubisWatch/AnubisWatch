@@ -145,8 +145,17 @@ __debug_bin
 .admin_password
 **/.admin_password
 
-*.out
+# Go coverage profiles at the repo root. Scoped to the root on purpose:
+# a bare `*.out` would silently swallow golden testdata files anywhere
+# in the tree.
+/*.out
+
+# Local agent/formatter tool state
 .dfmt/
-!/.wrongstack/
-/.wrongstack/*
-!/.wrongstack/project.json
+.design/
+.claude/settings.local.json
+
+# Scratch directories used by local runs and the e2e harness
+# (.tmp/anubis-e2e is rebuilt by scripts/test-e2e.sh and CI)
+/.tmp/
+/.temp_files/

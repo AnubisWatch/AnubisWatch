@@ -12,6 +12,11 @@ server:
     # cert: "/etc/anubis/tls/cert.pem"
     # key: "/etc/anubis/tls/key.pem"
     # Prefer explicit cert/key or ingress-managed TLS.
+    #
+    # Minimum TLS version for the REST and gRPC listeners:
+    #   0 = unset (TLS 1.2)   3 = TLS 1.2   4 = TLS 1.3
+    # 1 (TLS 1.0) and 2 (TLS 1.1) are rejected at config load.
+    # min_version: 3
 
 # Storage (CobaltDB)
 storage:

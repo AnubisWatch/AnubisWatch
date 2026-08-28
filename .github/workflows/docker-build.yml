@@ -56,6 +56,12 @@ jobs:
             type=raw,value=main,enable=${{ github.event_name == 'workflow_run' }}
             type=raw,value=sha-${{ env.SOURCE_SHA }},enable=${{ github.event_name == 'workflow_run' }}
 
+      # One timestamp shared by the scan candidate and the published image, so
+      # the bytes Trivy scanned are the bytes that get pushed.
+      - name: Compute build stamp
+        id: stamp
+        run: echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       # Build one native-platform candidate locally so Trivy can block before
       # any registry mutation. The multi-platform image is published only after
       # this scan succeeds.
@@ -69,6 +75,10 @@ jobs:
           push: false
           tags: anubiswatch-scan:${{ env.SOURCE_SHA }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ env.SOURCE_SHA }}
+            BUILD_DATE=${{ steps.stamp.outputs.date }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -97,6 +107,10 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            COMMIT=${{ env.SOURCE_SHA }}
+            BUILD_DATE=${{ steps.stamp.outputs.date }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

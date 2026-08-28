@@ -68,7 +68,7 @@ dashboard: ## Build React dashboard
 	@echo "✓ Dashboard built"
 
 dashboard-dev: ## Run dashboard dev server
-	cd web && npm run dev
+	cd web && pnpm run dev
 
 dashboard-coverage: ## Enforce exact dashboard coverage
 	cd web && pnpm run test:coverage
@@ -113,7 +113,11 @@ build-freebsd-amd64:
 
 # Docker
 docker: ## Build Docker image
-	docker build -t anubiswatch/$(BINARY):$(VERSION) .
+	docker build \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg COMMIT=$(COMMIT) \
+	  --build-arg BUILD_DATE=$(DATE) \
+	  -t anubiswatch/$(BINARY):$(VERSION) .
 	docker tag anubiswatch/$(BINARY):$(VERSION) anubiswatch/$(BINARY):latest
 
 docker-push: docker ## Push Docker image

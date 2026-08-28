@@ -363,10 +363,10 @@ Submit PRs, report bugs, improve documentation.
 
 #### Documentation
 - [Quick Start](/docs/quickstart)
-- [Configuration Reference](/docs/CONFIGURATION.md)
-- [Deployment Guide](/docs/DEPLOYMENT.md)
-- [API Reference](/docs/openapi.yaml)
-- [CLI Reference](/docs/cli.md)
+- [Configuration Reference](CONFIGURATION.md)
+- [Deployment Guide](deployment/guide.md)
+- [API Reference](api/openapi.yaml)
+- [Troubleshooting](TROUBLESHOOTING.md)
 
 #### Community
 - [GitHub](https://github.com/AnubisWatch/anubiswatch)

@@ -6,8 +6,7 @@
       "enabled": true,
       "cert": "${ANUBIS_TLS_CERT}",
       "key": "${ANUBIS_TLS_KEY}",
-      "min_version": 3,
-      "prefer_server": true
+      "min_version": 3
     }
   },
   "storage": {

@@ -19,8 +19,7 @@ data:
         {{- if .Values.config.server.tls.key }}
         key: {{ .Values.config.server.tls.key | quote }}
         {{- end }}
-        min_version: {{ .Values.config.server.tls.min_version }}
-        prefer_server: {{ .Values.config.server.tls.prefer_server }}
+        min_version: {{ .Values.config.server.tls.min_version | default 3 }}
       trusted_proxies: {{ .Values.config.server.trustedProxies | toJson }}
       allowed_origins: {{ .Values.config.server.allowedOrigins | toJson }}
 

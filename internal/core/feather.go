@@ -1,6 +1,7 @@
 package core
 
 import (
+	"crypto/tls"
 	"fmt"
 	"strings"
 	"time"
@@ -54,11 +55,36 @@ type ServerConfig struct {
 
 // TLSServerConfig defines TLS settings
 type TLSServerConfig struct {
-	Enabled      bool   `json:"enabled" yaml:"enabled"`
-	Cert         string `json:"cert" yaml:"cert"`
-	Key          string `json:"key" yaml:"key"`
-	MinVersion   int    `json:"min_version" yaml:"min_version"` // 0=default (TLS 1.0), 1=TLS 1.0, 2=TLS 1.1, 3=TLS 1.2, 4=TLS 1.3
-	PreferServer bool   `json:"prefer_server" yaml:"prefer_server"`
+	Enabled bool   `json:"enabled" yaml:"enabled"`
+	Cert    string `json:"cert" yaml:"cert"`
+	Key     string `json:"key" yaml:"key"`
+
+	// MinVersion selects the minimum TLS version the HTTP and gRPC listeners
+	// accept: 0 = unset (TLS 1.2), 3 = TLS 1.2, 4 = TLS 1.3. The legacy
+	// selectors 1 (TLS 1.0) and 2 (TLS 1.1) are rejected by validation rather
+	// than silently honoured — both protocols are deprecated and accepting
+	// them here would be a downgrade from the server's floor.
+	//
+	// Resolve it with ResolveMinVersion; do not read the int directly.
+	MinVersion int `json:"min_version" yaml:"min_version"`
+
+	// PreferServer is accepted for backward compatibility and does nothing.
+	// It used to map onto tls.Config.PreferServerCipherSuites, which Go has
+	// ignored since 1.17 — cipher preference is chosen by the runtime now.
+	//
+	// Deprecated: has no effect; remove it from your config.
+	PreferServer bool `json:"prefer_server,omitempty" yaml:"prefer_server,omitempty"`
+}
+
+// ResolveMinVersion maps the MinVersion selector onto a crypto/tls version
+// constant. Unset and every accepted legacy value floor at TLS 1.2, so a
+// config that omits the field gets the same policy the servers hardcoded
+// before this was wired up.
+func (c TLSServerConfig) ResolveMinVersion() uint16 {
+	if c.MinVersion == 4 {
+		return tls.VersionTLS13
+	}
+	return tls.VersionTLS12
 }
 
 // StorageConfig defines CobaltDB settings
@@ -314,6 +340,22 @@ func (c ServerConfig) validate() error {
 	if c.TLS.Enabled {
 		if c.TLS.Cert == "" || c.TLS.Key == "" {
 			return &ConfigError{Field: "server.tls", Message: "TLS is enabled but cert/key were not provided"}
+		}
+	}
+	// Validate the selector whether or not TLS is enabled: a config that asks
+	// for TLS 1.0 should be rejected at load time, not quietly upgraded the
+	// day someone flips tls.enabled to true.
+	switch c.TLS.MinVersion {
+	case 0, 3, 4:
+	case 1, 2:
+		return &ConfigError{
+			Field:   "server.tls.min_version",
+			Message: "TLS 1.0 and 1.1 are not supported; use 3 (TLS 1.2) or 4 (TLS 1.3)",
+		}
+	default:
+		return &ConfigError{
+			Field:   "server.tls.min_version",
+			Message: fmt.Sprintf("unknown value %d; use 0 (default, TLS 1.2), 3 (TLS 1.2), or 4 (TLS 1.3)", c.TLS.MinVersion),
 		}
 	}
 	return nil

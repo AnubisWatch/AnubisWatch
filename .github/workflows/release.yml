@@ -181,7 +181,10 @@ jobs:
           GOARM: ${{ matrix.goarm }}
         run: |
           CGO_ENABLED=0 go build \
-            -ldflags "-s -w -X main.Version=${{ github.ref_name }}" \
+            -ldflags "-s -w \
+              -X main.Version=${{ github.ref_name }} \
+              -X main.Commit=${{ github.sha }} \
+              -X main.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -o anubis-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.os == 'windows' && '.exe' || '' }} \
             ./cmd/anubis
 

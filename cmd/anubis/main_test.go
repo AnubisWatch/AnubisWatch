@@ -97,6 +97,84 @@ func TestShowVersion(t *testing.T) {
 	}
 }
 
+// `version --json` is what deployment checks parse to confirm which build is
+// running. The flag was documented but not implemented, so it silently
+// returned the human-readable banner; assert it is real JSON now.
+func TestShowVersionJSON(t *testing.T) {
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+
+	Version = "v1.2.3"
+	Commit = "abc1234"
+	BuildDate = "2026-08-28T00:00:00Z"
+
+	for _, flag := range []string{"--json", "-json"} {
+		t.Run(flag, func(t *testing.T) {
+			os.Args = []string{"anubis", "version", flag}
+
+			oldStdout := os.Stdout
+			r, w, _ := os.Pipe()
+			os.Stdout = w
+
+			showVersion()
+
+			w.Close()
+			os.Stdout = oldStdout
+
+			var buf bytes.Buffer
+			if _, err := io.Copy(&buf, r); err != nil {
+				t.Fatalf("reading captured stdout: %v", err)
+			}
+
+			var got map[string]string
+			if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+				t.Fatalf("output is not valid JSON: %v\noutput: %s", err, buf.String())
+			}
+			for key, want := range map[string]string{
+				"version":    "v1.2.3",
+				"commit":     "abc1234",
+				"build_date": "2026-08-28T00:00:00Z",
+			} {
+				if got[key] != want {
+					t.Errorf("field %q = %q, want %q", key, got[key], want)
+				}
+			}
+			for _, key := range []string{"go_version", "platform"} {
+				if got[key] == "" {
+					t.Errorf("field %q is empty", key)
+				}
+			}
+			if strings.Contains(buf.String(), "The Judgment Never Sleeps") {
+				t.Error("--json emitted the human-readable banner")
+			}
+		})
+	}
+}
+
+// Without the flag the banner is still what you get.
+func TestShowVersionPlainIgnoresOtherFlags(t *testing.T) {
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = []string{"anubis", "version", "--verbose"}
+
+	Version = "v4.5.6"
+
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	showVersion()
+	w.Close()
+	os.Stdout = oldStdout
+
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("reading captured stdout: %v", err)
+	}
+	if !strings.Contains(buf.String(), "The Judgment Never Sleeps") {
+		t.Errorf("expected the banner, got: %s", buf.String())
+	}
+}
+
 func TestGetGoVersion(t *testing.T) {
 	version := getGoVersion()
 

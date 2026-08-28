@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **`.dockerignore` excluded nothing on four pattern lines.** Docker does not strip a trailing `# comment` from a `.dockerignore` line, so `anubis.json         # local config with secrets` was parsed as a literal pattern matching no file. The root `anubis.json` — which carries a plaintext `auth.local.admin_password` — therefore reached the builder stage through `COPY . .`, along with `anubis`, `*.test`, and `.wrongstack/`. Comments moved onto their own lines; verified with a `COPY . /ctx` probe before and after
+- `scripts/check-dockerignore.sh` had codified the same wrong assumption: its lint regex ended in `(#.*)?$`, explicitly accepting trailing comments, and it only inspected the **final** image — which in a multi-stage build can never observe a builder-stage leak. It now rejects inline comments and probes the build context directly
+- Bumped `react-router-dom` 7.18.1 → 7.18.2 (GHSA-qwww-vcr4-c8h2, HIGH). The dashboard uses `BrowserRouter`, not the affected RSC mode, so it was not exploitable here
+
+### Fixed
+
+- **`server.tls.min_version` was parsed but never read.** Both listeners hardcoded TLS 1.2, so an operator who set `min_version: 4` silently got TLS 1.2. `configs/anubis-prod.json`, the Helm chart's default `values.yaml`, and `values-production.example.yaml` all set it, and the chart templated it into the ConfigMap. It is now resolved through `TLSServerConfig.ResolveMinVersion()` and applied to the REST and gRPC listeners. Selectors `1` (TLS 1.0) and `2` (TLS 1.1) are rejected at config load rather than honoured, so the change can only raise the floor
+- **Docker images reported `anubis version` = `dev`/`unknown`/`unknown`.** `Dockerfile` built with `-ldflags "-s -w"` and no `-X main.Version`, and `docker-build.yml` passed no `build-args` — so every published `ghcr.io/anubiswatch/anubiswatch:vX.Y.Z` was unidentifiable at runtime, while `SECURITY.md` asks vulnerability reporters for exactly that output. Added `VERSION`/`COMMIT`/`BUILD_DATE` build args, wired through `docker-build.yml` (both the scan candidate and the published image), and `make docker`
+- **`anubis version --json` was documented but not implemented** — the flag was accepted and ignored, emitting the human-readable banner to anything trying to parse it
+- Release binaries now stamp `main.Commit` and `main.BuildDate` as well as `main.Version`
+- `RESTServer.Stop` closed `rateLimitStopCh` unconditionally, so a second call panicked with "close of closed channel". Guarded with `sync.Once`
+
+### Changed
+
+- `server.tls.prefer_server` removed from the shipped configs and Helm chart. It mapped onto `tls.Config.PreferServerCipherSuites`, which Go has ignored since 1.17. The Go field remains (deprecated, `omitempty`) so existing configs still load
+- Standardised every frontend entry point on pnpm. `Makefile` (`dashboard-dev`), `web/package.json` (`build:embed`), and `scripts/test-e2e.sh` invoked bare `npm`, which has no `package-lock.json` to work from in this repo
+
+### Removed
+
+- Stale generated artifacts (~32 MB): `.tmp/anubis-e2e`, `.temp_files/`, root `coverage*.out`, `web/test-results/`, `web/.tmp-status/`, `web/.journeys-coverage/`, `web/vite.config.{js,d.ts}`
+- `.github/RELEASE_v0.0.1.md` — superseded by this changelog and GitHub Releases
+
+### Documentation
+
+- `PRODUCTION_READINESS.md` (root) moved to `docs/`. The pre-existing `docs/PRODUCTION_READINESS.md` was a **different** document — the 2026-05-20 audit of v0.1.1, still listing three CRITICAL findings as open — and now lives at `docs/audits/2026-05-20-security-audit-v0.1.1.md` behind a "superseded" banner
+- Fixed 8 broken relative links across `docs/CONFIGURATION.md`, `docs/INDEX.md`, and `docs/WEBSITE.md`; documented the `server.tls` block
+- `CLAUDE.md`: corrected the CI job list (12 jobs; no separate `lint`/`security` job), the invalid `pnpm ci` command, stale dependency pins, and the route count; noted the two drifting OpenAPI documents
+- `AGENTS.md`: the default port is 8443 in code — 8080 comes from `configs/anubis.yaml` and the container config, which the file stated as a flat fact
+
+
 ### Fixed (multi-node Raft was non-functional)
 
 Re-enabling the six chaos tests in `internal/raft/chaos_test.go` — which carried unconditional `t.Skip("flaky …")` calls, making the CI `chaos-tests` job a green no-op — exposed that multi-node clustering had never actually worked. Five interlocking bugs, each masked by the skipped tests:

@@ -47,7 +47,6 @@ config:
       cert: ""
       key: ""
       min_version: 3
-      prefer_server: true
     # trustedProxies: IPs of your ingress proxy (nginx/Traefik) to enable
     # X-Forwarded-For support. Without this, XFF is ignored (spoofing safe).
     # Example:

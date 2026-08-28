@@ -44,10 +44,14 @@ need before they touch this codebase.
 
 ## Useful pointers
 
-- Dashboard: `http://localhost:8080` (default creds generated on first run, stored in `data/.admin_password`)
-- API docs: `http://localhost:8080/api/docs`
-- Prometheus metrics: `http://localhost:8080/metrics`
-- Default port: 8080. gRPC: 9090. Cluster bind: 0.0.0.0:7946.
+- Ports depend on which config you start with, so check before assuming:
+  - **Code default** (`internal/core/config.go` `SetDefaults`): HTTP **8443**, data dir `/var/lib/anubis/data`.
+  - **`configs/anubis.yaml`** (what `make dev` / `--config ./configs/anubis.yaml` uses): HTTP **8080**, data dir `./data`.
+  - **`configs/container.anubis.json`** (baked into the Docker image): HTTP **8080**.
+  - gRPC: 9090. Cluster bind: 0.0.0.0:7946. Both are config-independent defaults.
+- Dashboard, API docs, and metrics are served off that same HTTP port: `/`, `/api/docs`, `/metrics`.
+- Default creds are generated on first run and stored at `<storage.path>/.admin_password`
+  (`./data/.admin_password` under `configs/anubis.yaml`).
 - Config reference: `configs/anubis.yaml`
 - Architecture: `ARCHITECTURE.md`
 - Deployment runbook: `docs/deployment/production-runbook.md`

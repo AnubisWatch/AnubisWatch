@@ -73,15 +73,33 @@ REQUIRED_PATTERNS=(
 echo "check-dockerignore: linting $DOCKERIGNORE"
 LINT_FAILED=0
 for pattern in "${REQUIRED_PATTERNS[@]}"; do
-  # Match each pattern as a whole line (anchored at start,
-  # optional trailing whitespace + comment, end of line).
-  # Substring matches don't count — a root-level pattern must
-  # be a standalone entry, not part of a deeper path.
-  if ! grep -qE "^[[:space:]]*${pattern}[[:space:]]*(#.*)?$" "$DOCKERIGNORE"; then
+  # Match each pattern as a whole line (anchored at start, optional
+  # trailing whitespace, end of line). Substring matches don't count —
+  # a root-level pattern must be a standalone entry, not part of a
+  # deeper path. A trailing "# comment" is NOT accepted here: see the
+  # inline-comment check below for why.
+  if ! grep -qE "^[[:space:]]*${pattern}[[:space:]]*$" "$DOCKERIGNORE"; then
     echo "  MISSING: $pattern" >&2
     LINT_FAILED=1
   fi
 done
+
+# ─── Lint: reject inline comments ────────────────────────────────
+# Docker does NOT strip a trailing "# ..." from a .dockerignore
+# pattern line. `anubis.json  # local config` is parsed as the
+# literal pattern "anubis.json  # local config", which matches no
+# file — so the line silently excludes nothing. This exact bug hid
+# a real leak of the root anubis.json (admin password, encryption
+# key) into the builder stage's context. Comments must be on their
+# own line.
+INLINE_COMMENTS=$(grep -nE '^[[:space:]]*[^#[:space:]].*[[:space:]]#' "$DOCKERIGNORE" || true)
+if [ -n "$INLINE_COMMENTS" ]; then
+  echo "FAIL: $DOCKERIGNORE has trailing comments on pattern lines." >&2
+  echo "      Docker treats the comment as part of the pattern, so these" >&2
+  echo "      lines exclude nothing. Move each comment to its own line:" >&2
+  echo "$INLINE_COMMENTS" | sed 's/^/    /' >&2
+  LINT_FAILED=1
+fi
 if [ "$LINT_FAILED" -ne 0 ]; then
   echo "FAIL: $DOCKERIGNORE is missing one or more required patterns." >&2
   echo "      Add the missing line(s) and re-run." >&2
@@ -116,12 +134,43 @@ fi
 # build` for older setups.
 
 PROBE_TAG="anubis-dockerignore-probe:$$"
+CTX_TAG="anubis-dockerignore-context:$$"
 TMPDIR_PROBE=$(mktemp -d)
 cleanup() {
   rm -rf "$TMPDIR_PROBE"
   docker rmi -f "$PROBE_TAG" 2>/dev/null || true
+  docker rmi -f "$CTX_TAG" 2>/dev/null || true
 }
 trap cleanup EXIT
+
+# ─── Build: probe the build CONTEXT itself ───────────────────────
+# The runtime-image check further down only sees the final stage.
+# But this Dockerfile is multi-stage and the builder does `COPY . .`,
+# so a secret that .dockerignore fails to exclude lands in a builder
+# layer — cached on disk, exported by registry cache backends, and
+# readable by anyone who builds `--target builder`. That exposure is
+# invisible to a final-image scan, so probe the context directly.
+# It is also cheap: one COPY, no compilation.
+echo "check-dockerignore: probing the build context"
+cat > "$TMPDIR_PROBE/Dockerfile.ctx" <<'CTXEOF'
+FROM alpine:3.24
+COPY . /ctx
+CTXEOF
+docker build --no-cache -q -f "$TMPDIR_PROBE/Dockerfile.ctx" -t "$CTX_TAG" . >/dev/null
+CTX_LEAKS=$(docker run --rm --entrypoint sh "$CTX_TAG" -c \
+  'find /ctx -type f \( -name "anubis.json" -o -name "*.pem" -o -name "*.key" \
+     -o -name "*.p12" -o -name ".env" -o -name ".env.*" \
+     -o -path "*/secrets/*" -o -path "*/configs/*.local.*" \) \
+   -not -path "/ctx/web/node_modules/*" 2>/dev/null | head -50' || true)
+if [ -n "$CTX_LEAKS" ]; then
+  echo "FAIL: .dockerignore did not exclude secret files from the build context." >&2
+  echo "      These reach the builder stage via 'COPY . .':" >&2
+  echo "$CTX_LEAKS" | sed 's|^/ctx|    |' >&2
+  echo "" >&2
+  echo "  Add the missing pattern(s) to $DOCKERIGNORE and re-run." >&2
+  exit 1
+fi
+echo "check-dockerignore: build context clean"
 
 echo "check-dockerignore: building the project's actual Dockerfile (this catches real drift)"
 BUILDER=""

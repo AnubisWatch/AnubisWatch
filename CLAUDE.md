@@ -22,7 +22,7 @@ make build
 
 # Build dashboard (React 19 + Tailwind 4, embedded in binary)
 make dashboard
-# Or directly: cd web && pnpm ci && pnpm run build
+# Or directly: cd web && pnpm install --frozen-lockfile && pnpm run build:embed
 
 # Dashboard dev server (hot reload)
 make dashboard-dev
@@ -173,7 +173,9 @@ In-memory B+Tree with configurable order (default 32, range 4–256), WAL for cr
 
 ### API Layer
 
-Custom router (no third-party library) with parameterized routes (`:param` syntax). Middleware chain: logging → security headers → CORS → recovery → JSON validation → path param validation → rate limiting. Auth via `requireAuth()` (token) and `requireRole()` (RBAC). 80+ routes under `/api/v1/`. SSE fallback at `/api/v1/events`. OpenAPI 3.0.3 spec at `docs/api/openapi.yaml` and served inline at `/api/v1/spec`.
+Custom router (no third-party library) with parameterized routes (`:param` syntax). Middleware chain: logging → security headers → CORS → recovery → JSON validation → path param validation → rate limiting. Auth via `requireAuth()` (token) and `requireRole()` (RBAC). ~94 registered routes, most under `/api/v1/`. SSE fallback at `/api/v1/events`.
+
+The API has **two independent OpenAPI documents that drift**: `docs/api/openapi.yaml` (3.0.3, 18 paths, hand-maintained) and a hardcoded `openapiJSON` blob in `internal/api/rest.go` (declares version 4.0.0, 42 paths) that is what `/api/v1/spec` and `/api/docs` actually serve. Neither covers all 94 routes. Treat the route table in `rest.go` as the source of truth.
 
 ### Authentication (`internal/auth/`)
 
@@ -239,30 +241,42 @@ Example config generation: `anubis init` creates `anubis.yaml` with sensible def
 
 ## CI Pipeline
 
-10 jobs in `.github/workflows/ci.yml`:
-1. `test-backend` — 80% coverage minimum
-2. `test-frontend` — Vitest + Playwright
-3. `lint` — golangci-lint with custom config
-4. `build` — Binary build verification
-5. `chaos-tests` — Raft cluster fault injection (main only)
-6. `load-tests` — Performance benchmarks (main only)
-7. `integration-tests` — Full stack integration (main only)
-8. `helm-tests` — Kubernetes chart validation
-9. `security` — gosec + Nancy dependency scanning
-10. `docker-security` — Trivy container scanning
+12 jobs in `.github/workflows/ci.yml`:
+
+| Job | What it gates |
+|---|---|
+| `test-backend` | `scripts/check-go-coverage.sh` — 80% statement minimum (measured ~86%) |
+| `test-frontend` | eslint + Vitest; `web/vitest.config.ts` enforces 80% (measured ~98%) |
+| `e2e-dashboard` | Playwright against a real `anubis` binary |
+| `static-analysis` | golangci-lint, gosec, CodeQL SARIF upload |
+| `script-validation` | shellcheck + `scripts/check-dockerignore.sh` |
+| `build` | Binary build verification, artifact upload |
+| `chaos-tests` | Raft fault injection, gated on `ANUBIS_RUN_CHAOS_TESTS=1` (main only) |
+| `load-tests` | Performance benchmarks (main only) |
+| `benchmarks` | `go test -bench`, artifact upload |
+| `integration-tests` | Full stack against the built binary (main only) |
+| `helm-tests` | `helm lint` / template validation |
+| `docker-security` | Trivy container scanning |
+
+There is no separate `lint` or `security` job — both are folded into `static-analysis`.
 
 Additional workflows: `docker-build.yml` (multi-arch images), `release.yml` (automated releases with Homebrew).
 
 ## Dependencies
 
-Direct Go dependencies:
-- `github.com/coder/websocket` v1.8.14 — WebSocket support
-- `github.com/go-ldap/ldap/v3` v3.4.13 — LDAP authentication
-- `golang.org/x/crypto` v0.49.0 — bcrypt password hashing
-- `golang.org/x/net` v0.52.0 — Extended networking
-- `google.golang.org/grpc` v1.80.0 — gRPC server
-- `google.golang.org/protobuf` v1.36.11 — Protocol buffers
-- `gopkg.in/yaml.v3` v3.0.1 — YAML config parsing
+Direct Go dependencies (keep in sync with `go.mod` — these drift fast):
+- `github.com/cenkalti/backoff/v5` — retry/backoff
+- `github.com/coder/websocket` — WebSocket support
+- `github.com/go-ldap/ldap/v3` — LDAP authentication
+- `go.opentelemetry.io/otel` (+ `sdk`, `trace`, OTLP gRPC exporter, otelgrpc contrib) — tracing
+- `golang.org/x/crypto` — bcrypt password hashing
+- `golang.org/x/net` — extended networking
+- `google.golang.org/grpc` — gRPC server
+- `google.golang.org/protobuf` — protocol buffers
+- `gopkg.in/yaml.v3` — YAML config parsing
+
+Run `go list -m -f '{{.Path}} {{.Version}}' all` for current versions rather than
+trusting a pinned list here.
 
 Dashboard (web/):
 - React 19, React Router DOM 7, Tailwind 4, Vite 6
@@ -271,4 +285,4 @@ Dashboard (web/):
 - Uses pnpm for package management
 
 Module: `github.com/AnubisWatch/anubiswatch`
-Go version: 1.26.2
+Go version: `go 1.26.0`, toolchain `go1.26.6` (see `go.mod`)

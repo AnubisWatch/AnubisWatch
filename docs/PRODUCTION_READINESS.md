@@ -1,316 +1,127 @@
-# Production Readiness Report
+# Production Readiness Checklist
 
-**Project:** AnubisWatch
-**Version:** v0.1.1 (`b9da994`)
-**Report generated:** 2026-05-20
-**Auditors:** security-scanner, audit-log, bug-hunter (static analysis)
+**Date:** 2026-07-24  
+**Status:** Single-node production candidate; requires environment-specific preflight, backup/restore rehearsal, rollout smoke evidence, and capacity validation. Multi-node deployment is not supported by the production chart.
 
----
+## Build Verification
 
-## Executive Summary
+- [x] `go build ./...` — clean, zero errors
+- [x] `go vet ./...` — clean, zero warnings
+- [x] `govulncheck ./...` — no dependency vulnerabilities
+- [x] `pnpm audit` (frontend devDeps) — 7 undici CVEs in devDependencies only (not in production binary)
 
-AnubisWatch is production-ready **with 3 critical security issues that must be resolved before any production deployment**. The operational infrastructure (CI/CD, Helm, Kubernetes, backup, metrics, health endpoints, graceful shutdown) is solid. The code passes `go vet` and `go build` cleanly. The critical gaps are exclusively in the security domain: LDAP anonymous bind bypass, TLS disabled by default, and SSRF via non-HTTP schemes.
+## Test Verification
 
-**Overall verdict: NOT CLEARED FOR PRODUCTION** — 3 CRITICAL security findings must be addressed first.
+- [x] `go test -short ./...` — all packages pass
+- [x] `go test -race -short ./...` — all packages pass with race detector
+- [x] `scripts/check-go-coverage.sh` — measured 88.9% statement coverage; enforced minimum is 80% (generated protobuf excluded)
+- [x] Frontend tests: `pnpm test` — all pass
 
----
+## Security Fixes Applied
 
-## Security Audit
+- [x] **GetLog data round-trip** (`raft_log.go`): Fixed type assertion bug that silently lost FSM command data on restart recovery
+- [x] **Alert dispatch workspace filter** (`manager.go`): Events now only dispatched to channels in the same workspace
+- [x] **WebSocket workspace isolation** (`websocket.go`): Client-supplied workspace query parameter no longer trusted; authenticated user's workspace always used
+- [x] **WebSocket global broadcast leak** (`websocket.go`): Empty-workspace events scoped to "default" room only, never broadcast globally
+- [x] **MCP workspace bypass** (`mcp.go`): Empty workspace context now defaults to "default" instead of granting access to all workspaces
+- [x] **Incident acknowledge/resolve** (`manager.go`): Workspace check is fail-closed (empty workspace no longer skips authorization)
+- [x] **TLS MinVersion** (all outbound checkers): HTTP, gRPC, SMTP, LDAP now enforce TLS 1.2 minimum
+- [x] **SSRF dialer wrap** (`http.go`): HTTP checker transport now uses SSRF-protected dialer (DNS rebinding defense)
+- [x] **Raft transport OOM** (`transport.go`): RPC payload size capped at 16MB
+- [x] **Escalation message** (`manager.go`): Uses human-readable SoulName instead of opaque ULID
 
-> Source: `internal/auth/ldap.go`, `internal/auth/oidc.go`, `internal/auth/local.go`, `internal/probe/ssrf.go`, `internal/api/rest.go`, `cmd/anubis/server.go`, `configs/`
+## Type Safety & API Hardening
 
-### CRITICAL
+- [x] **gRPC interface{} elimination** (`grpcapi/server.go`): Store interface, PB conversions, and handlers rewritten — 74 `interface{}` usages → 0 in production code
+- [x] **Request ID middleware** (`api/rest.go`): Every API request gets a ULID, logged in structured logs and OpenTelemetry spans, returned as `X-Request-ID` header
+- [x] **Key format validation** (`storage/engine.go`, `storage/storage.go`): `validateResourceID` guards against `/` in IDs across 8 entity types (souls, channels, rules, journeys, workspaces, status pages, dashboards, maintenance windows)
+- [x] **Cursor-based pagination** (`api/rest.go`): Judgment list endpoint accepts `cursor` query param (ULID-based), returns `next_cursor`/`has_more` — prevents phantom reads on live streams
+- [x] **CSP header** (`api/rest.go`): Content-Security-Policy set on all responses
 
-#### 1. LDAP anonymous bind → local fallback account bypass
-**File:** `internal/auth/ldap.go:79-82`
+## Frontend Hardening
 
-When `conn.Bind(bindDN, password)` fails against LDAP, the code silently falls back to local auth (`l.local.Login`). If the LDAP server allows anonymous binds (empty password), an attacker bypasses LDAP entirely and authenticates against the local admin account with any password.
+- [x] **ConfirmDialog** (`components/ConfirmDialog.tsx`): Reusable accessible dialog with focus trapping, Escape-to-close, ARIA compliance. Integrated into Souls, SoulDetail, Alerts, Journeys, Dashboards, StatusPages, Maintenance pages
+- [x] **Souls page decomposition** (`pages/Souls.tsx`): 716 → 466 lines. Extracted `SoulStatsCards`, `SoulFilterBar`, `SoulCreateModal`
+- [x] **Color contrast** (`index.css`): Dark theme `--text-muted` lightened from `#94a3b8` → `#adbac7` for WCAG AA compliance
 
-Additionally, `buildUserDN` at line 172 returns `email` as-is when no `@` is present — no DN escaping — so a malformed email DN could inject into the LDAP bind.
+## CI Pipeline
 
-**Action:** Require LDAP bind success or explicit opt-in fallback. Validate DN escaping. Disable anonymous LDAP bind at the LDAP server level.
+- [x] `.github/workflows/ci.yml` runs full test suite with `-race` flag
+- [x] Coverage threshold enforced at 80% (`scripts/check-go-coverage.sh` + `codecov.yml`), with current Go coverage at 88.9%
+- [x] Static analysis (gofmt, govet, gosec, govulncheck) gates merges
+- [x] Frontend tests and E2E tests run on every PR
 
-#### 2. TLS disabled by default with no minimum version enforcement
-**Files:** `internal/core/feather.go:54-57`, `configs/container.anubis.json:6`, `configs/anubis-prod.json:6`
+## Deployment Artifacts
 
-`TLSServerConfig` has no `MinVersion` or `CipherSuites`. All production configs set `tls.enabled: false` site-wide. The gRPC path sets `MinVersion: tls.VersionTLS12` only in `cmd/anubis/server.go:712`; the HTTP REST server has no TLS config object at all. A misconfigured deployment exposes plaintext traffic.
+- [x] Docker image build verified (`Dockerfile` multi-stage build)
+- [x] `docker-compose.yml` for single-node and cluster deployment
+- [x] Helm chart for Kubernetes (`deploy/helm/anubiswatch/`)
+- [x] K8s manifests for raw deployment (`deploy/k8s/`)
+- [x] Binary build: `go build -ldflags "-s -w" -o bin/anubis ./cmd/anubis`
 
-**Action:** Require TLS 1.2+ in config validation. Reject non-TLS in production mode. Add `MinVersion` and `CipherSuites` to `TLSServerConfig`.
+## Known Limitations
 
-#### 3. SSRF protection allows `grpc://`, `tcp://`, `udp://` schemes
-**File:** `internal/probe/ssrf.go:98-103`
+1. **WAL replay scale**: CobaltDB rebuilds its in-memory B+Tree from the WAL at startup. Recovery now checkpoints live state atomically and survives repeated restarts, but startup time and memory still grow with retained data; capacity-test the expected dataset.
+2. **Multi-node deployment**: Raft persistence, snapshots, mutation replication, and method-level gRPC permissions exist, but the production chart intentionally rejects cluster mode because deterministic ordinal formation and Raft mTLS material are not yet packaged or environment-validated.
+3. **Environment evidence**: Repository gates cannot prove DNS, certificates, ingress proxy ranges, storage latency/durability, backup restoration, alert delivery, or SLO capacity. Capture preflight, rollout, smoke, restore, and load evidence in the target environment before promotion.
 
-`ValidateTarget` explicitly permits `grpc`, `tcp`, and `udp` schemes. Combined with the hostname blocklist only covering known metadata IPs (not arbitrary RFC1918 addresses when `AllowPrivate=false`), an attacker can probe internal gRPC/Telnet services on private IPs.
+## Deployment Instructions
 
-**Action:** Restrict allowed schemes to `http`, `https`, `ws`, `wss` only. Remove `grpc`, `tcp`, `udp` from permitted schemes.
+### Production Preflight
 
----
-
-### HIGH
-
-#### 4. LDAP user filter injection when BindDN is empty
-**File:** `internal/auth/ldap.go:97`
-
-`filter = strings.ReplaceAll(filter, "{{mail}}", ldap.EscapeFilter(email))` is only applied when `l.cfg.UserFilter` is configured and `BindDN != ""`. If `UserFilter` is empty (the default), the email is interpolated into `(mail={{mail}})` unescaped.
-
-**Action:** Always escape filter interpolation, regardless of whether custom filter is set.
-
-#### 5. OIDC issuer trailing-slash mismatch
-**Files:** `internal/auth/oidc.go:273`, `internal/auth/oidc.go:630-633`
-
-The issuer is normalized with `strings.TrimSuffix(o.config.Issuer, "/")` at line 273 (discovery fetch) but the comparison at line 630 uses `o.config.Issuer` directly (untrimmed). If config uses a trailing slash and the provider does not, the issuer validation fails silently.
-
-**Action:** Use the trimmed issuer consistently at both discovery and validation points.
-
-#### 6. API key auth enabled with no key validation implementation
-**Files:** `configs/container.anubis.json:28-30`, `cmd/anubis/server.go`, `internal/auth/`
-
-`auth.api_keys.enabled: true` in the container config — but no key validation is found in the codebase. If this feature is partially implemented, enabling it in a container image without real keys is a dead code risk.
-
-**Action:** Either implement API key validation or explicitly disable `api_keys.enabled` in all production configs.
-
-#### 7. Password reset token prefix logged to structured log
-**File:** `internal/auth/local.go:576-578`
-
-```go
-slog.Info("password reset requested",
-    slog.String("email", email),
-    slog.String("token_prefix", token[:8]+"..."),
+```bash
+VALUES=deploy/helm/anubiswatch/values-production.example.yaml \
+ANUBIS_PREFLIGHT_CREATE_NAMESPACE=true \
+  bash scripts/production-preflight.sh
 ```
 
-The token prefix (8 chars) is logged alongside the email. Comment at line 574 says "In production this should be sent via email" — but nothing prevents the server from running this code path in production, leaking token material to log aggregation systems.
+### Single-node (recommended for most deployments)
 
-**Action:** Remove token data from logs entirely. The email alone is sufficient for audit.
+```bash
+# Build
+go build -ldflags "-s -w" -o bin/anubis ./cmd/anubis
 
----
+# Run with TLS behind a reverse proxy
+ANUBIS_ADMIN_PASSWORD='YourStrongPass123!' ./bin/anubis serve --single
 
-### MEDIUM
+# Or via Docker
+export ANUBIS_ADMIN_PASSWORD='YourStrongPass123!'
+docker-compose up -d
 
-| # | File | Finding | Line(s) |
-|---|------|---------|---------|
-| 8 | `internal/api/rest.go:497-500` | `ListenAndServeTLS` called without explicit `tls.Config` — inherits Go defaults (includes TLS 1.0) | 497-500 |
-| 9 | `internal/api/rest.go:2487` | HSTS header sent unconditionally even when TLS is disabled | 2487 |
-| 10 | `internal/api/rest.go:2368-2373` + `2687-2692` | Default CORS origins include `localhost:3000/8080` — persists in container deployments | 2368-2373, 2687-2692 |
-| 11 | `internal/api/rest.go:2485` | CSP `default-src 'self'` without `script-src` would block Swagger UI scripts at `/api/docs` | 2485 |
-| 12 | `internal/api/rest.go:2589-2592` | Rate limiter uses `X-Forwarded-For` without trusted-proxy validation — IP spoofing bypass | 2589-2592 |
-| 13 | `internal/auth/local.go:441-463` | Brute force lockout state is in-process memory — lost on restart or across cluster nodes | 441-463 |
-
----
-
-### LOW
-
-| # | File | Finding | Line(s) |
-|---|------|---------|---------|
-| 14 | `cmd/anubis/server.go:604` | Session file at `/var/lib/anubis/data/sessions.json` with `0600` — parent dir `0755` is world-traversable | 604 |
-| 15 | `internal/core/config.go:138-140` | Dashboard defaults to `0.0.0.0` — any LAN user can reach unauthenticated status pages | 138-140 |
-| 16 | `internal/core/feather.go:49` | `GRPCReflection` bool in config — correctly defaults to `false` but could be accidentally enabled | 49 |
-| 17 | `internal/api/rest.go:902-921` | OIDC nonce/state cookies use `Secure: true` but lack `__Host-` prefix — could be set on sibling domains | 902-921 |
-
----
-
-## Code Quality Audit
-
-> Source: `go vet ./...`, `go build ./...`, file-level inspection
-
-### Static Analysis
-```
-go vet  ./...  → CLEAN (0 warnings)
-go build ./... → CLEAN (0 errors)
+# Verify
+curl http://localhost:8080/health
+curl -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@anubis.watch","password":"YourStrongPass123!"}'
 ```
 
-### Semantic Bugs
+### Kubernetes (Helm)
 
-#### CRITICAL
-
-**8. Password reset token in structured log** (`internal/auth/local.go:576-578`)  
-Same as Security finding #7. See above.
-
-#### HIGH
-
-**9. Email enumeration via failed reset response** (`internal/auth/local.go:558`)  
-`RequestPasswordReset` uses `subtle.ConstantTimeCompare` to prevent email enumeration (line 558), but then logs the real email when a token IS generated (line 576), negating the enumeration protection.
-
-**Action:** Do not log the email when a token is successfully generated. Log only the fact that a reset was requested (count/success) without the email address.
-
-#### MEDIUM
-
-**10. Partial delete failure silently ignored** (`internal/storage/statuspage.go:114,120`)  
-`DeleteStatusPage` calls `r.storage.Delete(slugKey)` and `r.storage.Delete(domainKey)` and discards both error returns. If either delete fails, execution continues to delete the main record. Orphaned index entries remain in DB with no error returned to the caller.
-
-**Action:** Check both delete errors. Return error or log warning on partial failure.
-
-**11. REST server goroutine orphan on failure** (`cmd/anubis/server.go:145-149`)  
-```go
-go func() {
-    if err := s.deps.RESTServer.Start(); err != nil {
-        logger.Error("REST server failed", "err", err)
-    }
-}()
+```bash
+helm install anubiswatch deploy/helm/anubiswatch \
+  -f values-production.yaml \
+  --set-string secrets.adminPassword="$ANUBIS_ADMIN_PASSWORD" \
+  --set-string secrets.encryptionKey="$ANUBIS_ENCRYPTION_KEY" \
+  --atomic \
+  --timeout 10m
 ```
-If `Start()` returns with an error, the goroutine exits silently — no shutdown signal is sent to `s.Stop()`. Other components keep running. The server returns to accepting connections on the gRPC port but the REST API is down.
 
-**Action:** Send a signal to the shutdown channel when REST server fails, or wrap the goroutine so its exit is observable.
+### Smoke Test
 
-**12. Unsynced channel assignment in compaction** (`internal/storage/timeseries.go:216-219`)  
-`ts.stopCh = make(chan struct{})` is assigned without synchronization. `StopCompaction` closes the same channel at line 223. If `StartCompaction` and `StopCompaction` race, a nil or double-close panic could occur.
+```bash
+# Health check
+curl -s http://localhost:8080/health | jq .
 
-**Action:** Use sync atomics or a mutex to guard `stopCh` assignment.
+# Authenticate into an HttpOnly cookie jar, then create a monitor.
+COOKIE_JAR=$(mktemp)
+curl -fsS -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  --cookie-jar "$COOKIE_JAR" \
+  -d '{"email":"admin@anubis.watch","password":"YourStrongPass123!"}'
 
----
-
-### Verified NOT Bugs (False Positions Corrected)
-
-| Reported As | Correction |
-|---|---|
-| `internal/cluster/distribution.go:214+223` — self-deadlock in `ReassignSoul` | **FALSE POSITIVE.** `d.mu.Lock()` at line 214 is released at line 220 before `d.UnassignSoul()` is called. No re-entrant lock scenario. |
-| `internal/cluster/distribution.go` — lockout state lost on restart | **ACCEPTED RISK** (listed as MEDIUM #13 in security audit) — in-memory, not persisted. |
-
----
-
-## Operational Readiness Audit
-
-> Source: `Makefile`, `Dockerfile`, `docker-compose.yml`, `deploy/k8s/`, `deploy/helm/`, `.github/workflows/ci.yml`, `internal/backup/`, `internal/api/metrics.go`, `internal/api/rest.go`, `cmd/anubis/server.go`
-
-### PASS — Production Ready
-
-| Area | Finding |
-|---|---|
-| **CI/CD** | Comprehensive: `go vet`, `go build`, tests, coverage threshold (75%), Trivy Docker scan, gosec + govulncheck, Helm lint + kubeconform, chaos tests, codecov upload |
-| **Helm chart** | HPA, PDB, resource limits, security context, readiness/liveness probes, secret validation, cert-manager ingress annotations |
-| **Kubernetes manifests** | `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, `fsGroup: 1000`, resource limits, liveness/readiness probes |
-| **docker-compose** | Healthchecks on all services, `unless-stopped` restart policy, named volumes, cluster profile, secrets via env vars |
-| **Backup/restore** | AES-256-GCM encryption, SHA-256 checksum, atomic writes (temp+rename), gzip compression, path traversal protection, selective restore flags |
-| **Prometheus metrics** | `/metrics` endpoint, system + soul + cluster + alert + latency p50/p95/p99 metrics, Prometheus content-type correct |
-| **Health endpoints** | `/health` (liveness, no auth) → `200 OK`; `/ready` (readiness, no auth, validates storage/alert/cluster) → `200 OK` or `503` |
-| **Graceful shutdown** | SIGTERM/SIGINT handling, 10s timeout, correct ordering: telemetry → REST → gRPC → JourneyExecutor → AlertManager → ClusterManager → ProbeEngine → Storage |
-| **npm audit** | Both `web/` and `internal/dashboard/` clean — zero known vulnerabilities |
-| **Dockerfile** | Multi-stage, Alpine base, non-root `anubis:anubis` (uid 1000), `ca-certificates`, binary stripped (`-ldflags "-s -w"`) |
-| **Makefile** | All targets functional: `build`, `test`, `lint`, `dashboard`, `docker`, `release`, `smoke-production`, `preflight-production` |
-| **Production runbook** | Complete at `docs/deployment/production-runbook.md` — preflight, deploy, smoke, rollback, evidence capture |
-
-### MEDIUM — Needs Attention
-
-**13. Dockerfile does not set `readOnlyRootFilesystem: true` at container level**  
-The Dockerfile itself does not enforce a read-only root filesystem. Kubernetes manifests set it via `securityContext.readOnlyRootFilesystem: true` in the Helm chart, but the Dockerfile should enforce this regardless of deployment target.
-
-**Action:** Add `ReadOnlyRootFilesystem: true` to the Dockerfile `USER` statement layer, or document that deployments must set this.
-
----
-
-## Dependency Health
-
-| Check | Result |
-|---|---|
-| `go mod tidy` | ✅ Clean |
-| `go list -m -u all` | 5 LOW upgrades available (golang.org/x/mod, golang.org/x/tools, cel.dev/expr, otel GCP detector, genproto) — all LOW severity, none critical |
-| `web/` npm audit | ✅ Clean |
-| `internal/dashboard/` npm audit | ✅ Clean |
-
----
-
-## Risk Matrix
-
-| ID | Severity | Area | Finding | Remediation Owner |
-|----|----------|------|---------|-----------------|
-| 1 | **CRITICAL** | Auth/LDAP | Anonymous LDAP bind → local fallback bypass | Backend |
-| 2 | **CRITICAL** | TLS | TLS disabled by default, no min version | Backend |
-| 3 | **CRITICAL** | SSRF | `grpc/tcp/udp` schemes permitted | Backend |
-| 4 | **HIGH** | Auth/LDAP | User filter LDAP injection | Backend |
-| 5 | **HIGH** | Auth/OIDC | Issuer trailing-slash mismatch | Backend |
-| 6 | **HIGH** | Auth/API | API key auth enabled, no validation | Backend |
-| 7 | **CRITICAL** | Auth/Local | Password reset token in log | Backend |
-| 8 | MEDIUM | TLS | `ListenAndServeTLS` no explicit cipher config | Backend |
-| 9 | MEDIUM | Config | HSTS sent when TLS disabled | Backend |
-| 10 | MEDIUM | CORS | Default origins include localhost | Backend |
-| 11 | MEDIUM | CSP | Swagger CSP blocks its own scripts | Backend |
-| 12 | MEDIUM | Rate Limit | `X-Forwarded-For` spoofing bypass | Backend |
-| 13 | MEDIUM | Auth/Local | Lockout state lost on restart | Backend |
-| 8 | **HIGH** | Code | Email enumeration via reset log | Backend |
-| 9 | MEDIUM | Storage | Partial delete ignored errors | Backend |
-| 10 | MEDIUM | Server | REST goroutine orphan on failure | Backend |
-| 11 | MEDIUM | Storage | Unsynced channel write in compaction | Backend |
-| 12 | MEDIUM | Infra | Dockerfile no readOnlyRootFilesystem | DevOps |
-
-**Total: 3 CRITICAL (must fix), 4 HIGH (should fix), 11 MEDIUM (fix before production), 4 LOW (nice to have)**
-
-All items above have been addressed. See "Verdict" below for the final status.
-
----
-
-## Deployment Checklist
-
-> ✅ = fixed in this session (commits `f88d0b2`, `21300b1`)
-
-### Must (Blockers)
-- [x] ~~Fix CRITICAL-1: LDAP anonymous bind fallback~~ — ✅ Fixed: `isConnectionFailure()` guard; only unreachable-server errors trigger local fallback
-- [x] ~~Fix CRITICAL-2: Enforce TLS 1.2+ in production mode~~ — ✅ Fixed: `MinVersion` field added; REST enforces TLS 1.2 when enabled; production config must enable TLS
-- [x] ~~Fix CRITICAL-3: Remove `grpc`, `tcp`, `udp` from permitted SSRF schemes~~ — ✅ Fixed: `ssrf.go` now only allows `http`, `https`, `ws`, `wss`
-- [x] ~~Fix CRITICAL-7: Remove password reset token from all logs~~ — ✅ Fixed: `token_prefix` removed from `local.go` reset log
-
-### Should
-- [x] ~~Fix HIGH-4: Always escape LDAP filter interpolation~~ — ✅ Fixed: `ldap.EscapeFilter(email)` applied in default filter case
-- [x] ~~Fix HIGH-5: Normalize OIDC issuer consistently~~ — ✅ Fixed: issuer claim trimmed on both provider response and config sides
-- [x] ~~Fix HIGH-6: Implement API key validation or disable in configs~~ — ✅ Fixed: `api_keys.enabled` set to `false` in container config
-
-### Recommended
-- [x] ~~Fix MEDIUM-8: `ListenAndServeTLS` no explicit cipher config~~ — ✅ Fixed: explicit `tls.Config{MinVersion: TLS 1.2}` on REST server
-- [x] ~~Fix MEDIUM-9: HSTS sent when TLS disabled~~ — ✅ Fixed: HSTS header conditional on `s.config.TLS.Enabled`
-- [x] ~~Fix MEDIUM-10: Partial delete failure silently ignored~~ — ✅ Fixed: `statuspage.go` logs warnings on slug/domain index deletion failure
-- [x] ~~Fix MEDIUM-12: Unsynced channel write in compaction~~ — ✅ Fixed: `stopMu sync.Mutex` added to `TimeSeriesStore`
-- [x] ~~Fix MEDIUM-12: X-Forwarded-For spoofing bypass~~ — ✅ Fixed: `TrustedProxies` config + `realIP()` gates XFF on known proxy IPs
-
-### Remaining work before production
-
-| ID | Severity | File | Finding | Status |
-|----|----------|------|---------|--------|
-| CRITICAL-2 | CRITICAL | `internal/core/config.go` | TLS disabled by default, no MinVersion | ✅ Fixed: `validate()` rejects `tls.enabled: false` when `environment="production"` (commit pending after v0.1.3) |
-| MEDIUM-10 | MEDIUM | `internal/api/rest.go` | Default CORS origins include localhost | ✅ Fixed: documented in `getAllowedOrigins` comment; Helm values updated |
-| MEDIUM-11 | MEDIUM | `internal/api/rest.go` | CSP blocks Swagger UI scripts | ✅ Fixed: `handleOpenAPIDocs` emits a scoped CSP allowing `cdn.jsdelivr.net` for Swagger UI assets; the strict default applies everywhere else |
-| MEDIUM-13 | MEDIUM | `internal/auth/local.go` | Lockout state in-memory, lost on restart | ✅ Fixed: lockouts persisted into session file with stale-entry cleanup on load. Cross-cluster sync still requires OIDC/LDAP (documented operational risk) |
-| MEDIUM-14 | MEDIUM | Dockerfile | No `readOnlyRootFilesystem` at container level | ✅ Fixed: Helm `values.yaml` sets `readOnlyRootFilesystem: true` |
-
----
-
-## Verdict
-
-**CLEARED FOR PRODUCTION** — All CRITICAL, HIGH, and MEDIUM findings resolved as of v0.1.4 prep (commits `f88d0b2`, `21300b1`, `e6f6ea1`, plus the v0.1.4 hardening batch).
-
-The codebase is well-structured, passes all static analysis (`go vet`, `go build`, `gofmt`, `gosec`, `govulncheck`), has comprehensive CI/CD (13/13 jobs green, multi-arch container build, Trivy scan, Playwright e2e 8/8), strong operational tooling (Helm, Kubernetes, backup, metrics, health endpoints, graceful shutdown), and shows active maintenance.
-
-The previously-remaining MEDIUM items (`MEDIUM-11` Swagger CSP, `MEDIUM-13` lockout persistence) are now closed in code. The only operational-policy item that remains is cross-cluster lockout sync, which is mitigated by the architectural recommendation to use OIDC/LDAP for HA deployments rather than local auth.
-
----
-
-## Fixed in this session
-
-**Commit `f88d0b2`** (security fixes — 3 CRITICAL + 2 MEDIUM):
-
-| File | Change |
-|------|--------|
-| `internal/probe/ssrf.go` | Removed `grpc`, `tcp`, `udp` from allowed schemes — only `http`, `https`, `ws`, `wss` permitted |
-| `internal/auth/ldap.go` | Added `isConnectionFailure()` to gate local fallback — only network failures trigger fallback |
-| `internal/auth/ldap.go` | Escaped LDAP filter interpolation in default filter path |
-| `internal/auth/local.go` | Removed `token_prefix` from password reset structured log |
-| `internal/storage/statuspage.go` | Added `slog.Warn` on slug/domain index deletion failure |
-| `internal/storage/timeseries.go` | Added `stopMu sync.Mutex` protecting `stopCh` channel assignment |
-
-**Commit `21300b1`** (remaining HIGH + MEDIUM fixes):
-
-| File | Change |
-|------|--------|
-| `internal/core/feather.go` | Added `MinVersion`, `PreferServer`, `TrustedProxies` fields to `TLSServerConfig` and `ServerConfig` |
-| `internal/api/rest.go` | TLS 1.2 enforced on REST `ListenAndServeTLS` via explicit `tls.Config` |
-| `internal/api/rest.go` | HSTS header only set when `config.TLS.Enabled == true` |
-| `internal/api/rest.go` | Added `realIP()` function + `TrustedProxies` config — X-Forwarded-For spoofing blocked |
-| `internal/auth/oidc.go` | Issuer claim normalized on both provider response and config sides |
-| `configs/container.anubis.json` | Disabled `api_keys.enabled` (no validation implementation) |
-
-**Commit `e6f6ea1`** (tests + Helm TLS hardening):
-
-| File | Change |
-|------|--------|
-| `internal/probe/ssrf_test.go` | Removed `grpc` from allowed schemes test; added `TestSSRFValidator_ValidateTarget_BlockedSchemes` |
-| `internal/auth/ldap_test.go` | Added `TestIsConnectionFailure` with 12 test cases covering connection vs auth discrimination |
-| `deploy/helm/anubiswatch/values.yaml` | Added `tls.cert/key/min_version/prefer_server` and `trustedProxies` fields with secure defaults |
-| `deploy/helm/anubiswatch/values-production.example.yaml` | Documented TLS and `trustedProxies` production configuration |
-| `deploy/helm/anubiswatch/templates/configmap.yaml` | Wired new TLS and `trustedProxies` fields into `anubis.yaml` configmap |
+curl -fsS -X POST http://localhost:8080/api/v1/souls \
+  --cookie "$COOKIE_JAR" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Example","type":"http","target":"https://example.com","weight":"60s","timeout":"10s","http":{"method":"GET","valid_status":[200]}}'
+rm -f "$COOKIE_JAR"
+```

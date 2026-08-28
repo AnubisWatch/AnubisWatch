@@ -99,7 +99,28 @@ server:
     enabled: true
     cert: "/etc/ssl/certs/anubis.crt"
     key: "/etc/ssl/private/anubis.key"
+    min_version: 3
 ```
+
+#### `server.tls` Block
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Terminate TLS on the HTTP and gRPC listeners |
+| `cert` | string | - | PEM certificate path. Required when `enabled: true` |
+| `key` | string | - | PEM private key path. Required when `enabled: true` |
+| `min_version` | int | `0` | Minimum TLS version: `0` (unset — TLS 1.2), `3` (TLS 1.2), `4` (TLS 1.3) |
+
+`min_version` applies to both the REST and gRPC listeners. `1` (TLS 1.0) and `2`
+(TLS 1.1) are **rejected at config load** rather than honoured — both protocols
+are deprecated, and accepting them would lower the server below its TLS 1.2
+floor. Any other value is also rejected, so a typo fails fast instead of
+silently falling back.
+
+> **Removed:** `server.tls.prefer_server` is accepted for backward compatibility
+> but does nothing. It mapped onto `tls.Config.PreferServerCipherSuites`, which
+> Go has ignored since 1.17 — the runtime chooses cipher preference. Delete it
+> from your config.
 
 ## Storage Configuration
 
@@ -1183,15 +1204,15 @@ verdicts:
 
 ### 3-Node Cluster
 
-See [DEPLOYMENT.md](../DEPLOYMENT.md#kubernetes-cluster) for cluster configuration examples.
+See [deployment/guide.md](deployment/guide.md) for cluster configuration examples.
 
 ---
 
 ## See Also
 
-- [DEPLOYMENT.md](../DEPLOYMENT.md) - Deployment guides
-- [openapi.yaml](openapi.yaml) - REST API specification
-- [GHCR.md](../GHCR.md) - Container image documentation
+- [deployment/guide.md](deployment/guide.md) - Deployment guides
+- [api/openapi.yaml](api/openapi.yaml) - REST API specification
+- [deploy/README.md](../deploy/README.md) - Container image and deployment assets
 
 ---
 

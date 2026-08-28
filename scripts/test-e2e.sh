@@ -31,21 +31,21 @@ run_backend_tests() {
 run_frontend_tests() {
     echo -e "${YELLOW}Running frontend tests...${NC}"
     cd web
-    npm run test 2>&1 | tail -10
+    pnpm run test 2>&1 | tail -10
     cd ..
 }
 
 run_lint() {
     echo -e "${YELLOW}Running linter...${NC}"
     cd web
-    npm run lint 2>&1 | tail -5
+    pnpm run lint 2>&1 | tail -5
     cd ..
 }
 
 run_build() {
     echo -e "${YELLOW}Building embedded dashboard...${NC}"
     cd web
-    npm run build:embed
+    pnpm run build:embed
     cd ..
 
     echo -e "${YELLOW}Building binary...${NC}"
@@ -83,7 +83,7 @@ run_browser_e2e() {
     fi
 
     cd web
-    npm run e2e
+    pnpm run e2e
     cd ..
 }
 

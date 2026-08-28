@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "build:embed": "npm run build && node scripts/embed-dashboard.mjs",
+    "build:embed": "pnpm run build && node scripts/embed-dashboard.mjs",
     "preview": "vite preview",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "test": "vitest run",
@@ -20,7 +20,7 @@
     "lucide-react": "^1.18.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "react-router-dom": "^7.18.1",
+    "react-router-dom": "^7.18.2",
     "recharts": "^3.8.1",
     "zustand": "^5.0.14"
   },

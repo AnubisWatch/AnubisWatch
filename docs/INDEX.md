@@ -25,7 +25,7 @@
 | Document | Description | Location |
 |----------|-------------|----------|
 | **CONFIGURATION.md** | Complete `anubis.yaml` reference | [docs/](CONFIGURATION.md) |
-| **openapi.yaml** | REST API specification (OpenAPI 3.1.0) | [docs/api/](openapi.yaml) |
+| **openapi.yaml** | REST API specification (OpenAPI 3.0.3) | [docs/api/openapi.yaml](api/openapi.yaml) |
 | **deployment/guide.md** | Deployment guide | [docs/deployment/](deployment/guide.md) |
 | **deployment/production-runbook.md** | Production deploy, smoke, and rollback runbook | [docs/deployment/](deployment/production-runbook.md) |
 | **PRODUCTION_READINESS.md** | Security audit, code quality, and operational readiness report | [docs/](PRODUCTION_READINESS.md) |
@@ -37,7 +37,7 @@
 |----------|-------------|----------|
 | **CONTRIBUTING.md** | Contribution guidelines | [Root](../CONTRIBUTING.md) |
 | **ARCHITECTURE.md** | Architecture overview | [Root](../ARCHITECTURE.md) |
-| **openapi.yaml** | API specification for client generation | [docs/api/](openapi.yaml) |
+| **openapi.yaml** | API specification for client generation | [docs/api/openapi.yaml](api/openapi.yaml) |
 | **RELEASE_TEMPLATE.md** | GitHub Release template | [.github/](../.github/RELEASE_TEMPLATE.md) |
 | **docs/adr/** | Architecture Decision Records | [docs/adr/](adr/) |
 
@@ -94,7 +94,7 @@
 
 - **Markdown** for all documentation
 - **YAML** for configuration examples
-- **OpenAPI 3.1.0** for API specification
+- **OpenAPI 3.0.3** for API specification
 
 ### Style Guide
 

@@ -623,7 +623,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 			}
 			grpcTLSConfig = &tls.Config{
 				Certificates: []tls.Certificate{cert},
-				MinVersion:   tls.VersionTLS12,
+				MinVersion:   cfg.Server.TLS.ResolveMinVersion(),
 			}
 		}
 

@@ -21,9 +21,22 @@ RUN npm install -g pnpm@10
 COPY . .
 RUN cd web && pnpm install --frozen-lockfile && pnpm run build:embed
 
-# Build binary
+# Build binary.
+#
+# The version stamp is passed in rather than derived: the build context has no
+# .git (see .dockerignore), so `git describe` inside the builder is impossible.
+# Without these the image reports `anubis version` = dev/unknown/unknown, which
+# makes a running container unidentifiable — and SECURITY.md asks vulnerability
+# reporters for exactly that output. Defaults match the Go source so a bare
+# `docker build` still works.
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG BUILD_DATE=unknown
 RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags "-s -w" \
+    -ldflags "-s -w \
+      -X main.Version=${VERSION} \
+      -X main.Commit=${COMMIT} \
+      -X main.BuildDate=${BUILD_DATE}" \
     -o /build/anubis \
     ./cmd/anubis
 

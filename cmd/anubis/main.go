@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net"
@@ -128,6 +129,27 @@ Security flags (K7):
 }
 
 func showVersion() {
+	// `version --json` is the machine-readable form used to confirm which build
+	// is actually running (a container, a release artifact). It used to be
+	// documented but not implemented — the flag was accepted and ignored, so
+	// anything parsing it got the banner text instead.
+	for _, arg := range os.Args[2:] {
+		if arg == "--json" || arg == "-json" {
+			out, err := json.MarshalIndent(map[string]string{
+				"version":    Version,
+				"commit":     Commit,
+				"build_date": BuildDate,
+				"go_version": runtime.Version(),
+				"platform":   fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
+			}, "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "failed to encode version: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println(string(out))
+			return
+		}
+	}
 	fmt.Printf(`⚖️  AnubisWatch — The Judgment Never Sleeps
 Version:    %s
 Commit:     %s
