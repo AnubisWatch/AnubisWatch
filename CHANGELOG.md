@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- The Trivy image gate ran with `ignore-unfixed: false`, so it also blocked on vulnerabilities with no published fix — `GO-2026-5932` (`x/crypto/openpgp`) and `CVE-2026-56852` (`x/text`), both transitive, both already at the newest published version of their module, and both reported by `govulncheck` as unreachable from this code ("affected by 0 vulnerabilities"). No change in this repository could have turned that job green. Now `ignore-unfixed: true`: the gate blocks on actionable findings (it is what caught the openssl CVE below), unfixed ones stay visible through the `always()` SARIF upload to the Security tab, and `govulncheck` remains a hard gate with real reachability analysis
 - Base image now takes its pending security updates (`apk --no-cache upgrade`). `alpine:3.24` is pinned for reproducibility, but a pinned tag also freezes the package versions it shipped with: Trivy blocked the build on **CVE-2026-14456** (HIGH — OpenSSL QUIC unbounded memory growth) in `libcrypto3`/`libssl3` `3.5.7-r0`, fixed in `3.5.8-r0`. Image rescans clean; the Go binary itself had zero findings
 
 
