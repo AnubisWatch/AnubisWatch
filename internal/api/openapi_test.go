@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // routesNotInSpec are paths the router serves that are deliberately absent
@@ -47,6 +49,17 @@ func registeredRoutes(t *testing.T) map[string]bool {
 		t.Fatalf("found only %d routes in rest.go; the scan regex is probably stale", len(routes))
 	}
 	return routes
+}
+
+// openAPISpec parses the embedded spec. It lives here rather than beside the
+// serving code because nothing outside these tests reads the spec as a map —
+// the server writes the pre-converted bytes straight out.
+func openAPISpec() (map[string]any, error) {
+	var spec map[string]any
+	if err := yaml.Unmarshal(openapiYAML, &spec); err != nil {
+		return nil, err
+	}
+	return spec, nil
 }
 
 func specOperations(t *testing.T) map[string]bool {

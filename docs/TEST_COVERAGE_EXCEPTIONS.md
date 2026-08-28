@@ -54,4 +54,8 @@ Any new application-source exclusion requires an explicit policy and configurati
 
 ## CI and Codecov
 
-CI runs the same Go script and Vitest command used locally, then uploads `coverage-filtered.out` with the `backend` flag and `web/coverage/coverage-final.json` with the `frontend` flag. `codecov.yml` independently requires 80% project and patch coverage with zero tolerance below that target. Codecov upload errors fail CI so a missing report cannot appear successful.
+CI runs the same Go script and Vitest command used locally. Those two steps are the gate: they run before any upload and fail the job on their own.
+
+The Codecov upload is reporting layered on top. It uploads `coverage-filtered.out` with the `backend` flag and `web/coverage/coverage-final.json` with the `frontend` flag, and `codecov.yml` asks for 80% project and patch coverage — but that second opinion only exists when a `CODECOV_TOKEN` secret is configured for the repository. The upload steps are conditional on that secret and are skipped without it.
+
+> This used to read "Codecov upload errors fail CI so a missing report cannot appear successful." The upload did carry `fail_ci_if_error: true`, but no `CODECOV_TOKEN` was ever configured, so every push failed with `Token required - not valid tokenless upload` — after the tests and both coverage gates had passed. CI was red on `main` continuously, which meant a genuine regression was indistinguishable from the standing failure. Reporting is not allowed to fail the build over a missing org secret; the gates above are what enforce coverage.

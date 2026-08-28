@@ -43,12 +43,3 @@ func yamlToJSON(in []byte) ([]byte, error) {
 	}
 	return json.MarshalIndent(doc, "", "  ")
 }
-
-// openAPISpec returns the parsed spec. Used by the drift test.
-func openAPISpec() (map[string]any, error) {
-	var spec map[string]any
-	if err := yaml.Unmarshal(openapiYAML, &spec); err != nil {
-		return nil, err
-	}
-	return spec, nil
-}

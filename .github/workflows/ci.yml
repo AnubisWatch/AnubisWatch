@@ -23,6 +23,10 @@ jobs:
   test-backend:
     name: Backend Tests
     runs-on: ubuntu-latest
+    env:
+      # Hoisted so the Codecov step's `if:` can test it — the secrets context
+      # is not available in a step-level condition.
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -55,8 +59,12 @@ jobs:
           ANUBIS_CONFIG: /tmp/anubis-test.json
 
       - name: Upload coverage to Codecov
+        # Skipped when CODECOV_TOKEN is not configured. The coverage GATE is
+        # the check-go-coverage.sh step above; this is reporting on top of it.
+        if: env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@v6
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage-filtered.out
           flags: backend
           fail_ci_if_error: true
@@ -65,6 +73,10 @@ jobs:
   test-frontend:
     name: Frontend Tests
     runs-on: ubuntu-latest
+    env:
+      # Hoisted so the Codecov step's `if:` can test it — the secrets context
+      # is not available in a step-level condition.
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -94,8 +106,12 @@ jobs:
         run: pnpm run test:coverage
 
       - name: Upload coverage to Codecov
+        # Skipped when CODECOV_TOKEN is not configured. The coverage GATE is
+        # the vitest thresholds in the step above; this is reporting on top.
+        if: env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@v6
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: ./web/coverage/coverage-final.json
           flags: frontend
           fail_ci_if_error: true
@@ -249,7 +265,11 @@ jobs:
 
       - name: Upload SARIF to GitHub
         uses: github/codeql-action/upload-sarif@v4
-        if: always()
+        # always(), so a gosec finding still gets reported — but only if the
+        # file exists. When an earlier step fails, gosec is skipped and never
+        # writes gosec.sarif; uploading unconditionally then adds a second,
+        # misleading red step ("Path does not exist") on top of the real one.
+        if: always() && hashFiles('gosec.sarif') != ''
         with:
           sarif_file: gosec.sarif
 
