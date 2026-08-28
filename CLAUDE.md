@@ -175,7 +175,7 @@ In-memory B+Tree with configurable order (default 32, range 4–256), WAL for cr
 
 Custom router (no third-party library) with parameterized routes (`:param` syntax). Middleware chain: logging → security headers → CORS → recovery → JSON validation → path param validation → rate limiting. Auth via `requireAuth()` (token) and `requireRole()` (RBAC). ~94 registered routes, most under `/api/v1/`. SSE fallback at `/api/v1/events`.
 
-The API has **two independent OpenAPI documents that drift**: `docs/api/openapi.yaml` (3.0.3, 18 paths, hand-maintained) and a hardcoded `openapiJSON` blob in `internal/api/rest.go` (declares version 4.0.0, 42 paths) that is what `/api/v1/spec` and `/api/docs` actually serve. Neither covers all 94 routes. Treat the route table in `rest.go` as the source of truth.
+The OpenAPI spec is **`internal/api/openapi.yaml`** — a single document, embedded with `go:embed`, served as JSON at `/api/openapi.json`, as YAML at `/api/openapi.yaml`, and rendered by `/api/docs`. It covers every registered route; `TestOpenAPISpecCoversEveryRoute` and `TestOpenAPISpecHasNoPhantomOperations` fail the build if the spec and the router disagree in either direction. Add the operation in the same change that adds the route.
 
 ### Authentication (`internal/auth/`)
 

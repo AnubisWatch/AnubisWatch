@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The API is described by one document again.** There were three, and they disagreed: a hand-maintained `docs/api/openapi.yaml` (18 paths) that was never served, a hardcoded `openapiJSON` blob in `rest.go` (42 paths, declaring an `info.version` of `4.0.0` that corresponded to nothing) that was, and a Go map merging a handful more paths in at request time. None covered the 93-route table. The spec now lives at `internal/api/openapi.yaml`, is embedded with `go:embed`, and is served as JSON at `/api/openapi.json`, as YAML at the new `/api/openapi.yaml`, and rendered by `/api/docs`. It documents every registered route — 17 had no entry in any of the three previous documents, including all of password reset, change-password, workspace switching, the OIDC endpoints, and every `/api/v1/alerts/{channels,rules}/{id}` operation
+- `TestOpenAPISpecCoversEveryRoute` and `TestOpenAPISpecHasNoPhantomOperations` now fail the build if the router and the spec disagree in either direction, so the drift cannot silently return. Routes that are deliberately unpublished need an entry in `routesNotInSpec` with a reason
 - `server.tls.prefer_server` removed from the shipped configs and Helm chart. It mapped onto `tls.Config.PreferServerCipherSuites`, which Go has ignored since 1.17. The Go field remains (deprecated, `omitempty`) so existing configs still load
 - Standardised every frontend entry point on pnpm. `Makefile` (`dashboard-dev`), `web/package.json` (`build:embed`), and `scripts/test-e2e.sh` invoked bare `npm`, which has no `package-lock.json` to work from in this repo
 

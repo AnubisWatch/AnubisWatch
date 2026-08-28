@@ -365,7 +365,7 @@ Submit PRs, report bugs, improve documentation.
 - [Quick Start](/docs/quickstart)
 - [Configuration Reference](CONFIGURATION.md)
 - [Deployment Guide](deployment/guide.md)
-- [API Reference](api/openapi.yaml)
+- [API Reference](api/README.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
 
 #### Community

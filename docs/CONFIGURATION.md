@@ -1211,7 +1211,7 @@ See [deployment/guide.md](deployment/guide.md) for cluster configuration example
 ## See Also
 
 - [deployment/guide.md](deployment/guide.md) - Deployment guides
-- [api/openapi.yaml](api/openapi.yaml) - REST API specification
+- [api/README.md](api/README.md) - REST API specification
 - [deploy/README.md](../deploy/README.md) - Container image and deployment assets
 
 ---

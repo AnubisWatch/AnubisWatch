@@ -1,0 +1,1857 @@
+# AnubisWatch REST API — OpenAPI specification.
+#
+# THIS FILE IS THE SINGLE SOURCE OF TRUTH FOR THE API SURFACE.
+# It is embedded into the binary (see openapi.go) and served verbatim at
+# /api/openapi.yaml, converted to JSON at /api/openapi.json, and rendered by
+# /api/docs. There is no second, hardcoded copy any more — there used to be
+# three documents that disagreed (a hand-maintained YAML under docs/ that was
+# never served, a hardcoded JSON blob in rest.go, and a Go map that merged
+# extra paths into it).
+#
+# TestOpenAPISpecCoversEveryRoute in openapi_test.go fails the build if a route
+# is registered without a matching operation here, so adding an endpoint means
+# adding it below.
+#
+# Paths are absolute and include the /api/v1 prefix where it applies, because
+# /health, /ready, /metrics and the public status pages do not live under it.
+
+openapi: 3.0.3
+info:
+  title: AnubisWatch API
+  description: |
+    Zero-dependency uptime and synthetic monitoring platform API.
+
+    ## Authentication
+    All API endpoints require authentication via Bearer token in the Authorization header:
+    ```
+    Authorization: Bearer <your-token>
+    ```
+
+    ## Rate Limiting
+    API requests are rate limited per IP and per user:
+    - 100 requests/minute for standard endpoints
+    - 10 requests/minute for authentication endpoints
+    - 20 requests/minute for sensitive operations
+
+    Rate limit headers are included in responses:
+    - `X-RateLimit-Limit`: Maximum requests allowed
+    - `X-RateLimit-Remaining`: Remaining requests in window
+    - `X-RateLimit-Reset`: Unix timestamp when limit resets
+  # Version of the API contract, not of the product. The routes are served
+  # under /api/v1, so the contract is 1.x. (The two documents this file
+  # replaced claimed 3.0.0 and 4.0.0; neither corresponded to anything.)
+  version: 1.0.0
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  contact:
+    name: AnubisWatch Team
+    url: https://anubis.watch
+    email: team@anubis.watch
+servers:
+- url: http://localhost:8080
+  description: Local development server
+- url: https://api.anubis.watch
+  description: Production server
+security:
+- bearerAuth: []
+tags:
+- name: Authentication
+  description: User authentication and session management
+- name: Souls
+  description: Monitored targets management
+- name: Judgments
+  description: Health check results
+- name: Alerts
+  description: Alert channels and rules
+- name: Cluster
+  description: Raft cluster management
+- name: Journeys
+  description: Multi-step synthetic monitoring
+- name: Status Pages
+  description: Public status page configuration
+- name: System
+  description: System health and metrics
+paths:
+  /api/docs:
+    get:
+      responses:
+        '200':
+          description: Interactive API documentation
+      summary: Swagger UI documentation
+      tags:
+      - System
+  /api/openapi.json:
+    get:
+      responses:
+        '200':
+          description: OpenAPI document
+      summary: OpenAPI JSON specification
+      tags:
+      - System
+  /api/openapi.yaml:
+    get:
+      responses:
+        '200':
+          description: OpenAPI document in its authored YAML form
+      summary: OpenAPI YAML specification
+      tags:
+      - System
+  /api/v1/alerts/channels:
+    get:
+      tags:
+      - Alerts
+      summary: List alert channels
+      description: Retrieve all configured alert channels
+      responses:
+        '200':
+          description: List of alert channels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AlertChannel'
+    post:
+      tags:
+      - Alerts
+      summary: Create alert channel
+      description: Create a new alert channel (email, webhook, slack, etc.)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertChannelCreate'
+      responses:
+        '201':
+          description: Channel created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertChannel'
+  /api/v1/alerts/channels/{id}:
+    get:
+      summary: Get an alert channel
+      tags:
+      - Alerts
+      security: &id001
+      - bearerAuth: []
+      parameters:
+      - &id002
+        name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Channel
+        '404':
+          description: Not found
+    put:
+      summary: Update an alert channel
+      tags:
+      - Alerts
+      description: Requires the channels:* role.
+      security: *id001
+      parameters:
+      - *id002
+      responses:
+        '200':
+          description: Channel updated
+        '403':
+          description: Insufficient role
+    delete:
+      summary: Delete an alert channel
+      tags:
+      - Alerts
+      description: Requires the channels:* role.
+      security: *id001
+      parameters:
+      - *id002
+      responses:
+        '204':
+          description: Channel deleted
+        '403':
+          description: Insufficient role
+  /api/v1/alerts/channels/{id}/test:
+    post:
+      summary: Send a test notification through a channel
+      tags:
+      - Alerts
+      description: Requires the channels:* role.
+      security: *id001
+      parameters:
+      - *id002
+      responses:
+        '200':
+          description: Test dispatched
+        '403':
+          description: Insufficient role
+  /api/v1/alerts/rules:
+    get:
+      tags:
+      - Alerts
+      summary: List alert rules
+      description: Retrieve all configured alert rules
+      responses:
+        '200':
+          description: List of alert rules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AlertRule'
+    post:
+      tags:
+      - Alerts
+      summary: Create alert rule
+      description: Create a new alert rule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertRuleCreate'
+      responses:
+        '201':
+          description: Rule created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AlertRule'
+  /api/v1/alerts/rules/{id}:
+    get:
+      summary: Get an alert rule
+      tags:
+      - Alerts
+      security: *id001
+      parameters:
+      - *id002
+      responses:
+        '200':
+          description: Rule
+        '404':
+          description: Not found
+    put:
+      summary: Update an alert rule
+      tags:
+      - Alerts
+      description: Requires the rules:* role.
+      security: *id001
+      parameters:
+      - *id002
+      responses:
+        '200':
+          description: Rule updated
+        '403':
+          description: Insufficient role
+    delete:
+      summary: Delete an alert rule
+      tags:
+      - Alerts
+      description: Requires the rules:* role.
+      security: *id001
+      parameters:
+      - *id002
+      responses:
+        '204':
+          description: Rule deleted
+        '403':
+          description: Insufficient role
+  /api/v1/auth/change-password:
+    put:
+      summary: Change the authenticated user's password
+      tags:
+      - Authentication
+      security: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - current_password
+              - new_password
+              properties:
+                current_password:
+                  type: string
+                new_password:
+                  type: string
+      responses:
+        '200':
+          description: Password changed
+        '400':
+          description: New password fails the password policy
+        '401':
+          description: Current password is incorrect
+  /api/v1/auth/login:
+    post:
+      tags:
+      - Authentication
+      summary: User login
+      description: Authenticate a user and return a JWT token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - email
+              - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: user@example.com
+                password:
+                  type: string
+                  format: password
+                  example: secret123
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+                  user:
+                    $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '429':
+          $ref: '#/components/responses/RateLimitError'
+  /api/v1/auth/logout:
+    post:
+      tags:
+      - Authentication
+      summary: User logout
+      description: Invalidate the current authentication token
+      responses:
+        '200':
+          description: Logout successful
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Logged out successfully
+  /api/v1/auth/me:
+    get:
+      tags:
+      - Authentication
+      summary: Get current user
+      description: Retrieve information about the currently authenticated user
+      responses:
+        '200':
+          description: User information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+  /api/v1/auth/oidc/callback:
+    get:
+      summary: OIDC redirect endpoint
+      tags:
+      - Authentication
+      description: Registered only when an OIDC issuer is configured.
+      security: &id003 []
+      parameters:
+      - name: code
+        in: query
+        required: true
+        schema:
+          type: string
+      - name: state
+        in: query
+        required: true
+        schema:
+          type: string
+      responses:
+        '302':
+          description: Redirect to the dashboard with a session established
+        '401':
+          description: State or token validation failed
+  /api/v1/auth/oidc/login:
+    get:
+      summary: Begin the OIDC authorization-code flow
+      tags:
+      - Authentication
+      description: Registered only when an OIDC issuer is configured.
+      security: *id003
+      responses:
+        '302':
+          description: Redirect to the identity provider
+        '404':
+          description: OIDC is not configured
+  /api/v1/auth/reset-password:
+    post:
+      summary: Request a password reset token
+      tags:
+      - Authentication
+      description: Always returns 200 regardless of whether the address exists; the response does not
+        reveal account existence.
+      security: *id003
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - email
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Reset requested (response is identical for unknown addresses)
+  /api/v1/auth/reset-password/confirm:
+    post:
+      summary: Complete a password reset
+      tags:
+      - Authentication
+      security: *id003
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - token
+              - new_password
+              properties:
+                token:
+                  type: string
+                new_password:
+                  type: string
+      responses:
+        '200':
+          description: Password reset
+        '400':
+          description: Token invalid, expired, or password fails policy
+  /api/v1/auth/workspace:
+    post:
+      summary: Switch active workspace
+      tags:
+      - Authentication
+      security: *id001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - workspace_id
+              properties:
+                workspace_id:
+                  type: string
+      responses:
+        '200':
+          description: Active workspace switched
+        '403':
+          description: Not a member of that workspace
+  /api/v1/channels:
+    get:
+      responses:
+        '200':
+          description: Paginated list
+      security:
+      - BearerAuth: []
+      summary: List channels
+      tags:
+      - Alerts
+    post:
+      responses:
+        '201':
+          description: Channel created
+      security:
+      - BearerAuth: []
+      summary: Create channel
+      tags:
+      - Alerts
+  /api/v1/channels/{id}:
+    delete:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Channel deleted
+      security:
+      - BearerAuth: []
+      summary: Delete channel
+      tags:
+      - Alerts
+    get:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Channel details
+      security:
+      - BearerAuth: []
+      summary: Get channel
+      tags:
+      - Alerts
+    put:
+      responses:
+        '200':
+          description: Channel updated
+      security:
+      - BearerAuth: []
+      summary: Update channel
+      tags:
+      - Alerts
+  /api/v1/channels/{id}/test:
+    post:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Test sent
+      security:
+      - BearerAuth: []
+      summary: Test channel
+      tags:
+      - Alerts
+  /api/v1/cluster/peers:
+    get:
+      tags:
+      - Cluster
+      summary: List peers
+      description: Retrieve information about all cluster peers
+      responses:
+        '200':
+          description: List of peers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Peer'
+  /api/v1/cluster/status:
+    get:
+      tags:
+      - Cluster
+      summary: Cluster status
+      description: Retrieve the current cluster status and node information
+      responses:
+        '200':
+          description: Cluster status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterStatus'
+  /api/v1/config:
+    get:
+      responses:
+        '200':
+          description: Configuration
+      security:
+      - BearerAuth: []
+      summary: Get config
+      tags:
+      - Config
+    put:
+      responses:
+        '200':
+          description: Config updated
+      security:
+      - BearerAuth: []
+      summary: Update config
+      tags:
+      - Config
+  /api/v1/dashboards:
+    get:
+      responses:
+        '200':
+          description: List
+      security:
+      - BearerAuth: []
+      summary: List dashboards
+      tags:
+      - Dashboards
+    post:
+      responses:
+        '201':
+          description: Created
+      security:
+      - BearerAuth: []
+      summary: Create dashboard
+      tags:
+      - Dashboards
+  /api/v1/dashboards/templates:
+    get:
+      responses:
+        '200':
+          description: Templates
+      security:
+      - BearerAuth: []
+      summary: Dashboard templates
+      tags:
+      - Dashboards
+  /api/v1/dashboards/{id}:
+    delete:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Deleted
+      security:
+      - BearerAuth: []
+      summary: Delete dashboard
+      tags:
+      - Dashboards
+    get:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Details
+      security:
+      - BearerAuth: []
+      summary: Get dashboard
+      tags:
+      - Dashboards
+    put:
+      responses:
+        '200':
+          description: Updated
+      security:
+      - BearerAuth: []
+      summary: Update dashboard
+      tags:
+      - Dashboards
+  /api/v1/dashboards/{id}/query:
+    post:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Query results
+      security:
+      - BearerAuth: []
+      summary: Query dashboard
+      tags:
+      - Dashboards
+  /api/v1/events:
+    get:
+      responses:
+        '200':
+          description: Stream
+      summary: SSE stream
+      tags:
+      - SSE
+  /api/v1/incidents:
+    get:
+      responses:
+        '200':
+          description: List of incidents
+      security:
+      - BearerAuth: []
+      summary: List incidents
+      tags:
+      - Incidents
+  /api/v1/incidents/{id}/acknowledge:
+    post:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Acknowledged
+      security:
+      - BearerAuth: []
+      summary: Acknowledge incident
+      tags:
+      - Incidents
+  /api/v1/incidents/{id}/resolve:
+    post:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Resolved
+      security:
+      - BearerAuth: []
+      summary: Resolve incident
+      tags:
+      - Incidents
+  /api/v1/journeys:
+    get:
+      tags:
+      - Journeys
+      summary: List journeys
+      description: Retrieve all configured synthetic monitoring journeys
+      responses:
+        '200':
+          description: List of journeys
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Journey'
+    post:
+      tags:
+      - Journeys
+      summary: Create journey
+      description: Create a new multi-step synthetic monitoring journey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JourneyCreate'
+      responses:
+        '201':
+          description: Journey created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Journey'
+  /api/v1/journeys/{id}:
+    delete:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Deleted
+      security:
+      - BearerAuth: []
+      summary: Delete journey
+      tags:
+      - Journeys
+    get:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Details
+      security:
+      - BearerAuth: []
+      summary: Get journey
+      tags:
+      - Journeys
+    put:
+      responses:
+        '200':
+          description: Updated
+      security:
+      - BearerAuth: []
+      summary: Update journey
+      tags:
+      - Journeys
+  /api/v1/journeys/{id}/run:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      tags:
+      - Journeys
+      summary: Run journey
+      description: Execute a synthetic monitoring journey immediately
+      responses:
+        '200':
+          description: Journey execution started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  journey_id:
+                    type: string
+                  status:
+                    type: string
+                    example: execution_requested
+  /api/v1/journeys/{id}/runs:
+    get:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: List
+      security:
+      - BearerAuth: []
+      summary: List journey runs
+      tags:
+      - Journeys
+  /api/v1/journeys/{id}/runs/{runId}:
+    get:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      - in: path
+        name: runId
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Run details
+      security:
+      - BearerAuth: []
+      summary: Get journey run
+      tags:
+      - Journeys
+  /api/v1/judgments:
+    get:
+      tags:
+      - Judgments
+      summary: List all judgments
+      description: Retrieve recent health check results across all souls
+      parameters:
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 100
+      responses:
+        '200':
+          description: List of judgments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Judgment'
+  /api/v1/judgments/{id}:
+    get:
+      summary: Get a single judgment
+      tags:
+      - Judgments
+      security: *id001
+      parameters:
+      - *id002
+      responses:
+        '200':
+          description: Judgment
+        '404':
+          description: Not found
+  /api/v1/maintenance:
+    get:
+      responses:
+        '200':
+          description: List
+      security:
+      - BearerAuth: []
+      summary: List maintenance windows
+      tags:
+      - Maintenance
+    post:
+      responses:
+        '201':
+          description: Created
+      security:
+      - BearerAuth: []
+      summary: Create maintenance window
+      tags:
+      - Maintenance
+  /api/v1/maintenance/{id}:
+    delete:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Deleted
+      security:
+      - BearerAuth: []
+      summary: Delete maintenance window
+      tags:
+      - Maintenance
+    get:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Details
+      security:
+      - BearerAuth: []
+      summary: Get maintenance window
+      tags:
+      - Maintenance
+    put:
+      responses:
+        '200':
+          description: Updated
+      security:
+      - BearerAuth: []
+      summary: Update maintenance window
+      tags:
+      - Maintenance
+  /api/v1/mcp:
+    post:
+      responses:
+        '200':
+          description: MCP response
+      security:
+      - BearerAuth: []
+      summary: MCP endpoint
+      tags:
+      - MCP
+  /api/v1/mcp/tools:
+    get:
+      responses:
+        '200':
+          description: List of tools
+      security:
+      - BearerAuth: []
+      summary: List MCP tools
+      tags:
+      - MCP
+  /api/v1/rules:
+    get:
+      responses:
+        '200':
+          description: Paginated list
+      security:
+      - BearerAuth: []
+      summary: List rules
+      tags:
+      - Alerts
+    post:
+      responses:
+        '201':
+          description: Rule created
+      security:
+      - BearerAuth: []
+      summary: Create rule
+      tags:
+      - Alerts
+  /api/v1/rules/{id}:
+    delete:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Rule deleted
+      security:
+      - BearerAuth: []
+      summary: Delete rule
+      tags:
+      - Alerts
+    get:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Rule details
+      security:
+      - BearerAuth: []
+      summary: Get rule
+      tags:
+      - Alerts
+    put:
+      responses:
+        '200':
+          description: Rule updated
+      security:
+      - BearerAuth: []
+      summary: Update rule
+      tags:
+      - Alerts
+  /api/v1/souls:
+    get:
+      tags:
+      - Souls
+      summary: List souls
+      description: Retrieve a paginated list of monitored souls
+      parameters:
+      - name: offset
+        in: query
+        schema:
+          type: integer
+          default: 0
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 20
+          maximum: 100
+      - name: workspace
+        in: query
+        schema:
+          type: string
+      responses:
+        '200':
+          description: List of souls
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSouls'
+    post:
+      tags:
+      - Souls
+      summary: Create soul
+      description: Create a new monitored soul
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SoulCreate'
+      responses:
+        '201':
+          description: Soul created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Soul'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+  /api/v1/souls/{id}:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      tags:
+      - Souls
+      summary: Get soul
+      description: Retrieve a specific soul by ID
+      responses:
+        '200':
+          description: Soul details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Soul'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    put:
+      tags:
+      - Souls
+      summary: Update soul
+      description: Update an existing soul
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SoulUpdate'
+      responses:
+        '200':
+          description: Soul updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Soul'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+    delete:
+      tags:
+      - Souls
+      summary: Delete soul
+      description: Delete a soul and stop monitoring
+      responses:
+        '204':
+          description: Soul deleted
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+  /api/v1/souls/{id}/check:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      tags:
+      - Souls
+      summary: Force check
+      description: Immediately check a soul's health status
+      responses:
+        '200':
+          description: Check initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Judgment'
+  /api/v1/souls/{id}/judgments:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      tags:
+      - Judgments
+      summary: List judgments
+      description: Retrieve health check results for a soul
+      parameters:
+      - name: start
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: end
+        in: query
+        schema:
+          type: string
+          format: date-time
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          default: 100
+      responses:
+        '200':
+          description: List of judgments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Judgment'
+  /api/v1/souls/{id}/logs:
+    get:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Logs
+      security:
+      - BearerAuth: []
+      summary: Soul logs
+      tags:
+      - Souls
+  /api/v1/stats:
+    get:
+      responses:
+        '200':
+          description: Statistics
+      security:
+      - BearerAuth: []
+      summary: Get stats
+      tags:
+      - Stats
+  /api/v1/stats/overview:
+    get:
+      responses:
+        '200':
+          description: Overview
+      security:
+      - BearerAuth: []
+      summary: Stats overview
+      tags:
+      - Stats
+  /api/v1/status-pages:
+    get:
+      tags:
+      - Status Pages
+      summary: List status pages
+      description: Retrieve all configured public status pages
+      responses:
+        '200':
+          description: List of status pages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StatusPage'
+    post:
+      tags:
+      - Status Pages
+      summary: Create status page
+      description: Create a new public status page
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StatusPageCreate'
+      responses:
+        '201':
+          description: Status page created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusPage'
+  /api/v1/status-pages/{id}:
+    delete:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Deleted
+      security:
+      - BearerAuth: []
+      summary: Delete status page
+      tags:
+      - Status Pages
+    get:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Details
+      security:
+      - BearerAuth: []
+      summary: Get status page
+      tags:
+      - Status Pages
+    put:
+      responses:
+        '200':
+          description: Updated
+      security:
+      - BearerAuth: []
+      summary: Update status page
+      tags:
+      - Status Pages
+  /api/v1/users/me:
+    get:
+      summary: Get the authenticated user
+      tags:
+      - Authentication
+      description: Alias of /api/v1/auth/me.
+      security: *id001
+      responses:
+        '200':
+          description: Current user
+  /api/v1/workspaces:
+    get:
+      responses:
+        '200':
+          description: List of workspaces
+      security:
+      - BearerAuth: []
+      summary: List workspaces
+      tags:
+      - Workspaces
+    post:
+      responses:
+        '201':
+          description: Workspace created
+      security:
+      - BearerAuth: []
+      summary: Create workspace
+      tags:
+      - Workspaces
+  /api/v1/workspaces/{id}:
+    delete:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Workspace deleted
+      security:
+      - BearerAuth: []
+      summary: Delete workspace
+      tags:
+      - Workspaces
+    get:
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Workspace details
+      security:
+      - BearerAuth: []
+      summary: Get workspace
+      tags:
+      - Workspaces
+    put:
+      responses:
+        '200':
+          description: Workspace updated
+      security:
+      - BearerAuth: []
+      summary: Update workspace
+      tags:
+      - Workspaces
+  /health:
+    get:
+      servers:
+      - url: http://localhost:8080
+        description: Local development server
+      - url: https://api.anubis.watch
+        description: Production server
+      tags:
+      - System
+      summary: Health check
+      description: Check if the API is healthy
+      security: []
+      responses:
+        '200':
+          description: API is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+                  timestamp:
+                    type: string
+                    format: date-time
+  /metrics:
+    get:
+      servers:
+      - url: http://localhost:8080
+        description: Local development server
+      - url: https://api.anubis.watch
+        description: Production server
+      tags:
+      - System
+      summary: Prometheus metrics
+      description: Retrieve Prometheus-formatted metrics
+      security: []
+      responses:
+        '200':
+          description: Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+  /public/status:
+    get:
+      responses:
+        '200':
+          description: Public status summary
+      summary: Public system status
+      tags:
+      - Status Pages
+  /ready:
+    get:
+      servers:
+      - url: http://localhost:8080
+        description: Local development server
+      - url: https://api.anubis.watch
+        description: Production server
+      tags:
+      - System
+      summary: Readiness check
+      description: Check if the API is ready to accept requests
+      security: []
+      responses:
+        '200':
+          description: API is ready
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ready:
+                    type: boolean
+                  checks:
+                    type: object
+  /status:
+    get:
+      summary: Public status page (JSON)
+      tags:
+      - Status Pages
+      security: *id003
+      responses:
+        '200':
+          description: Status page payload
+  /status.html:
+    get:
+      summary: Public status page (HTML)
+      tags:
+      - Status Pages
+      security: *id003
+      responses:
+        '200':
+          description: Rendered status page
+  /status/{slug}:
+    get:
+      parameters:
+      - in: path
+        name: slug
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Rendered public status page or JSON status document
+      summary: Public status page
+      tags:
+      - Status Pages
+  /ws:
+    get:
+      responses:
+        '101':
+          description: Upgrade
+      summary: WebSocket
+      tags:
+      - WebSocket
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          type: string
+          enum:
+          - admin
+          - user
+          - viewer
+        workspace:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    Soul:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum:
+          - http
+          - tcp
+          - udp
+          - dns
+          - smtp
+          - icmp
+          - grpc
+          - websocket
+          - tls
+        target:
+          type: string
+        status:
+          type: string
+          enum:
+          - alive
+          - dead
+          - degraded
+          - unknown
+          - embalmed
+        weight:
+          type: integer
+        timeout:
+          type: integer
+        interval:
+          type: integer
+        http_config:
+          $ref: '#/components/schemas/HTTPConfig'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    SoulCreate:
+      type: object
+      required:
+      - name
+      - type
+      - target
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+        target:
+          type: string
+        weight:
+          type: integer
+        timeout:
+          type: integer
+        interval:
+          type: integer
+        http_config:
+          $ref: '#/components/schemas/HTTPConfig'
+    SoulUpdate:
+      allOf:
+      - $ref: '#/components/schemas/SoulCreate'
+    HTTPConfig:
+      type: object
+      properties:
+        method:
+          type: string
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        body:
+          type: string
+        valid_status:
+          type: array
+          items:
+            type: integer
+        follow_redirects:
+          type: boolean
+        verify_tls:
+          type: boolean
+    Judgment:
+      type: object
+      properties:
+        id:
+          type: string
+        soul_id:
+          type: string
+        status:
+          type: string
+          enum:
+          - pass
+          - fail
+        latency_ms:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+        error:
+          type: string
+    AlertChannel:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum:
+          - email
+          - webhook
+          - slack
+          - discord
+          - pagerduty
+        config:
+          type: object
+        enabled:
+          type: boolean
+    AlertChannelCreate:
+      type: object
+      required:
+      - name
+      - type
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+        config:
+          type: object
+        enabled:
+          type: boolean
+          default: true
+    AlertRule:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        condition:
+          type: string
+        channels:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+    AlertRuleCreate:
+      type: object
+      required:
+      - name
+      - condition
+      properties:
+        name:
+          type: string
+        condition:
+          type: string
+        channels:
+          type: array
+          items:
+            type: string
+        enabled:
+          type: boolean
+          default: true
+    ClusterStatus:
+      type: object
+      properties:
+        is_clustered:
+          type: boolean
+        node_id:
+          type: string
+        state:
+          type: string
+        leader:
+          type: string
+        term:
+          type: integer
+        peer_count:
+          type: integer
+    Peer:
+      type: object
+      properties:
+        id:
+          type: string
+        address:
+          type: string
+        region:
+          type: string
+        role:
+          type: string
+        last_contact:
+          type: string
+          format: date-time
+    Journey:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/JourneyStep'
+        enabled:
+          type: boolean
+    JourneyCreate:
+      type: object
+      required:
+      - name
+      - steps
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        steps:
+          type: array
+          items:
+            $ref: '#/components/schemas/JourneyStep'
+        enabled:
+          type: boolean
+          default: true
+    JourneyStep:
+      type: object
+      properties:
+        name:
+          type: string
+        target:
+          type: string
+        method:
+          type: string
+        assertions:
+          type: array
+          items:
+            type: object
+    StatusPage:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+        souls:
+          type: array
+          items:
+            type: string
+    StatusPageCreate:
+      type: object
+      required:
+      - name
+      - slug
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+          default: true
+        souls:
+          type: array
+          items:
+            type: string
+    PaginatedSouls:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Soul'
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+    Pagination:
+      type: object
+      properties:
+        total:
+          type: integer
+        offset:
+          type: integer
+        limit:
+          type: integer
+        has_more:
+          type: boolean
+        next_offset:
+          type: integer
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        code:
+          type: integer
+  responses:
+    BadRequestError:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    UnauthorizedError:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFoundError:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RateLimitError:
+      description: Too many requests
+      headers:
+        X-RateLimit-Limit:
+          schema:
+            type: integer
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+        X-RateLimit-Reset:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'

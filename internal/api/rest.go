@@ -438,6 +438,7 @@ func (s *RESTServer) setupRoutes() {
 
 	// OpenAPI / Swagger (no auth required)
 	s.router.Handle("GET", "/api/openapi.json", s.handleOpenAPIJSON)
+	s.router.Handle("GET", "/api/openapi.yaml", s.handleOpenAPIYAML)
 	s.router.Handle("GET", "/api/docs", s.handleOpenAPIDocs)
 
 	// Public Status Pages (no auth required)
@@ -701,97 +702,26 @@ func (s *RESTServer) handleReady(ctx *Context) error {
 	})
 }
 
-// openapiJSON holds the pre-marshalled OpenAPI spec
-var openapiJSON = []byte(`{"openapi":"3.0.3","info":{"title":"AnubisWatch API","version":"4.0.0","description":"REST API for AnubisWatch uptime monitoring"},"paths":{"/health":{"get":{"summary":"Health check","tags":["System"],"responses":{"200":{"description":"Service is healthy"}}}},"/ready":{"get":{"summary":"Readiness check","tags":["System"],"responses":{"200":{"description":"Service is ready"}}}},"/api/v1/auth/login":{"post":{"summary":"Authenticate user","tags":["Auth"],"requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","required":["email","password"],"properties":{"email":{"type":"string","format":"email"},"password":{"type":"string"}}}}}},"responses":{"200":{"description":"Login successful"},"401":{"description":"Invalid credentials"}}}},"/api/v1/auth/logout":{"post":{"summary":"Log out","tags":["Auth"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Logout successful"}}}},"/api/v1/auth/me":{"get":{"summary":"Get current user","tags":["Auth"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Current user"}}}},"/api/v1/souls":{"get":{"summary":"List souls","tags":["Souls"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"offset","in":"query","schema":{"type":"integer","default":0}},{"name":"limit","in":"query","schema":{"type":"integer","default":20,"max":100}}],"responses":{"200":{"description":"Paginated list"}}},"post":{"summary":"Create soul","tags":["Souls"],"security":[{"BearerAuth":[]}],"responses":{"201":{"description":"Soul created"}}}},"/api/v1/souls/{id}":{"get":{"summary":"Get soul","tags":["Souls"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Soul details"},"404":{"description":"Not found"}}},"put":{"summary":"Update soul","tags":["Souls"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Soul updated"}}},"delete":{"summary":"Delete soul","tags":["Souls"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"204":{"description":"Soul deleted"}}}},"/api/v1/souls/{id}/check":{"post":{"summary":"Force check","tags":["Souls"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Check result"}}}},"/api/v1/souls/{id}/judgments":{"get":{"summary":"List judgments","tags":["Judgments"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"List of judgments"}}}},"/api/v1/channels":{"get":{"summary":"List channels","tags":["Alerts"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Paginated list"}}},"post":{"summary":"Create channel","tags":["Alerts"],"security":[{"BearerAuth":[]}],"responses":{"201":{"description":"Channel created"}}}},"/api/v1/channels/{id}":{"get":{"summary":"Get channel","tags":["Alerts"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Channel details"}}},"put":{"summary":"Update channel","tags":["Alerts"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Channel updated"}}},"delete":{"summary":"Delete channel","tags":["Alerts"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"204":{"description":"Channel deleted"}}}},"/api/v1/channels/{id}/test":{"post":{"summary":"Test channel","tags":["Alerts"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Test sent"}}}},"/api/v1/rules":{"get":{"summary":"List rules","tags":["Alerts"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Paginated list"}}},"post":{"summary":"Create rule","tags":["Alerts"],"security":[{"BearerAuth":[]}],"responses":{"201":{"description":"Rule created"}}}},"/api/v1/rules/{id}":{"get":{"summary":"Get rule","tags":["Alerts"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Rule details"}}},"put":{"summary":"Update rule","tags":["Alerts"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Rule updated"}}},"delete":{"summary":"Delete rule","tags":["Alerts"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"204":{"description":"Rule deleted"}}}},"/api/v1/incidents":{"get":{"summary":"List incidents","tags":["Incidents"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"List of incidents"}}}},"/api/v1/incidents/{id}/acknowledge":{"post":{"summary":"Acknowledge incident","tags":["Incidents"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Acknowledged"}}}},"/api/v1/incidents/{id}/resolve":{"post":{"summary":"Resolve incident","tags":["Incidents"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Resolved"}}}},"/api/v1/workspaces":{"get":{"summary":"List workspaces","tags":["Workspaces"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"List of workspaces"}}},"post":{"summary":"Create workspace","tags":["Workspaces"],"security":[{"BearerAuth":[]}],"responses":{"201":{"description":"Workspace created"}}}},"/api/v1/workspaces/{id}":{"get":{"summary":"Get workspace","tags":["Workspaces"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Workspace details"}}},"put":{"summary":"Update workspace","tags":["Workspaces"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Workspace updated"}}},"delete":{"summary":"Delete workspace","tags":["Workspaces"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"204":{"description":"Workspace deleted"}}}},"/api/v1/stats":{"get":{"summary":"Get stats","tags":["Stats"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Statistics"}}}},"/api/v1/stats/overview":{"get":{"summary":"Stats overview","tags":["Stats"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Overview"}}}},"/api/v1/cluster/status":{"get":{"summary":"Cluster status","tags":["Cluster"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Cluster status"}}}},"/api/v1/cluster/peers":{"get":{"summary":"Cluster peers","tags":["Cluster"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Peers"}}}},"/api/v1/config":{"get":{"summary":"Get config","tags":["Config"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Configuration"}}},"put":{"summary":"Update config","tags":["Config"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Config updated"}}}},"/api/v1/status-pages":{"get":{"summary":"List status pages","tags":["Status Pages"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"List"}}},"post":{"summary":"Create status page","tags":["Status Pages"],"security":[{"BearerAuth":[]}],"responses":{"201":{"description":"Created"}}}},"/api/v1/status-pages/{id}":{"get":{"summary":"Get status page","tags":["Status Pages"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Details"}}},"put":{"summary":"Update status page","tags":["Status Pages"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Updated"}}},"delete":{"summary":"Delete status page","tags":["Status Pages"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"204":{"description":"Deleted"}}}},"/api/v1/journeys":{"get":{"summary":"List journeys","tags":["Journeys"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"List"}}},"post":{"summary":"Create journey","tags":["Journeys"],"security":[{"BearerAuth":[]}],"responses":{"201":{"description":"Created"}}}},"/api/v1/journeys/{id}":{"get":{"summary":"Get journey","tags":["Journeys"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Details"}}},"put":{"summary":"Update journey","tags":["Journeys"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Updated"}}},"delete":{"summary":"Delete journey","tags":["Journeys"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"204":{"description":"Deleted"}}}},"/api/v1/journeys/{id}/run":{"post":{"summary":"Run journey","tags":["Journeys"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Run started"}}}},"/api/v1/journeys/{id}/runs":{"get":{"summary":"List journey runs","tags":["Journeys"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"List"}}}},"/api/v1/journeys/{id}/runs/{runId}":{"get":{"summary":"Get journey run","tags":["Journeys"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}},{"name":"runId","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Run details"}}}},"/api/v1/maintenance":{"get":{"summary":"List maintenance windows","tags":["Maintenance"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"List"}}},"post":{"summary":"Create maintenance window","tags":["Maintenance"],"security":[{"BearerAuth":[]}],"responses":{"201":{"description":"Created"}}}},"/api/v1/maintenance/{id}":{"get":{"summary":"Get maintenance window","tags":["Maintenance"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Details"}}},"put":{"summary":"Update maintenance window","tags":["Maintenance"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Updated"}}},"delete":{"summary":"Delete maintenance window","tags":["Maintenance"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Deleted"}}}},"/api/v1/dashboards":{"get":{"summary":"List dashboards","tags":["Dashboards"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"List"}}},"post":{"summary":"Create dashboard","tags":["Dashboards"],"security":[{"BearerAuth":[]}],"responses":{"201":{"description":"Created"}}}},"/api/v1/dashboards/{id}":{"get":{"summary":"Get dashboard","tags":["Dashboards"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Details"}}},"put":{"summary":"Update dashboard","tags":["Dashboards"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Updated"}}},"delete":{"summary":"Delete dashboard","tags":["Dashboards"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"204":{"description":"Deleted"}}}},"/api/v1/dashboards/{id}/query":{"post":{"summary":"Query dashboard","tags":["Dashboards"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Query results"}}}},"/api/v1/dashboards/templates":{"get":{"summary":"Dashboard templates","tags":["Dashboards"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"Templates"}}}},"/api/v1/mcp":{"post":{"summary":"MCP endpoint","tags":["MCP"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"MCP response"}}}},"/api/v1/mcp/tools":{"get":{"summary":"List MCP tools","tags":["MCP"],"security":[{"BearerAuth":[]}],"responses":{"200":{"description":"List of tools"}}}},"/api/v1/souls/{id}/logs":{"get":{"summary":"Soul logs","tags":["Souls"],"security":[{"BearerAuth":[]}],"parameters":[{"name":"id","in":"path","required":true,"schema":{"type":"string"}}],"responses":{"200":{"description":"Logs"}}}},"/ws":{"get":{"summary":"WebSocket","tags":["WebSocket"],"responses":{"101":{"description":"Upgrade"}}}},"/api/v1/events":{"get":{"summary":"SSE stream","tags":["SSE"],"responses":{"200":{"description":"Stream"}}}}},"components":{"securitySchemes":{"BearerAuth":{"type":"http","scheme":"bearer","bearerFormat":"JWT"}}}}`)
-
 func (s *RESTServer) handleOpenAPIJSON(ctx *Context) error {
 	ctx.Response.Header().Set("Content-Type", "application/json")
 	ctx.Response.Header().Set("Cache-Control", "public, max-age=3600")
 	ctx.Response.WriteHeader(http.StatusOK)
-	if _, err := ctx.Response.Write(buildOpenAPIJSON()); err != nil {
+	if _, err := ctx.Response.Write(openapiJSON); err != nil {
 		s.logger.Warn("failed to write OpenAPI response", "err", err)
 	}
 	return nil
 }
 
-func buildOpenAPIJSON() []byte {
-	var spec map[string]any
-	if err := json.Unmarshal(openapiJSON, &spec); err != nil {
-		return openapiJSON
+// handleOpenAPIYAML serves the spec in its authored form, which is what a
+// client generator usually wants.
+func (s *RESTServer) handleOpenAPIYAML(ctx *Context) error {
+	ctx.Response.Header().Set("Content-Type", "application/yaml")
+	ctx.Response.Header().Set("Cache-Control", "public, max-age=3600")
+	ctx.Response.WriteHeader(http.StatusOK)
+	if _, err := ctx.Response.Write(openapiYAML); err != nil {
+		s.logger.Warn("failed to write OpenAPI response", "err", err)
 	}
-
-	paths, ok := spec["paths"].(map[string]any)
-	if !ok {
-		paths = map[string]any{}
-		spec["paths"] = paths
-	}
-
-	for path, definition := range publicOpenAPIPaths() {
-		if _, exists := paths[path]; !exists {
-			paths[path] = definition
-		}
-	}
-
-	data, _ := json.Marshal(spec)
-	return data
-}
-
-func publicOpenAPIPaths() map[string]any {
-	return map[string]any{
-		"/metrics": map[string]any{
-			"get": map[string]any{
-				"summary": "Prometheus metrics",
-				"tags":    []any{"System"},
-				"responses": map[string]any{
-					"200": map[string]any{"description": "Prometheus metrics"},
-				},
-			},
-		},
-		"/api/openapi.json": map[string]any{
-			"get": map[string]any{
-				"summary": "OpenAPI JSON specification",
-				"tags":    []any{"System"},
-				"responses": map[string]any{
-					"200": map[string]any{"description": "OpenAPI document"},
-				},
-			},
-		},
-		"/api/docs": map[string]any{
-			"get": map[string]any{
-				"summary": "Swagger UI documentation",
-				"tags":    []any{"System"},
-				"responses": map[string]any{
-					"200": map[string]any{"description": "Interactive API documentation"},
-				},
-			},
-		},
-		"/public/status": map[string]any{
-			"get": map[string]any{
-				"summary": "Public system status",
-				"tags":    []any{"Status Pages"},
-				"responses": map[string]any{
-					"200": map[string]any{"description": "Public status summary"},
-				},
-			},
-		},
-		"/status/{slug}": map[string]any{
-			"get": map[string]any{
-				"summary": "Public status page",
-				"tags":    []any{"Status Pages"},
-				"parameters": []any{
-					map[string]any{
-						"name":     "slug",
-						"in":       "path",
-						"required": true,
-						"schema":   map[string]any{"type": "string"},
-					},
-				},
-				"responses": map[string]any{
-					"200": map[string]any{"description": "Rendered public status page or JSON status document"},
-				},
-			},
-		},
-	}
+	return nil
 }
 
 func (s *RESTServer) handleOpenAPIDocs(ctx *Context) error {
