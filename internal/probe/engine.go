@@ -822,6 +822,10 @@ func (e *Engine) recordFailure(soulID string) {
 
 // isOpen returns true if the circuit breaker should block checks
 func (cb *circuitBreaker) isOpen(cfg CircuitBreakerConfig) bool {
+	if !cfg.Enabled {
+		return false
+	}
+
 	cb.mu.RLock()
 	state := cb.state
 	lastChange := cb.lastStateChange
@@ -866,6 +870,9 @@ func retryWithBackoff(ctx context.Context, maxRetries int, initialDelay time.Dur
 		// Don't retry on context cancellation
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if i == maxRetries-1 {
+			break
 		}
 
 		// Wait before retrying, but respect context cancellation

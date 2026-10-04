@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/AnubisWatch/anubiswatch/internal/api"
 )
 
 func summonNode() {
@@ -135,7 +137,7 @@ func showCluster() {
 	apiURL := getAPIURL()
 	token := getAPIToken()
 
-	var clusterData map[string]interface{}
+	var clusterData api.ClusterStatus
 	useAPI := false
 
 	if token != "" {
@@ -150,19 +152,12 @@ func showCluster() {
 
 	if useAPI {
 		// Display API data
-		isClustered, _ := clusterData["is_clustered"].(bool)
-		nodeID, _ := clusterData["node_id"].(string)
-		state, _ := clusterData["state"].(string)
-		leader, _ := clusterData["leader"].(string)
-		term, _ := clusterData["term"].(float64)
-		peerCount, _ := clusterData["peer_count"].(float64)
-
-		fmt.Printf("%-16s %s\n", "Raft State:", state)
-		fmt.Printf("%-16s %s\n", "Current Node:", nodeID)
-		fmt.Printf("%-16s %s\n", "Current Leader:", leader)
-		fmt.Printf("%-16s %.0f\n", "Term:", term)
-		fmt.Printf("%-16s %.0f\n", "Peer Count:", peerCount)
-		fmt.Printf("%-16s %v\n", "Clustered:", isClustered)
+		fmt.Printf("%-16s %s\n", "Raft State:", clusterData.State)
+		fmt.Printf("%-16s %s\n", "Current Node:", clusterData.NodeID)
+		fmt.Printf("%-16s %s\n", "Current Leader:", clusterData.Leader)
+		fmt.Printf("%-16s %d\n", "Term:", clusterData.Term)
+		fmt.Printf("%-16s %d\n", "Peer Count:", clusterData.PeerCount)
+		fmt.Printf("%-16s %v\n", "Clustered:", clusterData.IsClustered)
 	} else {
 		// Fall back to storage
 		store, err := openLocalStorage()

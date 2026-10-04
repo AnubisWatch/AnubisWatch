@@ -185,7 +185,13 @@ func (c *ICMPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 
 		// Wait between pings (except last)
 		if i < count-1 {
-			time.Sleep(interval)
+			timer := time.NewTimer(interval)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return failJudgment(soul, ctx.Err()), nil
+			case <-timer.C:
+			}
 		}
 	}
 
@@ -219,6 +225,7 @@ func (c *ICMPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	}
 
 	// Determine status
+	avgDuration := time.Duration(avgLat * float64(time.Millisecond))
 	status := core.SoulAlive
 	message := fmt.Sprintf("ICMP: %d/%d packets received, %.1f%% loss, avg %.2fms",
 		received, sent, packetLoss, avgLat)
@@ -230,7 +237,7 @@ func (c *ICMPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	} else if cfg.MaxLossPercent > 0 && packetLoss > cfg.MaxLossPercent {
 		status = core.SoulDegraded
 		message = fmt.Sprintf("ICMP: %.1f%% packet loss exceeds threshold %.1f%%", packetLoss, cfg.MaxLossPercent)
-	} else if cfg.Feather.Duration > 0 && time.Duration(avgLat)*time.Millisecond > cfg.Feather.Duration {
+	} else if cfg.Feather.Duration > 0 && avgDuration > cfg.Feather.Duration {
 		status = core.SoulDegraded
 		message = fmt.Sprintf("ICMP: avg latency %.2fms exceeds feather %s", avgLat, cfg.Feather.Duration)
 	}
@@ -239,7 +246,7 @@ func (c *ICMPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		ID:         core.GenerateID(),
 		SoulID:     soul.ID,
 		Timestamp:  time.Now().UTC(),
-		Duration:   time.Duration(avgLat) * time.Millisecond,
+		Duration:   avgDuration,
 		Status:     status,
 		StatusCode: 0,
 		Message:    message,

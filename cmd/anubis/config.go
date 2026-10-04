@@ -69,19 +69,19 @@ func findConfig() string {
 	}
 
 	for _, candidate := range []string{"./anubis.json", "./anubis.yaml"} {
-		if _, err := os.Stat(candidate); err == nil {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			return candidate
 		}
 	}
 
 	for _, candidate := range getUserConfigPaths() {
-		if _, err := os.Stat(candidate); err == nil {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			return candidate
 		}
 	}
 
 	for _, candidate := range getSystemConfigPaths() {
-		if _, err := os.Stat(candidate); err == nil {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
 			return candidate
 		}
 	}

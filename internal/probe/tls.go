@@ -2,6 +2,9 @@ package probe
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -142,6 +145,9 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 	// Check certificate expiry
 	if len(state.PeerCertificates) > 0 {
 		cert := state.PeerCertificates[0]
+		sans := certificateSANs(cert)
+		judgment.TLSInfo.SANs = sans
+		judgment.TLSInfo.KeyBits = certificateKeyBits(cert)
 		daysUntilExpiry := int(time.Until(cert.NotAfter).Hours() / 24)
 
 		// Critical expiry check
@@ -221,10 +227,19 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 		if len(cfg.ExpectedSAN) > 0 {
 			sanMatched := false
 			for _, expected := range cfg.ExpectedSAN {
-				for _, san := range cert.DNSNames {
-					if matchesSAN(san, expected) {
-						sanMatched = true
-						break
+				if expectedIP := net.ParseIP(expected); expectedIP != nil {
+					for _, ip := range cert.IPAddresses {
+						if ip.Equal(expectedIP) {
+							sanMatched = true
+							break
+						}
+					}
+				} else {
+					for _, san := range cert.DNSNames {
+						if matchesSAN(san, expected) {
+							sanMatched = true
+							break
+						}
 					}
 				}
 				if sanMatched {
@@ -234,7 +249,7 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 			assertions = append(assertions, core.AssertionResult{
 				Type:     "san",
 				Expected: strings.Join(cfg.ExpectedSAN, ", "),
-				Actual:   strings.Join(cert.DNSNames, ", "),
+				Actual:   strings.Join(sans, ", "),
 				Passed:   sanMatched,
 			})
 			if !sanMatched {
@@ -242,7 +257,7 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 				if judgment.Status != core.SoulDead {
 					judgment.Status = core.SoulDead
 					judgment.Message = fmt.Sprintf("SAN mismatch: expected %v, got %v",
-						cfg.ExpectedSAN, cert.DNSNames)
+						cfg.ExpectedSAN, sans)
 					return judgment, nil
 				}
 			}
@@ -290,14 +305,19 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 
 		// Key size check
 		if cfg.MinKeyBits > 0 {
-			// This is a simplified check - real implementation would parse the public key
-			keySizeOK := true // Assume OK for now
+			keySizeOK := judgment.TLSInfo.KeyBits >= cfg.MinKeyBits
 			assertions = append(assertions, core.AssertionResult{
 				Type:     "key_size",
 				Expected: fmt.Sprintf(">=%d bits", cfg.MinKeyBits),
-				Actual:   "unknown",
+				Actual:   fmt.Sprintf("%d bits", judgment.TLSInfo.KeyBits),
 				Passed:   keySizeOK,
 			})
+			if !keySizeOK {
+				allPassed = false
+				judgment.Status = core.SoulDegraded
+				judgment.Message = fmt.Sprintf("Certificate key size %d bits below minimum %d bits",
+					judgment.TLSInfo.KeyBits, cfg.MinKeyBits)
+			}
 		}
 	}
 
@@ -412,7 +432,7 @@ func extractTLSCertsOnly(certs []*x509.Certificate) *core.TLSInfo {
 	info := &core.TLSInfo{
 		Issuer:          cert.Issuer.CommonName,
 		Subject:         cert.Subject.CommonName,
-		SANs:            cert.DNSNames,
+		SANs:            certificateSANs(cert),
 		NotBefore:       cert.NotBefore,
 		NotAfter:        cert.NotAfter,
 		DaysUntilExpiry: int(time.Until(cert.NotAfter).Hours() / 24),
@@ -421,6 +441,30 @@ func extractTLSCertsOnly(certs []*x509.Certificate) *core.TLSInfo {
 		ChainValid:      len(certs) > 1,
 	}
 	return info
+}
+
+func certificateSANs(cert *x509.Certificate) []string {
+	sans := append([]string(nil), cert.DNSNames...)
+	for _, ip := range cert.IPAddresses {
+		sans = append(sans, ip.String())
+	}
+	return sans
+}
+
+func certificateKeyBits(cert *x509.Certificate) int {
+	switch key := cert.PublicKey.(type) {
+	case *rsa.PublicKey:
+		if key != nil && key.N != nil {
+			return key.N.BitLen()
+		}
+	case *ecdsa.PublicKey:
+		if key != nil && key.Curve != nil {
+			return key.Curve.Params().BitSize
+		}
+	case ed25519.PublicKey:
+		return len(key) * 8
+	}
+	return 0
 }
 
 func parseTLSVersion(s string) uint16 {

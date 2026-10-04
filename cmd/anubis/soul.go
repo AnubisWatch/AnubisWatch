@@ -58,53 +58,16 @@ func quickWatch() {
 		checkType = "icmp"
 	}
 
-	// Clean target prefix
-	target = strings.TrimPrefix(target, "http://")
-	target = strings.TrimPrefix(target, "https://")
+	// HTTP checks need the URL scheme; other checks use bare targets.
+	if checkType != "http" {
+		target = strings.TrimPrefix(target, "http://")
+		target = strings.TrimPrefix(target, "https://")
+	}
 	target = strings.TrimPrefix(target, "tcp://")
 	target = strings.TrimPrefix(target, "tcp+tls://")
 	target = strings.TrimPrefix(target, "icmp://")
 
 	fmt.Printf("⚖️  Adding soul: %s (%s)\n", name, target)
-
-	// Try API first (if server is running)
-	apiURL := getAPIURL()
-	token := getAPIToken()
-
-	if token != "" {
-		// Use API
-		soulReq := map[string]interface{}{
-			"name":        name,
-			"target":      target,
-			"type":        checkType,
-			"interval":    interval.String(),
-			"timeout":     "10s",
-			"enabled":     true,
-			"workspaceId": "default",
-		}
-
-		reqBody, _ := json.Marshal(soulReq)
-		resp, err := httpPost(apiURL+"/api/v1/souls", "application/json", reqBody, token)
-		if err == nil && resp.StatusCode == http.StatusCreated {
-			resp.Body.Close()
-			fmt.Println("✓ Soul added successfully via API")
-			return
-		}
-		if resp != nil {
-			resp.Body.Close()
-		}
-	}
-
-	// Fall back to direct storage access
-	store, err := openLocalStorage()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: cannot connect to API or open storage: %v\n", err)
-		fmt.Println("\nMake sure AnubisWatch is running, or run from the data directory.")
-		os.Exit(1)
-	}
-	defer store.Close()
-
-	ctx := context.Background()
 
 	// Determine soul type
 	var soulType core.CheckType
@@ -140,6 +103,51 @@ func quickWatch() {
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 	}
+	switch soulType {
+	case core.CheckHTTP:
+		soul.HTTP = &core.HTTPConfig{Method: "GET", ValidStatus: []int{200}}
+	case core.CheckTCP:
+		soul.TCP = &core.TCPConfig{}
+	case core.CheckICMP:
+		soul.ICMP = &core.ICMPConfig{Count: 3, Interval: core.Duration{Duration: 200 * time.Millisecond}}
+	case core.CheckDNS:
+		soul.DNS = &core.DNSConfig{RecordType: "A"}
+	case core.CheckSMTP:
+		soul.SMTP = &core.SMTPConfig{}
+	case core.CheckGRPC:
+		soul.GRPC = &core.GRPCConfig{}
+	case core.CheckWebSocket:
+		soul.WebSocket = &core.WebSocketConfig{}
+	case core.CheckTLS:
+		soul.TLS = &core.TLSConfig{ExpiryWarnDays: 30, ExpiryCriticalDays: 7, MinProtocol: "TLS1.2"}
+	}
+
+	// Use the same Soul schema for the API and direct storage.
+	apiURL := getAPIURL()
+	token := getAPIToken()
+	if token != "" {
+		reqBody, _ := json.Marshal(soul)
+		resp, err := httpPost(apiURL+"/api/v1/souls", "application/json", reqBody, token)
+		if err == nil && resp.StatusCode == http.StatusCreated {
+			resp.Body.Close()
+			fmt.Println("✓ Soul added successfully via API")
+			return
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+	}
+
+	// Fall back to direct storage access
+	store, err := openLocalStorage()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: cannot connect to API or open storage: %v\n", err)
+		fmt.Println("\nMake sure AnubisWatch is running, or run from the data directory.")
+		os.Exit(1)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
 
 	if err := store.SaveSoul(ctx, soul); err != nil {
 		fmt.Fprintf(os.Stderr, "Error saving soul: %v\n", err)
@@ -330,6 +338,13 @@ func importSouls(store *storage.CobaltDB, ctx context.Context) {
 		return
 	}
 
+	for i, soul := range souls {
+		if soul == nil {
+			fmt.Fprintf(os.Stderr, "Error: soul at index %d is null\n", i)
+			os.Exit(1)
+		}
+	}
+
 	// If replace mode, delete existing souls first
 	if replace {
 		existing, _ := store.ListSouls(ctx, "default", 0, 10000)
@@ -410,6 +425,13 @@ func soulsAdd(store *storage.CobaltDB, ctx context.Context) {
 	if len(souls) == 0 {
 		fmt.Println("No souls found in input file")
 		return
+	}
+
+	for i, soul := range souls {
+		if soul == nil {
+			fmt.Fprintf(os.Stderr, "Error: soul at index %d is null\n", i)
+			os.Exit(1)
+		}
 	}
 
 	added := 0

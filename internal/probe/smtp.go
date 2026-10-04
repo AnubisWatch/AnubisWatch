@@ -114,6 +114,20 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	if !strings.HasPrefix(line, "220") {
 		return failJudgment(soul, fmt.Errorf("unexpected SMTP greeting: %s", line)), nil
 	}
+	// Consume the complete greeting before reading the EHLO response, keeping
+	// the raw reply codes available for existing banner assertions.
+	greeting := []string{line}
+	for strings.HasPrefix(line, "220-") {
+		line, err = textReader.ReadLine()
+		if err != nil {
+			return failJudgment(soul, fmt.Errorf("failed to read SMTP greeting: %w", err)), nil
+		}
+		if !strings.HasPrefix(line, "220") {
+			return failJudgment(soul, fmt.Errorf("unexpected SMTP greeting: %s", line)), nil
+		}
+		greeting = append(greeting, line)
+	}
+	line = strings.Join(greeting, "\n")
 
 	// Check banner
 	if cfg.BannerContains != "" {
@@ -464,8 +478,11 @@ func (c *IMAPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		line = strings.TrimSpace(line)
 		capabilities = append(capabilities, line)
 
-		if strings.HasPrefix(line, "A001 OK") || strings.HasPrefix(line, "A001 BAD") {
+		if strings.HasPrefix(line, "A001 OK") {
 			break
+		}
+		if strings.HasPrefix(line, "A001 NO") || strings.HasPrefix(line, "A001 BAD") {
+			return failJudgment(soul, fmt.Errorf("CAPABILITY rejected: %s", line)), nil
 		}
 	}
 

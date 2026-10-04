@@ -610,8 +610,11 @@ func mergeChannelSecrets(existing, incoming *core.AlertChannel) error {
 	// When the destination endpoint changes, the caller must re-enter secrets
 	// explicitly. Preserving a [REDACTED] credential on a different destination
 	// would leak the credential to an attacker-controlled endpoint.
-	if channelDestinationChanged(existing.Config, incoming.Config) && hasRedactedConfigValues(incoming.Config) {
-		return fmt.Errorf("channel destination changed: secrets must be re-entered for the new destination")
+	if channelDestinationChanged(existing.Config, incoming.Config) {
+		if hasRedactedConfigValues(incoming.Config) {
+			return fmt.Errorf("channel destination changed: secrets must be re-entered for the new destination")
+		}
+		return nil
 	}
 	incoming.Config = mergeSecretAnyMap(existing.Config, incoming.Config)
 	return nil

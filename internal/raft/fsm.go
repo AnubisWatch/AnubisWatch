@@ -539,6 +539,9 @@ func (s *InMemoryStableStore) GetUint64(key string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
+	if len(val) != 8 {
+		return 0, fmt.Errorf("invalid uint64 value for key %q: got %d bytes, want 8", key, len(val))
+	}
 	return binary.BigEndian.Uint64(val), nil
 }
 

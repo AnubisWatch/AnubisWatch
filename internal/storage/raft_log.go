@@ -146,10 +146,16 @@ func (s *CobaltDBLogStore) StoreLogs(logs []core.RaftLogEntry) error {
 
 // DeleteRange deletes all log entries in the given range (inclusive)
 func (s *CobaltDBLogStore) DeleteRange(minIdx, maxIdx uint64) error {
-	for i := minIdx; i <= maxIdx; i++ {
+	if minIdx > maxIdx {
+		return nil
+	}
+	for i := minIdx; ; i++ {
 		key := fmt.Sprintf("raft/log/%d", i)
 		if err := s.db.Delete(key); err != nil {
 			return err
+		}
+		if i == maxIdx {
+			break
 		}
 	}
 	return nil
@@ -195,6 +201,14 @@ func (s *CobaltDBSnapshotStore) List() ([]raft.SnapshotMeta, error) {
 
 // Open opens a snapshot for reading
 func (s *CobaltDBSnapshotStore) Open(id string) (raft.SnapshotSource, error) {
+	metas, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	if len(metas) != 1 || metas[0].ID != id {
+		return nil, fmt.Errorf("snapshot not found: %s", id)
+	}
+
 	data, err := s.db.Get("raft/snapshot")
 	if err != nil {
 		return nil, err
@@ -306,6 +320,9 @@ func (s *CobaltDBStableStore) GetUint64(key string) (uint64, error) {
 	data, err := s.db.Get(fmt.Sprintf("raft/stable/%s", key))
 	if err != nil {
 		return 0, err
+	}
+	if len(data) != 8 {
+		return 0, fmt.Errorf("invalid uint64 value for key %q: got %d bytes, want 8", key, len(data))
 	}
 	return binary.BigEndian.Uint64(data), nil
 }

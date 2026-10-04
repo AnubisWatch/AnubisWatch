@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"net"
@@ -220,53 +221,57 @@ type ConfigOptions struct {
 
 // generateConfig generates the JSON config content
 func generateConfig(opts ConfigOptions) string {
+	quote := func(value string) string {
+		encoded, _ := json.Marshal(value)
+		return string(encoded)
+	}
 	tlsConfig := `{"enabled": false}`
 	if opts.EnableTLS {
 		tlsConfig = fmt.Sprintf(`{
       "enabled": true,
-      "cert": %q,
-      "key": %q
-    }`, opts.TLSCert, opts.TLSKey)
+      "cert": %s,
+      "key": %s
+    }`, quote(opts.TLSCert), quote(opts.TLSKey))
 	}
 
 	encryptionConfig := `{"enabled": false}`
 	if opts.EnableEncryption {
 		encryptionConfig = fmt.Sprintf(`{
       "enabled": true,
-      "key": %q
-    }`, opts.EncryptionKey)
+      "key": %s
+    }`, quote(opts.EncryptionKey))
 	}
 
 	clusterConfig := `{"enabled": false}`
 	if opts.EnableCluster {
 		clusterConfig = fmt.Sprintf(`{
       "enabled": true,
-      "node_name": %q,
-      "region": %q,
-      "cluster_secret": %q,
+      "node_name": %s,
+      "region": %s,
+      "cluster_secret": %s,
       "raft": {
         "bootstrap": %t,
         "bind_addr": "0.0.0.0:%d"
       }
-    }`, opts.NodeName, opts.Region, opts.ClusterSecret, opts.Bootstrap, opts.RaftPort)
+    }`, quote(opts.NodeName), quote(opts.Region), quote(opts.ClusterSecret), opts.Bootstrap, opts.RaftPort)
 	}
 
-	dashboardConfig := `{"enabled": true}`
+	dashboardConfig := `{"enabled": false}`
 	if opts.EnableDashboard {
 		dashboardConfig = fmt.Sprintf(`{
       "enabled": true,
-      "theme": %q
-    }`, opts.DashboardTheme)
+      "theme": %s
+    }`, quote(opts.DashboardTheme))
 	}
 
 	return fmt.Sprintf(`{
   "server": {
-    "host": %q,
+    "host": %s,
     "port": %d,
     "tls": %s
   },
   "storage": {
-    "path": %q,
+    "path": %s,
     "retention_days": %d,
     "encryption": %s
   },
@@ -274,20 +279,20 @@ func generateConfig(opts ConfigOptions) string {
     "enabled": true,
     "type": "local",
     "local": {
-      "admin_email": %q,
-      "admin_password": %q
+      "admin_email": %s,
+      "admin_password": %s
     }
   },
   "necropolis": %s,
   "dashboard": %s,
   "logging": {
-    "level": %q,
-    "format": %q
+    "level": %s,
+    "format": %s
   }
 }
-`, opts.Host, opts.HTTPPort, tlsConfig, opts.DataDir, opts.RetentionDays,
-		encryptionConfig, opts.AdminEmail, opts.AdminPassword,
-		clusterConfig, dashboardConfig, opts.LogLevel, opts.LogFormat)
+`, quote(opts.Host), opts.HTTPPort, tlsConfig, quote(opts.DataDir), opts.RetentionDays,
+		encryptionConfig, quote(opts.AdminEmail), quote(opts.AdminPassword),
+		clusterConfig, dashboardConfig, quote(opts.LogLevel), quote(opts.LogFormat))
 }
 
 // Interactive helpers

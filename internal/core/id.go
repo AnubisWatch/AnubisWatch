@@ -26,8 +26,8 @@ func (u ULID) String() string {
 func (u ULID) Time() time.Time {
 	// First 6 bytes are the timestamp in milliseconds (big-endian)
 	ms := uint64(u[0])<<40 | uint64(u[1])<<32 | uint64(u[2])<<24 | uint64(u[3])<<16 | uint64(u[4])<<8 | uint64(u[5])
-	// Safe conversion: ULID timestamp is 48-bit, well within int64 range
-	return time.Unix(0, int64(ms&0xFFFFFFFFFFFF)*1e6).UTC()
+	// ULID timestamps can exceed the int64 nanosecond range.
+	return time.UnixMilli(int64(ms)).UTC()
 }
 
 // MarshalText implements encoding.TextMarshaler.

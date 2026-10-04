@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -14,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 // Config holds telemetry configuration
@@ -58,7 +60,7 @@ func InitTracer(ctx context.Context, cfg Config, logger *slog.Logger) (*TracerPr
 	if !cfg.Enabled {
 		logger.Info("telemetry disabled, using no-op tracer")
 		// Set a no-op tracer provider
-		otel.SetTracerProvider(sdktrace.NewTracerProvider())
+		otel.SetTracerProvider(noop.NewTracerProvider())
 		return &TracerProvider{provider: nil, logger: logger}, nil
 	}
 
@@ -126,8 +128,12 @@ func InitTracer(ctx context.Context, cfg Config, logger *slog.Logger) (*TracerPr
 
 // createExporter creates an OTLP gRPC exporter
 func createExporter(ctx context.Context, endpoint string, insecure bool) (sdktrace.SpanExporter, error) {
+	endpointOption := otlptracegrpc.WithEndpoint(endpoint)
+	if strings.HasPrefix(endpoint, "http://") || strings.HasPrefix(endpoint, "https://") {
+		endpointOption = otlptracegrpc.WithEndpointURL(endpoint)
+	}
 	opts := []otlptracegrpc.Option{
-		otlptracegrpc.WithEndpoint(endpoint),
+		endpointOption,
 		otlptracegrpc.WithTimeout(10 * time.Second),
 	}
 

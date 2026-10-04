@@ -350,11 +350,13 @@ func (e *Executor) executeStep(ctx context.Context, jctx *JourneyContext, step c
 		dnsCopy := *step.DNS
 		dnsCopy.RecordType = e.interpolateVariables(dnsCopy.RecordType, jctx.Variables)
 		if dnsCopy.Nameservers != nil {
+			dnsCopy.Nameservers = append([]string(nil), dnsCopy.Nameservers...)
 			for i, ns := range dnsCopy.Nameservers {
 				dnsCopy.Nameservers[i] = e.interpolateVariables(ns, jctx.Variables)
 			}
 		}
 		if dnsCopy.Expected != nil {
+			dnsCopy.Expected = append([]string(nil), dnsCopy.Expected...)
 			for i, exp := range dnsCopy.Expected {
 				dnsCopy.Expected[i] = e.interpolateVariables(exp, jctx.Variables)
 			}
@@ -367,6 +369,7 @@ func (e *Executor) executeStep(ctx context.Context, jctx *JourneyContext, step c
 		tlsCopy := *step.TLS
 		tlsCopy.MinProtocol = e.interpolateVariables(tlsCopy.MinProtocol, jctx.Variables)
 		tlsCopy.ExpectedIssuer = e.interpolateVariables(tlsCopy.ExpectedIssuer, jctx.Variables)
+		tlsCopy.ExpectedSAN = append([]string(nil), tlsCopy.ExpectedSAN...)
 		for i, san := range tlsCopy.ExpectedSAN {
 			tlsCopy.ExpectedSAN[i] = e.interpolateVariables(san, jctx.Variables)
 		}
@@ -481,7 +484,16 @@ func (e *Executor) extractFromBody(body string, rule core.ExtractionRule) string
 
 // extractFromHeader extracts a value from response headers
 func (e *Executor) extractFromHeader(headers map[string]string, rule core.ExtractionRule) string {
-	if value, ok := headers[rule.Path]; ok {
+	value, ok := headers[rule.Path]
+	if !ok {
+		for name, candidate := range headers {
+			if strings.EqualFold(name, rule.Path) {
+				value, ok = candidate, true
+				break
+			}
+		}
+	}
+	if ok {
 		if rule.Regex != "" {
 			return e.extractRegex(value, rule.Regex)
 		}
@@ -679,8 +691,8 @@ func (e *Executor) runAssertion(judgment *core.Judgment, assertion core.Assertio
 
 	case "regex":
 		if judgment.Details != nil && assertion.Target != "" {
-			matched := e.extractRegex(judgment.Details.ResponseBody, assertion.Expected)
-			passed = matched != ""
+			re, err := regexp.Compile(assertion.Expected)
+			passed = err == nil && re.MatchString(judgment.Details.ResponseBody)
 		}
 
 	default:

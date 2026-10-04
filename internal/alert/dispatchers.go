@@ -628,6 +628,10 @@ func (d *OpsGenieDispatcher) closeAlert(ctx context.Context, host, apiKey, alias
 	}
 	defer closeResponseBody(resp)
 
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
+	}
+
 	return nil
 }
 
@@ -953,6 +957,9 @@ func (d *SMSDispatcher) sendVonage(ctx context.Context, event *core.AlertEvent, 
 				return err
 			}
 			defer closeResponseBody(resp)
+			if resp.StatusCode >= 400 {
+				return fmt.Errorf("unexpected status: %d", resp.StatusCode)
+			}
 		}
 	}
 

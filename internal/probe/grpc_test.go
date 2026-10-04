@@ -969,6 +969,7 @@ func TestGRPCChecker_Judge_FeatherExceeded(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		w.Header().Set("Grpc-Status", "0")
 		w.WriteHeader(http.StatusOK)
+		w.Write([]byte{0, 0, 0, 0, 2, 8, 1}) // HealthCheckResponse.status = SERVING.
 	}))
 	defer srv.Close()
 
@@ -1002,6 +1003,7 @@ func TestGRPCChecker_Judge_Success(t *testing.T) {
 	srv := newHTTP2TestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Grpc-Status", "0")
 		w.WriteHeader(http.StatusOK)
+		w.Write([]byte{0, 0, 0, 0, 2, 8, 1}) // HealthCheckResponse.status = SERVING.
 	}))
 	defer srv.Close()
 

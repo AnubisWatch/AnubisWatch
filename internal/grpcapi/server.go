@@ -429,23 +429,31 @@ func journeyToPB(j *core.JourneyConfig) *v1.Journey {
 
 // --- PB Conversion: core → protobuf (for alert events) ---
 
+func verdictStatus(event *core.AlertEvent) string {
+	if event.Resolved {
+		return "resolved"
+	}
+	if event.Acknowledged {
+		return "acknowledged"
+	}
+	// Preserve legacy events that store the verdict state in Status.
+	if strings.EqualFold(string(event.Status), "resolved") || strings.EqualFold(string(event.Status), "acknowledged") {
+		return strings.ToLower(string(event.Status))
+	}
+	return "firing"
+}
+
 // eventToVerdict converts a core.AlertEvent to protobuf Verdict
 func eventToVerdict(event *core.AlertEvent) *v1.Verdict {
 	if event == nil {
 		return nil
-	}
-	status := "firing"
-	if event.Resolved {
-		status = "resolved"
-	} else if event.Acknowledged {
-		status = "acknowledged"
 	}
 	return &v1.Verdict{
 		Id:       event.ID,
 		SoulId:   event.SoulID,
 		SoulName: event.SoulName,
 		RuleId:   event.ChannelID,
-		Status:   status,
+		Status:   verdictStatus(event),
 		Severity: string(event.Severity),
 		Message:  event.Message,
 		FiredAt:  ts(event.Timestamp),
@@ -602,6 +610,22 @@ func pbToRuleConfig(req *v1.CreateRuleRequest) *core.AlertRule {
 	}
 }
 
+func pbJourneySteps(steps []*v1.JourneyStep) []core.JourneyStep {
+	var converted []core.JourneyStep
+	for _, step := range steps {
+		if step == nil {
+			continue
+		}
+		converted = append(converted, core.JourneyStep{
+			Name:    step.Name,
+			Type:    core.CheckType(step.Type),
+			Target:  step.Target,
+			Timeout: core.Duration{Duration: time.Duration(step.Timeout) * time.Second},
+		})
+	}
+	return converted
+}
+
 func pbToJourneyConfig(req *v1.CreateJourneyRequest) *core.JourneyConfig {
 	now := time.Now()
 	return &core.JourneyConfig{
@@ -610,6 +634,7 @@ func pbToJourneyConfig(req *v1.CreateJourneyRequest) *core.JourneyConfig {
 		Description: req.Description,
 		Weight:      core.Duration{Duration: time.Duration(req.Interval) * time.Second},
 		Enabled:     req.Enabled,
+		Steps:       pbJourneySteps(req.Steps),
 		CreatedAt:   now,
 	}
 }
@@ -717,6 +742,9 @@ func applyJourneyUpdates(journey *core.JourneyConfig, req *v1.UpdateJourneyReque
 	}
 	if req.Enabled != nil {
 		journey.Enabled = *req.Enabled
+	}
+	if req.Steps != nil {
+		journey.Steps = pbJourneySteps(req.Steps)
 	}
 	journey.UpdatedAt = time.Now()
 }
@@ -1155,7 +1183,7 @@ func (s *Server) ListVerdicts(ctx context.Context, req *v1.ListVerdictsRequest) 
 		if ws := e.WorkspaceID; ws != "" && ws != workspace {
 			continue
 		}
-		if !matchesOptionalString(string(e.Status), req.GetStatus()) {
+		if !matchesOptionalString(verdictStatus(e), req.GetStatus()) && !matchesOptionalString(string(e.Status), req.GetStatus()) {
 			continue
 		}
 		if !matchesOptionalString(string(e.Severity), req.GetSeverity()) {

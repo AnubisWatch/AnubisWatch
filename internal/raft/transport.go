@@ -34,7 +34,8 @@ type TCPTransport struct {
 
 	// Connection pool with peer addresses
 	connections map[string]net.Conn
-	peerAddrs   map[string]string // peerID -> address mapping
+	incoming    map[net.Conn]struct{} // Accepted connections, protected by connMu.
+	peerAddrs   map[string]string     // peerID -> address mapping
 	peerRPCMu   map[string]*sync.Mutex
 	connMu      sync.Mutex
 
@@ -59,6 +60,7 @@ func NewTCPTransport(bindAddr, advertiseAddr string, tlsConfig *tls.Config, logg
 		tlsConfig:     tlsConfig,
 		handlers:      make(map[string]RPCHandler),
 		connections:   make(map[string]net.Conn),
+		incoming:      make(map[net.Conn]struct{}),
 		peerAddrs:     make(map[string]string),
 		peerRPCMu:     make(map[string]*sync.Mutex),
 		logger:        logger.With("component", "raft_transport"),
@@ -109,7 +111,11 @@ func (t *TCPTransport) Stop() error {
 		for _, conn := range t.connections {
 			conn.Close()
 		}
+		for conn := range t.incoming {
+			conn.Close()
+		}
 		t.connections = make(map[string]net.Conn)
+		clear(t.incoming)
 		t.connMu.Unlock()
 
 		close(t.doneCh)
@@ -186,18 +192,35 @@ func (t *TCPTransport) acceptLoop() {
 			continue
 		}
 
+		t.connMu.Lock()
+		if t.shutdown.Load() {
+			t.connMu.Unlock()
+			conn.Close()
+			return
+		}
+		t.incoming[conn] = struct{}{}
+		t.connMu.Unlock()
+
 		go t.handleConnection(conn)
 	}
 }
 
 // handleConnection handles an incoming connection
 func (t *TCPTransport) handleConnection(conn net.Conn) {
-	defer conn.Close()
+	defer func() {
+		conn.Close()
+		t.connMu.Lock()
+		delete(t.incoming, conn)
+		t.connMu.Unlock()
+	}()
 
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
 
 	for {
+		if t.shutdown.Load() {
+			return
+		}
 		// Read RPC type
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -478,6 +501,7 @@ func (t *TCPTransport) AddPeerConnection(peerID string, address string) error {
 	t.connMu.Lock()
 	t.peerAddrs[peerID] = address
 	existingConn, hasExisting := t.connections[peerID]
+	delete(t.connections, peerID)
 	t.connMu.Unlock()
 
 	// Close existing connection if any (will be recreated)

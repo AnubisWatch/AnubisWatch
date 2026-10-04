@@ -5,12 +5,15 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 	"github.com/AnubisWatch/anubiswatch/internal/storage"
@@ -68,7 +71,14 @@ func getAPIURL() string {
 	if port == "" {
 		port = "8443"
 	}
-	return fmt.Sprintf("http://%s:%s", host, port)
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		if parsed, err := url.Parse("http://" + host); err == nil {
+			host = parsed.Hostname()
+		} else {
+			host = host[1 : len(host)-1]
+		}
+	}
+	return (&url.URL{Scheme: "http", Host: net.JoinHostPort(host, port)}).String()
 }
 
 func getAPIToken() string {
@@ -104,7 +114,12 @@ func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen-3] + "..."
+	end := maxLen - 3
+	// Keep the byte budget without splitting a UTF-8 character.
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end] + "..."
 }
 
 // parseConfigValue converts a string value to an appropriate type for config

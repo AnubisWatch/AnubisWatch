@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"golang.org/x/net/http2"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
@@ -88,6 +90,9 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	if splitErr != nil {
 		return failJudgment(soul, fmt.Errorf("invalid gRPC target: %w", splitErr)), nil
 	}
+	// Own the sockets even while HTTP/2 stream cleanup is still unwinding.
+	connectionCtx, closeConnections := context.WithCancel(ctx)
+	defer closeConnections()
 
 	// Use HTTP/2 transport (handles both h2 and h2c). G402
 	// suppress: cfg.InsecureSkipVerify is gated by K7's
@@ -110,6 +115,7 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 			if err != nil {
 				return nil, err
 			}
+			context.AfterFunc(connectionCtx, func() { _ = raw.Close() })
 			if tlsCfg == nil {
 				return raw, nil // h2c (plaintext HTTP/2)
 			}
@@ -130,6 +136,7 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 			return tlsConn, nil
 		},
 	}
+	defer transport.CloseIdleConnections()
 
 	client := &http.Client{
 		Transport: transport,
@@ -159,7 +166,6 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	req.Header.Set("TE", "trailers")
 
 	resp, err := client.Do(req)
-	duration := time.Since(start)
 
 	if err != nil {
 		return failJudgment(soul, fmt.Errorf("gRPC request failed: %w", err)), nil
@@ -167,11 +173,14 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	defer resp.Body.Close()
 
 	// Read response body (limited)
-	_, _ = io.ReadAll(io.LimitReader(resp.Body, maxReadSize))
-	// Error intentionally ignored - we got a response, body content not needed
+	responseBody, readErr := io.ReadAll(io.LimitReader(resp.Body, maxReadSize+1))
+	duration := time.Since(start)
 
-	// Check gRPC status from headers
+	// Trailers carry the final RPC status; headers also support trailers-only replies.
 	grpcStatus := resp.Header.Get("Grpc-Status") // "0" = OK
+	if trailerStatus := resp.Trailer.Get("Grpc-Status"); trailerStatus != "" {
+		grpcStatus = trailerStatus
+	}
 
 	judgment := &core.Judgment{
 		ID:         core.GenerateID(),
@@ -180,7 +189,7 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		Duration:   duration,
 		StatusCode: resp.StatusCode,
 		Details: &core.JudgmentDetails{
-			ServiceStatus: "SERVING",
+			ServiceStatus: "UNKNOWN",
 		},
 	}
 
@@ -195,9 +204,27 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		judgment.Message = fmt.Sprintf("gRPC health check failed (HTTP %d) in %s",
 			resp.StatusCode, duration.Round(time.Millisecond))
 		judgment.Details.ServiceStatus = "NOT_SERVING"
+	} else if readErr != nil {
+		judgment.Status = core.SoulDead
+		judgment.Message = fmt.Sprintf("failed to read gRPC health response: %v", readErr)
+	} else if grpcStatus == "" {
+		judgment.Status = core.SoulDead
+		judgment.Message = "gRPC health check failed: missing grpc-status"
 	} else {
-		judgment.Status = core.SoulAlive
-		judgment.Message = fmt.Sprintf("gRPC health check OK in %s", duration.Round(time.Millisecond))
+		serviceStatus, err := parseGRPCHealthCheckResponse(responseBody)
+		if err != nil {
+			judgment.Status = core.SoulDead
+			judgment.Message = fmt.Sprintf("invalid gRPC health response: %v", err)
+		} else {
+			judgment.Details.ServiceStatus = serviceStatus.String()
+			if serviceStatus == healthpb.HealthCheckResponse_SERVING {
+				judgment.Status = core.SoulAlive
+				judgment.Message = fmt.Sprintf("gRPC health check OK in %s", duration.Round(time.Millisecond))
+			} else {
+				judgment.Status = core.SoulDead
+				judgment.Message = fmt.Sprintf("gRPC service health is %s in %s", serviceStatus, duration.Round(time.Millisecond))
+			}
+		}
 	}
 
 	// Performance budget check
@@ -212,6 +239,27 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	return judgment, nil
 }
 
+// parseGRPCHealthCheckResponse decodes a single uncompressed unary response.
+func parseGRPCHealthCheckResponse(body []byte) (healthpb.HealthCheckResponse_ServingStatus, error) {
+	if len(body) > maxReadSize {
+		return healthpb.HealthCheckResponse_UNKNOWN, fmt.Errorf("response exceeds %d bytes", maxReadSize)
+	}
+	if len(body) < 5 {
+		return healthpb.HealthCheckResponse_UNKNOWN, fmt.Errorf("missing message frame")
+	}
+	if body[0] != 0 {
+		return healthpb.HealthCheckResponse_UNKNOWN, fmt.Errorf("unsupported compression flag %d", body[0])
+	}
+	if uint64(binary.BigEndian.Uint32(body[1:5])) != uint64(len(body)-5) {
+		return healthpb.HealthCheckResponse_UNKNOWN, fmt.Errorf("message length does not match unary response")
+	}
+	var response healthpb.HealthCheckResponse
+	if err := proto.Unmarshal(body[5:], &response); err != nil {
+		return healthpb.HealthCheckResponse_UNKNOWN, fmt.Errorf("invalid health protobuf: %w", err)
+	}
+	return response.Status, nil
+}
+
 // buildGRPCHealthCheckRequest builds a gRPC Health Check protobuf message
 func buildGRPCHealthCheckRequest(serviceName string) []byte {
 	// gRPC message format: 1 byte compressed flag + 4 bytes length + protobuf data
@@ -221,13 +269,8 @@ func buildGRPCHealthCheckRequest(serviceName string) []byte {
 	var msg []byte
 	if serviceName != "" {
 		// Field tag: (1 << 3) | 2 = 10 = 0x0A
-		// Length: len(serviceName), encoded as a single-byte protobuf
-		// varint (high bit clear). Real-world service names fit in 7
-		// bits; longer names silently truncate, which is a known
-		// limitation of this 1-byte encoding. Use a proper varint
-		// loop if you ever need >127-byte service names.
 		msg = append(msg, 0x0A)
-		msg = append(msg, byte(len(serviceName)&0x7f))
+		msg = binary.AppendUvarint(msg, uint64(len(serviceName)))
 		msg = append(msg, []byte(serviceName)...)
 	}
 

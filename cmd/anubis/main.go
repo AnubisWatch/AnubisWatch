@@ -356,6 +356,7 @@ type serveOptions struct {
 
 func parseServeOptions(args []string) serveOptions {
 	opts := serveOptions{ConfigPath: configPathFromArgs(args)}
+	insecureSkipVerifySet := false
 	for i := 1; i < len(args); i++ {
 		arg := args[i]
 		switch {
@@ -418,14 +419,16 @@ func parseServeOptions(args []string) serveOptions {
 		// where the CLI is generated from an image entrypoint.
 		case arg == "--insecure-skip-verify":
 			opts.InsecureSkipVerify = true
+			insecureSkipVerifySet = true
 		case strings.HasPrefix(arg, "--insecure-skip-verify="):
 			opts.InsecureSkipVerify = parseBoolFlagValue(strings.TrimPrefix(arg, "--insecure-skip-verify="))
+			insecureSkipVerifySet = true
 		}
 	}
 
 	// Env var fallback. Only applies when the CLI flag was not set,
 	// so explicit --insecure-skip-verify=false still wins.
-	if !opts.InsecureSkipVerify {
+	if !insecureSkipVerifySet {
 		if v := os.Getenv("ANUBIS_ALLOW_INSECURE_TLS"); v != "" {
 			opts.InsecureSkipVerify = parseBoolFlagValue(v)
 		}

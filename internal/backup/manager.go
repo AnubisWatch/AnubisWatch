@@ -170,7 +170,8 @@ func (m *Manager) Create(ctx context.Context, opts Options) (*Backup, string, er
 	// Collect souls from all workspaces
 	var allSouls []*core.Soul
 	for _, ws := range workspaces {
-		souls, err := m.storage.ListSouls(ctx, ws.ID, 0, 10000)
+		// A zero limit requests all souls; full backups must not truncate a workspace.
+		souls, err := m.storage.ListSouls(ctx, ws.ID, 0, 0)
 		if err != nil {
 			m.logger.Warn("Failed to list souls for workspace", "workspace", ws.ID, "error", err)
 			continue
@@ -250,7 +251,11 @@ func (m *Manager) Create(ctx context.Context, opts Options) (*Backup, string, er
 
 	// Generate filename
 	timestamp := backup.CreatedAt.Format("20060102_150405")
-	filename := fmt.Sprintf("anubis_backup_%s.json", timestamp)
+	backupID, err := core.GenerateULID()
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to generate backup ID: %w", err)
+	}
+	filename := fmt.Sprintf("anubis_backup_%s_%s.json", timestamp, backupID.String())
 	if opts.Compress {
 		filename += ".gz"
 	}
@@ -368,6 +373,9 @@ func (m *Manager) Restore(ctx context.Context, storage RestoreStorage, backupPat
 		for key, value := range backup.Data.SystemConfig {
 			if err := storage.SaveSystemConfig(ctx, key, value); err != nil {
 				m.logger.Warn("Failed to restore system config", "key", key, "error", err)
+				if !opts.ContinueOnError {
+					return fmt.Errorf("failed to restore system config %s: %w", key, err)
+				}
 			}
 		}
 	}
@@ -492,7 +500,10 @@ func (m *Manager) calculateChecksum(backup *Backup) (string, error) {
 	data := *backup
 	data.Checksum = ""
 
-	jsonData, _ := json.Marshal(data)
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize backup for checksum: %w", err)
+	}
 
 	hash := sha256.Sum256(jsonData)
 	return hex.EncodeToString(hash[:]), nil
@@ -525,7 +536,10 @@ func (m *Manager) writeBackupFile(backup *Backup, path string, opts Options) err
 	}
 
 	// Serialize backup to JSON
-	jsonData, _ := json.MarshalIndent(backup, "", "  ")
+	jsonData, err := json.MarshalIndent(backup, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to serialize backup: %w", err)
+	}
 
 	// Encrypt if requested
 	if opts.Encrypt && encryptionKey != nil {
@@ -724,7 +738,10 @@ func (m *Manager) ExportToTar(ctx context.Context, w io.Writer, opts Options) er
 	}
 
 	// Serialize backup
-	data, _ := json.MarshalIndent(backup, "", "  ")
+	data, err := json.MarshalIndent(backup, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to serialize backup for export: %w", err)
+	}
 
 	// Write to tar
 	header := &tar.Header{

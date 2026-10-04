@@ -144,11 +144,16 @@ func (c *Config) applyEnvOverrides() {
 
 func parseInt(s string) (int, error) {
 	var result int
+	maxInt := int(^uint(0) >> 1)
 	for _, c := range s {
 		if c < '0' || c > '9' {
 			return 0, fmt.Errorf("invalid integer: %s", s)
 		}
-		result = result*10 + int(c-'0')
+		digit := int(c - '0')
+		if result > (maxInt-digit)/10 {
+			return 0, fmt.Errorf("integer out of range: %s", s)
+		}
+		result = result*10 + digit
 	}
 	return result, nil
 }
@@ -241,6 +246,26 @@ func (c *Config) setDefaults() {
 	}
 	if c.Necropolis.Distribution.RebalanceInterval.Duration == 0 {
 		c.Necropolis.Distribution.RebalanceInterval.Duration = 60 * 1e9 // 60s
+	}
+
+	// Journey defaults match the REST creation path.
+	for i := range c.Journeys {
+		journey := &c.Journeys[i]
+		if journey.Weight.Duration <= 0 {
+			journey.Weight.Duration = 60 * 1e9
+		}
+		if journey.Timeout.Duration <= 0 {
+			journey.Timeout.Duration = 30 * 1e9
+		}
+		for j := range journey.Steps {
+			step := &journey.Steps[j]
+			if step.Type == "" {
+				step.Type = CheckHTTP
+			}
+			if step.Timeout.Duration <= 0 {
+				step.Timeout.Duration = 10 * 1e9
+			}
+		}
 	}
 
 	// Tenants defaults

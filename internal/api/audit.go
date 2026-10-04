@@ -201,10 +201,14 @@ func (al *AuditLogger) writeLoop() {
 		case <-al.shutdown:
 			// Flush remaining events
 		flushLoop:
-			for len(al.buffer) > 0 && len(batch) < cap(batch) {
+			for len(al.buffer) > 0 {
 				select {
 				case event := <-al.buffer:
 					batch = append(batch, event)
+					if len(batch) >= 100 {
+						al.flush(batch)
+						batch = batch[:0]
+					}
 				default:
 					break flushLoop
 				}
@@ -305,6 +309,11 @@ type responseRecorder struct {
 
 func (rr *responseRecorder) WriteHeader(code int) {
 	if !rr.written {
+		// Informational responses do not commit the final status, except 101.
+		if code >= 100 && code <= 199 && code != http.StatusSwitchingProtocols {
+			rr.ResponseWriter.WriteHeader(code)
+			return
+		}
 		rr.statusCode = code
 		rr.written = true
 		rr.ResponseWriter.WriteHeader(code)

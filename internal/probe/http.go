@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -439,8 +440,8 @@ func (c *HTTPChecker) evaluateAssertions(cfg *core.HTTPConfig, bodyBytes []byte,
 	// 4. JSON path assertions
 	if cfg.JSONPath != nil {
 		for path, expected := range cfg.JSONPath {
-			actual := extractJSONPath(bodyBytes, path)
-			passed := actual == expected
+			actual, found := extractJSONPathValue(bodyBytes, path)
+			passed := found && actual == expected
 			assertions = append(assertions, core.AssertionResult{
 				Type:     "json_path",
 				Expected: path,
@@ -533,19 +534,25 @@ func tlsVersionString(v uint16) string {
 
 // extractJSONPath extracts a value from JSON using simple path syntax ($.key.subkey)
 func extractJSONPath(data []byte, path string) string {
+	value, _ := extractJSONPathValue(data, path)
+	return value
+}
+
+// extractJSONPathValue distinguishes failed extraction from an empty string value.
+func extractJSONPathValue(data []byte, path string) (string, bool) {
 	// Strip leading "$"
 	path = strings.TrimPrefix(path, "$")
 	path = strings.TrimPrefix(path, ".")
 
 	if path == "" {
-		return ""
+		return "", false
 	}
 
 	parts := strings.Split(path, ".")
 
 	var current interface{}
 	if err := json.Unmarshal(data, &current); err != nil {
-		return ""
+		return "", false
 	}
 
 	for _, part := range parts {
@@ -557,30 +564,30 @@ func extractJSONPath(data []byte, path string) string {
 		case map[string]interface{}:
 			val, ok := v[part]
 			if !ok {
-				return ""
+				return "", false
 			}
 			current = val
 		default:
-			return ""
+			return "", false
 		}
 	}
 
 	// Convert to string
 	switch v := current.(type) {
 	case string:
-		return v
+		return v, true
 	case float64:
 		if v == float64(int64(v)) {
-			return fmt.Sprintf("%d", int64(v))
+			return fmt.Sprintf("%d", int64(v)), true
 		}
-		return fmt.Sprintf("%g", v)
+		return fmt.Sprintf("%g", v), true
 	case bool:
-		return fmt.Sprintf("%t", v)
+		return fmt.Sprintf("%t", v), true
 	case nil:
-		return "null"
+		return "null", true
 	default:
 		b, _ := json.Marshal(v)
-		return string(b)
+		return string(b), true
 	}
 }
 
@@ -641,12 +648,16 @@ func validateNode(data interface{}, schema map[string]interface{}, strict bool) 
 
 	// Enum validation
 	if enum, ok := schema["enum"].([]interface{}); ok {
+		matched := false
 		for _, allowed := range enum {
-			if data == allowed {
-				return true
+			if reflect.DeepEqual(data, allowed) {
+				matched = true
+				break
 			}
 		}
-		return false
+		if !matched {
+			return false
+		}
 	}
 
 	// Strict mode: check for additional properties

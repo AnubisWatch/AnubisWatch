@@ -68,6 +68,8 @@ type Discovery struct {
 	onPeerLost       func(string)
 
 	// Control
+	stopOnce sync.Once
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -262,13 +264,15 @@ func (d *Discovery) Start() error {
 
 // Stop stops the discovery service
 func (d *Discovery) Stop() error {
-	d.cancel()
-	d.mdnsServer.Stop()
-	d.mdnsClient.Stop()
-	if d.gossipConn != nil {
-		d.gossipConn.Close()
-	}
-	close(d.done)
+	d.stopOnce.Do(func() {
+		d.cancel()
+		d.mdnsServer.Stop()
+		d.mdnsClient.Stop()
+		if d.gossipConn != nil {
+			d.gossipConn.Close()
+		}
+		close(d.done)
+	})
 	// Wait for gossip and mDNS loops to finish
 	d.wg.Wait()
 	return nil

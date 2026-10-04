@@ -136,10 +136,12 @@ func (ts *TimeSeriesStore) updateSummary(ctx context.Context, j *core.Judgment, 
 	// Calculate uptime percentage
 	summary.UptimePercent = float64(summary.SuccessCount) / float64(summary.Count) * 100
 
-	// Update packet loss if available
-	if j.Details != nil && j.Details.PacketLoss > 0 {
-		summary.PacketLossAvg = ((summary.PacketLossAvg * float64(summary.Count-1)) + j.Details.PacketLoss) / float64(summary.Count)
+	// Include zero-loss samples in the average over all judgments.
+	packetLoss := 0.0
+	if j.Details != nil {
+		packetLoss = j.Details.PacketLoss
 	}
+	summary.PacketLossAvg = ((summary.PacketLossAvg * float64(summary.Count-1)) + packetLoss) / float64(summary.Count)
 
 	// Save updated summary
 	newData, err := json.Marshal(summary)

@@ -310,6 +310,15 @@ func (c *RaftConfig) Validate() error {
 	} else if c.HeartbeatTimeout.Duration < 0 {
 		return &ValidationError{Field: "heartbeat_timeout", Message: "heartbeat timeout must be positive"}
 	}
+	// Match the effective ticker interval in raft.Node.run, including its
+	// fallback when halving a positive duration rounds down to zero.
+	heartbeatInterval := c.HeartbeatTimeout.Duration / 2
+	if heartbeatInterval == 0 {
+		heartbeatInterval = 50 * time.Millisecond
+	}
+	if heartbeatInterval >= c.ElectionTimeout.Duration {
+		return &ValidationError{Field: "heartbeat_timeout", Message: "heartbeat interval must be shorter than election timeout"}
+	}
 	if c.CommitTimeout.Duration == 0 {
 		c.CommitTimeout.Duration = 50 * time.Millisecond
 	} else if c.CommitTimeout.Duration < 0 {

@@ -127,12 +127,14 @@ func (d *Distributor) RegisterNode(nodeID, region string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	d.nodeLoads[nodeID] = &NodeLoad{
-		NodeID:        nodeID,
-		Region:        region,
-		LastHeartbeat: time.Now(),
-		Healthy:       true,
+	node, exists := d.nodeLoads[nodeID]
+	if !exists {
+		node = &NodeLoad{NodeID: nodeID}
+		d.nodeLoads[nodeID] = node
 	}
+	node.Region = region
+	node.LastHeartbeat = time.Now()
+	node.Healthy = true
 
 	d.logger.Info("Node registered", "node_id", nodeID, "region", region)
 }
@@ -389,6 +391,11 @@ func (d *Distributor) selectHashBased(candidates []*NodeLoad, key string) string
 	if len(candidates) == 0 {
 		return ""
 	}
+
+	// Map iteration order must not affect the owner selected by the hash.
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].NodeID < candidates[j].NodeID
+	})
 
 	// Simple hash-based selection
 	// For production, use a proper consistent hashing implementation

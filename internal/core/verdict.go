@@ -505,8 +505,49 @@ type MaintenanceWindow struct {
 
 // IsActive checks if the maintenance window is currently active
 func (m *MaintenanceWindow) IsActive(now time.Time) bool {
-	if !m.Enabled {
+	if !m.Enabled || now.Before(m.StartTime) || m.EndTime.Before(m.StartTime) {
 		return false
 	}
-	return !now.Before(m.StartTime) && !now.After(m.EndTime)
+	if !now.After(m.EndTime) {
+		return true
+	}
+
+	localNow := now.In(m.StartTime.Location())
+	year, month, day := localNow.Date()
+	hour, minute, second := m.StartTime.Clock()
+	nanosecond := m.StartTime.Nanosecond()
+	var start time.Time
+	switch m.Recurring {
+	case "daily":
+		start = time.Date(year, month, day, hour, minute, second, nanosecond, m.StartTime.Location())
+		if start.After(now) {
+			start = start.AddDate(0, 0, -1)
+		}
+	case "weekly":
+		daysSinceStart := (int(localNow.Weekday()) - int(m.StartTime.Weekday()) + 7) % 7
+		start = time.Date(year, month, day-daysSinceStart, hour, minute, second, nanosecond, m.StartTime.Location())
+		if start.After(now) {
+			start = start.AddDate(0, 0, -7)
+		}
+	case "monthly":
+		start = m.monthlyStart(year, month)
+		if start.After(now) {
+			start = m.monthlyStart(year, month-1)
+		}
+	default:
+		return false
+	}
+
+	return !start.Before(m.StartTime) && !now.Before(start) && !now.After(start.Add(m.EndTime.Sub(m.StartTime)))
+}
+
+func (m *MaintenanceWindow) monthlyStart(year int, month time.Month) time.Time {
+	day := m.StartTime.Day()
+	// Keep month-end schedules in the target month instead of overflowing into the next.
+	lastDay := time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
+	if day > lastDay {
+		day = lastDay
+	}
+	hour, minute, second := m.StartTime.Clock()
+	return time.Date(year, month, day, hour, minute, second, m.StartTime.Nanosecond(), m.StartTime.Location())
 }

@@ -108,7 +108,7 @@ func (e *encryptor) encrypt(plaintext []byte) ([]byte, error) {
 // decrypt decrypts data encrypted with encrypt.
 // Expects format: [32-byte salt][12-byte nonce][ciphertext + 16-byte auth tag]
 func (e *encryptor) decrypt(data []byte) ([]byte, error) {
-	if len(data) < encryptionSaltLen {
+	if len(data) < encryptionSaltLen+12+16 {
 		return nil, fmt.Errorf("encrypted data too short")
 	}
 

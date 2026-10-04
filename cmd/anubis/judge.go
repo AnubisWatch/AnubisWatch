@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,66 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/storage"
 )
 
+type judgeSoul struct {
+	core.Soul
+	Status    string     `json:"status"`
+	LastCheck *time.Time `json:"last_check"`
+	Latency   int64      `json:"latency"`
+}
+
+func fetchJudgeSouls(apiURL, token string) ([]judgeSoul, error) {
+	souls := make([]judgeSoul, 0)
+	for offset := 0; ; {
+		resp, err := httpGet(fmt.Sprintf("%s/api/v1/souls?offset=%d&limit=100", apiURL, offset), token)
+		if err != nil {
+			return nil, fmt.Errorf("Error connecting to API: %w", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			return nil, fmt.Errorf("Error: API returned status %d", resp.StatusCode)
+		}
+		var raw json.RawMessage
+		err = json.NewDecoder(resp.Body).Decode(&raw)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("Error parsing response: %w", err)
+		}
+		raw = bytes.TrimSpace(raw)
+		// Keep compatibility with older servers that returned a bare array.
+		if len(raw) > 0 && (raw[0] == '[' || bytes.Equal(raw, []byte("null"))) {
+			var legacy []judgeSoul
+			if err := json.Unmarshal(raw, &legacy); err != nil {
+				return nil, fmt.Errorf("Error parsing response: %w", err)
+			}
+			if legacy == nil && offset == 0 {
+				return nil, nil
+			}
+			return append(souls, legacy...), nil
+		}
+		var page struct {
+			Data       *[]judgeSoul `json:"data"`
+			Pagination struct {
+				HasMore    bool `json:"has_more"`
+				NextOffset *int `json:"next_offset"`
+			} `json:"pagination"`
+		}
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return nil, fmt.Errorf("Error parsing response: %w", err)
+		}
+		if page.Data == nil {
+			return nil, fmt.Errorf("Error parsing response: missing souls data")
+		}
+		souls = append(souls, (*page.Data)...)
+		if !page.Pagination.HasMore {
+			return souls, nil
+		}
+		if page.Pagination.NextOffset == nil || *page.Pagination.NextOffset <= offset {
+			return nil, fmt.Errorf("Error parsing response: invalid next offset")
+		}
+		offset = *page.Pagination.NextOffset
+	}
+}
+
 func showJudgments() {
 	fmt.Println("⚖️  AnubisWatch — The Judgment Never Sleeps")
 	fmt.Println("────────────────────────────────────────────")
@@ -22,16 +83,10 @@ func showJudgments() {
 	apiURL := getAPIURL()
 	token := getAPIToken()
 
-	var souls []*core.Soul
+	var souls []judgeSoul
 
 	if token != "" {
-		resp, err := httpGet(apiURL+"/api/v1/souls", token)
-		if err == nil && resp.StatusCode == http.StatusOK {
-			if err := json.NewDecoder(resp.Body).Decode(&souls); err != nil {
-				souls = nil
-			}
-			resp.Body.Close()
-		}
+		souls, _ = fetchJudgeSouls(apiURL, token)
 	}
 
 	// Fall back to direct storage access
@@ -47,10 +102,13 @@ func showJudgments() {
 		defer store.Close()
 
 		ctx := context.Background()
-		souls, err = store.ListSouls(ctx, "default", 0, 100)
+		storedSouls, err := store.ListSouls(ctx, "default", 0, 0)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error listing souls: %v\n", err)
 			os.Exit(1)
+		}
+		for _, soul := range storedSouls {
+			souls = append(souls, judgeSoul{Soul: *soul})
 		}
 	}
 
@@ -75,6 +133,18 @@ func showJudgments() {
 			region = "default"
 		}
 		lastJudged := "never"
+		switch soul.Status {
+		case "healthy", "alive":
+			status = "alive"
+		case "unhealthy", "dead":
+			status = "dead"
+		case "degraded", "embalmed":
+			status = soul.Status
+		}
+		if soul.LastCheck != nil {
+			latency = (time.Duration(soul.Latency) * time.Millisecond).String()
+			lastJudged = time.Since(*soul.LastCheck).Round(time.Second).String() + " ago"
+		}
 
 		// Try to get latest judgment
 		if store != nil {
@@ -330,29 +400,17 @@ func judgeSingle(nameOrID string) {
 	}
 
 	// First, find the soul by name or ID
-	resp, err := httpGet(apiURL+"/api/v1/souls", token)
+	souls, err := fetchJudgeSouls(apiURL, token)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error connecting to API: %v\n", err)
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "Error: API returned status %d\n", resp.StatusCode)
-		os.Exit(1)
-	}
-
-	var souls []*core.Soul
-	if err := json.NewDecoder(resp.Body).Decode(&souls); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
 
 	// Find matching soul
-	var targetSoul *core.Soul
+	var targetSoul *judgeSoul
 	for _, s := range souls {
 		if s.ID == nameOrID || s.Name == nameOrID {
-			targetSoul = s
+			targetSoul = &s
 			break
 		}
 	}
@@ -363,7 +421,7 @@ func judgeSingle(nameOrID string) {
 	}
 
 	// Trigger force check
-	resp, err = httpPost(apiURL+"/api/v1/souls/"+targetSoul.ID+"/check", "application/json", []byte("{}"), token)
+	resp, err := httpPost(apiURL+"/api/v1/souls/"+targetSoul.ID+"/check", "application/json", []byte("{}"), token)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error triggering check: %v\n", err)
 		os.Exit(1)
@@ -413,21 +471,9 @@ func judgeAll() {
 	}
 
 	// Get all souls
-	resp, err := httpGet(apiURL+"/api/v1/souls", token)
+	souls, err := fetchJudgeSouls(apiURL, token)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error connecting to API: %v\n", err)
-		os.Exit(1)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		fmt.Fprintf(os.Stderr, "Error: API returned status %d\n", resp.StatusCode)
-		os.Exit(1)
-	}
-
-	var souls []*core.Soul
-	if err := json.NewDecoder(resp.Body).Decode(&souls); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
 

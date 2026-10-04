@@ -1377,6 +1377,11 @@ func (db *CobaltDB) updateIndexForSet(key string) {
 	workspaceID := parts[0]
 	resourceType := parts[1]
 	resourceID := parts[2]
+	// Incident keys are nested under alerts, unlike top-level resources.
+	if resourceType == "alerts" && strings.HasPrefix(resourceID, "incidents/") {
+		resourceType = "incidents"
+		resourceID = strings.TrimPrefix(resourceID, "incidents/")
+	}
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -1411,6 +1416,10 @@ func (db *CobaltDB) updateIndexForDelete(key string) {
 	}
 	resourceType := parts[1]
 	resourceID := parts[2]
+	if resourceType == "alerts" && strings.HasPrefix(resourceID, "incidents/") {
+		resourceType = "incidents"
+		resourceID = strings.TrimPrefix(resourceID, "incidents/")
+	}
 
 	db.mu.Lock()
 	defer db.mu.Unlock()

@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"strings"
@@ -206,7 +207,7 @@ func (s Soul) validate(index int) error {
 		if s.ICMP.Interval.Duration < 0 {
 			return &ConfigError{Field: fmt.Sprintf("souls[%d].icmp.interval", index), Message: "ICMP interval cannot be negative"}
 		}
-		if s.ICMP.MaxLossPercent < 0 || s.ICMP.MaxLossPercent > 100 {
+		if math.IsNaN(s.ICMP.MaxLossPercent) || s.ICMP.MaxLossPercent < 0 || s.ICMP.MaxLossPercent > 100 {
 			return &ConfigError{Field: fmt.Sprintf("souls[%d].icmp.max_loss_percent", index), Message: "ICMP max loss percent must be between 0 and 100"}
 		}
 	case CheckGRPC:

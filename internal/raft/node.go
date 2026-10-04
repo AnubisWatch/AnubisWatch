@@ -122,6 +122,7 @@ type Node struct {
 	lastContact time.Time
 
 	// Control
+	stopMu   sync.Mutex
 	running  atomic.Bool
 	shutdown atomic.Bool
 
@@ -382,6 +383,9 @@ func (n *Node) Start() error {
 
 // Stop gracefully stops the Raft node
 func (n *Node) Stop() error {
+	n.stopMu.Lock()
+	defer n.stopMu.Unlock()
+
 	if !n.running.Load() {
 		return nil
 	}
@@ -1450,6 +1454,9 @@ func (n *Node) updateCommitIndex(req *core.AppendEntriesRequest) {
 	newCommit := req.LeaderCommit
 	if newCommit > lastNewIndex {
 		newCommit = lastNewIndex
+	}
+	if newCommit <= n.commitIndex {
+		return
 	}
 	old := n.commitIndex
 	n.commitIndex = newCommit

@@ -7,6 +7,7 @@ import (
 	"crypto/sha1"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"log/slog"
@@ -229,7 +230,10 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 
 	// Send message if configured
 	if cfg.Send != "" {
-		frame := buildWebSocketTextFrame(cfg.Send)
+		frame, err := buildWebSocketClientFrame(1, cfg.Send)
+		if err != nil {
+			return failJudgment(soul, fmt.Errorf("failed to build WebSocket message: %w", err)), nil
+		}
 		if _, err := conn.Write(frame); err != nil {
 			return failJudgment(soul, fmt.Errorf("failed to send WebSocket message: %w", err)), nil
 		}
@@ -237,46 +241,24 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 		// Read response (limited to maxMessageSize)
 		// Deadline is a hint; a failed set surfaces via the read below.
 		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		responseBuf := make([]byte, maxMessageSize)
-		n, err := conn.Read(responseBuf)
+		payload, err := readWebSocketMessage(reader, conn)
 		if err != nil {
 			return failJudgment(soul, fmt.Errorf("failed to read WebSocket response: %w", err)), nil
 		}
 
-		// Parse frame (simplified)
-		if n > 2 {
-			// Check for text frame (opcode 1) or binary (opcode 2)
-			opcode := responseBuf[0] & 0x0F
-			if opcode == 1 { // Text frame
-				// Decode payload length
-				payloadLen := int(responseBuf[1] & 0x7F)
-				var payloadStart int
-				if payloadLen < 126 {
-					payloadStart = 2
-				} else if payloadLen == 126 {
-					payloadLen = int(responseBuf[2])<<8 | int(responseBuf[3])
-					payloadStart = 4
-				}
-
-				if payloadStart+payloadLen <= n {
-					payload := string(responseBuf[payloadStart : payloadStart+payloadLen])
-
-					// Check expected content
-					if cfg.ExpectContains != "" {
-						if !strings.Contains(payload, cfg.ExpectContains) {
-							judgment.Status = core.SoulDead
-							judgment.Message = fmt.Sprintf("WebSocket response does not contain: %s", cfg.ExpectContains)
-							return judgment, nil
-						}
-					}
-				}
-			}
+		if cfg.ExpectContains != "" && !strings.Contains(payload, cfg.ExpectContains) {
+			judgment.Status = core.SoulDead
+			judgment.Message = fmt.Sprintf("WebSocket response does not contain: %s", cfg.ExpectContains)
+			return judgment, nil
 		}
 	}
 
 	// Ping check if requested
 	if cfg.PingCheck {
-		pingFrame := []byte{0x89, 0x00} // Ping frame with no payload
+		pingFrame, err := buildWebSocketClientFrame(9, "")
+		if err != nil {
+			return failJudgment(soul, fmt.Errorf("failed to build ping: %w", err)), nil
+		}
 		if _, err := conn.Write(pingFrame); err != nil {
 			return failJudgment(soul, fmt.Errorf("failed to send ping: %w", err)), nil
 		}
@@ -293,14 +275,13 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 		}
 		// Deadline is a hint; a failed set surfaces via the read below.
 		_ = conn.SetReadDeadline(time.Now().Add(pingTimeout))
-		pongBuf := make([]byte, 10)
-		n, err := conn.Read(pongBuf)
-		if err != nil || n < 2 {
+		opcode, _, _, err := readWebSocketFrame(reader, maxMessageSize)
+		if err != nil {
 			return failJudgment(soul, fmt.Errorf("ping/pong failed: %w", err)), nil
 		}
 
 		// Check for pong frame (opcode 0x0A)
-		if (pongBuf[0] & 0x0F) != 0x0A {
+		if opcode != 0x0A {
 			judgment.Status = core.SoulDegraded
 			judgment.Message = "Did not receive pong response"
 			return judgment, nil
@@ -318,6 +299,114 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 	}
 
 	return judgment, nil
+}
+
+// readWebSocketFrame preserves bytes buffered during the HTTP upgrade and
+// waits for the complete frame even when TCP splits its header or payload.
+func readWebSocketFrame(reader io.Reader, limit int) (byte, bool, []byte, error) {
+	var header [2]byte
+	if _, err := io.ReadFull(reader, header[:]); err != nil {
+		return 0, false, nil, err
+	}
+	opcode, fin := header[0]&0x0f, header[0]&0x80 != 0
+	if header[0]&0x70 != 0 || header[1]&0x80 != 0 {
+		return 0, false, nil, fmt.Errorf("unsupported WebSocket frame flags")
+	}
+	switch opcode {
+	case 0, 1, 2, 8, 9, 10:
+	default:
+		return 0, false, nil, fmt.Errorf("invalid WebSocket opcode %d", opcode)
+	}
+	length := uint64(header[1] & 0x7f)
+	var extended [8]byte
+	switch length {
+	case 126:
+		if _, err := io.ReadFull(reader, extended[:2]); err != nil {
+			return 0, false, nil, err
+		}
+		length = uint64(binary.BigEndian.Uint16(extended[:2]))
+		if length < 126 {
+			return 0, false, nil, fmt.Errorf("nonminimal WebSocket payload length")
+		}
+	case 127:
+		if _, err := io.ReadFull(reader, extended[:]); err != nil {
+			return 0, false, nil, err
+		}
+		length = binary.BigEndian.Uint64(extended[:])
+		if length < 65536 || length>>63 != 0 {
+			return 0, false, nil, fmt.Errorf("invalid WebSocket payload length")
+		}
+	}
+	if opcode&8 != 0 {
+		if !fin || length > 125 {
+			return 0, false, nil, fmt.Errorf("invalid WebSocket control frame")
+		}
+	} else if length > uint64(limit) {
+		return 0, false, nil, fmt.Errorf("WebSocket response exceeds maximum message size")
+	}
+	payload := make([]byte, int(length))
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return 0, false, nil, err
+	}
+	return opcode, fin, payload, nil
+}
+
+func readWebSocketMessage(reader io.Reader, conn net.Conn) (string, error) {
+	var message []byte
+	started := false
+	for {
+		opcode, fin, payload, err := readWebSocketFrame(reader, maxMessageSize-len(message))
+		if err != nil {
+			return "", err
+		}
+		switch opcode {
+		case 1, 2:
+			if started {
+				return "", fmt.Errorf("new WebSocket message before final continuation")
+			}
+			started = true
+		case 0:
+			if !started {
+				return "", fmt.Errorf("unexpected WebSocket continuation")
+			}
+		case 8:
+			return "", fmt.Errorf("WebSocket closed before response message")
+		case 9:
+			pong, err := buildWebSocketClientFrame(10, string(payload))
+			if err != nil {
+				return "", err
+			}
+			if _, err := conn.Write(pong); err != nil {
+				return "", err
+			}
+			continue
+		case 10:
+			continue
+		}
+		message = append(message, payload...)
+		if fin {
+			return string(message), nil
+		}
+	}
+}
+
+// RFC 6455 requires masking every client frame, including empty pings.
+func buildWebSocketClientFrame(opcode byte, payload string) ([]byte, error) {
+	var mask [4]byte
+	if _, err := rand.Read(mask[:]); err != nil {
+		return nil, err
+	}
+	frame := buildWebSocketTextFrame(payload)
+	headerLen := len(frame) - len(payload)
+	frame = append(frame, make([]byte, len(mask))...)
+	copy(frame[headerLen+len(mask):], frame[headerLen:len(frame)-len(mask)])
+	frame[0] = 0x80 | opcode
+	frame[1] |= 0x80
+	copy(frame[headerLen:], mask[:])
+	for i := 0; i < len(payload); i++ {
+		frame[headerLen+len(mask)+i] ^= mask[i%len(mask)]
+	}
+	return frame, nil
 }
 
 // generateWebSocketKey generates a random WebSocket key per RFC 6455

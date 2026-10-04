@@ -223,17 +223,11 @@ func (c *UDPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 	}
 	defer conn.Close()
 
-	// Set deadline. Prefer the parent context's deadline if it's sooner
-	// than soul.Timeout, so a 100ms test context gets a fast failure
-	// instead of waiting for the full soul.Timeout.
-	deadline := time.Now().Add(timeout)
-	if ctxDeadline, ok := ctx.Deadline(); ok {
-		if d := ctxDeadline; d.Before(deadline) {
-			deadline = d
-		}
+	stopDeadline, err := bindConnDeadline(ctx, conn, timeout)
+	if err != nil {
+		return failJudgment(soul, fmt.Errorf("failed to set UDP deadline: %w", err)), nil
 	}
-	// Deadline is a hint; a failed set surfaces via the first read/write.
-	_ = conn.SetDeadline(deadline)
+	defer stopDeadline()
 
 	// Build payload
 	var payload []byte

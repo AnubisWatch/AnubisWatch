@@ -29,7 +29,10 @@ func (db *CobaltDB) SaveJudgment(ctx context.Context, j *core.Judgment) error {
 	ts := j.Timestamp.UnixNano()
 	key := fmt.Sprintf("%s/judgments/%s/%d", workspaceID, j.SoulID, ts)
 
-	data, _ := json.Marshal(j)
+	data, err := json.Marshal(j)
+	if err != nil {
+		return fmt.Errorf("failed to marshal judgment: %w", err)
+	}
 
 	if err := db.Put(key, data); err != nil {
 		return err

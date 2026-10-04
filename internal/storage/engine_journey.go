@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
@@ -31,6 +32,10 @@ func (db *CobaltDB) GetJourneyNoCtx(id string) (*core.JourneyConfig, error) {
 	if err := json.Unmarshal(data, &journey); err != nil {
 		return nil, err
 	}
+	// Legacy records may omit WorkspaceID; the index retains the key's tenant.
+	if journey.WorkspaceID == "" {
+		journey.WorkspaceID = workspaceID
+	}
 
 	return &journey, nil
 }
@@ -46,9 +51,13 @@ func (db *CobaltDB) ListJourneysNoCtx(workspace string, offset, limit int) ([]*c
 	if offset >= len(journeys) {
 		return []*core.JourneyConfig{}, nil
 	}
-	end := offset + limit
-	if limit <= 0 || end > len(journeys) {
-		end = len(journeys)
+	// ListJourneys reads a map; pagination needs a stable ordering.
+	sort.Slice(journeys, func(i, j int) bool {
+		return journeys[i].ID < journeys[j].ID
+	})
+	end := len(journeys)
+	if limit > 0 && limit < end-offset {
+		end = offset + limit
 	}
 	return journeys[offset:end], nil
 }

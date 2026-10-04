@@ -172,7 +172,7 @@ func (s *RESTServer) buildJudgmentMetrics() string {
 	totalChecks := 0
 	failedChecks := 0
 	for _, soul := range souls {
-		judgments, err := s.store.ListJudgmentsNoCtx(soul.ID, time.Now().Add(-24*time.Hour), time.Now(), 100)
+		judgments, err := s.store.ListJudgmentsNoCtx(soul.ID, time.Now().Add(-24*time.Hour), time.Now(), 0)
 		if err != nil {
 			continue
 		}

@@ -191,7 +191,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// Start REST server
 	if s.deps.RESTServer != nil {
 		go func() {
-			if err := s.deps.RESTServer.Start(); err != nil {
+			if err := s.deps.RESTServer.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				logger.Error("REST server failed", "err", err)
 				// Signal shutdown so other components stop gracefully when the
 				// REST API becomes unavailable, and record the failure so the
@@ -870,7 +870,10 @@ func (a *restStorageAdapter) ListChannelsNoCtx(workspace string) ([]*core.AlertC
 func (a *restStorageAdapter) SaveChannelNoCtx(ch *core.AlertChannel) error {
 	if a.replicator != nil {
 		key := fmt.Sprintf("%s/channels/%s", ch.WorkspaceID, ch.ID)
-		data, _ := json.Marshal(ch)
+		data, err := json.Marshal(ch)
+		if err != nil {
+			return err
+		}
 		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
 	}
 	return a.store.SaveChannelNoCtx(ch)
@@ -894,7 +897,10 @@ func (a *restStorageAdapter) ListRulesNoCtx(workspace string) ([]*core.AlertRule
 func (a *restStorageAdapter) SaveRuleNoCtx(rule *core.AlertRule) error {
 	if a.replicator != nil {
 		key := fmt.Sprintf("%s/rules/%s", rule.WorkspaceID, rule.ID)
-		data, _ := json.Marshal(rule)
+		data, err := json.Marshal(rule)
+		if err != nil {
+			return err
+		}
 		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
 	}
 	return a.store.SaveRuleNoCtx(rule)
@@ -918,7 +924,10 @@ func (a *restStorageAdapter) ListWorkspacesNoCtx() ([]*core.Workspace, error) {
 func (a *restStorageAdapter) SaveWorkspaceNoCtx(ws *core.Workspace) error {
 	if a.replicator != nil {
 		key := fmt.Sprintf("%s/workspaces/%s", ws.ID, ws.ID)
-		data, _ := json.Marshal(ws)
+		data, err := json.Marshal(ws)
+		if err != nil {
+			return err
+		}
 		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
 	}
 	return a.store.SaveWorkspaceNoCtx(ws)
@@ -948,7 +957,10 @@ func (a *restStorageAdapter) ListStatusPagesNoCtx() ([]*core.StatusPage, error) 
 func (a *restStorageAdapter) SaveStatusPageNoCtx(page *core.StatusPage) error {
 	if a.replicator != nil {
 		key := fmt.Sprintf("%s/statuspages/%s", page.WorkspaceID, page.ID)
-		data, _ := json.Marshal(page)
+		data, err := json.Marshal(page)
+		if err != nil {
+			return err
+		}
 		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
 	}
 	return a.store.SaveStatusPageNoCtx(page)
@@ -977,7 +989,10 @@ func (a *restStorageAdapter) ListJourneysNoCtx(workspace string, offset, limit i
 func (a *restStorageAdapter) SaveJourneyNoCtx(journey *core.JourneyConfig) error {
 	if a.replicator != nil {
 		key := fmt.Sprintf("%s/journeys/%s", journey.WorkspaceID, journey.ID)
-		data, _ := json.Marshal(journey)
+		data, err := json.Marshal(journey)
+		if err != nil {
+			return err
+		}
 		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
 	}
 	return a.store.SaveJourneyNoCtx(journey)
@@ -1005,7 +1020,10 @@ func (a *restStorageAdapter) ListDashboardsNoCtx() ([]*core.CustomDashboard, err
 func (a *restStorageAdapter) SaveDashboardNoCtx(dashboard *core.CustomDashboard) error {
 	if a.replicator != nil {
 		key := fmt.Sprintf("%s/dashboards/%s", dashboard.WorkspaceID, dashboard.ID)
-		data, _ := json.Marshal(dashboard)
+		data, err := json.Marshal(dashboard)
+		if err != nil {
+			return err
+		}
 		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
 	}
 	return a.store.SaveDashboardNoCtx(dashboard)
@@ -1034,7 +1052,10 @@ func (a *restStorageAdapter) ListMaintenanceWindows() ([]*core.MaintenanceWindow
 func (a *restStorageAdapter) SaveMaintenanceWindow(w *core.MaintenanceWindow) error {
 	if a.replicator != nil {
 		key := fmt.Sprintf("%s/maintenance/%s", w.WorkspaceID, w.ID)
-		data, _ := json.Marshal(w)
+		data, err := json.Marshal(w)
+		if err != nil {
+			return err
+		}
 		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
 	}
 	return a.store.SaveMaintenanceWindow(w)
@@ -1250,10 +1271,9 @@ func storageGetLatestJudgment(store *storage.CobaltDB, ctx context.Context, work
 		return nil, &core.NotFoundError{Entity: "judgment", ID: soulID}
 	}
 
-	// Find latest (keys are sorted, so last one is latest)
+	// Unpadded decimal timestamp keys do not sort chronologically.
 	var latest *core.Judgment
-	var latestKey string
-	for key, data := range results {
+	for _, data := range results {
 		if data == nil {
 			continue
 		}
@@ -1261,9 +1281,8 @@ func storageGetLatestJudgment(store *storage.CobaltDB, ctx context.Context, work
 		if err := json.Unmarshal(data, &j); err != nil {
 			continue
 		}
-		if key > latestKey {
+		if latest == nil || j.Timestamp.After(latest.Timestamp) {
 			latest = &j
-			latestKey = key
 		}
 	}
 

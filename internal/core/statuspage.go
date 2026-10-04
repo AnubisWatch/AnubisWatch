@@ -160,6 +160,9 @@ func CalculateOverallStatus(souls []SoulStatusInfo) OverallStatus {
 		case "degraded":
 			degraded++
 		}
+		if dead > 0 {
+			break
+		}
 	}
 
 	if dead > 0 {

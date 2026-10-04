@@ -146,6 +146,15 @@ func (m *Manager) Start() error {
 				m.rules[rule.ID] = rule
 			}
 		}
+
+		incidents, err := m.storage.ListActiveIncidents()
+		if err != nil {
+			m.logger.Warn("Failed to load active incidents", "error", err)
+		} else {
+			for _, incident := range incidents {
+				m.incidents[incident.ID] = incident
+			}
+		}
 	}
 
 	// Start workers

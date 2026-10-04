@@ -208,11 +208,8 @@ func (rm *RetentionManager) purgeSummaries(resolution string, cutoff time.Time) 
 
 		for key := range results {
 			// Only keys for the requested resolution: {ws}/ts/{soul}/{resolution}/{ts}
-			if !strings.Contains(key, "/"+resolution+"/") {
-				continue
-			}
 			parts := strings.Split(key, "/")
-			if len(parts) < 5 {
+			if len(parts) != 5 || parts[3] != resolution {
 				continue
 			}
 

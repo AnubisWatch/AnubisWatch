@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -340,6 +341,9 @@ func logsCommand() {
 
 	// Simple implementation: print last lines
 	lines_data := strings.Split(string(data), "\n")
+	if lines_data[len(lines_data)-1] == "" {
+		lines_data = lines_data[:len(lines_data)-1]
+	}
 	start := len(lines_data) - lines
 	if start < 0 {
 		start = 0
@@ -525,8 +529,14 @@ func configCommand() {
 		}
 
 		var cfg map[string]interface{}
-		if err := json.Unmarshal(data, &cfg); err != nil {
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.UseNumber()
+		if err := decoder.Decode(&cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "✗ Invalid config JSON: %v\n", err)
+			os.Exit(1)
+		}
+		if err := decoder.Decode(new(interface{})); err != io.EOF {
+			fmt.Fprintln(os.Stderr, "✗ Invalid config JSON: unexpected trailing data")
 			os.Exit(1)
 		}
 

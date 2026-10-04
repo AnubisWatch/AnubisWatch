@@ -109,7 +109,9 @@ func (d *Distributor) GetPlan() core.DistributionPlan {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	return *d.plan
+	plan := *d.plan
+	plan.Assignments = append([]core.SoulAssignment(nil), d.plan.Assignments...)
+	return plan
 }
 
 // Recompute recomputes the distribution plan
@@ -183,7 +185,7 @@ func (d *Distributor) GetNodeAssignments(nodeID string) []core.SoulAssignment {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	return d.assignments[nodeID]
+	return append([]core.SoulAssignment(nil), d.assignments[nodeID]...)
 }
 
 // GetMyAssignments returns assignments for the local node
@@ -317,9 +319,18 @@ func (d *Distributor) distributeRedundant(nodes []*core.NodeInfo) []core.SoulAss
 
 // distributeWeighted assigns based on node capacity
 func (d *Distributor) distributeWeighted(nodes []*core.NodeInfo) []core.SoulAssignment {
+	// AssignedSouls is used as a per-run capacity counter below. Work on copies
+	// so recomputing a plan does not mutate the node health metadata supplied by
+	// callers or retained in d.nodes.
+	planningNodes := make([]*core.NodeInfo, len(nodes))
+	for i, node := range nodes {
+		copy := *node
+		planningNodes[i] = &copy
+	}
+
 	// Calculate total capacity
 	totalCapacity := 0
-	for _, node := range nodes {
+	for _, node := range planningNodes {
 		capacity := node.MaxSouls - node.AssignedSouls
 		if capacity < 0 {
 			capacity = 0
@@ -331,7 +342,7 @@ func (d *Distributor) distributeWeighted(nodes []*core.NodeInfo) []core.SoulAssi
 
 	for _, soul := range d.souls {
 		// Pick node with highest remaining capacity
-		bestNode := d.pickBestWeighted(nodes, totalCapacity)
+		bestNode := d.pickBestWeighted(planningNodes, totalCapacity)
 		if bestNode != nil {
 			assignments = append(assignments, core.SoulAssignment{
 				SoulID:   soul.ID,

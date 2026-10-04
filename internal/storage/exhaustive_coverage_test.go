@@ -481,7 +481,7 @@ func TestRaftSnapshotAndStoreErrorPaths(t *testing.T) {
 	if _, err := sink.Write([]byte("x")); err == nil {
 		t.Fatal("write to closed sink succeeded")
 	}
-	source, err := snaps.Open("ignored")
+	source, err := snaps.Open(sink.ID())
 	if err != nil {
 		t.Fatal(err)
 	}

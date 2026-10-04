@@ -349,15 +349,22 @@ func (h *Handler) buildStatusPageData(page *core.StatusPage) (*core.StatusPageDa
 	overallStatus := core.CalculateOverallStatus(souls)
 
 	// Get groups with soul data
+	var soulsByID map[string]core.SoulStatusInfo
+	if len(page.Groups) > 0 {
+		soulsByID = make(map[string]core.SoulStatusInfo, len(souls))
+		for _, soul := range souls {
+			// Keep the first match when an ID appears more than once.
+			if _, exists := soulsByID[soul.ID]; !exists {
+				soulsByID[soul.ID] = soul
+			}
+		}
+	}
 	groups := make([]core.GroupStatusInfo, 0, len(page.Groups))
 	for _, group := range page.Groups {
 		groupSouls := make([]core.SoulStatusInfo, 0)
 		for _, soulID := range group.SoulIDs {
-			for _, soul := range souls {
-				if soul.ID == soulID {
-					groupSouls = append(groupSouls, soul)
-					break
-				}
+			if soul, exists := soulsByID[soulID]; exists {
+				groupSouls = append(groupSouls, soul)
 			}
 		}
 		groups = append(groups, core.GroupStatusInfo{
@@ -747,8 +754,6 @@ func (h *Handler) renderStatusPage(page *core.StatusPage, data *core.StatusPageD
 
         %s
 
-        %s
-
         <footer>
             <div class="powered-by">
                 <span>𓃥</span>
@@ -768,7 +773,6 @@ func (h *Handler) renderStatusPage(page *core.StatusPage, data *core.StatusPageD
 		incidentsHTML,
 		soulsHTML,
 		groupsHTML,
-		incidentsHTML,
 		uptimeHTML,
 		data.Status.UpdatedAt.Format(time.RFC3339),
 	)
@@ -1124,7 +1128,7 @@ func (h *Handler) RSSFeedHandler(w http.ResponseWriter, r *http.Request) {
       <description><![CDATA[Incident on %s: %s]]></description>
       <pubDate>%s</pubDate>
       <link>https://%s/incidents/%s</link>
-      <guid>%s</guid>
+      <guid isPermaLink="false">%s</guid>
     </item>
 `, html.EscapeString(soulName), html.EscapeString(string(inc.Status)), html.EscapeString(soulName), html.EscapeString(string(inc.Status)),
 			inc.StartedAt.Format(time.RFC1123Z),

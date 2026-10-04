@@ -672,13 +672,19 @@ func (c *DNSChecker) resolve(ctx context.Context, domain, recordType, nameserver
 
 	switch recordType {
 	case "A", "AAAA":
-		// For AAAA, we'd use resolver.LookupIP with AF_INET6
-		// For simplicity, using LookupHost which returns both
-		ips, err := resolver.LookupHost(ctx, domain)
+		network := "ip4"
+		if recordType == "AAAA" {
+			network = "ip6"
+		}
+		ips, err := resolver.LookupIP(ctx, network, domain)
 		if err != nil {
 			return nil, err
 		}
-		return ips, nil
+		results := make([]string, len(ips))
+		for i, ip := range ips {
+			results[i] = ip.String()
+		}
+		return results, nil
 
 	case "CNAME":
 		cname, err := resolver.LookupCNAME(ctx, domain)

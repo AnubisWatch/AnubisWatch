@@ -67,6 +67,7 @@ func buildTLSPeerConfig(cfg *core.TLSPeerConfig) (*tls.Config, error) {
 
 // Manager handles cluster coordination
 type Manager struct {
+	lifecycleMu   sync.Mutex
 	mu            sync.RWMutex
 	necroConfig   core.NecropolisConfig
 	config        core.RaftConfig
@@ -127,12 +128,35 @@ func NewManager(cfg core.NecropolisConfig, db *storage.CobaltDB, logger *slog.Lo
 
 // Start initializes and starts the Raft node
 func (m *Manager) Start(ctx context.Context) error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+
+	var cleanupNode *raft.Node
+	var cleanupDiscovery *raft.Discovery
+	// Rollback runs after m.mu is released so discovery callbacks can finish.
+	defer func() {
+		if cleanupDiscovery != nil {
+			if err := cleanupDiscovery.Stop(); err != nil {
+				m.logger.Warn("failed to roll back discovery", "err", err)
+			}
+		}
+		if cleanupNode != nil {
+			if err := cleanupNode.Stop(); err != nil {
+				m.logger.Warn("failed to roll back Raft node", "err", err)
+			}
+		}
+	}()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if !m.isClustered {
 		m.logger.Info("running in standalone mode")
 		return nil
+	}
+
+	if m.node != nil && !m.stopped {
+		return fmt.Errorf("cluster manager already running")
 	}
 
 	m.logger.Info("starting Raft node", "node_id", m.config.NodeID, "bind_addr", m.config.BindAddr)
@@ -162,12 +186,12 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	// Set the transport on the node
 	node.SetTransport(transport)
-	m.node = node
 
 	// Start Raft node (this also starts the transport)
 	if err := node.Start(); err != nil {
 		return fmt.Errorf("failed to start Raft node: %w", err)
 	}
+	cleanupNode = node
 
 	m.logger.Info("Raft node started")
 
@@ -177,6 +201,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to create discovery service: %w", err)
 		} else {
+			cleanupDiscovery = disc
 			// Wire peer discovery callbacks to Raft node
 			// Use atomic stopped flag to avoid race with Stop()
 			disc.RegisterPeerCallback(
@@ -227,12 +252,20 @@ func (m *Manager) Start(ctx context.Context) error {
 	// Start distributor
 	m.distributor.Start()
 
+	m.node = node
+	m.stopped = false
+	cleanupNode = nil
+	cleanupDiscovery = nil
+
 	m.logger.Info("Cluster distributor started", "strategy", strategy.String())
 	return nil
 }
 
 // Stop gracefully shuts down the Raft node
 func (m *Manager) Stop(ctx context.Context) error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+
 	m.mu.Lock()
 	// Mark as stopped to prevent callbacks from accessing node
 	m.stopped = true

@@ -453,10 +453,9 @@ func TestOIDCAuthenticator_ParseIDToken_ECKey(t *testing.T) {
 	}
 	// ECDSA signature: R || S, each padded to curve byte length
 	keyLen := priv.Params().BitSize / 8
-	sigBytes := append(r.Bytes(), s.Bytes()...)
-	// Pad to 2*keyLen
 	padded := make([]byte, 2*keyLen)
-	copy(padded[2*keyLen-len(sigBytes):], sigBytes)
+	r.FillBytes(padded[:keyLen])
+	s.FillBytes(padded[keyLen:])
 	sigB64 := base64.RawURLEncoding.EncodeToString(padded)
 
 	token := headerB64 + "." + claimsB64 + "." + sigB64

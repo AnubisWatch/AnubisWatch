@@ -232,7 +232,7 @@ func backupInfo() {
 	fmt.Printf("Version:   %s\n", b.Version)
 	fmt.Printf("Type:      %s\n", b.BackupType)
 	fmt.Printf("Created:   %s\n", b.CreatedAt.Format("2006-01-02 15:04:05 UTC"))
-	fmt.Printf("Checksum:  %s...\n", b.Checksum[:16])
+	fmt.Printf("Checksum:  %.16s...\n", b.Checksum)
 	fmt.Println()
 	fmt.Println("Contents:")
 	fmt.Printf("  Workspaces:     %d\n", b.Metadata.Workspaces)
