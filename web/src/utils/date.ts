@@ -1,6 +1,7 @@
 export function formatDistanceToNow(date: string | Date): string {
   const now = new Date()
   const then = new Date(date)
+  if (!Number.isFinite(then.getTime())) return 'Unknown time'
   const seconds = Math.floor((now.getTime() - then.getTime()) / 1000)
 
   if (seconds < 60) {

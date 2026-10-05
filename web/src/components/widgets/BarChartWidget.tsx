@@ -25,7 +25,7 @@ export function BarChartWidget({ widget, dashboardId }: BarChartWidgetProps) {
         )
         if (!cancelled) setData(Array.isArray(result) ? result : result ? [result] : [])
       } catch {
-        // silently handle
+        if (!cancelled) setData([])
       } finally {
         if (!cancelled) setLoading(false)
       }

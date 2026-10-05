@@ -22,7 +22,7 @@ export function GaugeWidget({ widget, dashboardId }: GaugeWidgetProps) {
         )
         if (!cancelled) setData(result)
       } catch {
-        // silently handle
+        if (!cancelled) setData(null)
       } finally {
         if (!cancelled) setLoading(false)
       }
