@@ -1,5 +1,5 @@
 import { useParams, useNavigate } from 'react-router-dom'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { ArrowLeft, Save, X } from 'lucide-react'
 import { useSoul } from '../api/hooks'
 import { SoulProtocolFields } from '../components/SoulProtocolFields'
@@ -20,6 +20,14 @@ export function SoulEdit() {
   const { soul, loading, error, updateSoul } = useSoul(id)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const saveSequence = useRef(0)
+
+  useEffect(() => {
+    saveSequence.current += 1
+    setSaving(false)
+    setSaveError(null)
+    return () => { saveSequence.current += 1 }
+  }, [id])
 
   const [formData, setFormData] = useState<SoulFormData>(defaultSoulFormData)
 
@@ -32,15 +40,18 @@ export function SoulEdit() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!soul) return
+    const sequence = ++saveSequence.current
     setSaving(true)
     setSaveError(null)
     try {
       await updateSoul(buildSoulPayload(formData, soul.workspace_id || 'default'))
-      navigate(`/souls/${id}`)
+      if (sequence === saveSequence.current) navigate(`/souls/${id}`)
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : 'Failed to save')
+      if (sequence === saveSequence.current) {
+        setSaveError(err instanceof Error ? err.message : 'Failed to save')
+      }
     } finally {
-      setSaving(false)
+      if (sequence === saveSequence.current) setSaving(false)
     }
   }
 

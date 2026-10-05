@@ -6,7 +6,7 @@ import type { CustomDashboard } from '../api/client'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 
 export function Dashboards() {
-  const { dashboards, loading, deleteDashboard } = useDashboards()
+  const { dashboards, loading, error, deleteDashboard } = useDashboards()
   const [deleting, setDeleting] = useState<string | null>(null)
 
   const handleDelete = async (id: string) => {
@@ -54,6 +54,8 @@ export function Dashboards() {
         <div className="flex items-center justify-center h-64" role="status" aria-label="Loading dashboards">
           <div className="w-8 h-8 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
         </div>
+      ) : error ? (
+        <div role="alert" className="text-center py-16 text-rose-400">{error}</div>
       ) : dashboards.length === 0 ? (
         <div className="text-center py-16">
           <div className="w-24 h-24 rounded-2xl bg-gradient-to-br from-amber-500/20 to-amber-600/10

@@ -25,7 +25,7 @@ import {
   AlertTriangle,
   Loader2
 } from 'lucide-react'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { useSoul, useSoulJudgments } from '../api/hooks'
 import type { Judgment } from '../api/client'
 import type { LucideIcon } from 'lucide-react'
@@ -47,6 +47,14 @@ export function SoulDetail() {
   const [isDeleting, setIsDeleting] = useState(false)
   const [isChecking, setIsChecking] = useState(false)
   const [checkResult, setCheckResult] = useState<{ success: boolean; message: string } | null>(null)
+  const checkSequence = useRef(0)
+
+  useEffect(() => {
+    checkSequence.current += 1
+    setIsChecking(false)
+    setCheckResult(null)
+    return () => { checkSequence.current += 1 }
+  }, [id])
 
   const { soul, loading: soulLoading, error: soulError, refetch, updateSoul, deleteSoul, forceCheck } = useSoul(id)
   const {
@@ -163,10 +171,12 @@ export function SoulDetail() {
 
   const handleForceCheck = async () => {
     if (!soul) return
+    const sequence = ++checkSequence.current
     setIsChecking(true)
     setCheckResult(null)
     try {
       const result = await forceCheck()
+      if (sequence !== checkSequence.current) return
       setCheckResult({
         success: result?.status === 'passed',
         message: result?.status === 'passed'
@@ -175,13 +185,19 @@ export function SoulDetail() {
       })
       await Promise.all([refetch(), refetchJudgments()])
     } catch (err) {
-      setCheckResult({
-        success: false,
-        message: 'Check failed: ' + (err instanceof Error ? err.message : 'Unknown error')
-      })
+      if (sequence === checkSequence.current) {
+        setCheckResult({
+          success: false,
+          message: 'Check failed: ' + (err instanceof Error ? err.message : 'Unknown error')
+        })
+      }
     } finally {
-      setIsChecking(false)
-      setTimeout(() => setCheckResult(null), 5000)
+      if (sequence === checkSequence.current) {
+        setIsChecking(false)
+        setTimeout(() => {
+          if (sequence === checkSequence.current) setCheckResult(null)
+        }, 5000)
+      }
     }
   }
 
