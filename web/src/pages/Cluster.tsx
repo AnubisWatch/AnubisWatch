@@ -32,6 +32,7 @@ export function Cluster() {
   const {
     data: peersData,
     loading: peersLoading,
+    error: peersError,
     refetch: refetchPeers
   } = useClusterPeers()
 
@@ -91,10 +92,10 @@ export function Cluster() {
         <div className="flex items-center justify-center py-32" role="status" aria-label="Loading cluster status">
           <div className="w-10 h-10 border-2 border-amber-500/30 border-t-amber-500 rounded-full animate-spin" />
         </div>
-      ) : clusterError ? (
+      ) : clusterError || peersError ? (
         <div className="text-center py-16">
           <AlertCircle className="w-12 h-12 text-rose-500 mx-auto mb-4" />
-          <p className="text-gray-400">{clusterError}</p>
+          <p className="text-gray-400">{clusterError || peersError}</p>
           <button
             onClick={handleRefresh}
             className="mt-4 px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition-colors"

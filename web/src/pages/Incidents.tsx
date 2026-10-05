@@ -184,7 +184,11 @@ export function Incidents() {
             <div className="text-center py-16 bg-gray-900/50 border border-gray-800 rounded-2xl">
               <AlertTriangle className="w-12 h-12 text-gray-600 mx-auto mb-3" />
               <p className="text-gray-400 font-medium">No incidents found</p>
-              <p className="text-gray-500 text-sm mt-1">All systems are running smoothly</p>
+              <p className="text-gray-500 text-sm mt-1">
+                {incidents.length > 0
+                  ? 'Try adjusting your filters'
+                  : error ? 'Incident status is unavailable' : 'All systems are running smoothly'}
+              </p>
             </div>
           ) : (
             filtered.map((inc) => {

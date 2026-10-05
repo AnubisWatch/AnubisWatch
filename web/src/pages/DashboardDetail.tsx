@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Plus, Trash2, RefreshCw } from 'lucide-react'
 import { api } from '../api/client'
@@ -22,8 +22,10 @@ export function DashboardDetail() {
   const [newDescription, setNewDescription] = useState('')
   const [newRefreshSec, setNewRefreshSec] = useState(60)
   const [savingNew, setSavingNew] = useState(false)
+  const requestSequence = useRef(0)
 
   const fetchDashboard = useCallback(async () => {
+    const sequence = ++requestSequence.current
     if (isNewDashboard) {
       setLoading(false)
       return
@@ -31,15 +33,18 @@ export function DashboardDetail() {
     setLoading(true)
     try {
       const result = await api.get<CustomDashboard>(`/dashboards/${id}`)
-      setDashboard(result)
+      if (sequence === requestSequence.current) setDashboard(result)
     } catch {
-      setDashboard(null)
+      if (sequence === requestSequence.current) setDashboard(null)
     } finally {
-      setLoading(false)
+      if (sequence === requestSequence.current) setLoading(false)
     }
   }, [id, isNewDashboard])
 
-  useEffect(() => { fetchDashboard() }, [fetchDashboard])
+  useEffect(() => {
+    fetchDashboard()
+    return () => { requestSequence.current += 1 }
+  }, [fetchDashboard])
 
   // Auto-refresh
   useEffect(() => {
