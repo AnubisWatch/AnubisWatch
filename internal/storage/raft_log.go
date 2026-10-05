@@ -93,25 +93,23 @@ func (s *CobaltDBLogStore) GetLog(index uint64, log *core.RaftLogEntry) error {
 		return err
 	}
 
-	var entry map[string]any
+	var entry struct {
+		Term uint64            `json:"term"`
+		Type core.LogEntryType `json:"type"`
+		Data json.RawMessage   `json:"data"`
+	}
 	if err := json.Unmarshal(data, &entry); err != nil {
 		return fmt.Errorf("failed to unmarshal log entry: %w", err)
 	}
 
-	log.Index = index
-	if term, ok := entry["term"].(float64); ok {
-		log.Term = uint64(term)
-	}
-	if entryType, ok := entry["type"].(float64); ok {
-		log.Type = core.LogEntryType(entryType)
-	}
-	// Fix: Go's json.Unmarshal decodes []byte fields as base64-encoded strings,
-	// not []byte. We must type-assert to string and base64-decode.
-	if dataStr, ok := entry["data"].(string); ok {
-		if decoded, err := base64.StdEncoding.DecodeString(dataStr); err == nil {
-			log.Data = decoded
+	decoded := core.RaftLogEntry{Index: index, Term: entry.Term, Type: entry.Type}
+	var dataStr *string
+	if json.Unmarshal(entry.Data, &dataStr) == nil && dataStr != nil {
+		if data, err := base64.StdEncoding.DecodeString(*dataStr); err == nil {
+			decoded.Data = data
 		}
 	}
+	*log = decoded
 
 	return nil
 }

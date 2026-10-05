@@ -1,6 +1,7 @@
 package probe
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -551,7 +552,13 @@ func extractJSONPathValue(data []byte, path string) (string, bool) {
 	parts := strings.Split(path, ".")
 
 	var current interface{}
-	if err := json.Unmarshal(data, &current); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&current); err != nil {
+		return "", false
+	}
+	var trailing interface{}
+	if err := decoder.Decode(&trailing); err != io.EOF {
 		return "", false
 	}
 
@@ -576,11 +583,18 @@ func extractJSONPathValue(data []byte, path string) (string, bool) {
 	switch v := current.(type) {
 	case string:
 		return v, true
-	case float64:
-		if v == float64(int64(v)) {
-			return fmt.Sprintf("%d", int64(v)), true
+	case json.Number:
+		if !strings.ContainsAny(v.String(), ".eE") {
+			return v.String(), true
 		}
-		return fmt.Sprintf("%g", v), true
+		number, err := v.Float64()
+		if err != nil {
+			return "", false
+		}
+		if number == float64(int64(number)) {
+			return fmt.Sprintf("%d", int64(number)), true
+		}
+		return fmt.Sprintf("%g", number), true
 	case bool:
 		return fmt.Sprintf("%t", v), true
 	case nil:
