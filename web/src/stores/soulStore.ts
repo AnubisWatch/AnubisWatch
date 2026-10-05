@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { api } from '../api/client'
 import type { Soul, Judgment, ApiResponse } from '../api/client'
 
+const initialCheckRequests = new Map<string, symbol>()
+
 interface SoulStore {
   souls: Soul[]
   pagination: { total: number; has_more: boolean } | null
@@ -55,6 +57,8 @@ export const useSoulStore = create<SoulStore>((set, get) => ({
       const result = await api.get<ApiResponse<Soul[]>>('/souls')
       if (result) {
         set({ souls: result.data, pagination: result.pagination ?? null, loading: false })
+      } else {
+        set({ loading: false })
       }
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Unknown error', loading: false })
@@ -71,6 +75,8 @@ export const useSoulStore = create<SoulStore>((set, get) => ({
         if (result.enabled) {
           void get().retryInitialCheck(result.id)
         }
+      } else {
+        set({ loading: false })
       }
       return result ?? null
     } catch (err) {
@@ -80,22 +86,28 @@ export const useSoulStore = create<SoulStore>((set, get) => ({
   },
 
   retryInitialCheck: async (id) => {
+    const request = Symbol()
+    initialCheckRequests.set(id, request)
     set((state) => ({
       initialChecks: { ...state.initialChecks, [id]: 'running' },
     }))
 
     try {
       const judgment = await api.post<Judgment>(`/souls/${id}/check`)
+      if (initialCheckRequests.get(id) !== request) return judgment
       set((state) => ({
         souls: state.souls.map((s) => (s.id === id ? mergeJudgmentStatus(s, judgment) : s)),
         initialChecks: removeInitialCheck(state.initialChecks, id),
       }))
       return judgment
     } catch {
+      if (initialCheckRequests.get(id) !== request) return null
       set((state) => ({
         initialChecks: { ...state.initialChecks, [id]: 'failed' },
       }))
       return null
+    } finally {
+      if (initialCheckRequests.get(id) === request) initialCheckRequests.delete(id)
     }
   },
 
@@ -110,6 +122,8 @@ export const useSoulStore = create<SoulStore>((set, get) => ({
           souls: state.souls.map((s) => (s.id === id ? result : s)),
           loading: false,
         }))
+      } else {
+        set({ loading: false })
       }
       return result ?? null
     } catch (err) {

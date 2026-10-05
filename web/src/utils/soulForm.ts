@@ -122,6 +122,20 @@ export const soulTargetHints: Record<SoulType, { label: string; placeholder: str
 
 const parseNumber = (value: number, fallback: number) => Number.isFinite(value) ? value : fallback
 
+const parseIntervalSeconds = (value = '') => {
+  const legacy = Number(value)
+  if (Number.isFinite(legacy) && legacy > 0) return legacy
+
+  const units: Record<string, number> = { ns: 1e-9, us: 1e-6, 'µs': 1e-6, 'μs': 1e-6, ms: 1e-3, s: 1, m: 60, h: 3600 }
+  let consumed = ''
+  let seconds = 0
+  for (const match of value.matchAll(/(\d+(?:\.\d*)?|\.\d+)(ns|us|µs|μs|ms|s|m|h)/g)) {
+    consumed += match[0]
+    seconds += Number(match[1]) * units[match[2]]
+  }
+  return consumed === value && Number.isFinite(seconds) && seconds > 0 ? seconds : 1
+}
+
 const parseNumberList = (value: string, fallback: number[]) => {
   const parsed = value
     .split(/[,\s]+/)
@@ -169,7 +183,7 @@ export function soulFormDataFromSoul(soul: Soul): SoulFormData {
     dnsRecordType: dns?.record_type || 'A',
     dnsExpected: dns?.expected?.join(', ') || '',
     icmpCount: soul.icmp?.count ?? 4,
-    icmpInterval: Number.parseInt(soul.icmp?.interval || '1', 10) || 1,
+    icmpInterval: parseIntervalSeconds(soul.icmp?.interval),
     icmpMaxLossPercent: soul.icmp?.max_loss_percent ?? 100,
     smtpStartTLS: soul.smtp?.starttls ?? true,
     smtpBannerContains: soul.smtp?.banner_contains || '',

@@ -262,7 +262,7 @@ describe('useSoulStore', () => {
   it('covers empty API results and disabled creation', async () => {
     mockGet.mockResolvedValueOnce(null)
     await useSoulStore.getState().fetchSouls()
-    expect(useSoulStore.getState().loading).toBe(true)
+    expect(useSoulStore.getState().loading).toBe(false)
 
     const disabled = { id: 'd', name: 'Disabled', type: 'http', target: '', enabled: false, weight: 1, timeout: 1 }
     mockPost.mockResolvedValueOnce(disabled)
