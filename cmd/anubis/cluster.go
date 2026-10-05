@@ -146,6 +146,8 @@ func showCluster() {
 			if err := json.NewDecoder(resp.Body).Decode(&clusterData); err == nil {
 				useAPI = true
 			}
+		}
+		if resp != nil {
 			resp.Body.Close()
 		}
 	}
