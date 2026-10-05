@@ -37,6 +37,12 @@ interface MaintenanceWindow {
   updated_at?: string
 }
 
+function toLocalDateTime(value: string) {
+  const date = new Date(value)
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+    .toISOString().slice(0, 16)
+}
+
 function useMaintenance() {
   const [data, setData] = useState<MaintenanceWindow[]>([])
   const [loading, setLoading] = useState(true)
@@ -121,8 +127,8 @@ export function Maintenance() {
     setEditing(w)
     setFormName(w.name)
     setFormDescription(w.description)
-    setFormStartTime(w.start_time.slice(0, 16))
-    setFormEndTime(w.end_time.slice(0, 16))
+    setFormStartTime(toLocalDateTime(w.start_time))
+    setFormEndTime(toLocalDateTime(w.end_time))
     setFormRecurring(w.recurring || 'none')
     setFormEnabled(w.enabled)
     setFormTags((w.tags || []).join(', '))
@@ -214,7 +220,7 @@ export function Maintenance() {
   const stats = {
     total: data.length,
     active: data.filter(isActive).length,
-    scheduled: data.filter(w => w.enabled && !isActive).length,
+    scheduled: data.filter(w => w.enabled && !isActive(w)).length,
     disabled: data.filter(w => !w.enabled).length
   }
 
