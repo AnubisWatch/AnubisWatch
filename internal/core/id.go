@@ -154,6 +154,9 @@ func ulidDecode(src string) ([]byte, error) {
 	if len(decoded) != 16 {
 		return nil, errors.New("invalid decoded ULID length")
 	}
+	if enc.EncodeToString(decoded) != src {
+		return nil, errors.New("invalid ULID padding bits")
+	}
 	return decoded, nil
 }
 
