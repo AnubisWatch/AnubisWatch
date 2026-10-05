@@ -100,6 +100,13 @@ export function WorkspaceSwitcher({ user, onWorkspaceSwitched }: WorkspaceSwitch
         {canSwitch && <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-[#D4AF37]/70" />}
       </button>
 
+      {error && !open && (
+        <div role="alert" className="mt-2 flex items-start gap-2 text-xs text-rose-300">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
       {open && (
         <div
           role="menu"

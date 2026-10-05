@@ -88,11 +88,12 @@ export function ConfirmDialog({
 
     document.addEventListener('keydown', handleKeyDown)
     // Prevent body scroll while dialog is open
+    const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
 
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
-      document.body.style.overflow = ''
+      document.body.style.overflow = previousOverflow
       // Restore focus to the previously focused element
       previousFocusRef.current?.focus()
     }

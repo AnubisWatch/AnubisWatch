@@ -142,9 +142,10 @@ export function SoulProtocolFields({ formData, setFormData }: SoulProtocolFields
             <input
               id="icmp-interval"
               type="number"
-              min="1"
+              min="0"
+              step="any"
               value={formData.icmpInterval}
-              onChange={(e) => setFormData({ ...formData, icmpInterval: parseInt(e.target.value) })}
+              onChange={(e) => setFormData({ ...formData, icmpInterval: parseFloat(e.target.value) })}
               className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
             />
           </div>
