@@ -353,13 +353,18 @@ func ruleToPB(rule *core.AlertRule) *v1.Rule {
 	if len(rule.Channels) > 0 {
 		channelID = rule.Channels[0]
 	}
+	conditionType := ""
+	if len(rule.Conditions) > 0 {
+		conditionType = rule.Conditions[0].Type
+	}
 	return &v1.Rule{
-		Id:        rule.ID,
-		Name:      rule.Name,
-		Enabled:   rule.Enabled,
-		ChannelId: channelID,
-		Workspace: rule.WorkspaceID,
-		CreatedAt: ts(rule.CreatedAt),
+		Id:            rule.ID,
+		ConditionType: conditionType,
+		Name:          rule.Name,
+		Enabled:       rule.Enabled,
+		ChannelId:     channelID,
+		Workspace:     rule.WorkspaceID,
+		CreatedAt:     ts(rule.CreatedAt),
 	}
 }
 
@@ -448,15 +453,20 @@ func eventToVerdict(event *core.AlertEvent) *v1.Verdict {
 	if event == nil {
 		return nil
 	}
+	var resolvedAt *timestamppb.Timestamp
+	if event.ResolvedAt != nil {
+		resolvedAt = ts(*event.ResolvedAt)
+	}
 	return &v1.Verdict{
-		Id:       event.ID,
-		SoulId:   event.SoulID,
-		SoulName: event.SoulName,
-		RuleId:   event.ChannelID,
-		Status:   verdictStatus(event),
-		Severity: string(event.Severity),
-		Message:  event.Message,
-		FiredAt:  ts(event.Timestamp),
+		Id:         event.ID,
+		SoulId:     event.SoulID,
+		SoulName:   event.SoulName,
+		RuleId:     event.ChannelID,
+		Status:     verdictStatus(event),
+		Severity:   string(event.Severity),
+		Message:    event.Message,
+		FiredAt:    ts(event.Timestamp),
+		ResolvedAt: resolvedAt,
 	}
 }
 
