@@ -120,7 +120,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps = {}) {
 
         {navItems.map((item, index) => {
           const IconComponent = item.icon
-          const isActive = currentPath === item.path
+          const isActive = currentPath === item.path || (item.path !== '/' && currentPath.startsWith(`${item.path}/`))
 
           return (
             <NavLink

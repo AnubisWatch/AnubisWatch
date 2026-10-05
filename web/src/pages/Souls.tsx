@@ -281,7 +281,7 @@ export function Souls() {
                           <RefreshCw className="w-4 h-4" />
                           Retry
                         </button>
-                      ) : soul.latency ? (
+                      ) : soul.latency != null ? (
                         <div className="flex items-center gap-2">
                           <Clock className="w-4 h-4 text-gray-500" />
                           <span className={`text-sm font-medium ${soul.latency > 1000 ? 'text-amber-400' : 'text-emerald-400'}`}>
@@ -362,7 +362,7 @@ export function Souls() {
                       <span>Retry initial check</span>
                     </button>
                   )}
-                  {displayStatus !== 'checking' && displayStatus !== 'check_failed' && soul.latency && (
+                  {displayStatus !== 'checking' && displayStatus !== 'check_failed' && soul.latency != null && (
                     <div className="flex items-center gap-2 text-sm">
                       <Clock className="w-4 h-4 text-gray-500" />
                       <span className={soul.latency > 1000 ? 'text-amber-400' : 'text-emerald-400'}>

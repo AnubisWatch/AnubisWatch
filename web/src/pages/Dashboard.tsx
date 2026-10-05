@@ -132,9 +132,9 @@ export function Dashboard() {
       healthy,
       failed,
       enabled,
-      uptime: statsData?.souls ?
+      uptime: statsData?.souls && statsData.souls.total > 0 ?
         Math.round(((statsData.souls.healthy + statsData.souls.degraded) / Math.max(statsData.souls.total, 1)) * 1000) / 10 :
-        100,
+        null,
       checksToday: statsData?.judgments?.today || 0,
       avgLatency: Math.round(statsData?.judgments?.avg_latency_ms || 0)
     }
@@ -299,8 +299,8 @@ export function Dashboard() {
         />
         <StatCard
           title="Balance"
-          value={`${stats.uptime}%`}
-          subtext="Last 30 days"
+          value={stats.uptime === null ? 'N/A' : `${stats.uptime}%`}
+          subtext="Current soul health"
           icon={Zap}
           color="blue"
           delay={400}
