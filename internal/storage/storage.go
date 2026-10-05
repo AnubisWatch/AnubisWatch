@@ -577,19 +577,15 @@ func (db *CobaltDB) GetRaftState(ctx context.Context) (currentTerm uint64, voted
 		return 0, "", err
 	}
 
-	var state map[string]any
+	var state struct {
+		CurrentTerm uint64 `json:"current_term"`
+		VotedFor    string `json:"voted_for"`
+	}
 	if err := json.Unmarshal(data, &state); err != nil {
 		return 0, "", err
 	}
 
-	if term, ok := state["current_term"].(float64); ok {
-		currentTerm = uint64(term)
-	}
-	if voted, ok := state["voted_for"].(string); ok {
-		votedFor = voted
-	}
-
-	return currentTerm, votedFor, nil
+	return state.CurrentTerm, state.VotedFor, nil
 }
 
 // SaveRaftLogEntry saves a Raft log entry
@@ -617,19 +613,15 @@ func (db *CobaltDB) GetRaftLogEntry(ctx context.Context, index uint64) (term uin
 		return 0, nil, err
 	}
 
-	var entry map[string]any
+	var entry struct {
+		Term uint64 `json:"term"`
+		Data []byte `json:"data"`
+	}
 	if err := json.Unmarshal(entryData, &entry); err != nil {
 		return 0, nil, err
 	}
 
-	if t, ok := entry["term"].(float64); ok {
-		term = uint64(t)
-	}
-	if d, ok := entry["data"].([]byte); ok {
-		data = d
-	}
-
-	return term, data, nil
+	return entry.Term, entry.Data, nil
 }
 
 // Alert storage methods for alert manager

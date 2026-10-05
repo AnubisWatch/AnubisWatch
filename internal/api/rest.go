@@ -1102,14 +1102,17 @@ func (s *RESTServer) handleListSouls(ctx *Context) error {
 	workspace := ctx.Workspace
 	offset, limit := parsePagination(ctx.Request, 20, 100)
 
-	souls, err := s.store.ListSoulsNoCtx(workspace, offset, limit)
+	souls, err := s.store.ListSoulsNoCtx(workspace, offset, limit+1)
 	if err != nil {
 		s.logger.Error("failed to list souls", "error", err, "workspace", workspace)
 		return ctx.Error(http.StatusInternalServerError, "failed to retrieve souls")
 	}
 
 	// Check if there are more results
-	hasMore := len(souls) == limit
+	hasMore := len(souls) > limit
+	if hasMore {
+		souls = souls[:limit]
+	}
 	nextOffset := offset + limit
 	data := make([]soulMonitorDTO, 0, len(souls))
 	for _, soul := range souls {

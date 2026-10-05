@@ -47,9 +47,10 @@ type WebSocketServer struct {
 	messageWindow    time.Duration                 // message rate limit window
 
 	// Shutdown coordination
-	ctx    context.Context    // cancelled on Stop() to signal broadcastLoop exit
-	cancel context.CancelFunc // cancels ctx
-	stopWg sync.WaitGroup
+	ctx      context.Context    // cancelled on Stop() to signal broadcastLoop exit
+	cancel   context.CancelFunc // cancels ctx
+	stopWg   sync.WaitGroup
+	stopOnce sync.Once
 }
 
 // WSClient represents a connected WebSocket client
@@ -110,14 +111,16 @@ func (s *WebSocketServer) Stop() {
 	// Cancel the server context first — this signals broadcastLoop to exit
 	// via its <-ctx.Done() select branch. Then close the broadcast channel
 	// as a secondary signal (the drain loop handles remaining messages).
-	s.cancel()
+	s.stopOnce.Do(func() {
+		s.cancel()
 
-	// Close broadcast channel to signal broadcastLoop. Closing while holding
-	// no lock is safe: broadcastLoop reads the channel without holding the
-	// mutex; safeSend's defer/recover guards against sends racing close.
-	if s.broadcast != nil {
-		close(s.broadcast)
-	}
+		// Close broadcast channel to signal broadcastLoop. Closing while holding
+		// no lock is safe: broadcastLoop reads the channel without holding the
+		// mutex; safeSend's defer/recover guards against sends racing close.
+		if s.broadcast != nil {
+			close(s.broadcast)
+		}
+	})
 
 	// Wait for broadcastLoop to exit after context cancellation and channel
 	// close. TheWg.Wait ensures the loop has finished before we close

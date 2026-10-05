@@ -1033,7 +1033,8 @@ func (s *Server) ListJudgments(ctx context.Context, req *v1.ListJudgmentsRequest
 
 	offset, limit := normalizedListWindow(req.Offset, req.Limit)
 
-	var start, end time.Time
+	var start time.Time
+	end := time.Now()
 	if req.Since != nil {
 		start = req.Since.AsTime()
 	}
