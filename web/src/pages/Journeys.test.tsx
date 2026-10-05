@@ -107,7 +107,7 @@ describe('Journeys', () => {
     expect(screen.getByText('Failed DNS')).toBeInTheDocument()
     expect(screen.getByText('Pending TCP')).toBeInTheDocument()
     expect(screen.getByText('Unknown TLS')).toBeInTheDocument()
-    expect(screen.getByText('75%')).toBeInTheDocument()
+    expect(screen.getByText('Avg Success').parentElement).toHaveTextContent('56%')
     expect(screen.getByText('1.2s')).toBeInTheDocument()
     expect(screen.getAllByText('0 steps').length).toBeGreaterThan(0)
 
@@ -229,18 +229,12 @@ describe('Journeys', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
-  it('reaches the filtered-empty panel when the backing collection changes between render checks', async () => {
-    let lengthRead = 0
-    const changingCollection = {
-      get length() { return [1, 1, 0, 1][lengthRead++] ?? 1 },
-      filter: () => [],
-      reduce: () => 0,
-      find: () => undefined,
-    } as unknown as JourneyFixture[]
-    apiMocks.get.mockResolvedValueOnce(changingCollection)
-    render(<Journeys />)
-    expect(await screen.findByText('No voyages match your sacred filters')).toBeInTheDocument()
+  it('shows the filtered-empty panel and restores ordinary collection results', async () => {
+    await renderLoaded([checkout])
+    fireEvent.change(screen.getByPlaceholderText('Search journeys...'), { target: { value: 'missing' } })
+    expect(screen.getByText('No voyages match your sacred filters')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Clear Sacred Filters' }))
+    expect(screen.getByText('Checkout Flow')).toBeInTheDocument()
   })
 
   it('opens an edit journey with no steps and uses an empty step list', async () => {

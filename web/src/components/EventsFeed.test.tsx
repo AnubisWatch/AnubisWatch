@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { EventsFeed } from './EventsFeed'
 import { useWebSocket, type WebSocketMessage } from '../hooks/webSocketContext'
 
@@ -54,9 +54,9 @@ describe('EventsFeed', () => {
   it('limits events by maxEvents prop', () => {
     render(<EventsFeed maxEvents={2} />)
 
-    expect(screen.getByText('Health check passed')).toBeInTheDocument()
+    expect(screen.getByText('Incident open')).toBeInTheDocument()
     expect(screen.getByText('High latency detected')).toBeInTheDocument()
-    expect(screen.queryByText('Incident open')).not.toBeInTheDocument()
+    expect(screen.queryByText('Health check passed')).not.toBeInTheDocument()
   })
 
   it('dismisses an event when clicking the dismiss button', async () => {
@@ -67,7 +67,7 @@ describe('EventsFeed', () => {
     const dismissButtons = screen.getAllByLabelText('Dismiss event')
     expect(dismissButtons).toHaveLength(3)
 
-    fireEvent.click(dismissButtons[0])
+    fireEvent.click(within(screen.getByText('Health check passed').closest('.group') as HTMLElement).getByLabelText('Dismiss event'))
 
     await waitFor(() => {
       expect(screen.queryByText('Health check passed')).not.toBeInTheDocument()

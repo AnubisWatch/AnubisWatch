@@ -20,7 +20,7 @@ export function EventsFeed({ maxEvents = 10 }: EventsFeedProps) {
   const [dismissed, setDismissed] = useState<Set<string>>(new Set())
 
   const events = useMemo(
-    () => messages.map(messageToEvent).filter((event): event is Event => event !== null),
+    () => messages.slice().reverse().map(messageToEvent).filter((event): event is Event => event !== null),
     [messages]
   )
 

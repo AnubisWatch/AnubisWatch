@@ -471,7 +471,7 @@ export function Journeys() {
     issues: journeys.filter(j => j.last_status === 'failed').length,
     totalSteps: journeys.reduce((acc, j) => acc + (j.step_count || 0), 0),
     avgSuccessRate: journeys.length > 0
-      ? Math.round(journeys.filter(j => j.success_rate > 0).reduce((acc, j) => acc + j.success_rate, 0) / journeys.filter(j => j.success_rate > 0).length)
+      ? Math.round(journeys.reduce((acc, j) => acc + j.success_rate, 0) / journeys.length)
       : 0
   }
 
@@ -644,7 +644,7 @@ export function Journeys() {
       )}
 
       {/* Journeys Grid */}
-      {!error && journeys.length > 0 ? (
+      {!error && filteredJourneys.length > 0 ? (
         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-5">
           {filteredJourneys.map((journey) => (
             <div
