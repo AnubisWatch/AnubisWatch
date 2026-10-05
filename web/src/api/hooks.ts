@@ -16,29 +16,35 @@ function useApi<T>(
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const mountedRef = useRef(true)
+  const requestSequence = useRef(0)
 
   useEffect(() => {
+    const sequenceRef = requestSequence
     mountedRef.current = true
-    return () => { mountedRef.current = false }
+    return () => {
+      mountedRef.current = false
+      ++sequenceRef.current
+    }
   }, [])
 
   const fetchData = useCallback(async () => {
+    const sequence = ++requestSequence.current
     setLoading(true)
     setError(null)
 
     try {
       const result = await fetcher()
-      if (mountedRef.current) {
+      if (mountedRef.current && sequence === requestSequence.current) {
         setData(result)
       }
       return result
     } catch (err) {
-      if (mountedRef.current) {
+      if (mountedRef.current && sequence === requestSequence.current) {
         setError(err instanceof Error ? err.message : 'Unknown error')
       }
       throw err
     } finally {
-      if (mountedRef.current) {
+      if (mountedRef.current && sequence === requestSequence.current) {
         setLoading(false)
       }
     }

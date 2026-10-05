@@ -610,7 +610,7 @@ func (s *RESTServer) queryJudgments(q core.WidgetQuery, workspace string) (inter
 	})
 
 	for _, j := range judgments {
-		bucket := j.Timestamp.Truncate(time.Hour).Format("15:04")
+		bucket := j.Timestamp.UTC().Truncate(time.Hour).Format(time.RFC3339)
 		b := buckets[bucket]
 		b.Count++
 		b.TotalLat += float64(j.Duration.Milliseconds())
