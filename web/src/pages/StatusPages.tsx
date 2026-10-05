@@ -27,8 +27,7 @@ import type { StatusPage } from '../api/client'
 interface ServiceStatus {
   id: string
   name: string
-  status: 'operational' | 'degraded' | 'down'
-  uptime: string
+  status: 'operational' | 'degraded' | 'down' | 'unknown'
 }
 
 function displayTheme(theme: StatusPage['theme']): string {
@@ -212,8 +211,9 @@ export function StatusPages() {
   const soulStatus: ServiceStatus[] = souls.map(soul => ({
     id: soul.id,
     name: soul.name,
-    status: soul.enabled ? 'operational' : 'down',
-    uptime: '99.9%'
+    status: !soul.enabled ? 'unknown'
+      : soul.status === 'healthy' ? 'operational'
+      : soul.status === 'unhealthy' ? 'down' : 'unknown'
   }))
 
   const getStatusIcon = (status: string) => {
@@ -394,7 +394,7 @@ export function StatusPages() {
                           {getStatusIcon(soul.status)}
                           <span className="text-sm text-gray-300">{soul.name}</span>
                         </div>
-                        <span className="text-xs text-gray-500 font-mono">{soul.uptime}</span>
+                        <span className="text-xs text-gray-500">Uptime unavailable</span>
                       </div>
                     ) : null
                   })}

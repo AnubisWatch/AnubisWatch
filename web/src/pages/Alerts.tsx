@@ -133,7 +133,7 @@ export function Alerts() {
     setEditingRule(rule)
     setRuleName(rule.name)
     setRuleCondition(rule.condition || 'response_time')
-    setRuleThreshold(rule.threshold || 5000)
+    setRuleThreshold(rule.threshold ?? 5000)
     setRuleSeverity(rule.severity as Severity)
     setRuleConsecutive(rule.consecutive || 3)
     setRuleDuration(rule.duration || 60)
@@ -270,8 +270,8 @@ export function Alerts() {
 
   const handleSaveRule = async () => {
     if (!ruleName.trim()) return
-    const enabledChannelIds = channels.filter(channel => channel.enabled).map(channel => channel.id)
-    if (enabledChannelIds.length === 0) {
+    const channelIds = editingRule ? editingRule.channels : channels.filter(channel => channel.enabled).map(channel => channel.id)
+    if (channelIds.length === 0) {
       setRuleFormError('At least one enabled channel is required before creating a rule.')
       return
     }
@@ -285,7 +285,7 @@ export function Alerts() {
         consecutive: ruleConsecutive,
         duration: ruleDuration,
         enabled: ruleEnabled,
-        channels: enabledChannelIds
+        channels: channelIds
       } as Omit<AlertRule, 'id'>
       if (editingRule) {
         await updateRule(editingRule.id, payload)
@@ -1112,7 +1112,7 @@ export function Alerts() {
               <button onClick={() => { setShowRuleModal(false); resetRuleForm() }} className="px-5 py-2.5 text-gray-400 hover:text-white transition-colors">Cancel</button>
               <button
                 onClick={handleSaveRule}
-                disabled={saving || !ruleName.trim() || channels.filter(channel => channel.enabled).length === 0}
+                disabled={saving || !ruleName.trim() || (editingRule ? editingRule.channels.length : channels.filter(channel => channel.enabled).length) === 0}
                 className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl transition-colors font-medium"
               >
                 {saving ? 'Saving...' : editingRule ? 'Save Rule' : 'Add Rule'}
