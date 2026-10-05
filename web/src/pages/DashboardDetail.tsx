@@ -23,6 +23,12 @@ export function DashboardDetail() {
   const [newRefreshSec, setNewRefreshSec] = useState(60)
   const [savingNew, setSavingNew] = useState(false)
   const requestSequence = useRef(0)
+  const createSequence = useRef(0)
+
+  useEffect(() => {
+    setSavingNew(false)
+    return () => { createSequence.current += 1 }
+  }, [id, isNewDashboard])
 
   const fetchDashboard = useCallback(async () => {
     const sequence = ++requestSequence.current
@@ -86,6 +92,7 @@ export function DashboardDetail() {
 
   const handleCreateDashboard = async (event: React.FormEvent) => {
     event.preventDefault()
+    const sequence = ++createSequence.current
     setSavingNew(true)
     try {
       const created = await api.post<CustomDashboard>('/dashboards', {
@@ -94,9 +101,9 @@ export function DashboardDetail() {
         widgets: [],
         refresh_sec: newRefreshSec,
       })
-      navigate(`/dashboards/${created.id}`)
+      if (sequence === createSequence.current) navigate(`/dashboards/${created.id}`)
     } finally {
-      setSavingNew(false)
+      if (sequence === createSequence.current) setSavingNew(false)
     }
   }
 

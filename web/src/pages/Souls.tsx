@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import {
   Plus,
   Ghost,
@@ -60,6 +60,16 @@ export function Souls() {
   const [refreshing, setRefreshing] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [loading, setLoading] = useState(false)
+  const createGeneration = useRef(0)
+
+  useEffect(() => () => { createGeneration.current += 1 }, [])
+
+  const setCreateModalOpen = (open: boolean) => {
+    createGeneration.current += 1
+    setShowModal(open)
+    setFormErrors({})
+    setLoading(false)
+  }
   const [formErrors, setFormErrors] = useState<Record<string, string>>({})
 
   // Form state
@@ -100,18 +110,21 @@ export function Souls() {
       return
     }
 
+    const generation = createGeneration.current
     setFormErrors({})
     setLoading(true)
     try {
       await createSoul({
         ...buildSoulPayload(formData),
       })
+      if (generation !== createGeneration.current) return
       setShowModal(false)
       setFormData(defaultSoulFormData)
     } catch (err) {
+      if (generation !== createGeneration.current) return
       alert('Failed to create soul: ' + (err instanceof Error ? err.message : 'Unknown error'))
     } finally {
-      setLoading(false)
+      if (generation === createGeneration.current) setLoading(false)
     }
   }
 
@@ -188,7 +201,7 @@ export function Souls() {
             <RefreshCw className="w-5 h-5" />
           </button>
           <button
-            onClick={() => { setShowModal(true); setFormErrors({}) }}
+            onClick={() => setCreateModalOpen(true)}
             className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-all font-medium shadow-lg shadow-amber-600/20"
           >
             <Plus className="w-4 h-4" />
@@ -419,7 +432,7 @@ export function Souls() {
               <h3 className="text-lg font-semibold text-white mb-2">No essence in the realm</h3>
               <p className="text-gray-400 text-sm mb-4">Summon your first soul to begin the eternal watch</p>
               <button
-                onClick={() => { setShowModal(true); setFormErrors({}) }}
+                onClick={() => setCreateModalOpen(true)}
                 className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition-colors"
               >
                 Summon First Soul
@@ -435,7 +448,7 @@ export function Souls() {
         formData={formData}
         formErrors={formErrors}
         loading={loading}
-        onClose={() => { setShowModal(false); setFormErrors({}) }}
+        onClose={() => setCreateModalOpen(false)}
         onSubmit={handleCreateSoul}
         onFormDataChange={setFormData}
         onErrorsChange={setFormErrors}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
  Route,
  Plus,
@@ -277,6 +277,8 @@ export function Journeys() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [runningId, setRunningId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const saveGeneration = useRef(0)
+  useEffect(() => () => { saveGeneration.current += 1 }, [])
   const [editingJourney, setEditingJourney] = useState<Journey | null>(null)
   const [selectedJourneyForRuns, setSelectedJourneyForRuns] = useState<Journey | null>(null)
 
@@ -300,6 +302,7 @@ export function Journeys() {
   } = useJourneys()
 
   const resetForm = () => {
+    saveGeneration.current += 1
     setFormName('')
     setFormDescription('')
     setFormInterval(60)
@@ -316,6 +319,7 @@ export function Journeys() {
   }
 
   const handleOpenEditModal = (journey: Journey) => {
+    saveGeneration.current += 1
     setEditingJourney(journey)
     setFormName(journey.name)
     setFormDescription(journey.description || '')
@@ -380,6 +384,7 @@ export function Journeys() {
     if (!formName.trim()) return
     if (formSteps.length === 0) return
 
+    const generation = saveGeneration.current
     setSaving(true)
     try {
       const payload: Omit<Journey, 'id'> = {
@@ -412,12 +417,14 @@ export function Journeys() {
       } else {
         await createJourney(payload)
       }
+      if (generation !== saveGeneration.current) return
       setShowCreateModal(false)
       resetForm()
     } catch (err) {
+      if (generation !== saveGeneration.current) return
       alert('Failed to save journey: ' + (err instanceof Error ? err.message : 'Unknown error'))
     } finally {
-      setSaving(false)
+      if (generation === saveGeneration.current) setSaving(false)
     }
   }
 

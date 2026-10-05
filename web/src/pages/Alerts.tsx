@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
  Bell,
  Plus,
@@ -55,6 +55,8 @@ export function Alerts() {
   const [testingChannel, setTestingChannel] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<{ id: string; success: boolean; message: string } | null>(null)
   const [saving, setSaving] = useState(false)
+  const saveGeneration = useRef(0)
+  useEffect(() => () => { saveGeneration.current += 1 }, [])
   const [channelFormError, setChannelFormError] = useState<string | null>(null)
   const [ruleFormError, setRuleFormError] = useState<string | null>(null)
 
@@ -81,6 +83,7 @@ export function Alerts() {
   const [ruleEnabled, setRuleEnabled] = useState(true)
 
   const resetChannelForm = () => {
+    saveGeneration.current += 1
     setChannelName('')
     setChannelType('webhook')
     setChannelWebhookUrl('')
@@ -98,6 +101,7 @@ export function Alerts() {
   }
 
   const resetRuleForm = () => {
+    saveGeneration.current += 1
     setRuleName('')
     setRuleCondition('response_time')
     setRuleThreshold(5000)
@@ -234,6 +238,7 @@ export function Alerts() {
       return
     }
     setChannelFormError(null)
+    const generation = saveGeneration.current
     setSaving(true)
     try {
       const config: Record<string, unknown> = {}
@@ -259,12 +264,14 @@ export function Alerts() {
       } else {
         await createChannel(payload)
       }
+      if (generation !== saveGeneration.current) return
       setShowChannelModal(false)
       resetChannelForm()
     } catch (err) {
+      if (generation !== saveGeneration.current) return
       setChannelFormError(err instanceof Error ? err.message : 'Failed to save channel')
     } finally {
-      setSaving(false)
+      if (generation === saveGeneration.current) setSaving(false)
     }
   }
 
@@ -275,6 +282,7 @@ export function Alerts() {
       setRuleFormError('At least one enabled channel is required before creating a rule.')
       return
     }
+    const generation = saveGeneration.current
     setSaving(true)
     try {
       const payload = {
@@ -292,12 +300,14 @@ export function Alerts() {
       } else {
         await createRule(payload)
       }
+      if (generation !== saveGeneration.current) return
       setShowRuleModal(false)
       resetRuleForm()
     } catch (err) {
+      if (generation !== saveGeneration.current) return
       setRuleFormError(err instanceof Error ? err.message : 'Failed to save rule')
     } finally {
-      setSaving(false)
+      if (generation === saveGeneration.current) setSaving(false)
     }
   }
 

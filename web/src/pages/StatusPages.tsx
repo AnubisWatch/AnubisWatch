@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import {
   Globe,
   Plus,
@@ -70,6 +70,8 @@ export function StatusPages() {
   const [refreshing, setRefreshing] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  const saveGeneration = useRef(0)
+  useEffect(() => () => { saveGeneration.current += 1 }, [])
   const [editingPage, setEditingPage] = useState<StatusPage | null>(null)
 
   // Create form state
@@ -92,6 +94,7 @@ export function StatusPages() {
   const { souls } = useSouls()
 
   const resetForm = () => {
+    saveGeneration.current += 1
     setFormName('')
     setFormSlug('')
     setFormDescription('')
@@ -107,6 +110,7 @@ export function StatusPages() {
   }
 
   const handleOpenEditPage = (page: StatusPage) => {
+    saveGeneration.current += 1
     setEditingPage(page)
     setFormName(page.name)
     setFormSlug(page.slug)
@@ -119,6 +123,7 @@ export function StatusPages() {
 
   const handleSavePage = async () => {
     if (!formName.trim() || !formSlug.trim()) return
+    const generation = saveGeneration.current
     setSaving(true)
     try {
       const payload: Omit<StatusPage, 'id'> = {
@@ -138,12 +143,13 @@ export function StatusPages() {
       } else {
         await createPage(payload)
       }
+      if (generation !== saveGeneration.current) return
       setShowCreateModal(false)
       resetForm()
     } catch {
       // Failed to save page
     } finally {
-      setSaving(false)
+      if (generation === saveGeneration.current) setSaving(false)
     }
   }
 
