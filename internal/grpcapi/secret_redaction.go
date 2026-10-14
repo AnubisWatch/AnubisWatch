@@ -190,6 +190,18 @@ func redactAnyMapForGRPC(config map[string]interface{}) map[string]string {
 		case map[string]interface{}:
 			data, _ := json.Marshal(redactNestedMapForGRPC(typed, true))
 			out[key] = string(data)
+		case []any:
+			if isGRPCSecretField(key) {
+				out[key] = redactedSecretValue
+				continue
+			}
+			// Comma-separated, the same form normalizeGRPCChannelConfig
+			// accepts, so a read-modify-write keeps the list intact.
+			items := make([]string, 0, len(typed))
+			for _, item := range typed {
+				items = append(items, fmt.Sprintf("%v", item))
+			}
+			out[key] = strings.Join(items, ",")
 		default:
 			if isGRPCSecretField(key) {
 				out[key] = redactedSecretValue

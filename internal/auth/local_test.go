@@ -3,6 +3,7 @@ package auth
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1176,22 +1177,27 @@ func TestSaveSessionsLocked_RenameError(t *testing.T) {
 	auth.mu.Unlock()
 }
 
-// TestSaveSessionsLocked_ChmodError tests saveSessionsLocked when chmod fails on tmp file
-func TestSaveSessionsLocked_ChmodError(t *testing.T) {
-	// On Windows, chmod works differently; skip if needed
+// TestSaveSessionsLocked_CreatesMissingDirectory tests that saveSessionsLocked
+// creates the session file's directory when it does not exist yet.
+func TestSaveSessionsLocked_CreatesMissingDirectory(t *testing.T) {
+	// Create the directory before the authenticator. Cleanups run last-in
+	// first-out, so the authenticator's Shutdown, which saves the sessions
+	// again, now runs before the directory is removed. Created afterwards,
+	// the directory was removed first and Shutdown wrote it back, leaking it
+	// on every run.
+	tmpDir := t.TempDir()
 	auth := newTestLocalAuth(t, "", "admin@test.com", "TestPass1234!")
 
-	// Set an invalid session path where chmod would fail
-	// Using a read-only directory
-	tmpDir := t.TempDir()
-	auth.sessionPath = tmpDir + "/subdir/sessions.json"
+	// The session file's directory does not exist yet: saving must create it.
+	auth.sessionPath = filepath.Join(tmpDir, "subdir", "sessions.json")
 
-	// Create the file but make it read-only so chmod might fail
 	auth.mu.Lock()
 	auth.saveSessionsLocked()
 	auth.mu.Unlock()
 
-	// Should handle gracefully
+	if _, err := os.Stat(auth.sessionPath); err != nil {
+		t.Fatalf("sessions not saved into a directory that did not exist yet: %v", err)
+	}
 }
 
 func TestLocalAuthenticator_SwitchWorkspace(t *testing.T) {

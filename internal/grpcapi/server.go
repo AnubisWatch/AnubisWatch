@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,9 +39,28 @@ type Server struct {
 	logger    *slog.Logger
 	tlsConfig *tls.Config
 
-	store Store
-	probe ProbeEngine
-	auth  Authenticator
+	store  Store
+	probe  ProbeEngine
+	auth   Authenticator
+	alerts AlertRegistrar
+}
+
+// AlertRegistrar is the live alert engine. Rule and channel writes go to it as
+// well as to storage; otherwise anything created, changed or deleted over gRPC
+// would only take effect once the alert manager reloads storage on the next
+// restart.
+type AlertRegistrar interface {
+	RegisterRule(rule *core.AlertRule) error
+	DeleteRule(id string) error
+	ValidateChannel(channel *core.AlertChannel) error
+	RegisterChannel(channel *core.AlertChannel) error
+	DeleteChannel(id string) error
+}
+
+// SetAlertRegistrar connects the live alert engine. It must be called before Start.
+func (s *Server) SetAlertRegistrar(r AlertRegistrar) *Server {
+	s.alerts = r
+	return s
 }
 
 // Store defines the storage operations available to the gRPC server.
@@ -609,15 +630,68 @@ func pbToChannelConfig(req *v1.CreateChannelRequest) *core.AlertChannel {
 	return ch
 }
 
-func pbToRuleConfig(req *v1.CreateRuleRequest) *core.AlertRule {
-	now := time.Now()
-	return &core.AlertRule{
+func pbToRuleConfig(req *v1.CreateRuleRequest) (*core.AlertRule, error) {
+	rule := &core.AlertRule{
 		ID:        core.GenerateID(),
 		Name:      req.Name,
 		Enabled:   req.Enabled,
-		Channels:  []string{req.ChannelId},
-		CreatedAt: now,
+		CreatedAt: time.Now(),
 	}
+	if req.ChannelId != "" {
+		rule.Channels = []string{req.ChannelId}
+	}
+	applyRuleCoreConfig(rule, req.Config)
+	if req.ConditionType != "" {
+		cond := core.AlertCondition{Type: req.ConditionType}
+		if err := applyRuleConditionConfig(&cond, req.Config); err != nil {
+			return nil, err
+		}
+		rule.Conditions = []core.AlertCondition{cond}
+	}
+	return rule, nil
+}
+
+// applyRuleConditionConfig reads the condition parameters of a rule from the
+// flat string map the gRPC API carries. Numbers and durations must parse:
+// a threshold silently read as zero would make the rule fire on every check.
+func applyRuleConditionConfig(cond *core.AlertCondition, config map[string]string) error {
+	for k, v := range config {
+		switch k {
+		case "threshold":
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("config.threshold must be an integer: %q", v)
+			}
+			cond.Threshold = n
+		case "value":
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return fmt.Errorf("config.value must be a number: %q", v)
+			}
+			cond.Value = f
+		case "window", "duration":
+			d, err := time.ParseDuration(v)
+			if err != nil {
+				return fmt.Errorf("config.%s must be a duration: %q", k, v)
+			}
+			if k == "window" {
+				cond.Window = core.Duration{Duration: d}
+			} else {
+				cond.Duration = core.Duration{Duration: d}
+			}
+		case "metric":
+			cond.Metric = v
+		case "operator":
+			cond.Operator = v
+		case "from":
+			cond.From = v
+		case "to":
+			cond.To = v
+		case "status":
+			cond.Status = v
+		}
+	}
+	return nil
 }
 
 func pbJourneySteps(steps []*v1.JourneyStep) []core.JourneyStep {
@@ -794,6 +868,30 @@ func applyChannelUpdates(channel *core.AlertChannel, req *v1.UpdateChannelReques
 		channel.Config = mergeGRPCChannelConfig(channel.Config, allowed)
 	}
 	channel.UpdatedAt = time.Now()
+}
+
+// normalizeGRPCChannelConfig converts the strings gRPC carries into the value
+// shapes the dispatchers type-assert, which are those of a JSON-decoded REST
+// channel. Left as strings, an email channel passed validation and then failed
+// every send with "no recipients configured", and smtp_port fell back to 587.
+func normalizeGRPCChannelConfig(config map[string]any) error {
+	if to, ok := config["to"].(string); ok {
+		recipients := []any{}
+		for _, r := range strings.Split(to, ",") {
+			if r = strings.TrimSpace(r); r != "" {
+				recipients = append(recipients, r)
+			}
+		}
+		config["to"] = recipients
+	}
+	if port, ok := config["smtp_port"].(string); ok {
+		n, err := strconv.Atoi(strings.TrimSpace(port))
+		if err != nil || n < 1 || n > 65535 {
+			return fmt.Errorf("config.smtp_port must be a port number: %q", port)
+		}
+		config["smtp_port"] = float64(n)
+	}
+	return nil
 }
 
 func applyChannelConfigToStringMap(config map[string]string, updates map[string]string) {
@@ -1308,6 +1406,9 @@ func (s *Server) CreateChannel(ctx context.Context, req *v1.CreateChannelRequest
 
 	ch := pbToChannelConfig(req)
 	ch.WorkspaceID = workspace
+	if err := s.validateChannel(ch); err != nil {
+		return nil, err
+	}
 
 	if err := s.store.SaveChannelNoCtx(ch); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create channel: %v", err)
@@ -1317,7 +1418,36 @@ func (s *Server) CreateChannel(ctx context.Context, req *v1.CreateChannelRequest
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "channel created but could not be retrieved: %v", err)
 	}
+	s.registerChannel(created)
 	return channelToPB(created), nil
+}
+
+// validateChannel normalizes the string-only gRPC config into the value shapes
+// the dispatchers read, then checks the channel the way the alert engine will
+// on registration, so a channel it would refuse is never stored.
+func (s *Server) validateChannel(ch *core.AlertChannel) error {
+	if err := normalizeGRPCChannelConfig(ch.Config); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	validate := ch.Validate
+	if s.alerts != nil {
+		validate = func() error { return s.alerts.ValidateChannel(ch) }
+	}
+	if err := validate(); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	return nil
+}
+
+// registerChannel hands a stored channel to the live alert engine. Storage
+// already holds it, so a failure is logged rather than returned.
+func (s *Server) registerChannel(ch *core.AlertChannel) {
+	if s.alerts == nil || ch == nil {
+		return
+	}
+	if err := s.alerts.RegisterChannel(ch); err != nil && s.logger != nil {
+		s.logger.Warn("channel saved but not activated", "channel", ch.ID, "err", err)
+	}
 }
 
 func (s *Server) UpdateChannel(ctx context.Context, req *v1.UpdateChannelRequest) (*v1.Channel, error) {
@@ -1346,12 +1476,30 @@ func (s *Server) UpdateChannel(ctx context.Context, req *v1.UpdateChannelRequest
 		return nil, status.Error(codes.FailedPrecondition, "changing a channel destination requires re-entering all channel secrets")
 	}
 
-	applyChannelUpdates(existing, req)
-	if err := s.store.SaveChannelNoCtx(existing); err != nil {
+	// Update a copy so a refused update leaves the loaded record untouched.
+	// applyChannelUpdates only replaces Config when the request carries one,
+	// so without req.Config (or with no allowed channel fields) next.Config
+	// still aliases the loaded record's map — and validateChannel's
+	// normalizeGRPCChannelConfig rewrites "to"/"smtp_port" in place. Copy the
+	// map unconditionally so a refused update can never mutate storage.
+	next := *existing
+	applyChannelUpdates(&next, req)
+	if next.Config != nil {
+		copied := make(map[string]any, len(next.Config))
+		for k, v := range next.Config {
+			copied[k] = v
+		}
+		next.Config = copied
+	}
+	if err := s.validateChannel(&next); err != nil {
+		return nil, err
+	}
+	if err := s.store.SaveChannelNoCtx(&next); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update channel: %v", err)
 	}
 
 	updated, _ := s.store.GetChannelNoCtx(req.Id, workspace)
+	s.registerChannel(updated)
 	return channelToPB(updated), nil
 }
 
@@ -1371,6 +1519,11 @@ func (s *Server) DeleteChannel(ctx context.Context, req *v1.DeleteChannelRequest
 	}
 	if err := s.store.DeleteChannelNoCtx(req.Id, workspace); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete channel: %v", err)
+	}
+	if s.alerts != nil {
+		if err := s.alerts.DeleteChannel(req.Id); err != nil && s.logger != nil {
+			s.logger.Warn("channel deleted but still active until restart", "channel", req.Id, "err", err)
+		}
 	}
 	return &emptypb.Empty{}, nil
 }
@@ -1450,8 +1603,17 @@ func (s *Server) CreateRule(ctx context.Context, req *v1.CreateRuleRequest) (*v1
 		workspace = "default"
 	}
 
-	rule := pbToRuleConfig(req)
+	rule, err := pbToRuleConfig(req)
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 	rule.WorkspaceID = workspace
+	if err := rule.Validate(); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if err := rule.ValidateMetrics(); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 
 	if err := s.store.SaveRuleNoCtx(rule); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create rule: %v", err)
@@ -1461,7 +1623,20 @@ func (s *Server) CreateRule(ctx context.Context, req *v1.CreateRuleRequest) (*v1
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "rule created but could not be retrieved: %v", err)
 	}
+	s.registerRule(created)
 	return ruleToPB(created), nil
+}
+
+// registerRule hands a stored rule to the live alert engine. Storage already
+// holds the rule, so a failure here is logged rather than returned: the rule
+// takes effect at the latest on the next restart.
+func (s *Server) registerRule(rule *core.AlertRule) {
+	if s.alerts == nil || rule == nil {
+		return
+	}
+	if err := s.alerts.RegisterRule(rule); err != nil && s.logger != nil {
+		s.logger.Warn("rule saved but not activated", "rule", rule.ID, "err", err)
+	}
 }
 
 func (s *Server) UpdateRule(ctx context.Context, req *v1.UpdateRuleRequest) (*v1.Rule, error) {
@@ -1478,12 +1653,38 @@ func (s *Server) UpdateRule(ctx context.Context, req *v1.UpdateRuleRequest) (*v1
 		return nil, status.Errorf(codes.NotFound, "rule not found: %s", req.Id)
 	}
 
-	applyRuleUpdates(existing, req)
-	if err := s.store.SaveRuleNoCtx(existing); err != nil {
+	// Update a copy so a refused update leaves the loaded record untouched.
+	// Conditions is edited in place below, so it needs its own backing array;
+	// applyRuleUpdates replaces Channels rather than writing into it.
+	next := *existing
+	next.Conditions = slices.Clone(existing.Conditions)
+	applyRuleUpdates(&next, req)
+	// UpdateRuleRequest has no condition field, so the config map carries
+	// condition changes, including condition_type for a rule that has none.
+	if condType := req.Config["condition_type"]; condType != "" {
+		if len(next.Conditions) == 0 {
+			next.Conditions = []core.AlertCondition{{}}
+		}
+		next.Conditions[0].Type = condType
+	}
+	if len(next.Conditions) > 0 {
+		if err := applyRuleConditionConfig(&next.Conditions[0], req.Config); err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+	}
+	if err := next.Validate(); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if err := next.ValidateMetrics(); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	if err := s.store.SaveRuleNoCtx(&next); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update rule: %v", err)
 	}
 
 	updated, _ := s.store.GetRuleNoCtx(req.Id, user.Workspace)
+	s.registerRule(updated)
 	return ruleToPB(updated), nil
 }
 
@@ -1503,6 +1704,11 @@ func (s *Server) DeleteRule(ctx context.Context, req *v1.DeleteRuleRequest) (*em
 	}
 	if err := s.store.DeleteRuleNoCtx(req.Id, workspace); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete rule: %v", err)
+	}
+	if s.alerts != nil {
+		if err := s.alerts.DeleteRule(req.Id); err != nil && s.logger != nil {
+			s.logger.Warn("rule deleted but still active until restart", "rule", req.Id, "err", err)
+		}
 	}
 	return &emptypb.Empty{}, nil
 }

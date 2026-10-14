@@ -6,6 +6,7 @@ vi.mock('react-router-dom', () => ({ useParams: () => ({ id: state.id }), useNav
 vi.mock('../api/hooks', () => ({
   useSoul: () => ({ soul: { id: state.id, name: state.id, target: 'https://fixture.test', type: 'http', enabled: true, tags: [] }, loading: false, error: null, forceCheck: state.forceCheck, refetch: state.refetch }),
   useSoulJudgments: () => ({ data: [], loading: false, error: null, refetch: state.refetch }),
+  useSoulUptime: () => ({ data: null, loading: false, error: null, refetch: state.refetch }),
 }))
 function deferred() { let resolve!: (value: unknown) => void; let reject!: (error: Error) => void; const promise = new Promise((res, rej) => { resolve = res; reject = rej }); return { promise, resolve, reject } }
 beforeEach(() => { state.id = 'A'; state.forceCheck.mockReset(); state.refetch.mockReset(); state.refetch.mockResolvedValue(undefined) })

@@ -192,10 +192,16 @@ func (c *Config) setDefaults() {
 		c.Storage.TimeSeries.Compaction.FiveToHour.Duration = 30 * 24 * 60 * 60 * 1e9 // 30d
 	}
 	if c.Storage.TimeSeries.Compaction.HourToDay.Duration == 0 {
-		c.Storage.TimeSeries.Compaction.HourToDay.Duration = 365 * 24 * 60 * 60 * 1e9 // 365d
+		// 30d, well inside the 365d hourly retention: a day is rolled up only
+		// once all its hours are past this threshold, so a threshold equal to
+		// the hourly retention would have its first hours deleted first.
+		c.Storage.TimeSeries.Compaction.HourToDay.Duration = 30 * 24 * 60 * 60 * 1e9 // 30d
 	}
 	if c.Storage.TimeSeries.Retention.Raw.Duration == 0 {
-		c.Storage.TimeSeries.Retention.Raw.Duration = 48 * 60 * 60 * 1e9 // 48h
+		// 90d: status pages draw 90 days of uptime bars, and soul logs and
+		// dashboard queries read raw judgments too. A shorter default would
+		// delete history those views still show.
+		c.Storage.TimeSeries.Retention.Raw.Duration = 90 * 24 * 60 * 60 * 1e9 // 90d
 	}
 	if c.Storage.TimeSeries.Retention.Minute.Duration == 0 {
 		c.Storage.TimeSeries.Retention.Minute.Duration = 30 * 24 * 60 * 60 * 1e9 // 30d

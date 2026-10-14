@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
@@ -22,6 +24,9 @@ type RetentionManager struct {
 	dataPath  string
 	stopCh    chan struct{}
 	stoppedCh chan struct{}
+	stopOnce  sync.Once
+	startOnce sync.Once
+	started   atomic.Bool
 }
 
 // NewRetentionManager creates a retention manager
@@ -36,14 +41,22 @@ func NewRetentionManager(db *CobaltDB, config core.RetentionConfig, dataPath str
 	}
 }
 
-// Start starts the background retention cleanup goroutine
+// Start starts the background retention cleanup goroutine. Calling it again
+// is a no-op.
 func (rm *RetentionManager) Start() {
-	go rm.retentionLoop()
+	rm.startOnce.Do(func() {
+		rm.started.Store(true)
+		go rm.retentionLoop()
+	})
 }
 
-// Stop gracefully stops the retention manager
+// Stop gracefully stops the retention manager. It returns at once if Start
+// was never called, instead of waiting for a loop that never ran.
 func (rm *RetentionManager) Stop() {
-	close(rm.stopCh)
+	rm.stopOnce.Do(func() { close(rm.stopCh) })
+	if !rm.started.Load() {
+		return
+	}
 	<-rm.stoppedCh
 	rm.logger.Info("retention manager stopped")
 }

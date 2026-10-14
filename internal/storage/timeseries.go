@@ -29,6 +29,10 @@ type TimeSeriesStore struct {
 	stopCh       chan struct{}
 	stopMu       sync.Mutex // protects stopCh and compactionWG lifecycle
 	compactionWG sync.WaitGroup
+
+	// liveMarked caches which souls already have a live-since marker, so the
+	// marker costs one lookup per soul rather than one per judgment.
+	liveMarked sync.Map
 }
 
 // TimeResolution represents different time granularities
@@ -59,6 +63,28 @@ type JudgmentSummary struct {
 	P99Latency    float64   `json:"p99_latency_ms"`
 	UptimePercent float64   `json:"uptime_percent"`
 	PacketLossAvg float64   `json:"packet_loss_avg,omitempty"`
+
+	// Sources records, on a rollup, each source bucket it was built from,
+	// keyed by the bucket's Unix time. Compaction compares it with the
+	// current sources to fold in late data, and uses it in place of sources
+	// that retention has deleted since.
+	Sources map[string]SourceSnapshot `json:"sources,omitempty"`
+}
+
+// SourceSnapshot is the part of a source summary a rollup is computed from.
+type SourceSnapshot struct {
+	Count        int     `json:"count"`
+	SuccessCount int     `json:"success_count"`
+	MinLatency   float64 `json:"min_latency_ms"`
+	MaxLatency   float64 `json:"max_latency_ms"`
+	AvgLatency   float64 `json:"avg_latency_ms"`
+}
+
+func snapshotOf(s *JudgmentSummary) SourceSnapshot {
+	return SourceSnapshot{
+		Count: s.Count, SuccessCount: s.SuccessCount,
+		MinLatency: s.MinLatency, MaxLatency: s.MaxLatency, AvgLatency: s.AvgLatency,
+	}
 }
 
 // NewTimeSeriesStore creates a time-series store
@@ -82,7 +108,53 @@ func (ts *TimeSeriesStore) SaveJudgment(ctx context.Context, j *core.Judgment) e
 		ts.logger.Warn("failed to update 1min summary", "err", err)
 	}
 
+	// Keep the hour's and the day's summaries current too. Compaction would
+	// only roll them up weeks later; uptime over hours and days needs them
+	// now (TallyChecks, GetUptimeHistory).
+	if err := ts.updateSummary(ctx, j, Resolution1Hour); err != nil {
+		ts.logger.Warn("failed to update 1hour summary", "err", err)
+	}
+	if err := ts.updateSummary(ctx, j, Resolution1Day); err != nil {
+		ts.logger.Warn("failed to update 1day summary", "err", err)
+	}
+	ts.markLiveSince(summaryWorkspace(ctx, j), j.SoulID)
+
 	return nil
+}
+
+func summaryWorkspace(ctx context.Context, j *core.Judgment) string {
+	if j.WorkspaceID != "" {
+		return j.WorkspaceID
+	}
+	return core.WorkspaceIDFromContext(ctx)
+}
+
+// liveSinceKey records when a soul's results started being counted into its
+// hour and day summaries as they arrive. Every UTC hour or day starting at or
+// after that time has a complete summary; earlier ones must be read from raw
+// judgments.
+// The key has four segments, so compaction and retention, which only parse
+// {ws}/ts/{soul}/{resolution}/{bucket}, leave it alone.
+func liveSinceKey(workspaceID, soulID string) string {
+	return fmt.Sprintf("%s/ts/%s/live-since", workspaceID, soulID)
+}
+
+// markLiveSince records the current time, not the judgment's: a backdated
+// first judgment must not mark earlier days as fully counted.
+func (ts *TimeSeriesStore) markLiveSince(workspaceID, soulID string) {
+	key := liveSinceKey(workspaceID, soulID)
+	if _, done := ts.liveMarked.Load(key); done {
+		return
+	}
+	ts.summaryMu.Lock()
+	defer ts.summaryMu.Unlock()
+	if _, err := ts.db.Get(key); err != nil {
+		if err := ts.db.Put(key, []byte(time.Now().UTC().Format(time.RFC3339Nano))); err != nil {
+			ts.logger.Warn("failed to record live summary start", "soul", soulID, "err", err)
+			return
+		}
+	}
+	ts.liveMarked.Store(key, struct{}{})
 }
 
 // updateSummary updates the aggregated summary for a judgment
@@ -90,7 +162,10 @@ func (ts *TimeSeriesStore) updateSummary(ctx context.Context, j *core.Judgment, 
 	ts.summaryMu.Lock()
 	defer ts.summaryMu.Unlock()
 
-	workspaceID := core.WorkspaceIDFromContext(ctx)
+	workspaceID := j.WorkspaceID
+	if workspaceID == "" {
+		workspaceID = core.WorkspaceIDFromContext(ctx)
+	}
 
 	// Calculate bucket time
 	bucketTime := truncateToResolution(j.Timestamp, resolution)
@@ -220,7 +295,10 @@ func truncateToResolution(t time.Time, resolution TimeResolution) time.Time {
 	case Resolution1Hour:
 		return t.Truncate(time.Hour)
 	case Resolution1Day:
-		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+		// UTC days, as the status page counts them. Hours are already
+		// UTC-aligned (Truncate works on absolute time), so they nest.
+		u := t.UTC()
+		return time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
 	default:
 		return t
 	}
@@ -305,7 +383,31 @@ func (ts *TimeSeriesStore) runCompaction() error {
 	return nil
 }
 
-// compactToResolution aggregates data from source resolution to target resolution
+// resolutionSpan is the length of one bucket at a resolution.
+func resolutionSpan(res TimeResolution) time.Duration {
+	switch res {
+	case Resolution1Min:
+		return time.Minute
+	case Resolution5Min:
+		return 5 * time.Minute
+	case Resolution1Hour:
+		return time.Hour
+	case Resolution1Day:
+		return 24 * time.Hour
+	default:
+		return 0
+	}
+}
+
+// compactToResolution aggregates data from source resolution to target resolution.
+//
+// A target bucket is built once its whole span is older than the cutoff, and
+// records a snapshot of each source it was built from. Later runs rebuild it
+// only when a source has changed or appeared, i.e. data arrived late, and
+// then use the recorded snapshot for any source retention has deleted since.
+// Rebuilding blindly from the surviving sources on every run let retention
+// corrupt rollups, losing counts and skewing uptime; never rebuilding dropped
+// late data from every coarser level.
 func (ts *TimeSeriesStore) compactToResolution(srcRes, tgtRes TimeResolution, threshold time.Duration) error {
 	if threshold <= 0 {
 		return nil // Compaction disabled for this resolution
@@ -338,7 +440,9 @@ func (ts *TimeSeriesStore) compactToResolution(srcRes, tgtRes TimeResolution, th
 		soulID      string
 		bucketTime  time.Time
 	}
-	aggregations := make(map[targetKey][]*JudgmentSummary)
+	// Current sources per target bucket, keyed by source bucket Unix time.
+	aggregations := make(map[targetKey]map[string]*JudgmentSummary)
+	tgtSpan := resolutionSpan(tgtRes)
 
 	for _, ws := range workspaces {
 		// Pattern: {workspace}/ts/{soul}/{srcRes}/{timestamp}
@@ -367,30 +471,98 @@ func (ts *TimeSeriesStore) compactToResolution(srcRes, tgtRes TimeResolution, th
 				continue // Too recent, don't compact yet
 			}
 
-			var summary JudgmentSummary
-			if err := json.Unmarshal(data, &summary); err != nil {
-				ts.logger.Warn("failed to unmarshal summary for compaction", "err", err)
-				continue
-			}
-
 			tKey := targetKey{
 				workspaceID: workspaceID,
 				soulID:      soulID,
 				bucketTime:  truncateToResolution(bucketTime, tgtRes),
 			}
-			aggregations[tKey] = append(aggregations[tKey], &summary)
+			if tKey.bucketTime.Add(tgtSpan).After(cutoff) {
+				continue // target bucket still open: some sources may be newer
+			}
+
+			var summary JudgmentSummary
+			if err := json.Unmarshal(data, &summary); err != nil {
+				ts.logger.Warn("failed to unmarshal summary for compaction", "err", err)
+				continue
+			}
+			summary.BucketTime = bucketTime
+			if aggregations[tKey] == nil {
+				aggregations[tKey] = make(map[string]*JudgmentSummary)
+			}
+			aggregations[tKey][parts[4]] = &summary
 		}
 	}
 
-	// Aggregate and save target summaries
-	for tKey, summaries := range aggregations {
-		if err := ts.aggregateAndSave(tKey.workspaceID, tKey.soulID, tgtRes, tKey.bucketTime, summaries); err != nil {
+	for tKey, current := range aggregations {
+		tgtStoreKey := fmt.Sprintf("%s/ts/%s/%s/%d", tKey.workspaceID, tKey.soulID, tgtRes, tKey.bucketTime.Unix())
+		sources, changed := ts.rollupSources(tgtStoreKey, current)
+		if !changed {
+			continue
+		}
+		if err := ts.aggregateAndSave(tKey.workspaceID, tKey.soulID, tgtRes, tKey.bucketTime, sources); err != nil {
 			ts.logger.Warn("failed to save aggregated summary", "err", err)
 			continue
 		}
 	}
 
 	return nil
+}
+
+// rollupSources returns the sources to build the rollup at key from, and
+// whether it needs (re)building: it does not exist yet, or a current source
+// is new or differs from the snapshot recorded when it was built. Recorded
+// sources no longer present, deleted by retention, are carried over from
+// their snapshots so the rollup keeps what it already counted.
+func (ts *TimeSeriesStore) rollupSources(key string, current map[string]*JudgmentSummary) ([]*JudgmentSummary, bool) {
+	all := make([]*JudgmentSummary, 0, len(current))
+	for _, src := range current {
+		all = append(all, src)
+	}
+
+	data, err := ts.db.Get(key)
+	if err != nil {
+		return all, true // not built yet
+	}
+	var existing JudgmentSummary
+	if err := json.Unmarshal(data, &existing); err != nil {
+		ts.logger.Warn("failed to unmarshal existing rollup; rebuilding", "key", key, "err", err)
+		return all, true
+	}
+
+	if existing.Sources == nil {
+		// Built before snapshots were recorded: rebuild only if the current
+		// sources hold more than it counted, and never from fewer.
+		total := 0
+		for _, src := range current {
+			total += src.Count
+		}
+		return all, total > existing.Count
+	}
+
+	changed := false
+	for unix, src := range current {
+		if snap, ok := existing.Sources[unix]; !ok || snap != snapshotOf(src) {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		return nil, false
+	}
+	for unix, snap := range existing.Sources {
+		if _, ok := current[unix]; ok {
+			continue
+		}
+		sec, err := strconv.ParseInt(unix, 10, 64)
+		if err != nil {
+			continue
+		}
+		all = append(all, &JudgmentSummary{
+			BucketTime: time.Unix(sec, 0), Count: snap.Count, SuccessCount: snap.SuccessCount,
+			MinLatency: snap.MinLatency, MaxLatency: snap.MaxLatency, AvgLatency: snap.AvgLatency,
+		})
+	}
+	return all, true
 }
 
 // weightedLatency represents a latency value with its weight (count)
@@ -421,6 +593,11 @@ func (ts *TimeSeriesStore) aggregateAndSave(workspaceID, soulID string, resoluti
 	target.WorkspaceID = workspaceID
 	target.Resolution = string(resolution)
 	target.BucketTime = bucketTime
+
+	target.Sources = make(map[string]SourceSnapshot, len(sources))
+	for _, src := range sources {
+		target.Sources[strconv.FormatInt(src.BucketTime.Unix(), 10)] = snapshotOf(src)
+	}
 
 	totalCount := 0
 	successCount := 0

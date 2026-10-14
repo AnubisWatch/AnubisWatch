@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -89,7 +90,8 @@ type AlertCondition struct {
 // ChannelConfig defines an alert notification channel
 type ChannelConfig struct {
 	Name      string           `json:"name" yaml:"name"`
-	Type      string           `json:"type" yaml:"type"` // webhook, slack, discord, telegram, email, pagerduty, opsgenie, sms, ntfy
+	Type      string           `json:"type" yaml:"type"`                           // webhook, slack, discord, telegram, email, pagerduty, opsgenie, sms, ntfy
+	Enabled   *bool            `json:"enabled,omitempty" yaml:"enabled,omitempty"` // nil means enabled
 	Webhook   *WebhookConfig   `json:"webhook,omitempty" yaml:"webhook,omitempty"`
 	Slack     *SlackConfig     `json:"slack,omitempty" yaml:"slack,omitempty"`
 	Discord   *DiscordConfig   `json:"discord,omitempty" yaml:"discord,omitempty"`
@@ -400,6 +402,50 @@ func (c *AlertChannel) Validate() error {
 // Validate checks if the alert rule configuration is valid.
 func (r AlertRule) Validate() error {
 	return r.validate(0)
+}
+
+// ThresholdMetrics and AnomalyMetrics list the metrics those condition types
+// can measure; an empty metric means latency. The alert engine never fires on
+// any other metric. latency_ms and tls_expiry_days are what the dashboard sends.
+var (
+	ThresholdMetrics = []string{"latency", "latency_ms", "duration", "status_code", "tls_expiry_days"}
+	AnomalyMetrics   = []string{"latency", "latency_ms", "duration", "status_code"}
+)
+
+// ValidateMetrics rejects threshold and anomaly conditions, including those
+// nested in compound conditions, whose metric the alert engine cannot measure.
+// The API calls it on every rule write. Config loading only warns, so an
+// existing config file with such a rule does not stop the server from starting.
+func (r AlertRule) ValidateMetrics() error {
+	return validateConditionMetrics(r.Conditions, "conditions")
+}
+
+func validateConditionMetrics(conds []AlertCondition, path string) error {
+	for i, cond := range conds {
+		field := fmt.Sprintf("%s[%d]", path, i)
+		var supported []string
+		switch cond.Type {
+		case "threshold":
+			supported = ThresholdMetrics
+		case "anomaly":
+			supported = AnomalyMetrics
+		case "compound":
+			if err := validateConditionMetrics(cond.SubConditions, field+".sub_conditions"); err != nil {
+				return err
+			}
+			continue
+		default:
+			continue
+		}
+		if cond.Metric != "" && !slices.Contains(supported, cond.Metric) {
+			return &ValidationError{
+				Field: field + ".metric",
+				Message: fmt.Sprintf("unsupported metric %q for a %s condition (supported: %s)",
+					cond.Metric, cond.Type, strings.Join(supported, ", ")),
+			}
+		}
+	}
+	return nil
 }
 
 // validate validates the channel configuration

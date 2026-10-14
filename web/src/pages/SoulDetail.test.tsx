@@ -11,6 +11,8 @@ const mockRefetchSoul = vi.fn();
 const mockRefetchJudgments = vi.fn();
 const mockUseSoul = vi.fn();
 const mockUseSoulJudgments = vi.fn();
+const mockUseSoulUptime = vi.fn();
+const mockRefetchUptime = vi.fn();
 const mockWriteText = vi.fn();
 
 vi.mock("react-router-dom", async () => {
@@ -24,7 +26,29 @@ vi.mock("react-router-dom", async () => {
 vi.mock("../api/hooks", () => ({
 	useSoul: () => mockUseSoul(),
 	useSoulJudgments: () => mockUseSoulJudgments(),
+	useSoulUptime: (...args: unknown[]) => mockUseSoulUptime(...args),
 }));
+
+type Window = { checks: number; up: number; failures: number; uptime_percent: number | null; avg_latency_ms: number };
+
+function windowOf(checks: number, up: number, avg: number): Window {
+	return { checks, up, failures: checks - up, uptime_percent: checks ? Math.round((up / checks) * 10000) / 100 : null, avg_latency_ms: checks ? avg : 0 };
+}
+
+// The server's uptime summary with a series of `points` equal buckets of
+// `stepHours`, the last one containing now, oldest first.
+function uptimeFixture(w24: Window, w7: Window, w30: Window, bucket: Window = windowOf(1, 1, 120), points = 7, stepHours = 24) {
+	const step = stepHours * 3600 * 1000;
+	const last = Math.floor(Date.now() / step) * step;
+	const series = {
+		range: "7d",
+		step_seconds: stepHours * 3600,
+		points: Array.from({ length: points }, (_, i) => ({ start: new Date(last - (points - 1 - i) * step).toISOString(), ...bucket })),
+	};
+	return { data: { soul_id: "soul-1", windows: { "24h": w24, "7d": w7, "30d": w30 }, series }, loading: false, error: null, refetch: mockRefetchUptime };
+}
+
+const noChecks = windowOf(0, 0, 0);
 
 const soul = {
 	id: "soul-1",
@@ -94,6 +118,7 @@ describe("SoulDetail", () => {
 			error: null,
 			refetch: mockRefetchJudgments,
 		});
+		mockUseSoulUptime.mockReturnValue(uptimeFixture(windowOf(2, 1, 860), windowOf(40, 38, 300), windowOf(200, 190, 280)));
 		mockUpdateSoul.mockResolvedValue(undefined);
 		mockDeleteSoul.mockResolvedValue(undefined);
 		mockForceCheck.mockResolvedValue({ status: "passed", latency: 88 });
@@ -168,6 +193,7 @@ describe("SoulDetail", () => {
 		await waitFor(() => {
 			expect(mockRefetchSoul).toHaveBeenCalled();
 			expect(mockRefetchJudgments).toHaveBeenCalled();
+			expect(mockRefetchUptime).toHaveBeenCalled();
 		});
 		expect(
 			screen.getByText(/Check passed! Latency: 88ms/i),
@@ -204,6 +230,7 @@ describe("SoulDetail", () => {
 	});
 
 	it("renders judgment loading, error, and empty states", () => {
+		mockUseSoulUptime.mockReturnValue(uptimeFixture(noChecks, noChecks, noChecks, noChecks));
 		mockUseSoulJudgments.mockReturnValueOnce({ data: undefined, loading: true, error: null, refetch: mockRefetchJudgments });
 		renderDetail();
 		expect(document.querySelectorAll(".animate-spin").length).toBeGreaterThan(0);
@@ -215,7 +242,8 @@ describe("SoulDetail", () => {
 		mockUseSoulJudgments.mockReturnValueOnce({ data: [], loading: false, error: null, refetch: mockRefetchJudgments });
 		renderDetail();
 		expect(screen.getByText("No judgments yet")).toBeInTheDocument();
-		expect(screen.getAllByText("No checks yet")).toHaveLength(3);
+		// Per render: the 24h uptime card and the failures card.
+		expect(screen.getAllByText("No checks yet")).toHaveLength(6);
 	});
 
 	it("renders performance data, changes range, and navigates from secondary controls", () => {
@@ -288,6 +316,7 @@ describe("SoulDetail", () => {
 			data: [{ id: "j-unknown", status: "mystery", latency: 0, timestamp: new Date().toISOString(), purity: 0 }],
 			loading: false, error: null, refetch: mockRefetchJudgments,
 		});
+		mockUseSoulUptime.mockReturnValue(uptimeFixture(noChecks, noChecks, noChecks, noChecks));
 		renderDetail();
 		expect(screen.getByText("mystery")).toHaveClass("text-gray-400");
 		fireEvent.click(screen.getByRole("tab", { name: /performance/i }));
@@ -300,11 +329,61 @@ describe("SoulDetail", () => {
 			soul: { ...soul, weight: 45, timeout: 4, region: undefined }, loading: false, error: null,
 			refetch: mockRefetchSoul, updateSoul: mockUpdateSoul, deleteSoul: mockDeleteSoul, forceCheck: mockForceCheck,
 		});
-		mockUseSoulJudgments.mockReturnValue({ data: [{ id: "j-fast", status: "passed", latency: 50, timestamp: new Date().toISOString(), purity: 100 }], loading: false, error: null, refetch: mockRefetchJudgments });
+		mockUseSoulUptime.mockReturnValue(uptimeFixture(windowOf(1, 1, 50), windowOf(1, 1, 50), windowOf(1, 1, 50)));
 		renderDetail();
 		expect(screen.getByText("Fast")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("tab", { name: /settings/i }));
 		expect(screen.getByText("45s")).toBeInTheDocument();
 		expect(screen.getByText("global")).toBeInTheDocument();
+	});
+
+	// Uptime used to be computed from the judgments list, which holds only the
+	// latest results of the last day: 7d and 30d covered at most a day, and a
+	// soul with no checks showed 100%.
+	it("shows the server's 24h, 7d and 30d uptime and 30-day totals", () => {
+		renderDetail();
+		expect(screen.getAllByText("50%").length).toBeGreaterThan(0); // 24h card and bar
+		expect(screen.getAllByText("95%")).toHaveLength(2); // 7d and 30d bars (38/40, 190/200)
+		expect(screen.getByText("860ms")).toBeInTheDocument(); // 24h average
+		expect(screen.getByText("200")).toBeInTheDocument(); // checks in 30 days
+		expect(screen.getByText("Last 30 days")).toBeInTheDocument();
+		expect(screen.getByText("10")).toBeInTheDocument(); // failures in 30 days
+	});
+
+	it("shows no data instead of 100% for periods without checks", () => {
+		mockUseSoulUptime.mockReturnValue(uptimeFixture(noChecks, windowOf(4, 4, 100), noChecks));
+		renderDetail();
+		expect(screen.getByText("—")).toBeInTheDocument();
+		expect(screen.getAllByText("No checks")).toHaveLength(2); // 24h and 30d bars
+		expect(screen.getAllByText("100%")).toHaveLength(1); // only the 7d bar
+	});
+
+	it("draws days without checks as empty, not as 100% uptime", () => {
+		mockUseSoulUptime.mockReturnValue(uptimeFixture(windowOf(2, 2, 100), windowOf(2, 2, 100), windowOf(2, 2, 100), noChecks));
+		const fixture = mockUseSoulUptime();
+		fixture.data.series.points[6] = { ...fixture.data.series.points[6], ...windowOf(2, 2, 100) };
+		mockUseSoulUptime.mockReturnValue(fixture);
+		renderDetail();
+		fireEvent.click(screen.getByRole("tab", { name: /performance/i }));
+		expect(screen.getAllByTitle("No checks")).toHaveLength(6);
+		expect(screen.getAllByTitle("Uptime: 100%")).toHaveLength(1);
+	});
+
+	// The range selector used to change nothing: the chart always showed the
+	// last 7 days whatever it said.
+	it("requests and draws the range picked in the selector", () => {
+		renderDetail();
+		fireEvent.click(screen.getByRole("tab", { name: /performance/i }));
+		expect(mockUseSoulUptime).toHaveBeenLastCalledWith("soul-1", "24h");
+		expect(screen.getByText("Performance trends over the last 24 hours")).toBeInTheDocument();
+
+		mockUseSoulUptime.mockReturnValue(uptimeFixture(windowOf(2, 1, 860), windowOf(40, 38, 300), windowOf(200, 190, 280), windowOf(1, 1, 120), 30, 24));
+		fireEvent.change(screen.getByDisplayValue("Last 24 Hours"), { target: { value: "30d" } });
+		expect(mockUseSoulUptime).toHaveBeenLastCalledWith("soul-1", "30d");
+		expect(screen.getByText("Performance trends over the last 30 days")).toBeInTheDocument();
+		expect(screen.getAllByTitle(/Response:/)).toHaveLength(30);
+		// Only every fourth of 30 bars is labelled, as month/day.
+		const labels = screen.getAllByText(/^\d{1,2}\/\d{1,2}$/);
+		expect(labels).toHaveLength(8);
 	});
 });

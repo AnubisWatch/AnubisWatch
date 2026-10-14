@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { api, ApiResponse, Soul, Judgment, AlertChannel, AlertRule, Incident, Stats, ClusterStatus, StatusPage, User, CustomDashboard } from './client'
+import { api, ApiResponse, Soul, Judgment, SoulUptime, UptimeRange, AlertChannel, AlertRule, Incident, Stats, ClusterStatus, StatusPage, User, CustomDashboard } from './client'
 import { useRealtimeRefresh } from '../hooks/useRealtimeRefresh'
 import {
   AUTH_SESSION_CHANGED_EVENT,
@@ -200,6 +200,18 @@ export function useSoulJudgments(soulId: string | undefined) {
       return resp.data
     },
     [soulId]
+  )
+}
+
+export function useSoulUptime(soulId: string | undefined, range: UptimeRange = '7d') {
+  return useApi<SoulUptime>(
+    async () => {
+      // Buckets align to the browser's time zone; getTimezoneOffset is
+      // minutes west of UTC, the API wants minutes east.
+      const offset = -new Date().getTimezoneOffset()
+      return api.get<SoulUptime>(`/souls/${soulId}/uptime?range=${range}&tz_offset_minutes=${offset}`)
+    },
+    [soulId, range]
   )
 }
 

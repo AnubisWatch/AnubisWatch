@@ -185,6 +185,7 @@ func TestUpdateChannel_PreservesNestedRedactedConfig(t *testing.T) {
 	nested := map[string]interface{}{"Authorization": "Bearer secret"}
 	store.channels["channel-1"] = &core.AlertChannel{
 		ID:          "channel-1",
+		Name:        "channel-1",
 		WorkspaceID: "default",
 		Type:        core.ChannelWebHook,
 		Config: map[string]interface{}{
@@ -240,6 +241,7 @@ func TestUpdateChannel_AllowsDestinationChangeWithReenteredSecrets(t *testing.T)
 	store := newMockGRPCStore()
 	store.channels["channel-1"] = &core.AlertChannel{
 		ID:          "channel-1",
+		Name:        "channel-1",
 		WorkspaceID: "default",
 		Type:        core.ChannelWebHook,
 		Config: map[string]interface{}{

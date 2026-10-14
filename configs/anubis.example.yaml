@@ -29,9 +29,9 @@ storage:
       raw_to_minute: 48h
       minute_to_five: 168h
       five_to_hour: 720h
-      hour_to_day: 8760h
+      hour_to_day: 720h      # must stay below retention.hour minus 24h
     retention:
-      raw: 48h
+      raw: 2160h             # 90d: status pages show 90 days of uptime from raw results
       minute: 720h
       five: 2160h
       hour: 8760h

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -420,7 +421,20 @@ func (db *CobaltDB) ListJudgments(ctx context.Context, soulID string, start, end
 	if soulID != "" {
 		prefix = fmt.Sprintf("%s/judgments/%s/", workspaceID, soulID)
 	}
-	results, err := db.PrefixScan(prefix)
+
+	// For one soul, read only the requested window: keys end in the judgment's
+	// UnixNano, which sorts lexically while every bound has the same number of
+	// digits. Scanning the whole prefix decoded the soul's entire history on
+	// every call, however short the window.
+	var results map[string][]byte
+	var err error
+	startKey := fmt.Sprintf("%s%d", prefix, start.UnixNano())
+	endKey := fmt.Sprintf("%s%d", prefix, end.UnixNano())
+	if soulID != "" && !start.Before(minRangeScanTime) && end.Before(maxRangeScanTime) && len(startKey) == len(endKey) {
+		results, err = db.RangeScan(startKey, endKey)
+	} else {
+		results, err = db.PrefixScan(prefix)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -451,6 +465,123 @@ func (db *CobaltDB) ListJudgments(ctx context.Context, soulID string, start, end
 		judgments = judgments[:limit]
 	}
 	return judgments, nil
+}
+
+// Range scans over judgment keys are only used between these bounds, where
+// UnixNano has 19 digits: keys of equal width sort lexically in time order,
+// and time.Time values outside int64 nanoseconds (such as the zero Time used
+// as "from the beginning") have no meaningful UnixNano.
+var (
+	minRangeScanTime = time.Unix(1_000_000_000, 0)       // 2001-09-09
+	maxRangeScanTime = time.Unix(9_000_000_000, 0).UTC() // 2255
+)
+
+// TallyChecks counts a soul's checks in each [Start, End) range. Whole UTC
+// hours that started after the soul's results began being counted into live
+// hourly summaries are read from those summaries, one lookup per hour; only
+// the partial hours at a range's edges and anything before live counting are
+// read from raw judgments, each through a key-range scan of that part alone.
+func (db *CobaltDB) TallyChecks(soulID string, ranges []core.TimeRange) ([]core.CheckTally, error) {
+	workspaceID := "default"
+	if soul, err := db.GetSoulNoCtx(soulID); err == nil {
+		workspaceID = defaultWorkspace(soul.WorkspaceID)
+	}
+
+	var liveHour time.Time
+	if raw, err := db.Get(liveSinceKey(workspaceID, soulID)); err == nil {
+		if t, err := time.Parse(time.RFC3339Nano, string(raw)); err == nil {
+			liveHour = t.Truncate(time.Hour)
+			if liveHour.Before(t) {
+				liveHour = liveHour.Add(time.Hour)
+			}
+		}
+	}
+
+	hourly := map[int64]*JudgmentSummary{}
+	if !liveHour.IsZero() && len(ranges) > 0 {
+		first, last := ranges[0].Start, ranges[0].End
+		for _, r := range ranges[1:] {
+			if r.Start.Before(first) {
+				first = r.Start
+			}
+			if r.End.After(last) {
+				last = r.End
+			}
+		}
+		if first.Before(liveHour) {
+			first = liveHour
+		}
+		prefix := fmt.Sprintf("%s/ts/%s/%s/", workspaceID, soulID, Resolution1Hour)
+		results, err := db.RangeScan(
+			fmt.Sprintf("%s%d", prefix, first.Truncate(time.Hour).Unix()),
+			fmt.Sprintf("%s%d", prefix, last.Unix()+1))
+		if err != nil {
+			return nil, err
+		}
+		for key, data := range results {
+			unix, err := strconv.ParseInt(key[strings.LastIndex(key, "/")+1:], 10, 64)
+			if err != nil {
+				continue
+			}
+			var summary JudgmentSummary
+			if err := json.Unmarshal(data, &summary); err != nil {
+				continue
+			}
+			hourly[unix] = &summary
+		}
+	}
+
+	tallies := make([]core.CheckTally, len(ranges))
+	addRaw := func(t *core.CheckTally, start, end time.Time) error {
+		if !start.Before(end) {
+			return nil
+		}
+		judgments, err := db.QueryJudgments(context.Background(), workspaceID, soulID, start, end, 0)
+		if err != nil {
+			return err
+		}
+		for _, j := range judgments {
+			t.Checks++
+			if j.Status == core.SoulAlive {
+				t.Up++
+			}
+			t.LatencySumMs += float64(j.Duration) / float64(time.Millisecond)
+		}
+		return nil
+	}
+
+	for i, r := range ranges {
+		t := &tallies[i]
+		// Whole hours [a, b) inside the range and inside live counting.
+		a := r.Start
+		if !liveHour.IsZero() && a.Before(liveHour) {
+			a = liveHour
+		}
+		if trunc := a.Truncate(time.Hour); trunc.Before(a) {
+			a = trunc.Add(time.Hour)
+		}
+		b := r.End.Truncate(time.Hour)
+		if liveHour.IsZero() || !a.Before(b) {
+			if err := addRaw(t, r.Start, r.End); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		for h := a; h.Before(b); h = h.Add(time.Hour) {
+			if s := hourly[h.Unix()]; s != nil {
+				t.Checks += s.Count
+				t.Up += s.SuccessCount
+				t.LatencySumMs += s.AvgLatency * float64(s.Count)
+			}
+		}
+		if err := addRaw(t, r.Start, a); err != nil {
+			return nil, err
+		}
+		if err := addRaw(t, b, r.End); err != nil {
+			return nil, err
+		}
+	}
+	return tallies, nil
 }
 
 // GetRule retrieves an alert rule by ID
@@ -1097,47 +1228,76 @@ func (db *CobaltDB) DeleteStatusPageSubscription(subscriptionID string) error {
 	return db.Delete(key)
 }
 
+// GetUptimeHistory returns one entry per UTC day for the last days days.
+//
+// Days that started after the soul's results began being counted into day
+// summaries as they arrive (TimeSeriesStore, liveSinceKey) are read from
+// those summaries: one lookup per day. Only older days fall back to scanning
+// raw judgments, so once raw retention has outlived them the soul's raw
+// history is never scanned here.
 func (db *CobaltDB) GetUptimeHistory(soulID string, days int) ([]core.UptimeDay, error) {
 	workspaceID := "default"
 	if soul, err := db.GetSoulNoCtx(soulID); err == nil {
 		workspaceID = defaultWorkspace(soul.WorkspaceID)
 	}
 
-	// Get judgments for the soul
-	keyPrefix := fmt.Sprintf("%s/judgments/%s/", workspaceID, soulID)
-	results, err := db.PrefixScan(keyPrefix)
-	if err != nil {
-		return nil, err
-	}
-
-	// Collect judgments by date
-	dayStats := make(map[string]struct {
+	type tally struct {
 		up    int
 		total int
-	})
+	}
+	dayStats := make(map[string]tally, days)
 
-	now := time.Now().UTC()
-	for i := 0; i < days; i++ {
-		day := now.AddDate(0, 0, -i).Format("2006-01-02")
-		dayStats[day] = struct {
-			up    int
-			total int
-		}{0, 0}
+	var liveSince time.Time
+	if raw, err := db.Get(liveSinceKey(workspaceID, soulID)); err == nil {
+		if t, err := time.Parse(time.RFC3339Nano, string(raw)); err == nil {
+			liveSince = t
+		}
 	}
 
-	for _, data := range results {
-		var judgment core.Judgment
-		if err := json.Unmarshal(data, &judgment); err != nil {
+	now := time.Now().UTC()
+	rawDays := make(map[string]bool)
+	for i := 0; i < days; i++ {
+		d := now.AddDate(0, 0, -i)
+		dayStart := time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, time.UTC)
+		date := dayStart.Format("2006-01-02")
+		dayStats[date] = tally{}
+
+		if liveSince.IsZero() || dayStart.Before(liveSince) {
+			rawDays[date] = true // not (fully) covered by live day summaries
 			continue
 		}
-		day := judgment.Timestamp.UTC().Format("2006-01-02")
-		if _, ok := dayStats[day]; ok {
-			stats := dayStats[day]
-			stats.total++
-			if judgment.Status == core.SoulAlive {
-				stats.up++
+		key := fmt.Sprintf("%s/ts/%s/%s/%d", workspaceID, soulID, Resolution1Day, dayStart.Unix())
+		data, err := db.Get(key)
+		if err != nil {
+			continue // no checks that day
+		}
+		var summary JudgmentSummary
+		if err := json.Unmarshal(data, &summary); err != nil {
+			continue
+		}
+		dayStats[date] = tally{up: summary.SuccessCount, total: summary.Count}
+	}
+
+	if len(rawDays) > 0 {
+		keyPrefix := fmt.Sprintf("%s/judgments/%s/", workspaceID, soulID)
+		results, err := db.PrefixScan(keyPrefix)
+		if err != nil {
+			return nil, err
+		}
+		for _, data := range results {
+			var judgment core.Judgment
+			if err := json.Unmarshal(data, &judgment); err != nil {
+				continue
 			}
-			dayStats[day] = stats
+			day := judgment.Timestamp.UTC().Format("2006-01-02")
+			if rawDays[day] {
+				stats := dayStats[day]
+				stats.total++
+				if judgment.Status == core.SoulAlive {
+					stats.up++
+				}
+				dayStats[day] = stats
+			}
 		}
 	}
 

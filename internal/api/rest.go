@@ -470,6 +470,7 @@ func (s *RESTServer) setupRoutes() {
 	s.router.Handle("DELETE", "/api/v1/souls/:id", s.requireRole(s.handleDeleteSoul, "souls:*"))
 	s.router.Handle("POST", "/api/v1/souls/:id/check", s.requireRole(s.handleForceCheck, "souls:*"))
 	s.router.Handle("GET", "/api/v1/souls/:id/judgments", s.requireAuth(s.handleListJudgments))
+	s.router.Handle("GET", "/api/v1/souls/:id/uptime", s.requireAuth(s.handleSoulUptime))
 
 	// Judgments
 	s.router.Handle("GET", "/api/v1/judgments/:id", s.requireAuth(s.handleGetJudgment))
@@ -1623,6 +1624,9 @@ func (s *RESTServer) handleCreateRule(ctx *Context) error {
 	if err := rule.Validate(); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
+	if err := rule.ValidateMetrics(); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
 
 	if err := s.alert.RegisterRule(&rule); err != nil {
 		return s.internalError(ctx, err, "internal server error")
@@ -1673,6 +1677,9 @@ func (s *RESTServer) handleUpdateRule(ctx *Context) error {
 	rule.WorkspaceID = ctx.Workspace
 
 	if err := rule.Validate(); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
+	if err := rule.ValidateMetrics(); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 
@@ -2188,6 +2195,25 @@ func defaultWorkspaceQuotas() core.QuotaConfig {
 	}
 }
 
+// jsonHasTopLevelKey reports whether the JSON object in raw has key as a
+// top-level field, matched case-insensitively the way encoding/json binds
+// fields. A substring search over the body cannot answer this: it matched any
+// value equal to the key (a description of "password"), and missed keys the
+// decoder still binds ("Password", escaped spellings), so a request could
+// clear a stored password it never mentioned, or keep one it replaced.
+func jsonHasTopLevelKey(raw []byte, key string) bool {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return false
+	}
+	for k := range fields {
+		if strings.EqualFold(k, key) {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeStatusPageForSave(page *core.StatusPage) error {
 	page.Name = strings.TrimSpace(page.Name)
 	page.Slug = strings.TrimSpace(strings.ToLower(page.Slug))
@@ -2291,7 +2317,7 @@ func (s *RESTServer) handleCreateStatusPage(ctx *Context) error {
 	// at the raw JSON body before bind.
 	raw, _ := io.ReadAll(ctx.Request.Body)
 	ctx.Request.Body = io.NopCloser(bytes.NewReader(raw))
-	enabledExplicit := bytes.Contains(raw, []byte(`"enabled"`))
+	enabledExplicit := jsonHasTopLevelKey(raw, "enabled")
 
 	var page core.StatusPage
 	if err := ctx.Bind(&page); err != nil {
@@ -2742,28 +2768,27 @@ func (s *RESTServer) recoveryMiddleware(handler Handler) Handler {
 func (s *RESTServer) validateJSONMiddleware(handler Handler) Handler {
 	return func(ctx *Context) error {
 		if ctx.Request.Method == "POST" || ctx.Request.Method == "PUT" || ctx.Request.Method == "PATCH" {
-			// Only enforce Content-Type when a body is present: bodyless POST
-			// operations (logout, force-check, acknowledge) should not require
-			// clients to send a fake Content-Type header.
-			hasBody := ctx.Request.ContentLength > 0 || ctx.Request.TransferEncoding != nil
-			if hasBody {
-				contentType := ctx.Request.Header.Get("Content-Type")
-				if !strings.HasPrefix(contentType, "application/json") {
-					return ctx.Error(http.StatusBadRequest, "Content-Type must be application/json")
-				}
-			}
-
 			// Check Content-Length for pre-negotiated-size check
 			if ctx.Request.ContentLength > maxRequestBodySize {
 				return ctx.Error(http.StatusRequestEntityTooLarge, "Request body too large (max 1MB)")
 			}
 
-			// Validate JSON body structure to prevent attacks
-			if hasBody && ctx.Request.Body != nil {
+			// Whether a body is present is decided from the bytes that arrive,
+			// not from the declared length. ContentLength is -1 when the length
+			// is unknown, which net/http reports for HTTP/2 requests that omit
+			// content-length (HTTP/2 has no chunked encoding). Treating unknown
+			// as "no body" skipped every check below for such requests; treating
+			// it as "has a body" rejected bodyless writes (logout, force-check,
+			// acknowledge), which must not need a Content-Type header. Reading
+			// settles it: only a request that carries bytes is held to the policy.
+			var bodyBytes []byte
+			mayHaveBody := ctx.Request.ContentLength != 0 || ctx.Request.TransferEncoding != nil
+			if mayHaveBody && ctx.Request.Body != nil && ctx.Request.Body != http.NoBody {
 				// Read maxRequestBodySize+1 to distinguish "exactly at limit"
 				// from "oversized" — io.LimitReader truncates silently.
 				limited := io.LimitReader(ctx.Request.Body, maxRequestBodySize+1)
-				bodyBytes, err := io.ReadAll(limited)
+				var err error
+				bodyBytes, err = io.ReadAll(limited)
 				if err != nil {
 					return ctx.Error(http.StatusBadRequest, "Invalid request body")
 				}
@@ -2773,23 +2798,26 @@ func (s *RESTServer) validateJSONMiddleware(handler Handler) Handler {
 
 				// Restore body for later handlers
 				ctx.Request.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+			}
 
-				// Only validate non-empty bodies
-				if len(bodyBytes) > 0 {
-					// Check for common injection patterns
-					bodyStr := string(bodyBytes)
-					if containsInjectionPatterns(bodyStr) {
-						s.logger.Warn("Potential injection attack detected",
-							"ip", ctx.Request.RemoteAddr,
-							"path", ctx.Request.URL.Path)
-						return ctx.Error(http.StatusBadRequest, "Invalid characters in request")
-					}
+			if len(bodyBytes) > 0 {
+				contentType := ctx.Request.Header.Get("Content-Type")
+				if !strings.HasPrefix(contentType, "application/json") {
+					return ctx.Error(http.StatusBadRequest, "Content-Type must be application/json")
+				}
 
-					// Validate it's valid JSON
-					var jsonCheck interface{}
-					if err := json.Unmarshal(bodyBytes, &jsonCheck); err != nil {
-						return ctx.Error(http.StatusBadRequest, "Invalid JSON format")
-					}
+				// Check for common injection patterns
+				if containsInjectionPatterns(string(bodyBytes)) {
+					s.logger.Warn("Potential injection attack detected",
+						"ip", ctx.Request.RemoteAddr,
+						"path", ctx.Request.URL.Path)
+					return ctx.Error(http.StatusBadRequest, "Invalid characters in request")
+				}
+
+				// Validate it's valid JSON
+				var jsonCheck interface{}
+				if err := json.Unmarshal(bodyBytes, &jsonCheck); err != nil {
+					return ctx.Error(http.StatusBadRequest, "Invalid JSON format")
 				}
 			}
 		}

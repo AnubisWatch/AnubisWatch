@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -4998,12 +4999,15 @@ func TestValidateJSONMiddleware(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest(tt.method, "/test", nil)
+			// Send a real JSON body of bodyLen bytes: the middleware decides
+			// from the bytes that arrive, not from a declared length alone.
+			var body io.Reader
+			if tt.bodyLen > 0 {
+				body = strings.NewReader(`{"pad":"` + strings.Repeat("x", int(tt.bodyLen)-10) + `"}`)
+			}
+			req := httptest.NewRequest(tt.method, "/test", body)
 			if tt.contentType != "" {
 				req.Header.Set("Content-Type", tt.contentType)
-			}
-			if tt.bodyLen > 0 {
-				req.ContentLength = tt.bodyLen
 			}
 			rec := httptest.NewRecorder()
 			ctx := &Context{

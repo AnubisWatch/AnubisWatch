@@ -39,6 +39,8 @@ type ServerDependencies struct {
 	Config            *core.Config
 	Logger            *slog.Logger
 	Store             *storage.CobaltDB
+	TimeSeries        *storage.TimeSeriesStore
+	Retention         *storage.RetentionManager
 	Authenticator     api.Authenticator
 	AlertManager      *alert.Manager
 	ProbeEngine       *probe.Engine
@@ -95,12 +97,29 @@ func (s *Server) Start(ctx context.Context) error {
 	cfg := s.deps.Config
 	logger := s.logger
 
+	// Start storage maintenance: downsampling of check results into
+	// coarser summaries, and deletion of data past its retention period.
+	if s.deps.TimeSeries != nil {
+		s.deps.TimeSeries.StartCompaction()
+	}
+	if s.deps.Retention != nil {
+		r := cfg.Storage.TimeSeries.Retention
+		logger.Info("data retention enabled",
+			"raw", r.Raw.Duration, "1min", r.Minute.Duration, "5min", r.FiveMin.Duration,
+			"1hour", r.Hour.Duration, "1day", r.Day)
+		for _, w := range compactionRetentionConflicts(cfg.Storage.TimeSeries) {
+			logger.Warn("retention deletes summaries before they are rolled up", "detail", w)
+		}
+		s.deps.Retention.Start()
+	}
+
 	// Start alert manager
 	if s.deps.AlertManager != nil {
 		if err := s.deps.AlertManager.Start(); err != nil {
 			logger.Warn("failed to start alert manager", "err", err)
 		} else {
 			logger.Info("alert manager started")
+			loadConfiguredAlerts(cfg, s.deps.AlertManager, logger)
 		}
 	}
 
@@ -274,6 +293,14 @@ func (s *Server) Stop(ctx context.Context) error {
 	// Shutdown authenticator
 	if s.deps.Authenticator != nil {
 		s.deps.Authenticator.Shutdown()
+	}
+
+	// Stop storage maintenance before the store it writes to closes.
+	if s.deps.Retention != nil {
+		s.deps.Retention.Stop()
+	}
+	if s.deps.TimeSeries != nil {
+		s.deps.TimeSeries.StopCompaction()
 	}
 
 	// Close storage
@@ -470,6 +497,8 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize storage: %w", err)
 	}
+	timeSeries := storage.NewTimeSeriesStore(store, cfg.Storage.TimeSeries, logger)
+	retention := storage.NewRetentionManager(store, cfg.Storage.TimeSeries.Retention, cfg.Storage.Path, logger)
 
 	// Initialize auth
 	sessionPath := filepath.Join(cfg.Storage.Path, "sessions.json")
@@ -536,7 +565,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	registry := probe.NewCheckerRegistry()
 	probeEngine := probe.NewEngine(probe.EngineOptions{
 		Registry: registry,
-		Store:    &probeStorageAdapter{store: store},
+		Store:    &probeStorageAdapter{store: store, timeseries: timeSeries},
 		Alerter:  alertMgr,
 		NodeID:   cfg.Necropolis.NodeName,
 		Region:   cfg.Necropolis.Region,
@@ -635,13 +664,15 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 			logger,
 			grpcTLSConfig,
 			cfg.Server.GRPCReflection,
-		)
+		).SetAlertRegistrar(alertMgr)
 	}
 
 	return &ServerDependencies{
 		Config:            cfg,
 		Logger:            logger,
 		Store:             store,
+		TimeSeries:        timeSeries,
+		Retention:         retention,
 		Authenticator:     authenticator,
 		AlertManager:      alertMgr,
 		ProbeEngine:       probeEngine,
@@ -763,9 +794,15 @@ func applyClusterDefaults(cfg *core.Config, opts ServerOptions) {
 // probeStorageAdapter adapts storage.CobaltDB to probe.Storage interface
 type probeStorageAdapter struct {
 	store *storage.CobaltDB
+	// timeseries, when set, saves each judgment and folds it into the
+	// 1-minute summary that compaction downsamples from.
+	timeseries *storage.TimeSeriesStore
 }
 
 func (a *probeStorageAdapter) SaveJudgment(ctx context.Context, j *core.Judgment) error {
+	if a.timeseries != nil {
+		return a.timeseries.SaveJudgment(ctx, j)
+	}
 	return a.store.SaveJudgment(ctx, j)
 }
 
@@ -857,6 +894,12 @@ func (a *restStorageAdapter) GetJudgmentNoCtx(id string) (*core.Judgment, error)
 
 func (a *restStorageAdapter) ListJudgmentsNoCtx(soulID string, start, end time.Time, limit int) ([]*core.Judgment, error) {
 	return a.store.ListJudgmentsNoCtx(soulID, start, end, limit)
+}
+
+// TallyChecks lets the soul uptime endpoint count checks from hourly
+// summaries instead of decoding a month of raw judgments per request.
+func (a *restStorageAdapter) TallyChecks(soulID string, ranges []core.TimeRange) ([]core.CheckTally, error) {
+	return a.store.TallyChecks(soulID, ranges)
 }
 
 func (a *restStorageAdapter) GetChannelNoCtx(id string, workspace string) (*core.AlertChannel, error) {
@@ -1291,4 +1334,35 @@ func storageGetLatestJudgment(store *storage.CobaltDB, ctx context.Context, work
 	}
 
 	return latest, nil
+}
+
+// compactionRetentionConflicts reports each resolution whose retention ends
+// before compaction can roll its buckets up. A bucket is rolled up once its
+// whole span is past the compaction threshold, so the source level must be
+// kept for at least threshold + one target bucket, or the rollup is built
+// from a partly deleted bucket.
+func compactionRetentionConflicts(tsCfg core.TimeSeriesConfig) []string {
+	c, r := tsCfg.Compaction, tsCfg.Retention
+	levels := []struct {
+		src, tgt  string
+		threshold time.Duration
+		retention time.Duration
+		span      time.Duration
+	}{
+		{"1min", "5min", c.MinuteToFive.Duration, r.Minute.Duration, 5 * time.Minute},
+		{"5min", "1hour", c.FiveToHour.Duration, r.FiveMin.Duration, time.Hour},
+		{"1hour", "1day", c.HourToDay.Duration, r.Hour.Duration, 24 * time.Hour},
+	}
+	var conflicts []string
+	for _, l := range levels {
+		if l.threshold <= 0 || l.retention <= 0 {
+			continue // compaction disabled, or the level is kept forever
+		}
+		if l.retention < l.threshold+l.span {
+			conflicts = append(conflicts, fmt.Sprintf(
+				"%s summaries are kept %s but rolled up into %s only after %s; keep them at least %s",
+				l.src, l.retention, l.tgt, l.threshold, l.threshold+l.span))
+		}
+	}
+	return conflicts
 }

@@ -21,7 +21,7 @@ import (
 
 var startTime = time.Now()
 
-// testDataDir is set by init() in main_test.go to provide a default test directory
+// testDataDir is set by TestMain (testmain_test.go) to a temporary directory
 var testDataDir string
 
 // openLocalStorage opens storage directly for CLI operations
@@ -44,7 +44,7 @@ func getDataDir() string {
 	if dir := os.Getenv("ANUBIS_DATA_DIR"); dir != "" {
 		return dir
 	}
-	// Check test default (set by main_test.go init)
+	// Check test default (set by TestMain)
 	if testDataDir != "" {
 		return testDataDir
 	}

@@ -142,24 +142,38 @@ silently falling back.
 
 ### `storage.timeseries.compaction` Block
 
-CobaltDB automatically compacts time-series data:
+Every check result is folded into a 1-minute summary as it is saved. A
+background job then rolls summaries up into coarser ones every 5 minutes. A
+bucket is rolled up once its whole span is older than the threshold, and is
+built only once.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `raw_to_minute` | duration | `48h` | Raw samples → 1-minute aggregates |
-| `minute_to_five` | duration | `168h` | 1-minute → 5-minute aggregates |
-| `five_to_hour` | duration | `720h` | 5-minute → hourly aggregates |
-| `hour_to_day` | duration | `8760h` | Hourly → daily aggregates |
+| `raw_to_minute` | duration | `48h` | Unused: 1-minute summaries are written as results arrive |
+| `minute_to_five` | duration | `168h` | 1-minute → 5-minute summaries |
+| `five_to_hour` | duration | `720h` | 5-minute → hourly summaries |
+| `hour_to_day` | duration | `720h` | Hourly → daily summaries |
 
-### `storage.retention` Block
+### `storage.timeseries.retention` Block
+
+Data older than these periods is deleted once an hour, starting at server
+start.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `raw` | duration | `48h` | Keep raw judgment samples |
-| `minute` | duration | `720h` | Keep minute-level aggregates |
-| `five` | duration | `2160h` | Keep 5-minute aggregates |
-| `hour` | duration | `8760h` | Keep hourly aggregates |
-| `day` | duration | `unlimited` | Keep daily aggregates |
+| `raw` | duration | `2160h` | Keep raw check results (judgments) |
+| `minute` | duration | `720h` | Keep 1-minute summaries |
+| `five` | duration | `2160h` | Keep 5-minute summaries |
+| `hour` | duration | `8760h` | Keep hourly summaries |
+| `day` | duration | `unlimited` | Keep daily summaries |
+
+Status pages (90 days of uptime bars), soul logs and dashboard queries read raw
+check results, so a `raw` period shorter than 90 days leaves gaps in them.
+
+Keep each summary level longer than its compaction threshold plus one bucket of
+the next level (for example `hour` > `hour_to_day` + 24h). Otherwise its oldest
+buckets are deleted before they are rolled up, and the server logs a warning at
+startup.
 
 ### Example
 
@@ -174,9 +188,9 @@ storage:
       raw_to_minute: 48h
       minute_to_five: 168h
       five_to_hour: 720h
-      hour_to_day: 8760h
+      hour_to_day: 720h
     retention:
-      raw: 48h
+      raw: 2160h
       minute: 720h
       five: 2160h
       hour: 8760h

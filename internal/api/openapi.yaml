@@ -1185,6 +1185,76 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Judgment'
+  /api/v1/souls/{id}/uptime:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      tags:
+      - Judgments
+      summary: Soul uptime summary
+      description: >-
+        Uptime over the last 24 hours, 7 days and 30 days, plus a series of
+        equal buckets over the requested range: 5-minute buckets for 1h,
+        hourly for 24h, calendar days for 7d and 30d. Only alive results count
+        as up. uptime_percent is null for a period with no checks.
+      parameters:
+      - name: range
+        in: query
+        description: Period the series covers.
+        schema:
+          type: string
+          enum: [1h, 24h, 7d, 30d]
+          default: 7d
+      - name: tz_offset_minutes
+        in: query
+        description: Caller's offset from UTC in minutes (east positive), used to align buckets. Defaults to 0.
+        schema:
+          type: integer
+          minimum: -840
+          maximum: 840
+      responses:
+        '200':
+          description: Uptime summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  soul_id:
+                    type: string
+                  windows:
+                    type: object
+                    description: Keyed by "24h", "7d" and "30d".
+                    additionalProperties:
+                      $ref: '#/components/schemas/UptimeWindow'
+                  series:
+                    type: object
+                    properties:
+                      range:
+                        type: string
+                      step_seconds:
+                        type: integer
+                      points:
+                        type: array
+                        description: Equal buckets, oldest first.
+                        items:
+                          allOf:
+                          - $ref: '#/components/schemas/UptimeWindow'
+                          - type: object
+                            properties:
+                              start:
+                                type: string
+                                format: date-time
+        '400':
+          description: Invalid range or tz_offset_minutes
+        '403':
+          description: Soul belongs to another workspace
+        '404':
+          description: Soul not found
   /api/v1/souls/{id}/logs:
     get:
       parameters:
@@ -1594,6 +1664,21 @@ components:
           type: boolean
         verify_tls:
           type: boolean
+    UptimeWindow:
+      type: object
+      properties:
+        checks:
+          type: integer
+        up:
+          type: integer
+        failures:
+          type: integer
+        uptime_percent:
+          type: number
+          nullable: true
+          description: Null when there were no checks in the period.
+        avg_latency_ms:
+          type: number
     Judgment:
       type: object
       properties:

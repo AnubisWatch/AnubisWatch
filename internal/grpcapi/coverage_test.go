@@ -784,7 +784,7 @@ func TestGetRule_NotFound(t *testing.T) {
 
 func TestUpdateRule_MapType(t *testing.T) {
 	store := newMockGRPCStore()
-	store.rules["rule_1"] = &core.AlertRule{ID: "rule_1", Name: "old-name"}
+	store.rules["rule_1"] = &core.AlertRule{ID: "rule_1", Name: "old-name", Conditions: []core.AlertCondition{{Type: "consecutive_failures", Threshold: 1}}, Channels: []string{"ch_1"}}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
 	name := "updated-name"

@@ -239,6 +239,15 @@ func (m *Manager) RegisterChannel(channel *core.AlertChannel) error {
 	return nil
 }
 
+// ValidateChannel reports whether RegisterChannel would accept channel, so a
+// caller can reject a bad channel before persisting it elsewhere.
+func (m *Manager) ValidateChannel(channel *core.AlertChannel) error {
+	if err := channel.Validate(); err != nil {
+		return err
+	}
+	return m.validateChannelConfig(channel)
+}
+
 func (m *Manager) validateChannelConfig(channel *core.AlertChannel) error {
 	dispatcher, ok := m.dispatchers[channel.Type]
 	if !ok {
@@ -1066,7 +1075,7 @@ func (m *Manager) checkAnomaly(cond core.AlertCondition, judgment *core.Judgment
 	// Get current value
 	var currentValue float64
 	switch metric {
-	case "latency", "duration":
+	case "latency", "latency_ms", "duration":
 		currentValue = float64(judgment.Duration.Milliseconds())
 	case "status_code":
 		currentValue = float64(judgment.StatusCode)
@@ -1095,7 +1104,7 @@ func (m *Manager) checkAnomaly(cond core.AlertCondition, judgment *core.Judgment
 	for _, ev := range events {
 		var val float64
 		switch metric {
-		case "latency", "duration":
+		case "latency", "latency_ms", "duration":
 			if ev.Judgment != nil {
 				val = float64(ev.Judgment.Duration.Milliseconds())
 			}
@@ -1200,15 +1209,24 @@ func (m *Manager) evaluateCondition(cond core.AlertCondition, prevStatus core.So
 	case "anomaly":
 		return m.checkAnomaly(cond, judgment)
 	case "threshold":
-		// Metric-based threshold
+		// Metric-based threshold. An unset metric means latency, as in
+		// checkAnomaly. A metric this engine does not measure never fires:
+		// reading it as latency made e.g. `cpu > 90` page on every check
+		// slower than 90ms and stay silent on a real CPU problem.
 		var currentValue float64
 		switch cond.Metric {
-		case "latency", "duration":
+		case "", "latency", "latency_ms", "duration":
 			currentValue = float64(judgment.Duration.Milliseconds())
 		case "status_code":
 			currentValue = float64(judgment.StatusCode)
+		case "tls_expiry_days":
+			// Checks without certificate data cannot breach an expiry threshold.
+			if judgment.TLSInfo == nil {
+				return false
+			}
+			currentValue = float64(judgment.TLSInfo.DaysUntilExpiry)
 		default:
-			currentValue = float64(judgment.Duration.Milliseconds())
+			return false
 		}
 		threshold, _ := cond.Value.(float64)
 		if threshold == 0 {

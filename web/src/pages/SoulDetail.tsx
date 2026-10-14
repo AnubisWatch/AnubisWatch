@@ -26,13 +26,17 @@ import {
   Loader2
 } from 'lucide-react'
 import { useState, useMemo, useEffect, useRef } from 'react'
-import { useSoul, useSoulJudgments } from '../api/hooks'
-import type { Judgment } from '../api/client'
+import { useSoul, useSoulJudgments, useSoulUptime } from '../api/hooks'
+import type { Judgment, UptimeRange } from '../api/client'
 import type { LucideIcon } from 'lucide-react'
 
 interface UptimeData {
-  date: string
-  uptime: number
+  key: string
+  /** Axis label; empty for buckets between labelled ones */
+  label: string
+  checks: number
+  /** null when the day had no checks */
+  uptime: number | null
   responseTime: number
 }
 
@@ -42,7 +46,7 @@ type TabId = (typeof TABS)[number]
 export function SoulDetail() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const [timeRange, setTimeRange] = useState('24h')
+  const [timeRange, setTimeRange] = useState<UptimeRange>('24h')
   const [activeTab, setActiveTab] = useState<TabId>('overview')
   const [isDeleting, setIsDeleting] = useState(false)
   const [isChecking, setIsChecking] = useState(false)
@@ -66,83 +70,37 @@ export function SoulDetail() {
 
   const judgments = useMemo(() => judgmentsData || [], [judgmentsData])
 
-  // Calculate stats from real data
+  // Uptime comes from the server's 24h/7d/30d summary. The judgments list
+  // only holds the latest results of the last day, so figures derived from it
+  // could not cover 7 or 30 days. A period without checks is null, not 100%.
+  const { data: uptime, refetch: refetchUptime } = useSoulUptime(id, timeRange)
+
   const stats = useMemo(() => {
-    if (!judgments.length) {
-      return {
-        uptime24h: 100,
-        uptime7d: 100,
-        uptime30d: 100,
-        avgResponse: 0,
-        totalChecks: 0,
-        failures: 0,
-        availability: 100,
-      }
-    }
-
-    const now = Date.now()
-    const dayMs = 24 * 60 * 60 * 1000
-
-    const last24h = judgments.filter(j => new Date(j.timestamp).getTime() > now - dayMs)
-    const last7d = judgments.filter(j => new Date(j.timestamp).getTime() > now - 7 * dayMs)
-    const last30d = judgments.filter(j => new Date(j.timestamp).getTime() > now - 30 * dayMs)
-
-    const calcUptime = (items: typeof judgments) => {
-      if (!items.length) return 100
-      const passed = items.filter(j => j.status === 'passed').length
-      return Math.round((passed / items.length) * 10000) / 100
-    }
-
-    const avgResponse = judgments.length
-      ? Math.round(judgments.reduce((acc, j) => acc + j.latency, 0) / judgments.length)
-      : 0
-
-    const failures = judgments.filter(j => j.status === 'failed').length
-
+    const w24 = uptime?.windows?.['24h']
+    const w30 = uptime?.windows?.['30d']
     return {
-      uptime24h: calcUptime(last24h),
-      uptime7d: calcUptime(last7d),
-      uptime30d: calcUptime(last30d),
-      avgResponse,
-      totalChecks: judgments.length,
-      failures,
-      availability: calcUptime(judgments),
+      uptime24h: w24?.uptime_percent ?? null,
+      uptime7d: uptime?.windows?.['7d']?.uptime_percent ?? null,
+      uptime30d: w30?.uptime_percent ?? null,
+      avgResponse: Math.round(w24?.avg_latency_ms ?? 0),
+      totalChecks: w30?.checks ?? 0,
+      failures: w30?.failures ?? 0,
     }
-  }, [judgments])
+  }, [uptime])
 
-  // Generate uptime chart data from judgments
+  // The selected range, bucketed by the server in this browser's time zone.
   const uptimeData: UptimeData[] = useMemo(() => {
-    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-    const data: UptimeData[] = []
-
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date()
-      date.setDate(date.getDate() - i)
-      const dayName = days[date.getDay()]
-
-      const dayStart = new Date(date.setHours(0, 0, 0, 0)).getTime()
-      const dayEnd = dayStart + 24 * 60 * 60 * 1000
-
-      const dayJudgments = judgments.filter(j => {
-        const jTime = new Date(j.timestamp).getTime()
-        return jTime >= dayStart && jTime < dayEnd
-      })
-
-      if (dayJudgments.length > 0) {
-        const passed = dayJudgments.filter(j => j.status === 'passed').length
-        const avgLatency = dayJudgments.reduce((acc, j) => acc + j.latency, 0) / dayJudgments.length
-        data.push({
-          date: dayName,
-          uptime: Math.round((passed / dayJudgments.length) * 100 * 10) / 10,
-          responseTime: Math.round(avgLatency / 10), // Scale for display
-        })
-      } else {
-        data.push({ date: dayName, uptime: 100, responseTime: 0 })
-      }
-    }
-
-    return data
-  }, [judgments])
+    const points = Array.isArray(uptime?.series?.points) ? uptime.series.points : []
+    // Label at most about eight buckets so 24 or 30 bars stay readable.
+    const every = Math.max(1, Math.ceil(points.length / 8))
+    return points.map((point, i) => ({
+      key: point.start,
+      label: i % every === 0 ? bucketLabel(point.start, timeRange) : '',
+      checks: point.checks,
+      uptime: point.uptime_percent === null ? null : Math.round(point.uptime_percent * 10) / 10,
+      responseTime: Math.round(point.avg_latency_ms / 10), // Scale for display
+    }))
+  }, [uptime, timeRange])
 
   const handleToggleEnabled = async () => {
     if (!soul) return
@@ -183,7 +141,7 @@ export function SoulDetail() {
           ? `Check passed! Latency: ${result.latency}ms`
           : `Check failed: ${result?.error || 'Unknown error'}`
       })
-      await Promise.all([refetch(), refetchJudgments()])
+      await Promise.all([refetch(), refetchJudgments(), refetchUptime()])
     } catch (err) {
       if (sequence === checkSequence.current) {
         setCheckResult({
@@ -341,8 +299,8 @@ export function SoulDetail() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label="Uptime (24h)"
-          value={`${stats.uptime24h}%`}
-          subValue={stats.uptime24h >= 99.9 ? 'Excellent' : stats.uptime24h >= 99 ? 'Good' : 'Needs Attention'}
+          value={stats.uptime24h === null ? '—' : `${stats.uptime24h}%`}
+          subValue={stats.uptime24h === null ? 'No checks yet' : stats.uptime24h >= 99.9 ? 'Excellent' : stats.uptime24h >= 99 ? 'Good' : 'Needs Attention'}
           icon={Activity}
           gradient="from-emerald-500/20 to-emerald-600/10"
           iconColor="text-emerald-400"
@@ -360,7 +318,7 @@ export function SoulDetail() {
         <StatCard
           label="Total Checks"
           value={stats.totalChecks.toLocaleString()}
-          subValue="All time"
+          subValue="Last 30 days"
           icon={CheckCircle2}
           gradient="from-blue-500/20 to-blue-600/10"
           iconColor="text-blue-400"
@@ -520,11 +478,11 @@ export function SoulDetail() {
                     <TrendingUp className="w-5 h-5 text-amber-400" />
                     Response Time & Uptime
                   </h3>
-                  <p className="text-sm text-gray-400 mt-1">Performance trends over the last 7 days</p>
+                  <p className="text-sm text-gray-400 mt-1">Performance trends over {RANGE_DESCRIPTIONS[timeRange]}</p>
                 </div>
                 <select
                   value={timeRange}
-                  onChange={(e) => setTimeRange(e.target.value)}
+                  onChange={(e) => setTimeRange(e.target.value as UptimeRange)}
                   className="bg-gray-800 border border-gray-700/50 rounded-xl px-4 py-2 text-sm text-white focus:outline-none focus:border-amber-500/50"
                 >
                   <option value="1h">Last Hour</option>
@@ -534,17 +492,17 @@ export function SoulDetail() {
                 </select>
               </div>
 
-              {uptimeData.some(d => d.responseTime > 0) ? (
+              {uptimeData.some(d => d.checks > 0) ? (
                 <>
                   {/* Chart Bars */}
                   <div className="h-48 flex items-end justify-between gap-3">
                     {uptimeData.map((day) => (
-                      <div key={day.date} className="flex-1 flex flex-col items-center gap-2">
+                      <div key={day.key} className="flex-1 flex flex-col items-center gap-2">
                         <div className="w-full flex flex-col gap-1">
                           <div
                             className="w-full bg-emerald-500/80 rounded-t-lg transition-all hover:bg-emerald-400"
-                            style={{ height: `${day.uptime * 1.5}px` }}
-                            title={`Uptime: ${day.uptime}%`}
+                            style={{ height: `${(day.uptime ?? 0) * 1.5}px` }}
+                            title={day.uptime === null ? 'No checks' : `Uptime: ${day.uptime}%`}
                           />
                           <div
                             className="w-full bg-amber-500/60 rounded-t-lg transition-all hover:bg-amber-400"
@@ -552,7 +510,7 @@ export function SoulDetail() {
                             title={`Response: ${day.responseTime * 10}ms`}
                           />
                         </div>
-                        <span className="text-xs text-gray-500">{day.date}</span>
+                        <span className="text-xs text-gray-500 h-4 whitespace-nowrap">{day.label}</span>
                       </div>
                     ))}
                   </div>
@@ -798,17 +756,44 @@ function StatCard({ label, value, subValue, icon: Icon, gradient, iconColor, bor
   )
 }
 
-function AvailabilityBar({ label, value }: { label: string; value: number }) {
+const RANGE_DESCRIPTIONS: Record<UptimeRange, string> = {
+  '1h': 'the last hour',
+  '24h': 'the last 24 hours',
+  '7d': 'the last 7 days',
+  '30d': 'the last 30 days',
+}
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+/** Axis label for a bucket starting at start (ISO time), in local time. */
+function bucketLabel(start: string, range: UptimeRange): string {
+  const t = new Date(start)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  switch (range) {
+    case '1h':
+      return `${pad(t.getHours())}:${pad(t.getMinutes())}`
+    case '24h':
+      return `${pad(t.getHours())}:00`
+    case '7d':
+      return WEEKDAYS[t.getDay()]
+    case '30d':
+      return `${t.getMonth() + 1}/${t.getDate()}`
+  }
+}
+
+function AvailabilityBar({ label, value }: { label: string; value: number | null }) {
   return (
     <div>
       <div className="flex items-center justify-between text-sm mb-1">
         <span className="text-gray-400">{label}</span>
-        <span className="text-emerald-400 font-semibold">{value}%</span>
+        {value === null
+          ? <span className="text-gray-500">No checks</span>
+          : <span className="text-emerald-400 font-semibold">{value}%</span>}
       </div>
       <div className="h-2 bg-gray-700 rounded-full overflow-hidden">
         <div
           className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full"
-          style={{ width: `${Math.min(value, 100)}%` }}
+          style={{ width: `${Math.min(value ?? 0, 100)}%` }}
         />
       </div>
     </div>

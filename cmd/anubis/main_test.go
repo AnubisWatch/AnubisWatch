@@ -25,21 +25,6 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/storage"
 )
 
-// init sets up the test environment before any tests run
-func init() {
-	// Create a default temp dir for tests to avoid permission issues in CI
-	tmpDir, err := os.MkdirTemp("", "anubis-test-*")
-	if err == nil {
-		testDataDir = tmpDir
-		// Always set the environment variable for tests
-		// This ensures that even if a test unsets it, it will be restored
-		os.Setenv("ANUBIS_DATA_DIR", tmpDir)
-		fmt.Fprintf(os.Stderr, "DEBUG: Set testDataDir=%s\n", tmpDir)
-	} else {
-		fmt.Fprintf(os.Stderr, "DEBUG: Failed to create temp dir: %v\n", err)
-	}
-}
-
 func TestPrintUsage(t *testing.T) {
 	// Capture stdout
 	oldStdout := os.Stdout

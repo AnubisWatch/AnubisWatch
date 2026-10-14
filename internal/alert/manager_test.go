@@ -3599,7 +3599,7 @@ func TestManager_EvaluateCondition_Threshold(t *testing.T) {
 		t.Error("Expected status code threshold to be triggered")
 	}
 
-	// Default metric (unknown metric falls back to duration)
+	// Unknown metric never fires (see unknown_metric_regression_test.go)
 	cond3 := core.AlertCondition{
 		Type:     "threshold",
 		Metric:   "unknown_metric",

@@ -5175,8 +5175,9 @@ func TestTimeSeriesStore_QuerySummaries_WithCorruptData(t *testing.T) {
 		t.Fatalf("SaveJudgment failed: %v", err)
 	}
 
-	// Manually insert corrupt summary data
-	corruptKey := fmt.Sprintf("default/ts/corrupt-summary-soul/1min/%d", time.Now().Unix())
+	// Manually insert corrupt summary data in a different bucket: at second :00
+	// time.Now().Unix() equals the valid summary's minute key and overwrote it.
+	corruptKey := fmt.Sprintf("default/ts/corrupt-summary-soul/1min/%d", time.Now().Truncate(time.Minute).Add(-2*time.Minute).Unix())
 	db.Put(corruptKey, []byte("not valid json"))
 
 	// Query should handle corrupt data gracefully

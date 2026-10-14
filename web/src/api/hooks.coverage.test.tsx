@@ -11,6 +11,7 @@ import {
   useRules,
   useSoul,
   useSoulJudgments,
+  useSoulUptime,
   useSouls,
   useStats,
   useStatusPages,
@@ -164,6 +165,20 @@ describe('API hooks coverage', () => {
     const judgments = renderHook(() => useSoulJudgments('s1'))
     await settled(judgments.result)
     expect(mocks.get).toHaveBeenCalledWith('/souls/s1/judgments')
+
+    // getTimezoneOffset is minutes west of UTC; the API wants minutes east.
+    const offsetSpy = vi.spyOn(Date.prototype, 'getTimezoneOffset').mockReturnValue(-180)
+    const summary = { soul_id: 's1', windows: {}, daily: [] }
+    mocks.get.mockResolvedValueOnce(summary)
+    const uptime = renderHook(() => useSoulUptime('s1'))
+    await settled(uptime.result)
+    expect(mocks.get).toHaveBeenCalledWith('/souls/s1/uptime?range=7d&tz_offset_minutes=180')
+    mocks.get.mockResolvedValueOnce(summary)
+    const hourly = renderHook(() => useSoulUptime('s1', '1h'))
+    await settled(hourly.result)
+    expect(mocks.get).toHaveBeenCalledWith('/souls/s1/uptime?range=1h&tz_offset_minutes=180')
+    expect(uptime.result.current.data).toEqual(summary)
+    offsetSpy.mockRestore()
 
     let resolvePending!: (value: unknown) => void
     mocks.get.mockImplementationOnce(() => new Promise((resolve) => { resolvePending = resolve }))

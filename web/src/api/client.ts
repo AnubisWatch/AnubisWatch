@@ -540,6 +540,31 @@ export interface Judgment {
   purity?: number
 }
 
+/** One period of GET /souls/:id/uptime. uptime_percent is null when there were no checks. */
+export interface UptimeWindow {
+  checks: number
+  up: number
+  failures: number
+  uptime_percent: number | null
+  avg_latency_ms: number
+}
+
+export type UptimeRange = '1h' | '24h' | '7d' | '30d'
+
+export interface SoulUptime {
+  soul_id: string
+  windows: Record<'24h' | '7d' | '30d', UptimeWindow>
+  /**
+   * Equal buckets over the requested range, oldest first: 5 minutes for 1h,
+   * hours for 24h, calendar days (in the caller's time zone) for 7d and 30d.
+   */
+  series: {
+    range: UptimeRange
+    step_seconds: number
+    points: Array<UptimeWindow & { start: string }>
+  }
+}
+
 export interface AlertChannel {
   id: string
   name: string

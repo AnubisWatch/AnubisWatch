@@ -718,7 +718,7 @@ func TestServer_DeleteChannel_NotFound(t *testing.T) {
 
 func TestServer_UpdateRule_WithCoreType(t *testing.T) {
 	store := newMockGRPCStore()
-	store.rules["r1"] = &core.AlertRule{ID: "r1", Name: "old", WorkspaceID: "default"}
+	store.rules["r1"] = &core.AlertRule{ID: "r1", Name: "old", WorkspaceID: "default", Conditions: []core.AlertCondition{{Type: "consecutive_failures", Threshold: 1}}, Channels: []string{"ch_1"}}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 	name := "updated"
 	resp, err := srv.UpdateRule(testUserContext(), &v1.UpdateRuleRequest{Id: "r1", Name: &name})
@@ -732,7 +732,7 @@ func TestServer_UpdateRule_WithCoreType(t *testing.T) {
 
 func TestServer_UpdateRule_WithConfigMap(t *testing.T) {
 	store := newMockGRPCStore()
-	store.rules["r2"] = &core.AlertRule{ID: "r2", Name: "test"}
+	store.rules["r2"] = &core.AlertRule{ID: "r2", Name: "test", Conditions: []core.AlertCondition{{Type: "consecutive_failures", Threshold: 1}}, Channels: []string{"ch_1"}}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 	name := "updated"
 	_, err := srv.UpdateRule(testUserContext(), &v1.UpdateRuleRequest{
