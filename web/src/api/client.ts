@@ -632,11 +632,22 @@ export interface ClusterStatus {
   peer_count?: number
 }
 
+export type StatusPageVisibility = 'public' | 'private' | 'protected'
+
 export interface StatusPage {
   id: string
   name: string
   slug: string
   enabled: boolean
+  /** Who can see the page. 'private' needs a session, 'protected' a password. */
+  visibility?: StatusPageVisibility
+  /**
+   * Write-only: the API hashes this and never returns it. Send it only when the
+   * password is being set or changed; a present-but-empty value clears it.
+   */
+  password?: string
+  /** Read-only: whether the page currently has a password configured. */
+  password_set?: boolean
   description?: string
   workspace_id?: string
   domain?: string

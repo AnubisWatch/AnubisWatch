@@ -1405,12 +1405,10 @@ func TestDistributor_distributeWeighted_NoCapacity(t *testing.T) {
 
 	d.AddSoul(&core.Soul{ID: "soul-1", WorkspaceID: "default", Name: "Test", Type: core.CheckHTTP})
 
-	// Note: Implementation still assigns even when no capacity (returns first node)
 	assignments := d.distributeWeighted(nodes)
 
-	// Implementation assigns to first node even with no capacity
-	if len(assignments) != 1 {
-		t.Errorf("Expected 1 assignment (implementation assigns anyway), got %d", len(assignments))
+	if len(assignments) != 0 {
+		t.Errorf("Expected no assignments when capacity is exhausted, got %d", len(assignments))
 	}
 }
 

@@ -24,6 +24,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
@@ -2195,6 +2196,14 @@ func defaultWorkspaceQuotas() core.QuotaConfig {
 	}
 }
 
+// statusPageRequest carries an optional plaintext password alongside the page. The
+// stored hash is never accepted from a client: it is derived from this field or
+// preserved from the stored page.
+type statusPageRequest struct {
+	core.StatusPage
+	Password string `json:"password"`
+}
+
 // jsonHasTopLevelKey reports whether the JSON object in raw has key as a
 // top-level field, matched case-insensitively the way encoding/json binds
 // fields. A substring search over the body cannot answer this: it matched any
@@ -2214,6 +2223,52 @@ func jsonHasTopLevelKey(raw []byte, key string) bool {
 	return false
 }
 
+// applyStatusPagePassword sets, clears or preserves the page password. A body that
+// carries "password" is authoritative: an empty value clears the password, a
+// non-empty one replaces it, and an absent field keeps previousHash. Preserving is
+// the only sane semantics for an update, because a client can never read the hash
+// back and therefore cannot echo it.
+func applyStatusPagePassword(page *core.StatusPage, raw []byte, password, previousHash string) error {
+	// PasswordSet is derived for responses only; never persist a client's claim.
+	page.PasswordSet = false
+
+	if !jsonHasTopLevelKey(raw, "password") {
+		page.PasswordHash = previousHash
+		return nil
+	}
+	if strings.TrimSpace(password) == "" {
+		page.PasswordHash = ""
+		return nil
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to store the page password: %w", err)
+	}
+	page.PasswordHash = string(hash)
+	return nil
+}
+
+// redactedStatusPage returns a copy safe to serialise: the password hash never
+// leaves the server, and PasswordSet tells the caller whether one is configured.
+// The stored page is not modified.
+func redactedStatusPage(page *core.StatusPage) *core.StatusPage {
+	if page == nil {
+		return nil
+	}
+	copied := *page
+	copied.PasswordSet = page.PasswordHash != ""
+	copied.PasswordHash = ""
+	return &copied
+}
+
+func redactedStatusPages(pages []*core.StatusPage) []*core.StatusPage {
+	out := make([]*core.StatusPage, 0, len(pages))
+	for _, page := range pages {
+		out = append(out, redactedStatusPage(page))
+	}
+	return out
+}
+
 func normalizeStatusPageForSave(page *core.StatusPage) error {
 	page.Name = strings.TrimSpace(page.Name)
 	page.Slug = strings.TrimSpace(strings.ToLower(page.Slug))
@@ -2231,6 +2286,9 @@ func normalizeStatusPageForSave(page *core.StatusPage) error {
 	}
 	if page.Visibility == "" {
 		page.Visibility = core.VisibilityPublic
+	}
+	if page.Visibility == core.VisibilityProtected && page.PasswordHash == "" {
+		return fmt.Errorf("a password-protected status page requires a password")
 	}
 	if page.UptimeDays <= 0 {
 		page.UptimeDays = 90
@@ -2305,7 +2363,7 @@ func (s *RESTServer) handleListStatusPages(ctx *Context) error {
 			filtered = append(filtered, page)
 		}
 	}
-	return ctx.JSON(http.StatusOK, filtered)
+	return ctx.JSON(http.StatusOK, redactedStatusPages(filtered))
 }
 
 func (s *RESTServer) handleCreateStatusPage(ctx *Context) error {
@@ -2319,12 +2377,16 @@ func (s *RESTServer) handleCreateStatusPage(ctx *Context) error {
 	ctx.Request.Body = io.NopCloser(bytes.NewReader(raw))
 	enabledExplicit := jsonHasTopLevelKey(raw, "enabled")
 
-	var page core.StatusPage
-	if err := ctx.Bind(&page); err != nil {
+	var req statusPageRequest
+	if err := ctx.Bind(&req); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid status page data")
 	}
+	page := req.StatusPage
 	if !enabledExplicit {
 		page.Enabled = true
+	}
+	if err := applyStatusPagePassword(&page, raw, req.Password, ""); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 	if err := normalizeStatusPageForSave(&page); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
@@ -2343,7 +2405,7 @@ func (s *RESTServer) handleCreateStatusPage(ctx *Context) error {
 		return s.internalError(ctx, err, "internal server error")
 	}
 
-	return ctx.JSON(http.StatusCreated, page)
+	return ctx.JSON(http.StatusCreated, redactedStatusPage(&page))
 }
 
 func (s *RESTServer) handleGetStatusPage(ctx *Context) error {
@@ -2355,15 +2417,21 @@ func (s *RESTServer) handleGetStatusPage(ctx *Context) error {
 	if !sameWorkspace(page.WorkspaceID, contextWorkspace(ctx)) {
 		return ctx.Error(http.StatusForbidden, "access denied")
 	}
-	return ctx.JSON(http.StatusOK, page)
+	return ctx.JSON(http.StatusOK, redactedStatusPage(page))
 }
 
 func (s *RESTServer) handleUpdateStatusPage(ctx *Context) error {
 	id := ctx.Params["id"]
-	var page core.StatusPage
-	if err := ctx.Bind(&page); err != nil {
+
+	raw, _ := io.ReadAll(ctx.Request.Body)
+	ctx.Request.Body = io.NopCloser(bytes.NewReader(raw))
+	enabledExplicit := jsonHasTopLevelKey(raw, "enabled")
+
+	var req statusPageRequest
+	if err := ctx.Bind(&req); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid status page data")
 	}
+	page := req.StatusPage
 
 	existing, err := s.store.GetStatusPageNoCtx(id)
 	if err != nil {
@@ -2371,6 +2439,17 @@ func (s *RESTServer) handleUpdateStatusPage(ctx *Context) error {
 	}
 	if !sameWorkspace(existing.WorkspaceID, contextWorkspace(ctx)) {
 		return ctx.Error(http.StatusForbidden, "access denied")
+	}
+	// An update that omits "enabled" must keep the stored value: binding the zero
+	// value would disable the page, and Storage's GetStatusPageBySlug filters out
+	// !Enabled pages, so the public /status/{slug} URL would silently start 404ing.
+	// A bool cannot tell "field omitted" from "explicit false", hence the peek --
+	// the same rule the create handler applies.
+	if !enabledExplicit {
+		page.Enabled = existing.Enabled
+	}
+	if err := applyStatusPagePassword(&page, raw, req.Password, existing.PasswordHash); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 	if err := normalizeStatusPageForSave(&page); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
@@ -2389,7 +2468,7 @@ func (s *RESTServer) handleUpdateStatusPage(ctx *Context) error {
 		return s.internalError(ctx, err, "internal server error")
 	}
 
-	return ctx.JSON(http.StatusOK, page)
+	return ctx.JSON(http.StatusOK, redactedStatusPage(&page))
 }
 
 func (s *RESTServer) handleDeleteStatusPage(ctx *Context) error {
@@ -2720,9 +2799,22 @@ func (s *RESTServer) corsMiddleware(handler Handler) Handler {
 // or via ANUBIS_CORS_ORIGINS. The localhost fallback is safe only for
 // single-node or local development environments.
 func (s *RESTServer) getAllowedOrigins() []string {
+	return resolveAllowedOrigins(s.config.AllowedOrigins)
+}
+
+// resolveAllowedOrigins is the single definition of the CORS origin policy:
+// explicit configuration first, then the ANUBIS_CORS_ORIGINS environment
+// variable, then the localhost development defaults.
+//
+// Both the CORS middleware and the router's preflight handler go through here,
+// because when each applied the policy on its own they disagreed: with nothing
+// configured, a preflight from a default development origin was answered without
+// Access-Control-Allow-Origin while the same origin was allowed on the actual
+// request, so the browser blocked exactly the requests the server permitted.
+func resolveAllowedOrigins(configured []string) []string {
 	// Priority 1: Config file settings (MED-18)
-	if len(s.config.AllowedOrigins) > 0 {
-		return s.config.AllowedOrigins
+	if len(configured) > 0 {
+		return configured
 	}
 	// Priority 2: Environment variable
 	if allowed := os.Getenv("ANUBIS_CORS_ORIGINS"); allowed != "" {
@@ -3099,15 +3191,9 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if method == "OPTIONS" {
 		origin := req.Header.Get("Origin")
 
-		// Use configured allowed origins from router (same as corsMiddleware)
-		// Priority: router.allowedOrigins (from config) > environment variable > empty (production-safe)
-		var allowedOrigins []string
-		if len(r.allowedOrigins) > 0 {
-			allowedOrigins = r.allowedOrigins
-		} else if envOrigins := os.Getenv("ANUBIS_CORS_ORIGINS"); envOrigins != "" {
-			allowedOrigins = strings.Split(envOrigins, ",")
-		}
-		// If no origins configured, we'll check against empty list (production-safe default)
+		// Resolve through the shared policy, so a preflight reaches the same
+		// decision as corsMiddleware for the same origin.
+		allowedOrigins := resolveAllowedOrigins(r.allowedOrigins)
 
 		originAllowed := false
 		for _, allowed := range allowedOrigins {

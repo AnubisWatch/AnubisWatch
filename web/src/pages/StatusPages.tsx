@@ -22,7 +22,7 @@ import {
 } from 'lucide-react'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { useStatusPages, useSouls } from '../api/hooks'
-import type { StatusPage } from '../api/client'
+import type { StatusPage, StatusPageVisibility } from '../api/client'
 
 interface ServiceStatus {
   id: string
@@ -80,6 +80,10 @@ export function StatusPages() {
   const [formDescription, setFormDescription] = useState('')
   const [formTheme, setFormTheme] = useState('dark')
   const [formSelectedSouls, setFormSelectedSouls] = useState<string[]>([])
+  const [formVisibility, setFormVisibility] = useState<StatusPageVisibility>('public')
+  const [formPassword, setFormPassword] = useState('')
+  const [clearPassword, setClearPassword] = useState(false)
+  const [formError, setFormError] = useState('')
 
   const {
     pages,
@@ -100,6 +104,10 @@ export function StatusPages() {
     setFormDescription('')
     setFormTheme('dark')
     setFormSelectedSouls([])
+    setFormVisibility('public')
+    setFormPassword('')
+    setClearPassword(false)
+    setFormError('')
     setEditingPage(null)
     setSaving(false)
   }
@@ -117,12 +125,23 @@ export function StatusPages() {
     setFormDescription(page.description || '')
     setFormTheme(formThemeFromPage(page.theme))
     setFormSelectedSouls(page.souls || [])
+    setFormVisibility(page.visibility || 'public')
+    setFormPassword('')
+    setClearPassword(false)
+    setFormError('')
     setSaving(false)
     setShowCreateModal(true)
   }
 
   const handleSavePage = async () => {
     if (!formName.trim() || !formSlug.trim()) return
+    // The API refuses a password-protected page without a password, and its
+    // rejection is silent in this view, so catch it here with a visible message.
+    if (formVisibility === 'protected' && !clearPassword && formPassword.trim() === '' && !editingPage?.password_set) {
+      setFormError('A password-protected page needs a password.')
+      return
+    }
+    setFormError('')
     const generation = saveGeneration.current
     setSaving(true)
     try {
@@ -131,6 +150,7 @@ export function StatusPages() {
         slug: formSlug,
         description: formDescription,
         theme: formTheme,
+        visibility: formVisibility,
         enabled: editingPage?.enabled ?? true,
         domain: editingPage?.domain,
         custom_domain: editingPage?.custom_domain,
@@ -138,6 +158,14 @@ export function StatusPages() {
         subscribers: editingPage?.subscribers || 0,
         uptime_days: 90
       } as Omit<StatusPage, 'id'>
+      // The API reads a present-but-empty "password" as "clear it", so only send
+      // the field when the operator changed or cleared it. Sending it on every
+      // edit would silently wipe the stored password.
+      if (clearPassword) {
+        payload.password = ''
+      } else if (formPassword.trim() !== '') {
+        payload.password = formPassword
+      }
       if (editingPage) {
         await updatePage(editingPage.id, payload)
       } else {
@@ -568,6 +596,52 @@ export function StatusPages() {
                   className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
                 />
               </div>
+
+              <div>
+                <label htmlFor="status-page-visibility" className="block text-sm font-medium text-gray-300 mb-2">Visibility</label>
+                <select
+                  id="status-page-visibility"
+                  value={formVisibility}
+                  onChange={(e) => setFormVisibility(e.target.value as StatusPageVisibility)}
+                  className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
+                >
+                  <option value="public">Public — anyone with the link</option>
+                  <option value="private">Private — signed-in users of this workspace</option>
+                  <option value="protected">Password protected</option>
+                </select>
+              </div>
+
+              {(formVisibility === 'protected' || editingPage?.password_set) && (
+                <div>
+                  <label htmlFor="status-page-password" className="block text-sm font-medium text-gray-300 mb-2">Page password</label>
+                  <input
+                    id="status-page-password"
+                    type="password"
+                    value={formPassword}
+                    onChange={(e) => { setFormPassword(e.target.value); setClearPassword(false) }}
+                    placeholder={editingPage?.password_set ? 'Leave blank to keep the current password' : 'Required for a protected page'}
+                    className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
+                  />
+                  <div className="flex items-center justify-between mt-2">
+                    <p className="text-xs text-gray-500">
+                      {editingPage?.password_set && !clearPassword ? 'A password is set.' : 'No password set.'}
+                    </p>
+                    {editingPage?.password_set && !clearPassword && (
+                      <button
+                        type="button"
+                        onClick={() => { setClearPassword(true); setFormPassword('') }}
+                        className="text-xs text-amber-400 hover:text-amber-300"
+                      >
+                        Remove password
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {formError && (
+                <p role="alert" className="text-sm text-red-400">{formError}</p>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-3">Theme</label>

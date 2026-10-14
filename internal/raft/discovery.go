@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -265,7 +266,9 @@ func (d *Discovery) Start() error {
 // Stop stops the discovery service
 func (d *Discovery) Stop() error {
 	d.stopOnce.Do(func() {
+		d.peersMu.Lock()
 		d.cancel()
+		d.peersMu.Unlock()
 		d.mdnsServer.Stop()
 		d.mdnsClient.Stop()
 		if d.gossipConn != nil {
@@ -280,6 +283,8 @@ func (d *Discovery) Stop() error {
 
 // RegisterPeerCallback sets the callback for discovered peers
 func (d *Discovery) RegisterPeerCallback(onDiscovered func(core.RaftPeer), onLost func(string)) {
+	d.peersMu.Lock()
+	defer d.peersMu.Unlock()
 	d.onPeerDiscovered = onDiscovered
 	d.onPeerLost = onLost
 }
@@ -397,9 +402,12 @@ func (d *Discovery) sendGossip(peer *DiscoveredPeer, msg GossipMessage) {
 	}
 
 	// Parse peer address
-	addr, err := net.ResolveUDPAddr("udp4", peer.Address)
+	d.peersMu.RLock()
+	peerAddress := peer.Address
+	d.peersMu.RUnlock()
+	addr, err := net.ResolveUDPAddr("udp4", peerAddress)
 	if err != nil {
-		d.logger.Debug("invalid peer address", "addr", peer.Address, "error", err)
+		d.logger.Debug("invalid peer address", "addr", peerAddress, "error", err)
 		return
 	}
 
@@ -413,8 +421,10 @@ func (d *Discovery) sendGossip(peer *DiscoveredPeer, msg GossipMessage) {
 	}
 
 	// Update local tracking
+	d.peersMu.Lock()
 	peer.LastGossip = time.Now()
 	peer.GossipCount++
+	d.peersMu.Unlock()
 }
 
 // gossipListen listens for incoming gossip messages
@@ -486,6 +496,10 @@ func (d *Discovery) handleGossip(msg *GossipMessage) {
 
 	// Update sender info
 	d.peersMu.Lock()
+	if d.ctx != nil && d.ctx.Err() != nil {
+		d.peersMu.Unlock()
+		return
+	}
 	if peer, ok := d.knownPeers[msg.NodeID]; ok {
 		peer.LastSeen = time.Now()
 	} else {
@@ -517,6 +531,10 @@ func (d *Discovery) handleGossip(msg *GossipMessage) {
 	// Merge peer info from gossip message
 	for _, p := range msg.Peers {
 		d.peersMu.Lock()
+		if d.ctx != nil && d.ctx.Err() != nil {
+			d.peersMu.Unlock()
+			return
+		}
 		if peer, ok := d.knownPeers[p.ID]; ok {
 			// Update if newer
 			if p.LastSeen > peer.LastSeen.Unix() {
@@ -568,19 +586,36 @@ func (d *Discovery) queryMDNS() {
 // handleMDNSDiscovery processes a discovered mDNS service
 func (d *Discovery) handleMDNSDiscovery(svc *MDNSService) {
 	// Parse TXT records for node info
-	var nodeID, region, version string
+	var nodeID, region, version, signature string
 	for _, txt := range svc.TXT {
-		if strings.HasPrefix(txt, "id=") {
+		switch {
+		case strings.HasPrefix(txt, "id="):
 			nodeID = strings.TrimPrefix(txt, "id=")
-		} else if strings.HasPrefix(txt, "region=") {
+		case strings.HasPrefix(txt, "region="):
 			region = strings.TrimPrefix(txt, "region=")
-		} else if strings.HasPrefix(txt, "version=") {
+		case strings.HasPrefix(txt, "version="):
 			version = strings.TrimPrefix(txt, "version=")
+		case strings.HasPrefix(txt, "sig="):
+			signature = strings.TrimPrefix(txt, "sig=")
 		}
 	}
 
 	if nodeID == "" || nodeID == d.nodeID {
 		return
+	}
+
+	// mDNS announcements are cleartext and unauthenticated, so an
+	// advertisement is only trusted once it carries a valid signature over
+	// the identity fields we are about to act on.
+	if len(d.clusterSecret) > 0 {
+		expected := mdnsSignature(nodeID, region, version, d.clusterSecret)
+		if !hmac.Equal([]byte(expected), []byte(signature)) {
+			d.logger.Warn("K9: rejected mDNS advertisement from untrusted source",
+				"claimed_node_id", nodeID,
+				"address", svc.Host,
+				"reason", "missing or invalid signature")
+			return
+		}
 	}
 
 	address := fmt.Sprintf("%s:%d", svc.Host, svc.Port)
@@ -639,6 +674,13 @@ func (d *Discovery) checkPeerHealth() {
 // MDNSServer implementation using UDP broadcast
 
 func (d *Discovery) newMDNSServer() *MDNSServer {
+	port := 7946
+	if _, portText, err := net.SplitHostPort(d.bindAddr); err == nil {
+		if configuredPort, err := strconv.Atoi(portText); err == nil && configuredPort > 0 && configuredPort <= 65535 {
+			port = configuredPort
+		}
+	}
+
 	// Get all local IPs
 	ips, _ := net.InterfaceAddrs()
 	localIPs := make([]net.IP, 0)
@@ -654,13 +696,9 @@ func (d *Discovery) newMDNSServer() *MDNSServer {
 		instance: d.nodeID,
 		service:  "_anubiswatch._tcp",
 		domain:   "local",
-		port:     7946, // Default Raft port
+		port:     port,
 		ips:      localIPs,
-		txt: []string{
-			fmt.Sprintf("id=%s", d.nodeID),
-			fmt.Sprintf("region=%s", d.region),
-			"version=0.1.0",
-		},
+		txt:      mdnsTXTRecords(d.nodeID, d.region, "0.1.0", d.clusterSecret),
 	}
 }
 
@@ -916,6 +954,32 @@ func decodeGossip(data []byte) (*GossipMessage, error) {
 // If secret is empty, the function is a no-op and the message will
 // be sent without an HMAC. The receiver is expected to reject
 // unsigned messages in that case (see verifyGossip).
+// mdnsSignature returns the hex HMAC-SHA256 over the identity fields carried in
+// an mDNS advertisement. mDNS announcements are broadcast in cleartext to
+// 255.255.255.255, so without a signature any host on the broadcast domain can
+// claim any node id and have a peer injected into the cluster. That is the same
+// threat K9 already blocks on the gossip path; this closes it for mDNS, which
+// is the default discovery mode.
+func mdnsSignature(nodeID, region, version string, secret []byte) string {
+	mac := hmac.New(sha256.New, secret)
+	fmt.Fprintf(mac, "mdns|%s|%s|%s", nodeID, region, version)
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// mdnsTXTRecords builds the TXT payload for our own presence announcement,
+// including the signature that lets peers authenticate us.
+func mdnsTXTRecords(nodeID, region, version string, secret []byte) []string {
+	txt := []string{
+		fmt.Sprintf("id=%s", nodeID),
+		fmt.Sprintf("region=%s", region),
+		fmt.Sprintf("version=%s", version),
+	}
+	if len(secret) > 0 {
+		txt = append(txt, fmt.Sprintf("sig=%s", mdnsSignature(nodeID, region, version, secret)))
+	}
+	return txt
+}
+
 func signGossip(msg *GossipMessage, secret []byte) *GossipMessage {
 	if len(secret) == 0 {
 		msg.HMAC = ""
@@ -988,11 +1052,10 @@ func (d *Discovery) checkReplay(sig string, now time.Time) error {
 		}
 	}
 
-	// Still oversized after pruning means a flood of distinct valid
-	// signatures. Reset rather than grow without bound: the timestamp
-	// window remains as the outer defense.
+	// Keep fresh signatures remembered even at capacity; forgetting them
+	// would allow duplicates inside the timestamp freshness window.
 	if len(d.seenHMACs) >= seenHMACsMax {
-		d.seenHMACs = make(map[string]time.Time)
+		return errors.New("raft: replay cache full")
 	}
 
 	d.seenHMACs[sig] = now

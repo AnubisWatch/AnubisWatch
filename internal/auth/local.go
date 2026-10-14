@@ -109,8 +109,19 @@ func NewLocalAuthenticator(sessionPath, adminEmail, adminPassword string) (*Loca
 		resetTokens:       make(map[string]*resetToken),
 	}
 
-	// Create admin user if credentials provided
-	if adminEmail != "" && adminPassword != "" {
+	// Load persisted state before seeding the admin account. A persisted user
+	// record is the account of record, and its ID is what workspace ownership is
+	// keyed by (internal/api/rest.go canAccessWorkspace), so it must win over a
+	// freshly minted identity.
+	if sessionPath != "" {
+		a.loadSessions()
+	}
+
+	// Create the admin user when credentials were provided and persisted state
+	// does not already represent that account. Minting a new identity on every
+	// boot would change api.User.ID across restarts, orphaning every workspace
+	// the account owns.
+	if adminEmail != "" && adminPassword != "" && !a.hasUserWithEmail(adminEmail) {
 		adminID, err := generateID()
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate admin user ID: %w", err)
@@ -124,11 +135,6 @@ func NewLocalAuthenticator(sessionPath, adminEmail, adminPassword string) (*Loca
 			CreatedAt: time.Now(),
 		}
 		a.users[adminUser.ID] = adminUser
-	}
-
-	// Load persisted sessions if path provided
-	if sessionPath != "" {
-		a.loadSessions()
 	}
 
 	// Start background cleanup goroutine
@@ -155,19 +161,31 @@ func (a *LocalAuthenticator) loadSessions() {
 		return
 	}
 
-	// Only load non-expired sessions and their users
+	// Restore persisted accounts independently of their sessions. An account
+	// outlives its session, and its ID is what workspace ownership is keyed by,
+	// so dropping it here would orphan the account's workspaces on every restart.
+	for id, user := range sessionData.Users {
+		if user == nil {
+			continue
+		}
+		a.users[id] = user
+	}
+
+	// Only load non-expired sessions
 	now := time.Now()
 	for token, sess := range sessionData.Tokens {
+		if sess == nil {
+			continue
+		}
 		if now.Before(sess.ExpiresAt) {
 			a.tokens[token] = sess
-			// Also load the associated user
-			if user, ok := sessionData.Users[sess.UserID]; ok {
-				a.users[sess.UserID] = user
-			}
 		}
 	}
 	// Load non-expired reset tokens
 	for token, rt := range sessionData.ResetTokens {
+		if rt == nil {
+			continue
+		}
 		if now.Before(rt.ExpiresAt) {
 			a.resetTokens[token] = rt
 		}
@@ -189,6 +207,18 @@ func (a *LocalAuthenticator) loadSessions() {
 		}
 		a.attemptsMu.Unlock()
 	}
+}
+
+// hasUserWithEmail reports whether an account with this email is already known.
+// It is called from the constructor before the authenticator is shared, so it
+// does not take a.mu.
+func (a *LocalAuthenticator) hasUserWithEmail(email string) bool {
+	for _, user := range a.users {
+		if user != nil && user.Email == email {
+			return true
+		}
+	}
+	return false
 }
 
 // saveSessionsJSON is overwritten by tests to inject marshal failures.
@@ -276,6 +306,15 @@ func (a *LocalAuthenticator) cleanupExpiredSessions() {
 					delete(a.tokens, token)
 				}
 			}
+			// Reset tokens expire too. Leaving them in place would let an
+			// unauthenticated caller (POST /api/v1/auth/reset-password) grow this
+			// map, and the file it is persisted to, for the lifetime of the
+			// process: an entry otherwise leaves only when it is redeemed.
+			for token, rt := range a.resetTokens {
+				if now.After(rt.ExpiresAt) {
+					delete(a.resetTokens, token)
+				}
+			}
 			a.saveSessionsLocked()
 			a.mu.Unlock()
 
@@ -319,7 +358,7 @@ func (a *LocalAuthenticator) Authenticate(token string) (*api.User, error) {
 		return nil, errors.New("user not found")
 	}
 
-	return user, nil
+	return copyUser(user), nil
 }
 
 // Login creates a new session and returns a token
@@ -329,18 +368,22 @@ func (a *LocalAuthenticator) Login(email, password string) (*api.User, string, e
 		return nil, "", err
 	}
 
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// Validate credentials against configured admin
-	if email == "" || password == "" {
+	// An empty password does the same work for every address, so the response time
+	// cannot reveal whether the address is the configured account.
+	if password == "" {
+		dummyHash, _ := bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing"), bcrypt.DefaultCost)
+		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
+		a.mu.Lock()
 		a.recordFailedAttempt(email)
+		a.mu.Unlock()
 		return nil, "", errors.New("invalid credentials")
 	}
 
-	// Constant-time comparison for email
+	// Anything that is not the configured account is rejected before the auth lock
+	// is taken: adminEmail is immutable, this branch mutates nothing, and holding
+	// the lock across the dummy bcrypt let an unauthenticated caller stall every
+	// other request, because Authenticate needs the same lock.
 	if subtle.ConstantTimeCompare([]byte(email), []byte(a.adminEmail)) != 1 {
-		a.recordFailedAttempt(email)
 		// MED-11: Run dummy bcrypt comparison to prevent timing-based user enumeration
 		// This ensures the response time is consistent whether the email exists or not
 		dummyHash, _ := bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing"), bcrypt.DefaultCost)
@@ -348,9 +391,28 @@ func (a *LocalAuthenticator) Login(email, password string) (*api.User, string, e
 		return nil, "", errors.New("invalid credentials")
 	}
 
-	// bcrypt password verification
-	if err := bcrypt.CompareHashAndPassword([]byte(a.adminPasswordHash), []byte(password)); err != nil {
+	// Verify the password outside the auth lock: bcrypt at the configured cost
+	// takes hundreds of milliseconds and every authenticated request needs that
+	// lock. The credential is snapshotted first so the comparison has a stable
+	// input.
+	a.mu.Lock()
+	expectedHash := a.adminPasswordHash
+	a.mu.Unlock()
+
+	if bcrypt.CompareHashAndPassword([]byte(expectedHash), []byte(password)) != nil {
+		a.mu.Lock()
 		a.recordFailedAttempt(email)
+		a.mu.Unlock()
+		return nil, "", errors.New("invalid credentials")
+	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// The password was verified outside the lock, so re-check it here: a rotation
+	// that interleaved must not let the previous password open a session that
+	// outlives it.
+	if a.adminPasswordHash != expectedHash {
 		return nil, "", errors.New("invalid credentials")
 	}
 
@@ -396,10 +458,24 @@ func (a *LocalAuthenticator) Login(email, password string) (*api.User, string, e
 	// Persist sessions if configured
 	a.saveSessionsLocked()
 
-	return user, token, nil
+	return copyUser(user), token, nil
 }
 
 // Logout invalidates a token
+// copyUser returns a value the caller owns. Callers keep the *api.User they get
+// from Authenticate/Login/SwitchWorkspace for the life of a request and read its
+// fields without holding a.mu, while SwitchWorkspace rewrites the stored account
+// in place -- handing out the stored pointer would race with that write, and a
+// torn Workspace string is what request scoping is derived from. api.User is a
+// flat value struct, so a shallow copy is a full copy.
+func copyUser(u *api.User) *api.User {
+	if u == nil {
+		return nil
+	}
+	c := *u
+	return &c
+}
+
 func (a *LocalAuthenticator) Logout(token string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -436,7 +512,7 @@ func (a *LocalAuthenticator) SwitchWorkspace(token, workspace string) (*api.User
 	}
 	user.Workspace = workspace
 	a.saveSessionsLocked()
-	return user, nil
+	return copyUser(user), nil
 }
 
 // generateToken returns a 256-bit hex-encoded random token.
@@ -535,6 +611,15 @@ func (a *LocalAuthenticator) checkBruteForceProtection(email string) error {
 // process restart. Callers must hold a.mu so saveSessionsLocked can read
 // sessions/users safely; attemptsMu is acquired and released here.
 func (a *LocalAuthenticator) recordFailedAttempt(email string) {
+	// Only the configured account can authenticate -- Login rejects every other
+	// address before any password check -- so an attempt against another address
+	// can never affect a lockout decision. Recording it would let an
+	// unauthenticated caller grow this store, and the file it is persisted to, by
+	// choosing addresses freely.
+	if email != a.adminEmail {
+		return
+	}
+
 	a.attemptsMu.Lock()
 	attempt, exists := a.loginAttempts[email]
 	if !exists {
@@ -584,6 +669,16 @@ func HashPassword(password string) (string, error) {
 	return string(hash), nil
 }
 
+// VerifyPassword reports whether password matches a stored bcrypt hash. It is the
+// counterpart to HashPassword, works with hashes produced at any bcrypt cost, and
+// treats an empty hash or password as "cannot match" rather than as a comparison.
+func VerifyPassword(hash, password string) bool {
+	if hash == "" || password == "" {
+		return false
+	}
+	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
+}
+
 // ChangePassword validates the current password and sets a new one.
 // All existing sessions are invalidated on success.
 func (a *LocalAuthenticator) ChangePassword(token, currentPassword, newPassword string) error {
@@ -627,10 +722,10 @@ func (a *LocalAuthenticator) ChangePassword(token, currentPassword, newPassword 
 // RequestPasswordReset generates a time-limited reset token for the given email.
 // The token is logged to the server log (since no email infrastructure exists).
 func (a *LocalAuthenticator) RequestPasswordReset(email string) (string, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// Use constant-time comparison to prevent user enumeration
+	// Use constant-time comparison to prevent user enumeration.
+	// The equalisation work below depends on nothing but a constant and adminEmail
+	// is immutable, so it runs before the auth lock is taken: holding that lock
+	// across bcrypt let an unauthenticated caller stall every other request.
 	if subtle.ConstantTimeCompare([]byte(email), []byte(a.adminEmail)) != 1 {
 		// Run dummy bcrypt to prevent timing attacks (same as login)
 		dummyHash, _ := bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing"), bcrypt.DefaultCost)
@@ -638,6 +733,9 @@ func (a *LocalAuthenticator) RequestPasswordReset(email string) (string, error) 
 		// Still return success to prevent email enumeration
 		return "", nil
 	}
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
 
 	// Generate reset token
 	token, err := generateToken()

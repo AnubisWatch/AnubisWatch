@@ -299,10 +299,18 @@ func (c *HTTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	}
 	defer resp.Body.Close()
 
-	// Read body (limited to maxReadSize)
-	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxReadSize))
+	// Read body (limited to maxReadSize). One byte past the limit is read so an
+	// oversized response is detected rather than silently truncated: the
+	// assertions below run against what was read, so a body larger than the cap
+	// would otherwise fail a body assertion for a reason that belongs to this
+	// check's read limit rather than to the server.
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, maxReadSize+1))
 	if err != nil {
 		return failJudgment(soul, fmt.Errorf("failed to read body: %w", err)), nil
+	}
+	bodyTruncated := len(bodyBytes) > maxReadSize
+	if bodyTruncated {
+		bodyBytes = bodyBytes[:maxReadSize]
 	}
 
 	// Journey checks are not persisted by the probe engine and need the raw
@@ -326,10 +334,22 @@ func (c *HTTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	// Persist only non-sensitive response metadata. Assertions are evaluated
 	// against the live response below, so credentials never need to enter the
 	// durable judgment object.
+	//
+	// A header may repeat -- Set-Cookie does, once per cookie -- and http.Header
+	// keeps every value. Persisting only v[0] dropped the rest, so a journey
+	// extracting a cookie that was not first received an empty variable. The
+	// values are joined in a form their consumers can still parse: Set-Cookie is
+	// a ";"-separated list of name=value pairs, so its values are joined with
+	// "; ", while other headers use the standard ", " fold.
 	for k, v := range resp.Header {
-		if len(v) > 0 && (captureResponseMaterial || !isSensitiveResponseHeader(k)) {
-			judgment.Details.ResponseHeaders[k] = v[0]
+		if len(v) == 0 || (!captureResponseMaterial && isSensitiveResponseHeader(k)) {
+			continue
 		}
+		sep := ", "
+		if strings.EqualFold(k, "Set-Cookie") {
+			sep = "; "
+		}
+		judgment.Details.ResponseHeaders[k] = strings.Join(v, sep)
 	}
 	if captureResponseMaterial {
 		judgment.Details.ResponseBody = string(bodyBytes)
@@ -342,6 +362,20 @@ func (c *HTTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 
 	// Run assertions using extracted helper
 	assertions, allPassed := c.evaluateAssertions(cfg, bodyBytes, resp, duration)
+
+	// The response was larger than this check reads, so no body assertion could
+	// have been evaluated against the whole body. Say so, instead of letting the
+	// truncated prefix read as the server's failure: the gRPC check reports the
+	// same condition explicitly ("response exceeds %d bytes").
+	if bodyTruncated {
+		assertions = append(assertions, core.AssertionResult{
+			Type:     "response_body_size",
+			Expected: fmt.Sprintf("<= %d bytes", maxReadSize),
+			Actual:   fmt.Sprintf("> %d bytes (read limit reached)", maxReadSize),
+			Passed:   false,
+		})
+		allPassed = false
+	}
 
 	// Handle feather (performance budget) - marks as degraded if exceeded
 	if cfg.Feather.Duration > 0 {
@@ -606,9 +640,51 @@ func extractJSONPathValue(data []byte, path string) (string, bool) {
 }
 
 // validateJSONSchema validates JSON against a schema (simplified implementation)
+// supportedSchemaKeywords lists the JSON Schema keywords validateNode can
+// evaluate. A schema using anything else must not be treated as satisfied:
+// ignoring an unknown keyword silently drops part of the operator's assertion and
+// turns the check into one that cannot fail, which is the opposite of what a
+// monitoring assertion is for.
+var supportedSchemaKeywords = map[string]bool{
+	"type":       true,
+	"required":   true,
+	"properties": true,
+	"enum":       true,
+}
+
+// schemaIsSupported reports whether every keyword in the schema, including those
+// nested under "properties", is one this validator implements.
+func schemaIsSupported(schema map[string]interface{}) bool {
+	for key, value := range schema {
+		if !supportedSchemaKeywords[key] {
+			return false
+		}
+		if key != "properties" {
+			continue
+		}
+		props, ok := value.(map[string]interface{})
+		if !ok {
+			return false
+		}
+		for _, sub := range props {
+			subSchema, ok := sub.(map[string]interface{})
+			if !ok {
+				return false
+			}
+			if !schemaIsSupported(subSchema) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func validateJSONSchema(data []byte, schema string, strict bool) bool {
 	var schemaObj map[string]interface{}
 	if err := json.Unmarshal([]byte(schema), &schemaObj); err != nil {
+		return false
+	}
+	if !schemaIsSupported(schemaObj) {
 		return false
 	}
 

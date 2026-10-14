@@ -68,7 +68,7 @@ func (l *LDAPAuthenticator) Login(email, password string) (*api.User, string, er
 	}
 	l.mu.Unlock()
 
-	return user, token, nil
+	return copyUser(user), token, nil
 }
 
 // ldapLogin authenticates against LDAP server
@@ -191,7 +191,9 @@ func (l *LDAPAuthenticator) buildUserDN(email string) string {
 	return email
 }
 
-// extractHostnameFromURL extracts the hostname from an LDAP URL for SNI
+// extractHostnameFromURL extracts the hostname from an LDAP URL for SNI.
+// The result must be a bare host: it is used directly as tls.Config.ServerName,
+// where an IPv6 literal is only usable without its brackets.
 func extractHostnameFromURL(rawURL string) string {
 	// ldap://hostname:port/... or ldaps://hostname:port/...
 	rawURL = strings.TrimPrefix(rawURL, "ldap://")
@@ -200,11 +202,13 @@ func extractHostnameFromURL(rawURL string) string {
 	if idx := strings.Index(rawURL, "/"); idx >= 0 {
 		rawURL = rawURL[:idx]
 	}
-	// Remove port
-	if idx := strings.LastIndex(rawURL, ":"); idx >= 0 {
-		rawURL = rawURL[:idx]
+	// SplitHostPort understands a bracketed IPv6 literal and its port; the
+	// fallback covers a URL with no port, where a bracketed literal still needs
+	// unwrapping.
+	if host, _, err := net.SplitHostPort(rawURL); err == nil {
+		return host
 	}
-	return rawURL
+	return strings.Trim(rawURL, "[]")
 }
 
 // Authenticate validates a token and returns the user
@@ -222,7 +226,7 @@ func (l *LDAPAuthenticator) Authenticate(token string) (*api.User, error) {
 		if user == nil {
 			return nil, fmt.Errorf("user not found")
 		}
-		return user, nil
+		return copyUser(user), nil
 	}
 	l.mu.RUnlock()
 
@@ -295,7 +299,7 @@ func (l *LDAPAuthenticator) SwitchWorkspace(token, workspace string) (*api.User,
 		}
 		user.Workspace = workspace
 		l.mu.Unlock()
-		return user, nil
+		return copyUser(user), nil
 	}
 	l.mu.Unlock()
 
@@ -331,7 +335,7 @@ func (l *LDAPAuthenticator) GetUsers() []*api.User {
 
 	users := make([]*api.User, 0, len(l.users))
 	for _, user := range l.users {
-		users = append(users, user)
+		users = append(users, copyUser(user))
 	}
 	return users
 }
@@ -355,5 +359,5 @@ func (l *LDAPAuthenticator) AddUser(email, name, role string) (*api.User, error)
 		CreatedAt: time.Now(),
 	}
 	l.users[user.ID] = user
-	return user, nil
+	return copyUser(user), nil
 }

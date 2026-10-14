@@ -99,32 +99,25 @@ async function fetchAllPaginated<T>(path: string): Promise<ApiResponse<T[]>> {
 
 // Souls API hooks
 export function useSouls() {
-  const [data, setData] = useState<ApiResponse<Soul[]> | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const { data, loading, error, refetch: refetchSouls } = useApi<ApiResponse<Soul[]>>(
+    () => fetchAllPaginated<Soul>('/souls')
+  )
 
-  const fetchSouls = useCallback(async () => {
-    setLoading(true)
-    try {
-      const result = await fetchAllPaginated<Soul>('/souls')
-      setData(result)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
+  // Keep the list live: refresh on soul lifecycle and judgment events. useApi
+  // owns the request sequence, so a slow response resolving after a newer one
+  // can no longer overwrite fresher state with a stale list.
+  useRealtimeRefresh(['soul_update', 'judgment', 'status'], refetchSouls)
 
-  useEffect(() => {
-    fetchSouls()
-  }, [fetchSouls])
-
-  // Keep the list live: refresh on soul lifecycle and judgment events
-  useRealtimeRefresh(['soul_update', 'judgment', 'status'], fetchSouls)
+  // The mutation paths await a refresh. A failed refresh is already surfaced
+  // through the hook's error state, so swallow it here rather than letting
+  // create/update/delete reject after the mutation itself succeeded.
+  const refreshSouls = useCallback(async () => {
+    await refetchSouls().catch(() => {})
+  }, [refetchSouls])
 
   const createSoul = async (soul: Omit<Soul, 'id'>) => {
     const result = await api.post<Soul>('/souls', soul)
-    await fetchSouls()
+    await refreshSouls()
     return result
   }
 
@@ -132,13 +125,13 @@ export function useSouls() {
     const existing = data?.data.find((s) => s.id === id)
     const payload = existing ? { ...existing, ...soul, id } : soul
     const result = await api.put<Soul>(`/souls/${id}`, payload)
-    await fetchSouls()
+    await refreshSouls()
     return result
   }
 
   const deleteSoul = async (id: string) => {
     await api.delete(`/souls/${id}`)
-    await fetchSouls()
+    await refreshSouls()
   }
 
   const forceCheck = async (id: string) => {
@@ -150,7 +143,7 @@ export function useSouls() {
     pagination: data?.pagination,
     loading,
     error,
-    refetch: fetchSouls,
+    refetch: refreshSouls,
     createSoul,
     updateSoul,
     deleteSoul,
@@ -225,29 +218,22 @@ export function useJudgments() {
 
 // Alerts API hooks
 export function useChannels() {
-  const [data, setData] = useState<ApiResponse<AlertChannel[]> | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  // useApi owns the request sequence, so a slow response resolving after a
+  // newer one can no longer overwrite fresher state with a stale list.
+  const { data, loading, error, refetch: refetchChannels } = useApi<ApiResponse<AlertChannel[]>>(
+    () => fetchAllPaginated<AlertChannel>('/channels')
+  )
 
-  const fetchChannels = useCallback(async () => {
-    setLoading(true)
-    try {
-      const result = await fetchAllPaginated<AlertChannel>('/channels')
-      setData(result)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchChannels()
-  }, [fetchChannels])
+  // The mutation paths await a refresh. A failed refresh is already surfaced
+  // through the hook's error state, so swallow it here rather than letting a
+  // create/update/delete reject after the mutation itself succeeded.
+  const refreshChannels = useCallback(async () => {
+    await refetchChannels().catch(() => {})
+  }, [refetchChannels])
 
   const createChannel = async (channel: Omit<AlertChannel, 'id'>) => {
     const result = await api.post<AlertChannel>('/channels', channel)
-    await fetchChannels()
+    await refreshChannels()
     return result
   }
 
@@ -255,13 +241,13 @@ export function useChannels() {
     const existing = data?.data.find((c) => c.id === id)
     const payload = existing ? { ...existing, ...channel, id } : channel
     const result = await api.put<AlertChannel>(`/channels/${id}`, payload)
-    await fetchChannels()
+    await refreshChannels()
     return result
   }
 
   const deleteChannel = async (id: string) => {
     await api.delete(`/channels/${id}`)
-    await fetchChannels()
+    await refreshChannels()
   }
 
   const testChannel = async (id: string) => {
@@ -272,7 +258,7 @@ export function useChannels() {
     channels: data?.data || [],
     loading,
     error,
-    refetch: fetchChannels,
+    refetch: refreshChannels,
     createChannel,
     updateChannel,
     deleteChannel,
@@ -281,29 +267,22 @@ export function useChannels() {
 }
 
 export function useRules() {
-  const [data, setData] = useState<ApiResponse<AlertRule[]> | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  // useApi owns the request sequence, so a slow response resolving after a
+  // newer one can no longer overwrite fresher state with a stale list.
+  const { data, loading, error, refetch: refetchRules } = useApi<ApiResponse<AlertRule[]>>(
+    () => fetchAllPaginated<AlertRule>('/rules')
+  )
 
-  const fetchRules = useCallback(async () => {
-    setLoading(true)
-    try {
-      const result = await fetchAllPaginated<AlertRule>('/rules')
-      setData(result)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchRules()
-  }, [fetchRules])
+  // The mutation paths await a refresh. A failed refresh is already surfaced
+  // through the hook's error state, so swallow it here rather than letting a
+  // create/update/delete reject after the mutation itself succeeded.
+  const refreshRules = useCallback(async () => {
+    await refetchRules().catch(() => {})
+  }, [refetchRules])
 
   const createRule = async (rule: Omit<AlertRule, 'id'>) => {
     const result = await api.post<AlertRule>('/rules', rule)
-    await fetchRules()
+    await refreshRules()
     return result
   }
 
@@ -311,20 +290,20 @@ export function useRules() {
     const existing = data?.data.find((r) => r.id === id)
     const payload = existing ? { ...existing, ...rule, id } : rule
     const result = await api.put<AlertRule>(`/rules/${id}`, payload)
-    await fetchRules()
+    await refreshRules()
     return result
   }
 
   const deleteRule = async (id: string) => {
     await api.delete(`/rules/${id}`)
-    await fetchRules()
+    await refreshRules()
   }
 
   return {
     rules: data?.data || [],
     loading,
     error,
-    refetch: fetchRules,
+    refetch: refreshRules,
     createRule,
     updateRule,
     deleteRule,
@@ -341,42 +320,23 @@ export function useStats() {
 
 // Incidents API hooks
 export function useIncidents() {
-  const [data, setData] = useState<Incident[] | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const fetchIncidents = useCallback(async () => {
-    setLoading(true)
-    try {
-      const result = await api.get<Incident[]>('/incidents')
-      setData(result ?? [])
-      setError(null)
-      return result ?? []
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
-      throw err
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchIncidents().catch(() => {
-      // Error state is set by fetchIncidents.
-    })
-  }, [fetchIncidents])
+  // useApi owns the request sequence, so a stale response can no longer
+  // overwrite a newer one; it also surfaces a null body as [] for us.
+  const { data, loading, error, refetch: fetchIncidents } = useApi<Incident[]>(
+    () => api.get<Incident[] | null>('/incidents').then((r) => r ?? [])
+  )
 
   // Keep incident list live: refresh when alerts fire or incidents change
   useRealtimeRefresh(['incident', 'alert'], fetchIncidents)
 
   const acknowledgeIncident = async (id: string) => {
     await api.post(`/incidents/${id}/acknowledge`)
-    await fetchIncidents()
+    await fetchIncidents().catch(() => {})
   }
 
   const resolveIncident = async (id: string) => {
     await api.post(`/incidents/${id}/resolve`)
-    await fetchIncidents()
+    await fetchIncidents().catch(() => {})
   }
 
   return {
@@ -408,48 +368,41 @@ export function useClusterPeers() {
 
 // Status Pages API hooks
 export function useStatusPages() {
-  const [data, setData] = useState<StatusPage[] | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  // useApi owns the request sequence, so a slow response resolving after a
+  // newer one can no longer overwrite fresher state with a stale list.
+  const { data, loading, error, refetch: refetchPages } = useApi<StatusPage[]>(
+    () => api.get<StatusPage[]>('/status-pages')
+  )
 
-  const fetchPages = useCallback(async () => {
-    setLoading(true)
-    try {
-      const result = await api.get<StatusPage[]>('/status-pages')
-      setData(result)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchPages()
-  }, [fetchPages])
+  // The mutation paths await a refresh. A failed refresh is already surfaced
+  // through the hook's error state, so swallow it here rather than letting a
+  // create/update/delete reject after the mutation itself succeeded.
+  const refreshPages = useCallback(async () => {
+    await refetchPages().catch(() => {})
+  }, [refetchPages])
 
   const createPage = async (page: Omit<StatusPage, 'id'>) => {
     const result = await api.post<StatusPage>('/status-pages', page)
-    await fetchPages()
+    await refreshPages()
     return result
   }
 
   const updatePage = async (id: string, page: Partial<StatusPage>) => {
     const result = await api.put<StatusPage>(`/status-pages/${id}`, page)
-    await fetchPages()
+    await refreshPages()
     return result
   }
 
   const deletePage = async (id: string) => {
     await api.delete(`/status-pages/${id}`)
-    await fetchPages()
+    await refreshPages()
   }
 
   return {
     pages: data || [],
     loading,
     error,
-    refetch: fetchPages,
+    refetch: refreshPages,
     createPage,
     updatePage,
     deletePage,
@@ -458,48 +411,41 @@ export function useStatusPages() {
 
 // Dashboards API hooks
 export function useDashboards() {
-  const [data, setData] = useState<CustomDashboard[] | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  // useApi owns the request sequence, so a slow response resolving after a
+  // newer one can no longer overwrite fresher state with a stale list.
+  const { data, loading, error, refetch: refetchDashboards } = useApi<CustomDashboard[]>(
+    () => api.get<CustomDashboard[]>('/dashboards')
+  )
 
-  const fetchDashboards = useCallback(async () => {
-    setLoading(true)
-    try {
-      const result = await api.get<CustomDashboard[]>('/dashboards')
-      setData(result)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error')
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    fetchDashboards()
-  }, [fetchDashboards])
+  // The mutation paths await a refresh. A failed refresh is already surfaced
+  // through the hook's error state, so swallow it here rather than letting a
+  // create/update/delete reject after the mutation itself succeeded.
+  const refreshDashboards = useCallback(async () => {
+    await refetchDashboards().catch(() => {})
+  }, [refetchDashboards])
 
   const createDashboard = async (dashboard: Omit<CustomDashboard, 'id'>) => {
     const result = await api.post<CustomDashboard>('/dashboards', dashboard)
-    await fetchDashboards()
+    await refreshDashboards()
     return result
   }
 
   const updateDashboard = async (id: string, dashboard: Partial<CustomDashboard>) => {
     const result = await api.put<CustomDashboard>(`/dashboards/${id}`, dashboard)
-    await fetchDashboards()
+    await refreshDashboards()
     return result
   }
 
   const deleteDashboard = async (id: string) => {
     await api.delete(`/dashboards/${id}`)
-    await fetchDashboards()
+    await refreshDashboards()
   }
 
   return {
     dashboards: data || [],
     loading,
     error,
-    refetch: fetchDashboards,
+    refetch: refreshDashboards,
     createDashboard,
     updateDashboard,
     deleteDashboard,

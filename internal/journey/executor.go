@@ -234,37 +234,28 @@ func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyC
 		run.Status = core.SoulDead
 	}
 
-	// Save the journey run with retry
+	// Deduplicate before saving; the hash represents the last persisted run.
+	hash := e.computeDedupHashFromRun(journey, run)
+	if allowDedupSkip && hash != "" {
+		e.mu.RLock()
+		lastHash := e.lastHash[journey.ID]
+		e.mu.RUnlock()
+		if lastHash == hash {
+			e.logger.Debug("skipping journey run save - extracted values unchanged", "journey_id", journey.ID)
+			return nil
+		}
+	}
+
+	// Save the journey run with retry. Failed saves must remain retryable.
 	if err := retryWithBackoff(ctx, 3, 100*time.Millisecond, func() error {
 		return e.db.SaveJourneyRun(ctx, run)
 	}); err != nil {
 		e.logger.Error("failed to save journey run after retries", "journey_id", journey.ID, "err", err)
 		// Continue - don't fail the journey execution due to storage issues
-	}
-
-	// Post-execution dedup: if the extracted values haven't changed since
-	// the last run, skip saving to avoid duplicate alerts.
-	if allowDedupSkip {
-		if hash := e.computeDedupHashFromRun(journey, run); hash != "" {
-			e.mu.RLock()
-			lastHash := e.lastHash[journey.ID]
-			e.mu.RUnlock()
-			if lastHash == hash {
-				e.logger.Debug("skipping journey run save - extracted values unchanged", "journey_id", journey.ID)
-				return nil
-			}
-			// Update dedup hash for next comparison
-			e.mu.Lock()
-			e.lastHash[journey.ID] = hash
-			e.mu.Unlock()
-		}
-	} else {
-		// Manual run: still update the hash so the next scheduled run can dedup
-		if hash := e.computeDedupHashFromRun(journey, run); hash != "" {
-			e.mu.Lock()
-			e.lastHash[journey.ID] = hash
-			e.mu.Unlock()
-		}
+	} else if hash != "" {
+		e.mu.Lock()
+		e.lastHash[journey.ID] = hash
+		e.mu.Unlock()
 	}
 
 	e.logger.Debug("completed journey execution",
@@ -679,7 +670,7 @@ func (e *Executor) runAssertion(judgment *core.Judgment, assertion core.Assertio
 
 	case "header":
 		if judgment.Details != nil && assertion.Target != "" {
-			actual = judgment.Details.ResponseHeaders[assertion.Target]
+			actual = e.extractFromHeader(judgment.Details.ResponseHeaders, core.ExtractionRule{Path: assertion.Target})
 			passed = e.compareValues(actual, assertion.Operator, assertion.Expected)
 		}
 
@@ -690,7 +681,7 @@ func (e *Executor) runAssertion(judgment *core.Judgment, assertion core.Assertio
 		}
 
 	case "regex":
-		if judgment.Details != nil && assertion.Target != "" {
+		if judgment.Details != nil {
 			re, err := regexp.Compile(assertion.Expected)
 			passed = err == nil && re.MatchString(judgment.Details.ResponseBody)
 		}
@@ -723,21 +714,21 @@ func (e *Executor) compareValues(actual, operator, expected string) bool {
 	case "contains":
 		return strings.Contains(actual, expected)
 	case "greater_than", "gt", ">":
-		actualNum, _ := strconv.ParseFloat(actual, 64)
-		expectedNum, _ := strconv.ParseFloat(expected, 64)
-		return actualNum > expectedNum
+		actualNum, actualErr := strconv.ParseFloat(actual, 64)
+		expectedNum, expectedErr := strconv.ParseFloat(expected, 64)
+		return actualErr == nil && expectedErr == nil && actualNum > expectedNum
 	case "less_than", "lt", "<":
-		actualNum, _ := strconv.ParseFloat(actual, 64)
-		expectedNum, _ := strconv.ParseFloat(expected, 64)
-		return actualNum < expectedNum
+		actualNum, actualErr := strconv.ParseFloat(actual, 64)
+		expectedNum, expectedErr := strconv.ParseFloat(expected, 64)
+		return actualErr == nil && expectedErr == nil && actualNum < expectedNum
 	case "greater_equals", "ge", ">=":
-		actualNum, _ := strconv.ParseFloat(actual, 64)
-		expectedNum, _ := strconv.ParseFloat(expected, 64)
-		return actualNum >= expectedNum
+		actualNum, actualErr := strconv.ParseFloat(actual, 64)
+		expectedNum, expectedErr := strconv.ParseFloat(expected, 64)
+		return actualErr == nil && expectedErr == nil && actualNum >= expectedNum
 	case "less_equals", "le", "<=":
-		actualNum, _ := strconv.ParseFloat(actual, 64)
-		expectedNum, _ := strconv.ParseFloat(expected, 64)
-		return actualNum <= expectedNum
+		actualNum, actualErr := strconv.ParseFloat(actual, 64)
+		expectedNum, expectedErr := strconv.ParseFloat(expected, 64)
+		return actualErr == nil && expectedErr == nil && actualNum <= expectedNum
 	default:
 		return actual == expected
 	}

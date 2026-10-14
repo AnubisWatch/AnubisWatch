@@ -67,6 +67,11 @@ func buildTLSPeerConfig(cfg *core.TLSPeerConfig) (*tls.Config, error) {
 
 // Manager handles cluster coordination
 type Manager struct {
+	// failoverTimeout, when positive, replaces the distributor's default when
+	// Start creates it. It must be set before Start: the heartbeat loop reads
+	// the distributor's value from its own goroutine.
+	failoverTimeout time.Duration
+
 	lifecycleMu   sync.Mutex
 	mu            sync.RWMutex
 	necroConfig   core.NecropolisConfig
@@ -86,6 +91,10 @@ type Manager struct {
 
 	// Discovery
 	discovery *raft.Discovery
+
+	// Heartbeats keep the distributor's liveness view current (see startHeartbeats)
+	heartbeatStop chan struct{}
+	heartbeatWg   sync.WaitGroup
 }
 
 // NewManager creates a new cluster manager
@@ -240,6 +249,9 @@ func (m *Manager) Start(ctx context.Context) error {
 	// Initialize distributor
 	strategy := StrategyLoadBased
 	m.distributor = NewDistributor(m.config.NodeID, m.config.Region, strategy, m.logger)
+	if m.failoverTimeout > 0 {
+		m.distributor.failoverTimeout = m.failoverTimeout
+	}
 
 	// Register self
 	m.distributor.RegisterNode(m.config.NodeID, m.config.Region)
@@ -257,8 +269,79 @@ func (m *Manager) Start(ctx context.Context) error {
 	cleanupNode = nil
 	cleanupDiscovery = nil
 
+	// Keep the distributor's view of liveness current. The distributor only records
+	// a heartbeat when a node is registered or its load is updated, and nothing in
+	// production does either after startup: without this every node is stamped at
+	// Start and goes stale after failoverTimeout, so no soul could ever be assigned.
+	m.startHeartbeats()
+
 	m.logger.Info("Cluster distributor started", "strategy", strategy.String())
 	return nil
+}
+
+// heartbeatInterval is how often node heartbeats are refreshed: a third of the
+// failover timeout, so two refreshes can be missed before a node is called dead. It
+// is read per tick so a changed timeout takes effect immediately.
+func (m *Manager) heartbeatInterval() time.Duration {
+	interval := 10 * time.Second
+	if m.distributor != nil && m.distributor.failoverTimeout > 0 {
+		interval = m.distributor.failoverTimeout / 3
+	}
+	if interval < 10*time.Millisecond {
+		interval = 10 * time.Millisecond
+	}
+	return interval
+}
+
+func (m *Manager) startHeartbeats() {
+	m.heartbeatStop = make(chan struct{})
+	m.heartbeatWg.Add(1)
+	go func() {
+		defer m.heartbeatWg.Done()
+		timer := time.NewTimer(m.heartbeatInterval())
+		defer timer.Stop()
+		for {
+			select {
+			case <-m.heartbeatStop:
+				return
+			case <-timer.C:
+				m.refreshNodeHeartbeats()
+				timer.Reset(m.heartbeatInterval())
+			}
+		}
+	}()
+}
+
+func (m *Manager) stopHeartbeats() {
+	if m.heartbeatStop == nil {
+		return
+	}
+	close(m.heartbeatStop)
+	m.heartbeatWg.Wait()
+	m.heartbeatStop = nil
+}
+
+// refreshNodeHeartbeats marks this node and every peer Raft reports as connected as
+// alive. A peer that stops responding is not refreshed, so it goes stale and its
+// souls are failed over to a node that is still up.
+func (m *Manager) refreshNodeHeartbeats() {
+	m.mu.RLock()
+	distributor, node, stopped := m.distributor, m.node, m.stopped
+	m.mu.RUnlock()
+
+	if distributor == nil || stopped {
+		return
+	}
+
+	distributor.Heartbeat(m.config.NodeID)
+	if node == nil {
+		return
+	}
+	for _, peer := range node.GetState().Peers {
+		if peer.IsConnected {
+			distributor.Heartbeat(peer.ID)
+		}
+	}
 }
 
 // Stop gracefully shuts down the Raft node
@@ -276,6 +359,9 @@ func (m *Manager) Stop(ctx context.Context) error {
 		}
 	}
 	m.mu.Unlock()
+
+	// Stop the heartbeat producer before the distributor it feeds.
+	m.stopHeartbeats()
 
 	// Stop other components outside of main lock to avoid deadlock
 	if m.distributor != nil {

@@ -65,6 +65,15 @@ type fsmCommandApplier interface {
 	ApplyFSMCommand(cmd *core.FSMCommand) error
 }
 
+// indexRebuilder is the optional interface a Storage implementation can
+// implement when it keeps in-memory secondary indexes. Restore replaces the
+// keyspace with raw Set calls, which bypass those indexes, so it must be
+// refreshed afterwards or index-backed lookups report NotFound for data that
+// is durably present.
+type indexRebuilder interface {
+	RebuildIndexes()
+}
+
 // applyCommand applies a command log entry
 func (f *StorageFSM) applyCommand(log *core.RaftLogEntry) interface{} {
 	cmd, err := f.decodeCommand(log.Data)
@@ -145,7 +154,7 @@ func (f *StorageFSM) Snapshot() (core.FSMCommand, error) {
 		}
 		value, err := f.store.Get(key)
 		if err != nil {
-			continue
+			return core.FSMCommand{}, fmt.Errorf("snapshot read key %q: %w", key, err)
 		}
 		snapshot[key] = value
 	}
@@ -193,6 +202,14 @@ func (f *StorageFSM) Restore(snapshot []byte) error {
 		if err := f.store.Set(key, value); err != nil {
 			return err
 		}
+	}
+
+	// The writes above go through raw Set, so the store's in-memory secondary
+	// indexes still describe the pre-restore keyspace. Refresh them, otherwise
+	// every restored judgment is unreachable via GetJudgmentNoCtx and the
+	// workspace index stays stale until the next process restart.
+	if r, ok := f.store.(indexRebuilder); ok {
+		r.RebuildIndexes()
 	}
 
 	return nil

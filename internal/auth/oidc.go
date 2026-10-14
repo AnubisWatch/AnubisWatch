@@ -99,10 +99,13 @@ type tokenResponse struct {
 }
 
 type userInfoResponse struct {
-	Sub           string `json:"sub"`
-	Email         string `json:"email"`
-	Name          string `json:"name"`
-	EmailVerified bool   `json:"email_verified"`
+	Sub   string `json:"sub"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
+	// EmailVerified is a pointer so an omitted email_verified claim (allowed by
+	// OIDC Core, and left to the provider's policy) stays distinguishable from an
+	// explicit false, which must not establish identity.
+	EmailVerified *bool `json:"email_verified"`
 }
 
 const oidcMaxResponseBody = 1 << 20 // 1 MiB
@@ -269,9 +272,19 @@ func (o *OIDCAuthenticator) OIDCLoginURL() (string, string, string, error) {
 	if err != nil {
 		return "", "", "", err
 	}
-	expiresAt := time.Now().Add(10 * time.Minute)
+	now := time.Now()
+	expiresAt := now.Add(10 * time.Minute)
 
 	o.mu.Lock()
+	// Reclaim expired login states. An entry is otherwise removed only when its
+	// own state is submitted to the callback, so abandoned or attacker-driven
+	// /api/v1/auth/oidc/login requests would grow this map for the lifetime of the
+	// process. Sweeping on insert keeps retention bounded by the CSRF window.
+	for key, st := range o.state {
+		if st == nil || now.After(st.ExpiresAt) {
+			delete(o.state, key)
+		}
+	}
 	o.state[state] = &oidcState{
 		Nonce:     nonce,
 		ExpiresAt: expiresAt,
@@ -281,12 +294,15 @@ func (o *OIDCAuthenticator) OIDCLoginURL() (string, string, string, error) {
 	// Sign state for cluster compatibility
 	signedState := o.signState(state)
 
-	// Build authorization URL
+	// Build authorization URL.
+	// The nonce must be sent here: parseIDToken requires the ID token to echo it,
+	// and a provider can only pass through a value it received (OIDC Core §3.1.2.1).
 	redirectURL := cfg.AuthURL + "?" +
 		"response_type=code" +
 		"&client_id=" + o.config.ClientID +
 		"&redirect_uri=" + o.config.RedirectURL +
 		"&scope=openid+profile+email" +
+		"&nonce=" + url.QueryEscape(nonce) +
 		"&state=" + url.QueryEscape(signedState)
 
 	return redirectURL, signedState, nonce, nil
@@ -336,9 +352,15 @@ func (o *OIDCAuthenticator) OIDCCallback(code, state, nonce string) (*api.User, 
 		return nil, "", fmt.Errorf("invalid ID token: %w", err)
 	}
 
-	// Optionally refresh from userinfo endpoint if available
+	// Optionally refresh from userinfo endpoint if available.
+	// An email the provider explicitly marks unverified must not establish
+	// identity: the account is provisioned and looked up by email, so this
+	// mirrors the rule parseIDToken applies to the ID token. An omitted
+	// email_verified claim is left to the provider's policy.
 	if info, err := o.getUserInfo(tokenResp.AccessToken); err == nil && info.Email != "" {
-		if userInfo.Email == "" || info.EmailVerified {
+		verified := info.EmailVerified != nil && *info.EmailVerified
+		unverified := info.EmailVerified != nil && !*info.EmailVerified
+		if (userInfo.Email == "" && !unverified) || verified {
 			userInfo = info
 		}
 	}
@@ -381,7 +403,7 @@ func (o *OIDCAuthenticator) OIDCCallback(code, state, nonce string) (*api.User, 
 	}
 	o.mu.Unlock()
 
-	return user, token, nil
+	return copyUser(user), token, nil
 }
 
 // fetchOIDCConfig fetches and validates the OIDC discovery document.
@@ -872,7 +894,7 @@ func (o *OIDCAuthenticator) parseIDToken(idToken string, expectedNonce string) (
 		Sub: sub, // Already validated above
 	}
 	if verified, ok := claims["email_verified"].(bool); ok {
-		userInfo.EmailVerified = verified
+		userInfo.EmailVerified = &verified
 	}
 	if email, ok := claims["email"].(string); ok && email != "" {
 		// The account is provisioned/looked up by email, so an unverified
@@ -907,7 +929,7 @@ func (o *OIDCAuthenticator) Authenticate(token string) (*api.User, error) {
 		if user == nil {
 			return nil, fmt.Errorf("user not found")
 		}
-		return user, nil
+		return copyUser(user), nil
 	}
 	o.mu.RUnlock()
 
@@ -950,7 +972,7 @@ func (o *OIDCAuthenticator) SwitchWorkspace(token, workspace string) (*api.User,
 		}
 		user.Workspace = workspace
 		o.mu.Unlock()
-		return user, nil
+		return copyUser(user), nil
 	}
 	o.mu.Unlock()
 
@@ -986,7 +1008,7 @@ func (o *OIDCAuthenticator) GetUsers() []*api.User {
 
 	users := make([]*api.User, 0, len(o.users))
 	for _, user := range o.users {
-		users = append(users, user)
+		users = append(users, copyUser(user))
 	}
 	return users
 }
@@ -1011,5 +1033,5 @@ func (o *OIDCAuthenticator) AddUser(email, name, role string) (*api.User, error)
 	}
 	o.users[user.ID] = user
 	o.users[user.Email] = user
-	return user, nil
+	return copyUser(user), nil
 }

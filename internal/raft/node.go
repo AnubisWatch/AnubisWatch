@@ -772,11 +772,15 @@ func (n *Node) replicateLog() {
 
 	for _, peer := range peers {
 		go func(p *Peer) {
+			prevLogIndex := uint64(0)
+			if p.nextIndex > 0 {
+				prevLogIndex = p.nextIndex - 1
+			}
 			req := &core.AppendEntriesRequest{
 				Term:         n.currentTerm,
 				LeaderID:     n.nodeID,
-				PrevLogIndex: p.matchIndex,
-				PrevLogTerm:  n.getLogTerm(p.matchIndex),
+				PrevLogIndex: prevLogIndex,
+				PrevLogTerm:  n.getLogTerm(prevLogIndex),
 				Entries:      n.getEntriesAfter(p.nextIndex, n.config.MaxAppendEntries),
 				LeaderCommit: n.commitIndex,
 			}
@@ -785,6 +789,7 @@ func (n *Node) replicateLog() {
 			if err != nil {
 				return
 			}
+			n.markPeerContacted(p.ID)
 
 			n.handleAppendEntriesResponse(p, req, resp)
 		}(peer)
@@ -824,7 +829,11 @@ func (n *Node) GetState() core.ClusterState {
 				Region:  p.Region,
 				Role:    p.Role,
 			},
-			IsConnected:  time.Since(p.lastContact) < n.heartbeatTimeout*3,
+			// A peer is connected if it answered our replication, or -- for the current
+			// leader -- if this node itself heard from it: n.lastContact records that,
+			// and a follower has no other evidence about its leader.
+			IsConnected: time.Since(p.lastContact) < n.heartbeatTimeout*3 ||
+				(p.ID == n.leaderID && time.Since(n.lastContact) < n.heartbeatTimeout*3),
 			LastContact:  p.lastContact,
 			NextIndex:    p.nextIndex,
 			MatchIndex:   p.matchIndex,
@@ -1051,8 +1060,13 @@ func (n *Node) requestPreVotes(term, lastLogIndex, lastLogTerm uint64, peers []*
 
 	// Skip peer RPCs if transport is nil (test scenarios)
 	if n.transport == nil {
-		// With no transport, just count self-vote
-		needed := len(peers)/2 + 1
+		// Only the self-vote can be counted, and the quorum is still a majority of the
+		// voting members INCLUDING the candidate -- the same rule startElection uses for
+		// the real election, and the one this function's main path below uses.
+		// len(peers)/2 + 1 omitted the self-vote, which for an odd peer count sits below
+		// a majority: a node that could reach no peer passed its own pre-vote, defeating
+		// the protection the pre-vote exists to provide.
+		needed := (len(peers)+1)/2 + 1
 		return int(preVotesGranted.Load()) >= needed
 	}
 
@@ -1211,6 +1225,8 @@ func (n *Node) becomeLeader() {
 	for _, p := range n.peers {
 		n.nextIndex[p.ID] = lastLogIndex + 1
 		n.matchIndex[p.ID] = 0
+		p.nextIndex = lastLogIndex + 1
+		p.matchIndex = 0
 	}
 	n.peerMu.RUnlock()
 
@@ -1266,8 +1282,10 @@ func (n *Node) sendHeartbeats(commitIndex uint64) {
 	// peer replication state (matchIndex/nextIndex), currentTerm, and the log
 	// are all mutated by handleAppendEntriesResponse while holding n.mu.
 	reqs := make([]*core.AppendEntriesRequest, len(peers))
+	needsSnapshot := make([]bool, len(peers))
 	n.mu.RLock()
 	for i, p := range peers {
+		needsSnapshot[i] = p.nextIndex <= n.logBase
 		// PrevLogIndex must be the entry immediately before the first entry
 		// sent (nextIndex-1), NOT matchIndex: after a leader change
 		// nextIndex != matchIndex+1, and anchoring on matchIndex makes
@@ -1288,8 +1306,8 @@ func (n *Node) sendHeartbeats(commitIndex uint64) {
 	n.mu.RUnlock()
 
 	for i, peer := range peers {
-		go func(p *Peer, req *core.AppendEntriesRequest) {
-			if p.nextIndex <= n.logBase {
+		go func(p *Peer, req *core.AppendEntriesRequest, snapshot bool) {
+			if snapshot {
 				n.sendSnapshot(p)
 				return
 			}
@@ -1297,9 +1315,10 @@ func (n *Node) sendHeartbeats(commitIndex uint64) {
 			if err != nil {
 				return
 			}
+			n.markPeerContacted(p.ID)
 
 			n.handleAppendEntriesResponse(p, req, resp)
-		}(peer, reqs[i])
+		}(peer, reqs[i], needsSnapshot[i])
 	}
 }
 
@@ -1446,6 +1465,32 @@ func (n *Node) reconcileLogEntries(req *core.AppendEntriesRequest) error {
 	return nil
 }
 
+// notifyCommit wakes the run loop after commitIndex advances. It must never
+// block: both call sites hold n.mu, and the run loop that would drain commitCh
+// is the very goroutine executing these calls (it dispatches handleRPC), so a
+// blocking send on a full buffer wedges the node holding the node mutex and
+// nothing can drain it again. Dropping an intermediate value is safe because
+// processCommitted applies every entry up to the index it is given, so only the
+// newest pending index carries information.
+func (n *Node) notifyCommit(index uint64) {
+	select {
+	case n.commitCh <- index:
+		return
+	default:
+	}
+	// Buffer full: discard the stale pending signal and keep the newest index.
+	select {
+	case <-n.commitCh:
+	default:
+	}
+	select {
+	case n.commitCh <- index:
+	default:
+	}
+}
+
+// updateCommitIndex advances the follower's commit index from the leader's
+
 func (n *Node) updateCommitIndex(req *core.AppendEntriesRequest) {
 	if req.LeaderCommit <= n.commitIndex {
 		return
@@ -1465,7 +1510,7 @@ func (n *Node) updateCommitIndex(req *core.AppendEntriesRequest) {
 		n.logger.Error("Failed to persist follower commit index", "error", err)
 		return
 	}
-	n.commitCh <- n.commitIndex
+	n.notifyCommit(n.commitIndex)
 }
 
 func (n *Node) handleRequestVote(req *core.RequestVoteRequest) *core.RequestVoteResponse {
@@ -1645,6 +1690,25 @@ func (n *Node) handleInstallSnapshot(req *core.InstallSnapshotRequest) *core.Ins
 	return &core.InstallSnapshotResponse{Term: term, Success: true}
 }
 
+// markPeerContacted records that a peer has just answered us. Peer.lastContact is
+// what ClusterState.Peers[].IsConnected is computed from; without this write it stays
+// at the zero time, so every peer is reported as disconnected forever and consumers
+// that rely on the field (the cluster manager's heartbeat producer, the cluster status
+// API) treat a live peer as dead.
+//
+// Call it from paths that do not already hold n.mu: sendHeartbeats takes peerMu and
+// then n.mu, so taking peerMu while holding n.mu would invert that order.
+func (n *Node) markPeerContacted(peerID string) {
+	if peerID == "" || peerID == n.nodeID {
+		return
+	}
+	n.peerMu.Lock()
+	defer n.peerMu.Unlock()
+	if peer, ok := n.peers[peerID]; ok {
+		peer.lastContact = time.Now()
+	}
+}
+
 // handleHeartbeat processes heartbeat RPC
 func (n *Node) handleHeartbeat(req *core.HeartbeatRequest) *core.HeartbeatResponse {
 	n.mu.Lock()
@@ -1817,7 +1881,7 @@ func (n *Node) checkCommit() {
 			n.logger.Error("Failed to persist leader commit index", "error", err)
 			return
 		}
-		n.commitCh <- index
+		n.notifyCommit(index)
 		return
 	}
 }
@@ -2132,8 +2196,11 @@ func (n *Node) restoreLatestSnapshot() error {
 	if n.commitIndex < meta.Index {
 		n.commitIndex = meta.Index
 	}
-	if n.lastApplied < meta.Index {
-		n.lastApplied = meta.Index
+	// Restore replaces the application state with the snapshot image, so any
+	// later committed entries must be replayed even if hard state says applied.
+	n.lastApplied = meta.Index
+	if fsm, ok := n.fsm.(interface{ SetLastApplied(uint64) }); ok {
+		fsm.SetLastApplied(meta.Index)
 	}
 	n.log = []core.RaftLogEntry{{Index: meta.Index, Term: meta.Term}}
 	return nil

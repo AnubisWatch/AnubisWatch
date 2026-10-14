@@ -25,6 +25,13 @@ type Manager struct {
 	// its threshold. Reset to 0 by any non-failure judgment.
 	failureStreak map[string]int
 
+	// statusSince records when each soul first entered its current status, so
+	// the status_for condition can honour its configured dwell time instead of
+	// firing on the first matching judgment. Guarded by mu. Keyed by soulID and
+	// holding only the latest status, so a status change resets the clock and
+	// the map stays bounded by the number of souls rather than growing per rule.
+	statusSince map[string]statusHold
+
 	// Dispatchers
 	dispatchers map[core.AlertChannelType]ChannelDispatcher
 
@@ -54,6 +61,12 @@ type Manager struct {
 	// Dependencies
 	logger  *slog.Logger
 	storage AlertStorage
+}
+
+// statusHold records when a soul first entered a given status.
+type statusHold struct {
+	Status core.SoulStatus
+	Since  time.Time
 }
 
 // ChannelDispatcher sends notifications to a specific channel type
@@ -94,6 +107,7 @@ func NewManager(storage AlertStorage, logger *slog.Logger) *Manager {
 		history:       &core.AlertHistory{Entries: make(map[string]*core.AlertHistoryEntry)},
 		incidents:     make(map[string]*core.Incident),
 		failureStreak: make(map[string]int),
+		statusSince:   make(map[string]statusHold),
 		dispatchers:   make(map[core.AlertChannelType]ChannelDispatcher),
 		stopCh:        make(chan struct{}),
 		queue:         make(chan *core.AlertEvent, 1000),
@@ -394,6 +408,10 @@ func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, j
 		// failure chain clears the counter.
 		m.updateFailureStreak(rule.ID, soul.ID, judgment.Status)
 
+		// Refresh the per-soul status clock before conditions run, so
+		// status_for can measure how long the current status has held.
+		m.noteStatus(soul.ID, judgment.Status)
+
 		// Check conditions
 		triggered := m.checkConditions(rule, prevStatus, judgment)
 		if !triggered {
@@ -408,8 +426,13 @@ func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, j
 		}
 
 		// Create alert event
+		severity := rule.Severity
+		if severity == "" {
+			severity = m.calculateSeverity(judgment)
+		}
 		event := &core.AlertEvent{
 			ID:          generateAlertID(),
+			RuleID:      rule.ID,
 			SoulID:      soul.ID,
 			SoulName:    soul.Name,
 			WorkspaceID: soul.WorkspaceID,
@@ -418,7 +441,7 @@ func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, j
 			Judgment:    judgment,
 			Message:     judgment.Message,
 			Details:     m.extractDetails(judgment),
-			Severity:    m.calculateSeverity(judgment),
+			Severity:    severity,
 			Timestamp:   time.Now().UTC(),
 		}
 
@@ -604,14 +627,43 @@ func (m *Manager) worker() {
 func (m *Manager) dispatch(event *core.AlertEvent) {
 	m.mu.RLock()
 	channels := make([]*core.AlertChannel, 0, len(m.channels))
-	for _, ch := range m.channels {
-		channels = append(channels, ch)
+	if event.RuleID != "" {
+		// A rule's alerts go only to the channels the rule names. A rule
+		// deleted while its event was queued routes nowhere.
+		if rule := m.rules[event.RuleID]; rule != nil {
+			seen := make(map[string]struct{}, len(rule.Channels))
+			for _, id := range rule.Channels {
+				if _, dup := seen[id]; dup {
+					continue
+				}
+				seen[id] = struct{}{}
+				if ch := m.channels[id]; ch != nil {
+					channels = append(channels, ch)
+				}
+			}
+		}
+	} else {
+		for _, ch := range m.channels {
+			channels = append(channels, ch)
+		}
 	}
 	m.mu.RUnlock()
+
+	if event.RuleID != "" && len(channels) == 0 {
+		m.logger.Warn("Alert has no deliverable channel: rule names no existing channel",
+			"rule", event.RuleID,
+			"soul_id", event.SoulID)
+	}
 
 	// Process channels concurrently with a semaphore to limit goroutines
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 10) // Limit concurrent dispatchers
+
+	// attempted counts sends actually started and delivered those that
+	// succeeded. Only a send that ran and failed releases the dedup entry
+	// (see below).
+	var deliveredMu sync.Mutex
+	attempted, delivered := 0, 0
 
 	for _, channel := range channels {
 		// Workspace isolation: only dispatch to channels in the same workspace
@@ -646,6 +698,7 @@ func (m *Manager) dispatch(event *core.AlertEvent) {
 			continue
 		}
 
+		attempted++
 		wg.Add(1)
 		sem <- struct{}{}
 
@@ -665,6 +718,9 @@ func (m *Manager) dispatch(event *core.AlertEvent) {
 					"channel", ch.ID,
 					"error", err)
 			} else {
+				deliveredMu.Lock()
+				delivered++
+				deliveredMu.Unlock()
 				m.logger.Debug("Alert sent",
 					"channel", ch.ID,
 					"soul_id", event.SoulID)
@@ -673,6 +729,36 @@ func (m *Manager) dispatch(event *core.AlertEvent) {
 	}
 
 	wg.Wait()
+
+	// An alert whose every send failed was never delivered, so it must not
+	// consume the dedup window: isDuplicate's contract is to suppress alerts the
+	// operator has already been told about. Leaving the entry in place meant one
+	// transient channel outage swallowed the notification for the whole window
+	// (rule cooldown, default 5 minutes), so nobody was told the service was down.
+	//
+	// When no send was attempted at all (the rule names no existing channel, or
+	// every channel was filtered, disabled, in another workspace or rate
+	// limited) retrying cannot succeed. Releasing then would rerun the whole
+	// alert path, event and incident writes included, on every check instead of
+	// once per cooldown, so the entry stays.
+	deliveredMu.Lock()
+	sent := delivered
+	deliveredMu.Unlock()
+	if attempted > 0 && sent == 0 {
+		m.releaseDedup(event)
+	}
+}
+
+// releaseDedup drops the entry isDuplicate recorded for this event, so an
+// undelivered alert can be attempted again on the next judgment.
+func (m *Manager) releaseDedup(event *core.AlertEvent) {
+	if event == nil || event.RuleID == "" {
+		return
+	}
+	key := fmt.Sprintf("dedup:%s:%s:%s", event.RuleID, event.SoulID, event.Status)
+	m.history.Mu.Lock()
+	delete(m.history.Entries, key)
+	m.history.Mu.Unlock()
 }
 
 // sendToChannel sends an alert to a specific channel
@@ -715,6 +801,9 @@ func (m *Manager) sendToChannel(ctx context.Context, event *core.AlertEvent, cha
 		ebo.MaxInterval = maxWait
 		ebo.Reset()
 		_, lastErr = backoff.Retry[error](ctx, func() (error, error) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			return nil, dispatcher.Send(ctx, event, channel)
 		}, backoff.WithMaxTries(maxAttempts), backoff.WithBackOff(ebo))
 	} else {
@@ -886,6 +975,51 @@ func (m *Manager) failureStreakCount(ruleID, soulID string) int {
 	return m.failureStreak[key]
 }
 
+// noteStatus records when a soul first entered its current status, restarting
+// the dwell clock whenever the status changes. Callers must invoke it once per
+// judgment, before conditions are evaluated.
+func (m *Manager) noteStatus(soulID string, status core.SoulStatus) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Lazy-init: Manager is also built as a struct literal in some callers,
+	// which bypasses NewManager's map initialisation.
+	if m.statusSince == nil {
+		m.statusSince = make(map[string]statusHold)
+	}
+	if hold, ok := m.statusSince[soulID]; ok && hold.Status == status {
+		return
+	}
+	m.statusSince[soulID] = statusHold{Status: status, Since: time.Now()}
+}
+
+// statusHeldFor reports whether the soul has been in its current status for at
+// least the requested dwell time. A non-positive dwell preserves the original
+// instantaneous behaviour.
+func (m *Manager) statusHeldFor(soulID string, status core.SoulStatus, dwell time.Duration) bool {
+	if dwell <= 0 {
+		return true
+	}
+	m.mu.RLock()
+	hold, ok := m.statusSince[soulID]
+	m.mu.RUnlock()
+	if !ok || hold.Status != status {
+		return false
+	}
+	return time.Since(hold.Since) >= dwell
+}
+
+// statusForCondition implements the status_for condition: the judgment's status
+// must match, and it must have held for at least the configured Duration.
+// AlertCondition.Duration is documented as "for status_for"
+// (internal/core/verdict.go) and is settable through the REST API, so a rule
+// asking to wait before paging must actually wait.
+func (m *Manager) statusForCondition(cond core.AlertCondition, judgment *core.Judgment) bool {
+	if string(judgment.Status) != cond.Status {
+		return false
+	}
+	return m.statusHeldFor(judgment.SoulID, judgment.Status, cond.Duration.Duration)
+}
+
 // checkConditions checks if alert conditions are met
 func (m *Manager) checkConditions(rule *core.AlertRule, prevStatus core.SoulStatus, judgment *core.Judgment) bool {
 	for _, cond := range rule.Conditions {
@@ -903,8 +1037,7 @@ func (m *Manager) checkConditions(rule *core.AlertRule, prevStatus core.SoulStat
 				return true
 			}
 		case "status_for":
-			// Would need history tracking
-			if string(judgment.Status) == cond.Status {
+			if m.statusForCondition(cond, judgment) {
 				return true
 			}
 		case "failure_rate":
@@ -922,6 +1055,10 @@ func (m *Manager) checkConditions(rule *core.AlertRule, prevStatus core.SoulStat
 			}
 		case "anomaly":
 			if m.checkAnomaly(cond, judgment) {
+				return true
+			}
+		case "threshold":
+			if m.evaluateCondition(cond, prevStatus, judgment) {
 				return true
 			}
 		case "compound":
@@ -1196,10 +1333,12 @@ func (m *Manager) checkCompound(cond core.AlertCondition, prevStatus core.SoulSt
 // evaluateCondition evaluates a single condition (used by compound).
 func (m *Manager) evaluateCondition(cond core.AlertCondition, prevStatus core.SoulStatus, judgment *core.Judgment) bool {
 	switch cond.Type {
+	case "compound":
+		return m.checkCompound(cond, prevStatus, judgment)
 	case "status_change":
 		return string(prevStatus) == cond.From && string(judgment.Status) == cond.To
 	case "status_for":
-		return string(judgment.Status) == cond.Status
+		return m.statusForCondition(cond, judgment)
 	case "failure_rate":
 		return judgment.Status == core.SoulDead
 	case "degraded":
@@ -1499,25 +1638,34 @@ func (m *Manager) escalationChecker() {
 
 // checkEscalations checks all active incidents for escalation
 func (m *Manager) checkEscalations() {
-	m.mu.RLock()
-	incidents := make([]*core.Incident, 0, len(m.incidents))
-	for _, inc := range m.incidents {
-		if inc.Status == core.IncidentOpen || inc.Status == core.IncidentAcked {
-			incidents = append(incidents, inc)
-		}
+	// Resolve each incident's rule while holding the lock. Copying the map reference
+	// (rules := m.rules) copies only the header: the reads below would then happen on
+	// the live map, which RegisterRule and UnregisterRule write under this same mutex.
+	// A rule edit concurrent with an escalation check is a data race on that map and
+	// can abort the process with "fatal error: concurrent map read and map write".
+	type escalationWork struct {
+		incident *core.Incident
+		rule     *core.AlertRule
 	}
-	rules := m.rules
-	m.mu.RUnlock()
 
-	for _, incident := range incidents {
-		rule, ok := rules[incident.RuleID]
+	m.mu.RLock()
+	work := make([]escalationWork, 0, len(m.incidents))
+	for _, inc := range m.incidents {
+		if inc.Status != core.IncidentOpen && inc.Status != core.IncidentAcked {
+			continue
+		}
+		rule, ok := m.rules[inc.RuleID]
 		if !ok || rule.Escalation == nil || len(rule.Escalation.Stages) == 0 {
 			continue
 		}
+		work = append(work, escalationWork{incident: inc, rule: rule})
+	}
+	m.mu.RUnlock()
 
+	for _, w := range work {
 		// Check if escalation is needed
-		if m.shouldEscalate(incident, rule) {
-			m.escalateIncident(incident, rule)
+		if m.shouldEscalate(w.incident, w.rule) {
+			m.escalateIncident(w.incident, w.rule)
 		}
 	}
 }

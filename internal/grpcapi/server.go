@@ -986,31 +986,24 @@ func (s *Server) ListSouls(ctx context.Context, req *v1.ListSoulsRequest) (*v1.L
 		return &v1.ListSoulsResponse{Souls: pbSouls, Pagination: pagination}, nil
 	}
 
-	souls, err := s.store.ListSoulsNoCtx(workspace, offset, limit+1)
+	// Fetch the full matching set before paginating. This branch previously
+	// fetched only offset+limit+1 rows and approximated the total as
+	// "offset + page size (+1 when hasMore)", so a workspace with 50 souls
+	// listed with Limit=10 reported Total=11. The type/tag-filtered branch
+	// above and every sibling list RPC (ListJudgments, ListVerdicts,
+	// ListJourneys, ListChannels, ListRules) fetch fully and report the true
+	// total. ListSouls treats limit<=0 as unbounded.
+	allSouls, err := s.store.ListSoulsNoCtx(workspace, 0, 0)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list souls: %v", err)
 	}
-	hasMore := len(souls) > limit
-	if len(souls) > limit {
-		souls = souls[:limit]
-	}
+	page, pagination := paginateSouls(allSouls, offset, limit)
 
-	pbSouls := make([]*v1.Soul, 0, len(souls))
-	for _, soul := range souls {
+	pbSouls := make([]*v1.Soul, 0, len(page))
+	for _, soul := range page {
 		if pb := soulToPB(soul); pb != nil {
 			pbSouls = append(pbSouls, pb)
 		}
-	}
-
-	total := offset + len(pbSouls)
-	if hasMore {
-		total++
-	}
-	pagination := newPagination(total, offset, limit, len(pbSouls))
-	if hasMore {
-		pagination.HasMore = true
-		next := int32(offset + len(pbSouls))
-		pagination.NextOffset = &next
 	}
 
 	return &v1.ListSoulsResponse{
@@ -1165,10 +1158,12 @@ func (s *Server) ListJudgments(ctx context.Context, req *v1.ListJudgmentsRequest
 		}
 	}
 
-	fetchLimit := listFetchLimit(offset, limit)
-	if req.GetStatus() != "" || soulID == "" {
-		fetchLimit = 0
-	}
+	// Fetch the full matching set before paginating. paginateJudgments derives
+	// Pagination.Total from len(items), so fetching only offset+limit+1 rows
+	// made Total report the page size instead of the true count whenever the
+	// caller filtered by soul_id without a status filter. Every sibling list
+	// RPC (ListJourneys, ListChannels, ListRules) fetches fully for this reason.
+	fetchLimit := 0
 	var judgments []*core.Judgment
 	if soulID == "" {
 		souls, err := s.store.ListSoulsNoCtx(user.Workspace, 0, 0)
@@ -1278,10 +1273,13 @@ func (s *Server) ListVerdicts(ctx context.Context, req *v1.ListVerdictsRequest) 
 		return nil, err
 	}
 
-	fetchLimit := listFetchLimit(offset, limit)
-	if req.GetStatus() != "" || req.GetSeverity() != "" {
-		fetchLimit = 0
-	}
+	// Fetch the full matching set before paginating. The inline pagination
+	// below derives Pagination.Total from len(filtered), so fetching only
+	// offset+limit+1 rows made Total report the page size instead of the true
+	// count whenever the caller supplied neither a status nor a severity
+	// filter. Sibling list RPCs (ListJourneys, ListChannels, ListRules) and
+	// ListJudgments all fetch fully for this reason.
+	fetchLimit := 0
 	events, err := s.store.ListEvents(soulID, fetchLimit)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list verdicts: %v", err)

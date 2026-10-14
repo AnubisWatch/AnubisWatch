@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/AnubisWatch/anubiswatch/internal/auth"
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
@@ -16,9 +19,24 @@ import (
 //
 //go:generate echo "The Judgment Never Sleeps"
 type Handler struct {
-	repository    Repository
-	templateCache map[string]*Template
-	defaultTheme  core.StatusPageTheme
+	repository       Repository
+	templateCache    map[string]*Template
+	defaultTheme     core.StatusPageTheme
+	sessionValidator SessionValidator
+}
+
+// SessionValidator reports whether a session token may view pages in a workspace.
+// The status page is served outside the authenticated API, so the handler cannot
+// validate sessions itself; cmd/anubis adapts the configured authenticator onto
+// this. When none is configured the session path stays closed, as it always was.
+type SessionValidator interface {
+	ValidateStatusPageSession(token, workspaceID string) bool
+}
+
+// SetSessionValidator installs the session validator used for private pages.
+func (h *Handler) SetSessionValidator(v SessionValidator) *Handler {
+	h.sessionValidator = v
+	return h
 }
 
 // Repository defines the storage interface for status pages
@@ -83,20 +101,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check visibility
-	if page.Visibility == core.VisibilityPrivate {
-		// Require authentication
-		if !h.isAuthenticated(r, page) {
+	if !h.pageAccessAllowed(r, page) {
+		if page.Visibility == core.VisibilityPrivate {
 			h.requestAuthentication(w, r)
-			return
-		}
-	}
-
-	if page.Visibility == core.VisibilityProtected {
-		// Check password protection
-		if !h.checkPasswordProtection(r, page) {
+		} else {
 			h.showPasswordForm(w, r, page)
-			return
 		}
+		return
 	}
 
 	// Build status page data
@@ -118,10 +129,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func normalizeHost(host string) string {
 	domain := strings.TrimSpace(strings.ToLower(host))
-	if colonIdx := strings.LastIndex(domain, ":"); colonIdx != -1 {
-		domain = domain[:colonIdx]
+	if hostname, _, err := net.SplitHostPort(domain); err == nil {
+		domain = hostname
 	}
-	return domain
+	return strings.Trim(domain, "[]")
 }
 
 // extractSlugFromPath extracts the slug from URL path
@@ -132,6 +143,22 @@ func extractSlugFromPath(path string) string {
 		return ""
 	}
 	return parts[1]
+}
+
+// pageAccessAllowed reports whether the request may see this page's data under
+// the page's visibility policy. Every endpoint that publishes a page must ask:
+// ServeHTTP was the only one that did, so a private or password-protected page
+// was refused at /status/<slug> and still served in full by the widget, badge and
+// feed handlers, which load the same page by slug.
+func (h *Handler) pageAccessAllowed(r *http.Request, page *core.StatusPage) bool {
+	switch page.Visibility {
+	case core.VisibilityPrivate:
+		return h.isAuthenticated(r, page)
+	case core.VisibilityProtected:
+		return h.checkPasswordProtection(r, page)
+	default:
+		return true
+	}
 }
 
 // isAuthenticated checks if request is authenticated for private pages
@@ -154,9 +181,13 @@ func (h *Handler) isAuthenticated(r *http.Request, page *core.StatusPage) bool {
 
 // validateSession validates a session token
 func (h *Handler) validateSession(token string, workspaceID string) bool {
-	// Implementation would validate against session store
-	// Placeholder - actual implementation would check Feather or session cache
-	return false
+	// Without a configured validator there is nothing to validate against, so the
+	// session path stays closed. A private page was therefore refused even for the
+	// account that owns it, because nothing ever installed a validator.
+	if h.sessionValidator == nil {
+		return false
+	}
+	return h.sessionValidator.ValidateStatusPageSession(token, workspaceID)
 }
 
 // validateAPIKey validates an API key
@@ -190,9 +221,13 @@ func (h *Handler) checkPasswordProtection(r *http.Request, page *core.StatusPage
 
 // verifyPagePassword verifies the page password
 func (h *Handler) verifyPagePassword(password string, page *core.StatusPage) bool {
-	// Hash and compare against stored hash
-	// Placeholder - actual implementation would check hashed password
-	return false
+	// A page with no stored hash has no password to match, so nothing unlocks it.
+	// The API refuses to save a password-protected page in that state, which used
+	// to leave the page permanently unreachable.
+	if page == nil || page.PasswordHash == "" {
+		return false
+	}
+	return auth.VerifyPassword(page.PasswordHash, password)
 }
 
 // showPasswordForm renders password entry form
@@ -319,13 +354,23 @@ func (h *Handler) buildStatusPageData(page *core.StatusPage) (*core.StatusPageDa
 			status = string(lastJudgment.Status)
 		}
 
-		// Calculate uptime from 30-day history
+		// Calculate uptime from 30-day history.
+		// Only days that actually carry judgments may contribute: the repository
+		// returns one entry per requested day, including days with no checks at
+		// all (Status "unknown"). Counting those as 24 hours of downtime made a
+		// healthy monitor that was created today report 100/30 = 3.33% uptime
+		// on its public status page, and an idle monitor report 0%.
 		uptimePercent := 100.0
 		history, err := h.repository.GetUptimeHistory(soulID, 30)
 		if err == nil && len(history) > 0 {
 			totalHours := 0.0
 			upHours := 0.0
 			for _, day := range history {
+				if day.Status == "unknown" {
+					// No judgments recorded for this day: the monitor was not
+					// (yet) reporting, which is not downtime.
+					continue
+				}
 				totalHours += 24.0
 				upHours += 24.0 * (day.Uptime / 100.0)
 			}
@@ -414,6 +459,10 @@ func (h *Handler) buildUptimeData(page *core.StatusPage, souls []core.SoulStatus
 		}
 		days = append(days, history...)
 	}
+
+	sort.Slice(days, func(i, j int) bool {
+		return days[i].Date < days[j].Date
+	})
 
 	// Calculate overall uptime percentage
 	var totalUptime float64
@@ -864,6 +913,11 @@ func (h *Handler) BadgeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.pageAccessAllowed(r, page) {
+		h.requestAuthentication(w, r)
+		return
+	}
+
 	// Get souls status
 	souls := make([]core.SoulStatusInfo, 0, len(page.Souls))
 	for _, soulID := range page.Souls {
@@ -962,6 +1016,11 @@ func (h *Handler) WidgetHandler(w http.ResponseWriter, r *http.Request) {
 	page, err := h.repository.GetStatusPageBySlug(pageID)
 	if err != nil {
 		http.Error(w, "Status page not found", http.StatusNotFound)
+		return
+	}
+
+	if !h.pageAccessAllowed(r, page) {
+		h.requestAuthentication(w, r)
 		return
 	}
 
@@ -1096,6 +1155,11 @@ func (h *Handler) RSSFeedHandler(w http.ResponseWriter, r *http.Request) {
 	page, err := h.repository.GetStatusPageBySlug(pageID)
 	if err != nil {
 		http.Error(w, "Status page not found", http.StatusNotFound)
+		return
+	}
+
+	if !h.pageAccessAllowed(r, page) {
+		h.requestAuthentication(w, r)
 		return
 	}
 

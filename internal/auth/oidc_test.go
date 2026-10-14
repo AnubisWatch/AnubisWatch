@@ -311,7 +311,7 @@ func TestOIDCAuthenticator_ParseIDToken(t *testing.T) {
 	if userInfo.Sub != "1234567890" {
 		t.Errorf("Expected sub '1234567890', got %s", userInfo.Sub)
 	}
-	if !userInfo.EmailVerified {
+	if userInfo.EmailVerified == nil || !*userInfo.EmailVerified {
 		t.Error("Expected email_verified to be true")
 	}
 }

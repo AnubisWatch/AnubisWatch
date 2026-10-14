@@ -377,7 +377,11 @@ func (e *Engine) startSoul(soul *core.Soul) {
 
 // judgeSoul executes a single check with concurrency limiting and circuit breaker
 func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
+	if ctx.Err() != nil {
+		return
+	}
 	soul := runner.getSoul()
+	assignedSoul := soul
 
 	// Check circuit breaker first
 	if cb := e.getCircuitBreaker(soul.ID); cb != nil && cb.isOpen(e.Config().CircuitBreaker) {
@@ -432,6 +436,10 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 
 	// Execute the check
 	judgment, err := checker.Judge(checkCtx, soul)
+	// The assignment may have been canceled or updated while the check ran.
+	if ctx.Err() != nil || runner.getSoul() != assignedSoul {
+		return
+	}
 	if err != nil {
 		judgment = failJudgment(soul, err)
 		e.recordFailure(soul.ID)
@@ -468,6 +476,10 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 		}
 	}
 
+	if ctx.Err() != nil || runner.getSoul() != assignedSoul {
+		return
+	}
+
 	// Notify Raft (for distributed aggregation). Atomic load — no
 	// mutex on the per-check hot path.
 	if onJudgment := e.onJudgment.Load(); onJudgment != nil {
@@ -475,8 +487,8 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 	}
 
 	// Evaluate alert rules
+	prevStatus := runner.swapStatus(judgment.Status)
 	if e.alerter != nil {
-		prevStatus := runner.swapStatus(judgment.Status)
 		e.alerter.ProcessJudgment(soul, prevStatus, judgment)
 	}
 
@@ -530,6 +542,22 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	// The concurrency limit applies to every check, including manual ones: the REST
+	// force-check endpoint, the MCP force_check tool and the gRPC ForceCheck RPC all
+	// arrive here. Without this, manual checks were unbounded by MaxConcurrentChecks and
+	// were not counted in the reported ChecksRunning. Acquire with the check's own
+	// timeout so a saturated engine returns an error instead of blocking the caller
+	// forever.
+	select {
+	case e.semaphore <- struct{}{}:
+	case <-checkCtx.Done():
+		return nil, fmt.Errorf("concurrency limit reached (%d concurrent checks): %w", cap(e.semaphore), checkCtx.Err())
+	}
+	defer func() { <-e.semaphore }()
+
+	e.checksRunning.Add(1)
+	defer e.checksRunning.Add(-1)
+
 	// K7: apply the same master security gate here so manually-triggered
 	// checks honour the global InsecureSkipVerify policy.
 	checkSoul := e.applySecurityGate(soul)
@@ -576,8 +604,8 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 		(*onJudgment)(judgment)
 	}
 
+	prevStatus := runner.swapStatus(judgment.Status)
 	if e.alerter != nil {
-		prevStatus := runner.swapStatus(judgment.Status)
 		e.alerter.ProcessJudgment(soul, prevStatus, judgment)
 	}
 
@@ -786,6 +814,7 @@ func (e *Engine) recordSuccess(soulID string) {
 	defer cb.mu.Unlock()
 
 	if cb.state == "closed" {
+		cb.failures = 0
 		return // Already healthy
 	}
 
@@ -812,9 +841,9 @@ func (e *Engine) recordFailure(soulID string) {
 	cb.successes = 0
 	cb.lastFailureTime = time.Now()
 
-	// Transition from closed to open
+	// A failed recovery probe reopens immediately; closed circuits use the threshold.
 	cfg := e.Config().CircuitBreaker
-	if cb.state == "closed" && cb.failures >= cfg.FailureThreshold {
+	if cb.state == "half-open" || (cb.state == "closed" && cb.failures >= cfg.FailureThreshold) {
 		cb.state = "open"
 		cb.lastStateChange = time.Now()
 	}

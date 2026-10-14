@@ -240,6 +240,10 @@ type RetryPolicyConfig struct {
 
 // AlertEvent represents a single alert notification
 type AlertEvent struct {
+	// RuleID identifies the rule that produced this event. The dedup window is
+	// keyed by (rule, soul, status), so the dispatch path needs the rule to
+	// release that entry when an alert could not be delivered.
+	RuleID       string            `json:"rule_id,omitempty" yaml:"-"`
 	ID           string            `json:"id"`
 	ChannelID    string            `json:"channel_id"`
 	ChannelType  AlertChannelType  `json:"channel_type"`

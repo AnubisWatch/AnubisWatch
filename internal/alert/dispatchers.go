@@ -42,6 +42,29 @@ func getHTTPClient() *http.Client {
 	return sharedHTTPClient.c
 }
 
+// redactURL renders a request URL without the parts that can carry a credential:
+// a Slack/Discord webhook URL is the secret itself, and a Telegram bot token lives
+// in the path. The scheme and host are kept so a failure stays diagnosable.
+func redactURL(u *url.URL) string {
+	if u == nil || u.Host == "" {
+		return "<redacted-url>"
+	}
+	return u.Scheme + "://" + u.Host + "/<redacted>"
+}
+
+// redactedRequestError renders a transport failure without leaking the request URL.
+// Go's url.Error prints the full URL, and the alert manager logs the error it gets
+// back ("Failed to send alert"), so a credential embedded in the URL would land in
+// the log stream.
+func redactedRequestError(err error, req *http.Request) error {
+	if req == nil || req.URL == nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	redacted := redactURL(req.URL)
+	return fmt.Errorf("failed to send request to %s: %s", redacted,
+		strings.ReplaceAll(err.Error(), req.URL.String(), redacted))
+}
+
 // closeResponseBody drains and closes the response body to ensure connection reuse
 // and prevent resource leaks. This helper should be used instead of defer resp.Body.Close()
 func closeResponseBody(resp *http.Response) {
@@ -116,7 +139,7 @@ func (d *SlackDispatcher) Send(ctx context.Context, event *core.AlertEvent, chan
 	client := getHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return redactedRequestError(err, req)
 	}
 	defer closeResponseBody(resp)
 
@@ -255,7 +278,7 @@ func (d *DiscordDispatcher) Send(ctx context.Context, event *core.AlertEvent, ch
 	client := getHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return redactedRequestError(err, req)
 	}
 	defer closeResponseBody(resp)
 
@@ -435,7 +458,34 @@ type plainAuth struct {
 	host     string
 }
 
+// isLocalSMTPHost mirrors net/smtp's isLocalhost: the standard library allows PLAIN
+// credentials on a local relay without TLS.
+func isLocalSMTPHost(name string) bool {
+	switch name {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
+}
+
+// Start answers the SMTP AUTH PLAIN challenge. net/smtp's PlainAuth refuses to send
+// credentials over a connection that is neither TLS-protected nor local, and
+// refuses a server presenting a name other than the configured host. Without those
+// checks EmailDispatcher.Send handed the operator's SMTP username and password to
+// smtp.SendMail, which transmits them in the clear whenever the server advertises
+// AUTH but not STARTTLS.
+//
+// A nil ServerInfo means the caller did not describe the connection; net/smtp always
+// supplies one, so the checks apply on every real send.
 func (a *plainAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	if server != nil {
+		if !server.TLS && !isLocalSMTPHost(server.Name) {
+			return "", nil, fmt.Errorf("refusing to send SMTP credentials over an unencrypted connection to %q", server.Name)
+		}
+		if server.Name != a.host {
+			return "", nil, fmt.Errorf("refusing to send SMTP credentials to %q, which is not the configured host %q", server.Name, a.host)
+		}
+	}
 	return "PLAIN", []byte(a.identity + "\x00" + a.username + "\x00" + a.password), nil
 }
 
@@ -493,7 +543,7 @@ func (d *PagerDutyDispatcher) Send(ctx context.Context, event *core.AlertEvent, 
 	client := getHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return redactedRequestError(err, req)
 	}
 	defer closeResponseBody(resp)
 
@@ -602,7 +652,7 @@ func (d *OpsGenieDispatcher) Send(ctx context.Context, event *core.AlertEvent, c
 	client := getHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return redactedRequestError(err, req)
 	}
 	defer closeResponseBody(resp)
 
@@ -704,7 +754,7 @@ func (d *NtfyDispatcher) Send(ctx context.Context, event *core.AlertEvent, chann
 	client := getHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return redactedRequestError(err, req)
 	}
 	defer closeResponseBody(resp)
 
@@ -794,7 +844,7 @@ func (d *TelegramDispatcher) Send(ctx context.Context, event *core.AlertEvent, c
 	client := getHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return redactedRequestError(err, req)
 	}
 	defer closeResponseBody(resp)
 
@@ -900,7 +950,7 @@ func (d *SMSDispatcher) sendTwilio(ctx context.Context, event *core.AlertEvent, 
 	client := getHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return redactedRequestError(err, req)
 	}
 	defer closeResponseBody(resp)
 
@@ -1070,7 +1120,7 @@ func (d *WebHookDispatcher) Send(ctx context.Context, event *core.AlertEvent, ch
 	client := getHTTPClient()
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %w", err)
+		return redactedRequestError(err, req)
 	}
 	defer closeResponseBody(resp)
 

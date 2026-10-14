@@ -568,7 +568,8 @@ func TestDiscovery_handleMDNSDiscovery(t *testing.T) {
 		Name: "mdns-peer",
 		Host: "127.0.0.1",
 		Port: 7946,
-		TXT:  []string{"id=mdns-peer", "region=us-west", "version=1.0.0"},
+		// Signed with the cluster secret: unsigned announcements are rejected.
+		TXT: mdnsTXTRecords("mdns-peer", "us-west", "1.0.0", discovery.clusterSecret),
 	}
 
 	discovery.handleMDNSDiscovery(svc)
@@ -968,7 +969,8 @@ func TestDiscovery_handleMDNSDiscovery_PartialTXT(t *testing.T) {
 		Name: "partial-peer",
 		Host: "127.0.0.1",
 		Port: 7946,
-		TXT:  []string{"id=partial-peer"},
+		// Only the id, plus the signature unsigned announcements now need.
+		TXT: []string{"id=partial-peer", "sig=" + mdnsSignature("partial-peer", "", "", discovery.clusterSecret)},
 	}
 
 	discovery.handleMDNSDiscovery(svc)
@@ -1314,8 +1316,12 @@ func TestCheckReplay_BoundsMemoryUnderFlood(t *testing.T) {
 	now := time.Now()
 
 	for i := 0; i < seenHMACsMax+100; i++ {
-		if err := d.checkReplay(fmt.Sprintf("sig-%d", i), now); err != nil {
-			t.Fatalf("distinct signature %d must be accepted, got %v", i, err)
+		err := d.checkReplay(fmt.Sprintf("sig-%d", i), now)
+		if i < seenHMACsMax && err != nil {
+			t.Fatalf("distinct signature %d below capacity must be accepted, got %v", i, err)
+		}
+		if i >= seenHMACsMax && err == nil {
+			t.Fatalf("distinct signature %d at capacity must be rejected", i)
 		}
 	}
 

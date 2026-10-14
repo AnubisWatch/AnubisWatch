@@ -7,23 +7,30 @@ import (
 // StatusPage represents a public status page
 // The public temple where citizens view the health of services
 type StatusPage struct {
-	ID           string           `json:"id" yaml:"id"`
-	WorkspaceID  string           `json:"workspace_id" yaml:"workspace_id"`
-	Name         string           `json:"name" yaml:"name"`
-	Slug         string           `json:"slug" yaml:"slug"`
-	Description  string           `json:"description" yaml:"description"`
-	LogoURL      string           `json:"logo_url" yaml:"logo_url"`
-	FaviconURL   string           `json:"favicon_url" yaml:"favicon_url"`
-	CustomDomain string           `json:"custom_domain" yaml:"custom_domain"`
-	Theme        StatusPageTheme  `json:"theme" yaml:"theme"`
-	Visibility   PageVisibility   `json:"visibility" yaml:"visibility"`
-	Enabled      bool             `json:"enabled" yaml:"enabled"`
-	Souls        []string         `json:"souls" yaml:"souls"` // Soul IDs to display
-	Groups       []StatusGroup    `json:"groups" yaml:"groups"`
-	Incidents    []StatusIncident `json:"incidents" yaml:"incidents"`
-	UptimeDays   int              `json:"uptime_days" yaml:"uptime_days"` // Days to show
-	CreatedAt    time.Time        `json:"created_at" yaml:"-"`
-	UpdatedAt    time.Time        `json:"updated_at" yaml:"-"`
+	ID           string          `json:"id" yaml:"id"`
+	WorkspaceID  string          `json:"workspace_id" yaml:"workspace_id"`
+	Name         string          `json:"name" yaml:"name"`
+	Slug         string          `json:"slug" yaml:"slug"`
+	Description  string          `json:"description" yaml:"description"`
+	LogoURL      string          `json:"logo_url" yaml:"logo_url"`
+	FaviconURL   string          `json:"favicon_url" yaml:"favicon_url"`
+	CustomDomain string          `json:"custom_domain" yaml:"custom_domain"`
+	Theme        StatusPageTheme `json:"theme" yaml:"theme"`
+	Visibility   PageVisibility  `json:"visibility" yaml:"visibility"`
+	// PasswordHash protects a VisibilityProtected page. It is persisted with the
+	// page and is never returned by the API, which reports PasswordSet instead; the
+	// API derives it from the plaintext password a caller supplies.
+	PasswordHash string `json:"password_hash,omitempty" yaml:"-"`
+	// PasswordSet is derived on the way out so a client can tell whether a password
+	// is configured without ever seeing the hash.
+	PasswordSet bool             `json:"password_set,omitempty" yaml:"-"`
+	Enabled     bool             `json:"enabled" yaml:"enabled"`
+	Souls       []string         `json:"souls" yaml:"souls"` // Soul IDs to display
+	Groups      []StatusGroup    `json:"groups" yaml:"groups"`
+	Incidents   []StatusIncident `json:"incidents" yaml:"incidents"`
+	UptimeDays  int              `json:"uptime_days" yaml:"uptime_days"` // Days to show
+	CreatedAt   time.Time        `json:"created_at" yaml:"-"`
+	UpdatedAt   time.Time        `json:"updated_at" yaml:"-"`
 }
 
 // StatusPageTheme contains theme configuration

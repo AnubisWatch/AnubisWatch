@@ -478,7 +478,7 @@ func parseDNSSECResponse(msg []byte) (rrsigRecords []string, adFlag bool, err er
 		rdlength := int(binary.BigEndian.Uint16(msg[offset+8 : offset+10]))
 		offset += 10
 
-		if rtype == 46 && rdlength > 0 && offset+rdlength <= len(msg) {
+		if rtype == 46 && rdlength > 0 && offset+2 <= len(msg) && offset+rdlength <= len(msg) {
 			// Parse RRSIG RDATA
 			typeCovered := binary.BigEndian.Uint16(msg[offset : offset+2])
 			// Parse signer name
@@ -505,12 +505,15 @@ func extractRRSIGInfo(msg []byte, nameStart int, rdataStart int) string {
 	if nameEnd <= nameStart || nameEnd+10 > len(msg) {
 		return ""
 	}
-	// rdlength at rdataStart
-	rdlength := int(binary.BigEndian.Uint16(msg[rdataStart+8 : rdataStart+10]))
-	if rdlength < 18 {
+	// queryDNSSEC hands us buf[:n] out of a 4096-byte read buffer, so len and
+	// cap only agree when the datagram is exactly 4096 bytes. Bound every read
+	// below by len(msg) so an unchecked slice cannot read past the received
+	// datagram and panic the probe worker.
+	rdlength := int(binary.BigEndian.Uint16(msg[rdataStart-2 : rdataStart]))
+	if rdlength < 18 || rdataStart+rdlength > len(msg) {
 		return ""
 	}
-	offset := rdataStart + 10
+	offset := rdataStart
 	typeCovered := binary.BigEndian.Uint16(msg[offset : offset+2])
 	_, signerEnd := skipDNSName(msg, offset+18)
 	if signerEnd > offset+18 {
@@ -635,17 +638,27 @@ func findNameEnd(msg []byte, offset int) int {
 }
 
 // encodeDNSName encodes a domain name into DNS wire format
+// maxDNSLabelLength is the label bound from RFC 1035 §2.3.4: DNS labels are
+// 0..63 octets, and the 6-bit length octet cannot express anything larger.
+const maxDNSLabelLength = 63
+
 func encodeDNSName(name string) []byte {
 	name = strings.TrimSuffix(name, ".")
 	parts := strings.Split(name, ".")
 	var result []byte
 	for _, part := range parts {
-		// DNS labels are 0..63 bytes per RFC 1035 §2.3.4. The
-		// 6-bit length field carries the value in the wire format;
-		// we mask to make the bound explicit. If a label is over
-		// 63 bytes, it truncates silently — callers should validate
-		// before calling encodeDNSName.
-		result = append(result, byte(len(part)&0x3f))
+		// DNS labels are 0..63 bytes per RFC 1035 §2.3.4, and the 6-bit
+		// length octet cannot express a longer value. Clamp the label to
+		// what it declares: the octet written must equal the number of
+		// label bytes that follow it, otherwise every reader of this
+		// buffer — findNameEnd, skipDNSName, decodeDNSNameDepth, and the
+		// nameserver itself — walks into the middle of the label instead
+		// of onto the next length octet. (A 64-byte label used to encode
+		// with a 0x00 octet, terminating the name in mid-message.)
+		if len(part) > maxDNSLabelLength {
+			part = part[:maxDNSLabelLength]
+		}
+		result = append(result, byte(len(part)))
 		result = append(result, part...)
 	}
 	result = append(result, 0) // Root label

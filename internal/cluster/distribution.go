@@ -173,6 +173,22 @@ func (d *Distributor) UnregisterNode(nodeID string) {
 	d.logger.Info("Node unregistered", "node_id", nodeID, "souls_moved", len(soulsToMove))
 }
 
+// Heartbeat records that a node is alive without touching its load figures. The
+// manager drives this from Raft's per-peer liveness, so a node that is up keeps
+// being assigned souls while one that stops being reachable goes stale after
+// failoverTimeout and is failed over.
+func (d *Distributor) Heartbeat(nodeID string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	node, exists := d.nodeLoads[nodeID]
+	if !exists {
+		return
+	}
+	node.LastHeartbeat = time.Now()
+	node.Healthy = true
+}
+
 // UpdateNodeLoad updates load information for a node
 func (d *Distributor) UpdateNodeLoad(nodeID string, cpu, memory float64, soulCount int) {
 	d.mu.Lock()
@@ -254,6 +270,9 @@ func (d *Distributor) ReassignSoul(soulID string) error {
 		// Try to restore old assignment
 		d.mu.Lock()
 		d.soulMap[soulID] = currentNode
+		if node, exists := d.nodeLoads[currentNode]; exists {
+			node.SoulCount++
+		}
 		d.mu.Unlock()
 		return err
 	}
@@ -304,12 +323,67 @@ func (d *Distributor) GetLoadDistribution() map[string]*NodeLoad {
 	return result
 }
 
+// nodeStale reports whether a node has stopped heartbeating for longer than the
+// configured failover timeout. LastHeartbeat is refreshed by RegisterNode and
+// UpdateNodeLoad and read nowhere else, so without this comparison a node that dies
+// silently keeps its Healthy flag forever.
+func (d *Distributor) nodeStale(node *NodeLoad) bool {
+	// A zero LastHeartbeat means the node was never seen through RegisterNode or
+	// UpdateNodeLoad (both always set it), so there is no staleness to judge. A node
+	// that registered and then stopped heartbeating has a non-zero timestamp and is
+	// detected here.
+	if node.LastHeartbeat.IsZero() {
+		return false
+	}
+	return d.failoverTimeout > 0 && time.Since(node.LastHeartbeat) > d.failoverTimeout
+}
+
+// failoverStaleNodes marks nodes past the failover timeout unhealthy and reassigns
+// the souls they were holding, mirroring what UnregisterNode does for an explicit
+// departure. Without it those souls stay mapped to a node that will never check
+// them again, which is exactly what failoverTimeout exists to trigger.
+func (d *Distributor) failoverStaleNodes() {
+	d.mu.Lock()
+	var staleNodes []string
+	for nodeID, node := range d.nodeLoads {
+		if !node.Healthy || !d.nodeStale(node) {
+			continue
+		}
+		node.Healthy = false
+		staleNodes = append(staleNodes, nodeID)
+	}
+
+	var soulsToMove []string
+	if len(staleNodes) > 0 {
+		stale := make(map[string]bool, len(staleNodes))
+		for _, nodeID := range staleNodes {
+			stale[nodeID] = true
+		}
+		for soulID, nodeID := range d.soulMap {
+			if stale[nodeID] {
+				soulsToMove = append(soulsToMove, soulID)
+			}
+		}
+	}
+	d.mu.Unlock()
+
+	for _, nodeID := range staleNodes {
+		d.logger.Warn("Node missed its heartbeat and was marked unhealthy", "node_id", nodeID)
+	}
+	for _, soulID := range soulsToMove {
+		if err := d.ReassignSoul(soulID); err != nil {
+			d.logger.Error("Failed to reassign soul from a node that stopped heartbeating",
+				"soul_id", soulID, "error", err)
+		}
+	}
+}
+
 // selectNodeForSoul selects the best node for a soul based on strategy
 func (d *Distributor) selectNodeForSoul(soul *core.Soul) string {
 	var candidates []*NodeLoad
 
 	for _, node := range d.nodeLoads {
-		if node.Healthy {
+		if node.Healthy && !d.nodeStale(node) {
 			candidates = append(candidates, node)
 		}
 	}
@@ -426,6 +500,10 @@ func (d *Distributor) rebalanceLoop(interval time.Duration) {
 
 // checkAndRebalance checks load distribution and rebalances if needed
 func (d *Distributor) checkAndRebalance() {
+	// Fail over nodes that stopped heartbeating first: their souls must move even
+	// when the load itself is balanced, and even in a single-node cluster.
+	d.failoverStaleNodes()
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -480,6 +558,7 @@ func (d *Distributor) checkAndRebalance() {
 
 	// Calculate moves needed
 	var moves []SoulMove
+	planned := make(map[string]bool)
 	for _, over := range overloaded {
 		for _, under := range underloaded {
 			if over.SoulCount <= int(avgLoad) {
@@ -491,7 +570,7 @@ func (d *Distributor) checkAndRebalance() {
 
 			// Find souls to move
 			for soulID, nodeID := range d.soulMap {
-				if nodeID == over.NodeID {
+				if nodeID == over.NodeID && !planned[soulID] {
 					moves = append(moves, SoulMove{
 						SoulID:   soulID,
 						FromNode: over.NodeID,
@@ -501,8 +580,9 @@ func (d *Distributor) checkAndRebalance() {
 
 					over.SoulCount--
 					under.SoulCount++
+					planned[soulID] = true
 
-					if over.SoulCount <= int(avgLoad) {
+					if over.SoulCount <= int(avgLoad) || under.SoulCount >= int(avgLoad) {
 						break
 					}
 				}

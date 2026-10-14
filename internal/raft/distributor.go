@@ -143,6 +143,9 @@ func (d *Distributor) Recompute() (core.DistributionPlan, error) {
 		plan.Assignments = d.distributeRedundant(healthyNodes)
 	case core.StrategyWeighted:
 		plan.Assignments = d.distributeWeighted(healthyNodes)
+		if len(plan.Assignments) != len(d.souls) {
+			return core.DistributionPlan{}, fmt.Errorf("insufficient node capacity: assigned %d of %d souls", len(plan.Assignments), len(d.souls))
+		}
 	case core.StrategyLatencyOptimal:
 		plan.Assignments = d.distributeLatencyOptimal(healthyNodes)
 	default:
@@ -159,10 +162,14 @@ func (d *Distributor) Recompute() (core.DistributionPlan, error) {
 	}
 
 	if d.onRebalance != nil {
-		go d.onRebalance(plan)
+		callbackPlan := plan
+		callbackPlan.Assignments = append([]core.SoulAssignment(nil), plan.Assignments...)
+		go d.onRebalance(callbackPlan)
 	}
 
-	return plan, nil
+	result := plan
+	result.Assignments = append([]core.SoulAssignment(nil), plan.Assignments...)
+	return result, nil
 }
 
 // GetAssignment returns the assignment for a soul
@@ -430,7 +437,7 @@ func (d *Distributor) pickLeastLoaded(nodes []*core.NodeInfo) *core.NodeInfo {
 
 // pickBestWeighted selects node based on weighted capacity
 func (d *Distributor) pickBestWeighted(nodes []*core.NodeInfo, totalCapacity int) *core.NodeInfo {
-	if len(nodes) == 0 {
+	if len(nodes) == 0 || totalCapacity <= 0 {
 		return nil
 	}
 

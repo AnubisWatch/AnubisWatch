@@ -159,3 +159,7 @@ __debug_bin
 # (.tmp/anubis-e2e is rebuilt by scripts/test-e2e.sh and CI)
 /.tmp/
 /.temp_files/
+.temp_files/
+!/.wrongstack/
+/.wrongstack/*
+!/.wrongstack/project.json

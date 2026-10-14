@@ -101,6 +101,7 @@ type BackupMetadata struct {
 type BackupData struct {
 	Workspaces    []*core.Workspace          `json:"workspaces"`
 	Souls         []*core.Soul               `json:"souls"`
+	Judgments     []*core.Judgment           `json:"judgments,omitempty"`
 	AlertChannels []*core.AlertChannel       `json:"alert_channels"`
 	AlertRules    []*core.AlertRule          `json:"alert_rules"`
 	StatusPages   []*core.StatusPage         `json:"status_pages"`
@@ -180,6 +181,37 @@ func (m *Manager) Create(ctx context.Context, opts Options) (*Backup, string, er
 	}
 	backup.Data.Souls = allSouls
 	backup.Metadata.Souls = len(allSouls)
+
+	// Collect recent judgment history when the operator asked for it. The
+	// storage interface declares ListJudgments for exactly this purpose; the
+	// option used to be accepted and silently ignored, so a backup taken with
+	// --include-history contained no history and nothing reported the omission.
+	if opts.IncludeJudgments {
+		days := opts.JudgmentDays
+		if days <= 0 {
+			days = 7
+		}
+		end := time.Now()
+		start := end.AddDate(0, 0, -days)
+
+		var allJudgments []*core.Judgment
+		for _, soul := range allSouls {
+			// ListJudgments resolves its key prefix from the workspace in the
+			// context, so it must be scoped per soul. Without this the prefix
+			// was always "default/judgments/<soul>/" and every non-default
+			// workspace's history was silently dropped from the archive.
+			soulCtx := core.ContextWithWorkspaceID(ctx, soul.WorkspaceID)
+			// A zero limit requests everything inside the window, so the day
+			// range the operator chose is the only bound on the history.
+			judgments, err := m.storage.ListJudgments(soulCtx, soul.ID, start, end, 0)
+			if err != nil {
+				m.logger.Warn("Failed to list judgments for soul", "soul", soul.ID, "error", err)
+				continue
+			}
+			allJudgments = append(allJudgments, judgments...)
+		}
+		backup.Data.Judgments = allJudgments
+	}
 
 	// Collect alert channels across all workspaces
 	var allChannels []*core.AlertChannel
@@ -557,6 +589,7 @@ func (m *Manager) writeBackupFile(backup *Backup, path string, opts Options) err
 	if err != nil {
 		return err
 	}
+	defer os.Remove(tmpPath)
 
 	var writer io.Writer = file
 	var gzipWriter *gzip.Writer
@@ -628,18 +661,24 @@ func (m *Manager) readBackupFile(path string) (*Backup, error) {
 	}
 
 	// Try to detect if this is an encrypted backup
-	// Encrypted backups start with 32-byte salt, JSON backups start with '{'
-	if len(data) > 32 && data[0] == 0x00 && data[31] != '{' {
+	// Encrypted backups start with random salt, which has no fixed prefix.
+	if len(data) > 32 && !json.Valid(data) {
 		// Looks encrypted, try to decrypt
 		keyFile := path + backupKeySuffix
+		var key []byte
 		if _, err := os.Stat(keyFile); os.IsNotExist(err) {
-			// Try default key location
-			keyFile = m.backupsDir + "/.backup_key"
+			if envKey := os.Getenv("ANUBIS_BACKUP_ENCRYPTION_KEY"); envKey != "" {
+				key = []byte(envKey)
+			} else {
+				keyFile = m.backupsDir + "/.backup_key"
+			}
 		}
 
-		key, err := m.GetStoredEncryptionKey(keyFile)
-		if err != nil {
-			return nil, fmt.Errorf("backup is encrypted but no key found: %w", err)
+		if key == nil {
+			key, err = m.GetStoredEncryptionKey(keyFile)
+			if err != nil {
+				return nil, fmt.Errorf("backup is encrypted but no key found: %w", err)
+			}
 		}
 
 		decrypted, err := decryptData(key, data)
@@ -759,7 +798,7 @@ func (m *Manager) ExportToTar(ctx context.Context, w io.Writer, opts Options) er
 		return err
 	}
 
-	return nil
+	return tw.Close()
 }
 
 // ImportFromTar imports backup data from a tar archive

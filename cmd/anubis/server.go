@@ -627,9 +627,12 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		}
 	}
 
-	// Initialize status page handler
+	// Initialize status page handler. Private pages are gated on a session, so the
+	// configured authenticator is adapted onto the handler's session check; without
+	// this a private page is refused for everyone, including its owner.
 	statusPageRepo := &statusPageRepository{store: store}
-	statusPageHandler := statuspage.NewHandler(statusPageRepo)
+	statusPageHandler := statuspage.NewHandler(statusPageRepo).
+		SetSessionValidator(statusPageSessionValidator{auth: authenticator})
 
 	// Initialize MCP server
 	mcpServer := api.NewMCPServer(restStore, probeEngine, alertMgr, logger)
@@ -912,7 +915,12 @@ func (a *restStorageAdapter) ListChannelsNoCtx(workspace string) ([]*core.AlertC
 
 func (a *restStorageAdapter) SaveChannelNoCtx(ch *core.AlertChannel) error {
 	if a.replicator != nil {
-		key := fmt.Sprintf("%s/channels/%s", ch.WorkspaceID, ch.ID)
+		// Alert channels are stored by the engine under "{ws}/alerts/channels/{id}"
+		// (internal/storage/storage.go SaveAlertChannel/GetAlertChannel/
+		// ListAlertChannels). Replicating under "{ws}/channels/{id}" wrote the
+		// record where no read path looks, so a clustered create succeeded and
+		// the channel was immediately unreadable. Use the canonical key.
+		key := fmt.Sprintf("%s/alerts/channels/%s", ch.WorkspaceID, ch.ID)
 		data, err := json.Marshal(ch)
 		if err != nil {
 			return err
@@ -924,7 +932,9 @@ func (a *restStorageAdapter) SaveChannelNoCtx(ch *core.AlertChannel) error {
 
 func (a *restStorageAdapter) DeleteChannelNoCtx(id string, workspace string) error {
 	if a.replicator != nil {
-		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: fmt.Sprintf("%s/channels/%s", workspace, id)})
+		// Same canonical key as SaveChannelNoCtx; the old "{ws}/channels/{id}"
+		// form left the stored record orphaned.
+		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: fmt.Sprintf("%s/alerts/channels/%s", workspace, id)})
 	}
 	return a.store.DeleteChannelNoCtx(id, workspace)
 }
@@ -939,7 +949,12 @@ func (a *restStorageAdapter) ListRulesNoCtx(workspace string) ([]*core.AlertRule
 
 func (a *restStorageAdapter) SaveRuleNoCtx(rule *core.AlertRule) error {
 	if a.replicator != nil {
-		key := fmt.Sprintf("%s/rules/%s", rule.WorkspaceID, rule.ID)
+		// Alert rules are stored by the engine under "{ws}/alerts/rules/{id}"
+		// (internal/storage/storage.go SaveAlertRule/GetAlertRule/
+		// ListAlertRules). Replicating under "{ws}/rules/{id}" wrote the record
+		// where no read path looks, so a clustered create succeeded and the rule
+		// was immediately unreadable. Use the canonical key.
+		key := fmt.Sprintf("%s/alerts/rules/%s", rule.WorkspaceID, rule.ID)
 		data, err := json.Marshal(rule)
 		if err != nil {
 			return err
@@ -951,7 +966,9 @@ func (a *restStorageAdapter) SaveRuleNoCtx(rule *core.AlertRule) error {
 
 func (a *restStorageAdapter) DeleteRuleNoCtx(id string, workspace string) error {
 	if a.replicator != nil {
-		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: fmt.Sprintf("%s/rules/%s", workspace, id)})
+		// Same canonical key as SaveRuleNoCtx; the old "{ws}/rules/{id}" form
+		// left the stored record orphaned.
+		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: fmt.Sprintf("%s/alerts/rules/%s", workspace, id)})
 	}
 	return a.store.DeleteRuleNoCtx(id, workspace)
 }
@@ -966,7 +983,13 @@ func (a *restStorageAdapter) ListWorkspacesNoCtx() ([]*core.Workspace, error) {
 
 func (a *restStorageAdapter) SaveWorkspaceNoCtx(ws *core.Workspace) error {
 	if a.replicator != nil {
-		key := fmt.Sprintf("%s/workspaces/%s", ws.ID, ws.ID)
+		// Every read path in CobaltDB resolves workspaces through the
+		// workspace-less "workspaces/{id}" key (engine.go GetWorkspace,
+		// ListWorkspaces, SaveWorkspace, DeleteWorkspace). Replicating under
+		// "{ws}/workspaces/{ws}" wrote the record where nothing reads it, so a
+		// clustered create answered 201 and the workspace was immediately
+		// unreadable. Use the same canonical key the engine uses.
+		key := "workspaces/" + ws.ID
 		data, err := json.Marshal(ws)
 		if err != nil {
 			return err
@@ -978,13 +1001,39 @@ func (a *restStorageAdapter) SaveWorkspaceNoCtx(ws *core.Workspace) error {
 
 func (a *restStorageAdapter) DeleteWorkspaceNoCtx(id string) error {
 	if a.replicator != nil {
-		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: fmt.Sprintf("%s/workspaces/%s", id, id)})
+		// Same canonical key as SaveWorkspaceNoCtx; deleting the old
+		// "{id}/workspaces/{id}" form left the stored record orphaned.
+		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: "workspaces/" + id})
 	}
 	return a.store.DeleteWorkspaceNoCtx(id)
 }
 
 func (a *restStorageAdapter) GetStatsNoCtx(workspace string, start, end time.Time) (*core.Stats, error) {
 	return a.store.GetStatsNoCtx(workspace, start, end)
+}
+
+// statusPageSessionValidator adapts the configured authenticator to the status
+// page's session check: a private page is visible to a session whose user belongs
+// to the page's workspace, with the empty workspace meaning "default" exactly as
+// it does elsewhere.
+type statusPageSessionValidator struct{ auth api.Authenticator }
+
+func (v statusPageSessionValidator) ValidateStatusPageSession(token, workspaceID string) bool {
+	if v.auth == nil || token == "" {
+		return false
+	}
+	user, err := v.auth.Authenticate(token)
+	if err != nil || user == nil {
+		return false
+	}
+	return statusPageWorkspace(user.Workspace) == statusPageWorkspace(workspaceID)
+}
+
+func statusPageWorkspace(workspace string) string {
+	if workspace == "" {
+		return "default"
+	}
+	return workspace
 }
 
 // StatusPage methods

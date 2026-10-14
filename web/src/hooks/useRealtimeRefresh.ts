@@ -28,7 +28,9 @@ export function useRealtimeRefresh(
     if (timerRef.current) clearTimeout(timerRef.current)
     timerRef.current = setTimeout(() => {
       timerRef.current = null
-      Promise.resolve(refetchRef.current()).catch(() => {
+      void (async () => {
+        await refetchRef.current()
+      })().catch(() => {
         // The owning hook exposes fetch errors through its own error state.
       })
     }, debounceMs)
@@ -36,5 +38,5 @@ export function useRealtimeRefresh(
 
   useEffect(() => () => {
     if (timerRef.current) clearTimeout(timerRef.current)
-  }, [])
+  }, [typesKey])
 }

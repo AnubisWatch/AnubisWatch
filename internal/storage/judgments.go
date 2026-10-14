@@ -86,7 +86,14 @@ func (db *CobaltDB) QueryJudgments(ctx context.Context, workspaceID, soulID stri
 	startKey := fmt.Sprintf("%s%d", prefix, start.UnixNano())
 	endKey := fmt.Sprintf("%s%d", prefix, end.UnixNano())
 
-	results, err := db.RangeScan(startKey, endKey)
+	var results map[string][]byte
+	var err error
+	if start.UnixNano() < 0 || end.UnixNano() < 0 || len(startKey) != len(endKey) {
+		// Decimal keys have lexical order only for positive, equal-width timestamps.
+		results, err = db.PrefixScan(prefix)
+	} else {
+		results, err = db.RangeScan(startKey, endKey)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -99,6 +106,9 @@ func (db *CobaltDB) QueryJudgments(ctx context.Context, workspaceID, soulID stri
 		var j core.Judgment
 		if err := json.Unmarshal(data, &j); err != nil {
 			db.logger.Warn("failed to unmarshal judgment", "err", err)
+			continue
+		}
+		if j.Timestamp.Before(start) || !j.Timestamp.Before(end) {
 			continue
 		}
 		judgments = append(judgments, &j)
@@ -128,10 +138,9 @@ func (db *CobaltDB) GetLatestJudgment(ctx context.Context, workspaceID, soulID s
 		return nil, &core.NotFoundError{Entity: "judgment", ID: soulID}
 	}
 
-	// Find latest (keys are sorted, so last one is latest)
+	// Compare timestamps; decimal key strings do not preserve chronological order.
 	var latest *core.Judgment
-	var latestKey string
-	for key, data := range results {
+	for _, data := range results {
 		if data == nil {
 			continue
 		}
@@ -139,9 +148,8 @@ func (db *CobaltDB) GetLatestJudgment(ctx context.Context, workspaceID, soulID s
 		if err := json.Unmarshal(data, &j); err != nil {
 			continue
 		}
-		if key > latestKey {
+		if latest == nil || j.Timestamp.After(latest.Timestamp) {
 			latest = &j
-			latestKey = key
 		}
 	}
 

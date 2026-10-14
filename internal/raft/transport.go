@@ -268,14 +268,14 @@ func (t *TCPTransport) handleConnection(conn net.Conn) {
 		resp, err := t.handleRPC(method, payload)
 		if err != nil {
 			t.logger.Debug("RPC error", "method", method, "error", err)
-			continue
+			return
 		}
 
 		// Send response
 		respData, err := json.Marshal(resp)
 		if err != nil {
 			t.logger.Debug("Marshal error", "error", err)
-			continue
+			return
 		}
 
 		if _, err := fmt.Fprintf(writer, "%d\n", len(respData)); err != nil {
@@ -295,6 +295,10 @@ func (t *TCPTransport) handleConnection(conn net.Conn) {
 
 // handleRPC dispatches to the appropriate handler
 func (t *TCPTransport) handleRPC(method string, payload []byte) (interface{}, error) {
+	if t.shutdown.Load() {
+		return nil, fmt.Errorf("transport stopped")
+	}
+
 	t.handlerMu.RLock()
 	handler, ok := t.handlers[method]
 	t.handlerMu.RUnlock()

@@ -40,6 +40,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       const ws = new WebSocket(wsUrl)
 
       ws.onopen = () => {
+        if (wsRef.current !== ws) return
         setConnected(true)
         reconnectAttemptsRef.current = 0
 
@@ -51,6 +52,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       }
 
       ws.onmessage = (event) => {
+        if (wsRef.current !== ws) return
         try {
           const raw = JSON.parse(event.data) as WebSocketMessage
           const message: WebSocketMessage = {
@@ -59,7 +61,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
             timestamp: typeof raw.timestamp === 'string' ? raw.timestamp : new Date().toISOString()
           }
           setLastMessage(message)
-          setMessages(prev => [...prev.slice(-50), message]) // Keep last 50 messages
+          setMessages(prev => [...prev.slice(-49), message]) // Keep last 50 messages
 
           // Handle ping/pong for keepalive
           if (message.type === 'ping') {
@@ -71,6 +73,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       }
 
       ws.onclose = () => {
+        if (wsRef.current !== ws) return
         setConnected(false)
         wsRef.current = null
 
@@ -101,10 +104,9 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
       reconnectTimeoutRef.current = null
     }
 
-    if (wsRef.current) {
-      wsRef.current.close()
-      wsRef.current = null
-    }
+    const ws = wsRef.current
+    wsRef.current = null
+    ws?.close()
     setConnected(false)
   }, [])
 

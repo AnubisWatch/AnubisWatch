@@ -121,7 +121,12 @@ func (al *AuditLogger) LogRequest(r *http.Request, userID string, status int, du
 		"status_code":  status,
 		"duration_ms":  duration.Milliseconds(),
 		"content_type": r.Header.Get("Content-Type"),
-		"referer":      r.Header.Get("Referer"),
+		// The referer is a URL supplied by the same client, and after the OIDC
+		// callback the browser's address bar -- which same-origin requests send in
+		// full -- is /api/v1/auth/oidc/callback?code=...&state=... . It carries the
+		// same class of parameters as the request query above, so it gets the same
+		// masking instead of being stored verbatim.
+		"referer": sanitizeURL(r.Header.Get("Referer")),
 	}
 
 	al.Log(eventType, userID, resource, action, statusStr, details)

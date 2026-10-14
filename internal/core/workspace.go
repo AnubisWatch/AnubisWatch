@@ -90,16 +90,19 @@ const (
 
 // Can checks if role has permission
 func (r MemberRole) Can(permission string) bool {
-	perms := map[MemberRole][]string{
-		RoleOwner:  {"*"},
-		RoleAdmin:  {"souls:*", "channels:*", "rules:*", "members:*", "settings:read", "settings:write"},
-		RoleEditor: {"souls:*", "channels:read", "rules:read"},
-		RoleViewer: {"souls:read", "judgments:read", "channels:read", "rules:read"},
-		RoleAPI:    {"souls:*", "judgments:read", "api:*"},
-	}
-
-	rolePerms, ok := perms[r]
-	if !ok {
+	var rolePerms []string
+	switch r {
+	case RoleOwner:
+		return true
+	case RoleAdmin:
+		rolePerms = []string{"souls:*", "channels:*", "rules:*", "members:*", "settings:read", "settings:write"}
+	case RoleEditor:
+		rolePerms = []string{"souls:*", "channels:read", "rules:read"}
+	case RoleViewer:
+		rolePerms = []string{"souls:read", "judgments:read", "channels:read", "rules:read"}
+	case RoleAPI:
+		rolePerms = []string{"souls:*", "judgments:read", "api:*"}
+	default:
 		return false
 	}
 

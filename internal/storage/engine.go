@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -120,6 +121,9 @@ const (
 	// Maximum B+Tree order
 	maxBTreeOrder = 256
 
+	// WAL writes and recovery must agree on the maximum encoded entry size.
+	maxWALEntryBytes = 1024 * 1024
+
 	// minWALCheckpointBytes is the floor below which the WAL is never
 	// compacted — avoids churning on tiny datasets.
 	minWALCheckpointBytes = 8 * 1024 * 1024 // 8 MiB
@@ -200,6 +204,7 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 	var enc *encryptor
 	if config.Encryption.Enabled {
 		if config.Encryption.Key == "" {
+			_ = wal.Close()
 			return nil, fmt.Errorf("encryption is enabled but encryption.key is empty")
 		}
 		var err error
@@ -354,7 +359,7 @@ func (db *CobaltDB) Get(key string) ([]byte, error) {
 // expect JSON or Raft records and silently drop data when decoding fails.
 func (db *CobaltDB) decodeStoredValue(key string, value []byte) ([]byte, error) {
 	if db.encryptor == nil {
-		return value, nil
+		return bytes.Clone(value), nil
 	}
 
 	decrypted, err := db.encryptor.decrypt(value)
@@ -374,13 +379,15 @@ func (db *CobaltDB) Put(key string, value []byte) error {
 	db.closedMu.Unlock()
 
 	// Encrypt value if encryption is enabled
-	storeValue := value
+	var storeValue []byte
 	if db.encryptor != nil {
 		encrypted, err := db.encryptor.encrypt(value)
 		if err != nil {
 			return fmt.Errorf("encryption failed: %w", err)
 		}
 		storeValue = encrypted
+	} else {
+		storeValue = bytes.Clone(value)
 	}
 
 	// writeMu makes the WAL append and the tree apply a single atomic step so
@@ -543,6 +550,20 @@ func (db *CobaltDB) compactTree() {
 		_ = db.data.insert(e.key, e.value)
 	}
 	db.data.nextSeq = uint64(len(live))
+}
+
+// RebuildIndexes repopulates every in-memory secondary index from the durable
+// keyspace, taking both locks it needs. Callers that replace the keyspace
+// wholesale instead of going through the Save* helpers -- notably the Raft FSM
+// snapshot install path in internal/raft -- must invoke this, or index-backed
+// lookups such as GetJudgmentNoCtx will report NotFound for records that are
+// present on disk.
+func (db *CobaltDB) RebuildIndexes() {
+	db.mu.Lock()
+	defer db.mu.Unlock()
+	db.data.mu.Lock()
+	defer db.data.mu.Unlock()
+	db.rebuildIndexes()
 }
 
 // rebuildIndexes clears and repopulates all in-memory secondary indexes by
@@ -1062,6 +1083,9 @@ func writeEntryLocked(f *os.File, entry walEntry) (int, error) {
 	entry.Crc32 = csum
 
 	data, _ := json.Marshal(entry)
+	if len(data) > maxWALEntryBytes {
+		return 0, fmt.Errorf("WAL entry exceeds maximum encoded size of %d bytes", maxWALEntryBytes)
+	}
 
 	length := []byte{
 		byte(len(data) >> 24 & 0xff),
@@ -1214,7 +1238,7 @@ func (w *writeAheadLog) Truncate() error {
 type walEntry struct {
 	Op    string `json:"op"`
 	Key   string `json:"key"`
-	Value []byte `json:"value,omitempty"`
+	Value []byte `json:"value,omitzero"`
 	Time  int64  `json:"time"`
 	// Crc32 is a CRC-32/IEEE checksum covering the entry's op, key, value,
 	// and time fields (everything except crc32 itself). Zero means no
@@ -1266,7 +1290,7 @@ func (db *CobaltDB) recoverFromWAL() error {
 		}
 
 		length := int(buf[0])<<24 | int(buf[1])<<16 | int(buf[2])<<8 | int(buf[3])
-		if length <= 0 || length > 1024*1024 {
+		if length <= 0 || length > maxWALEntryBytes {
 			db.logWALTornTail("entry length out of range", fmt.Errorf("length=%d", length))
 			break
 		}

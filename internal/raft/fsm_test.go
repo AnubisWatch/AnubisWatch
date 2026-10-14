@@ -1156,17 +1156,12 @@ func TestStorageFSM_Snapshot_GetErrors(t *testing.T) {
 	fsm := NewStorageFSM(store)
 
 	snapshot, err := fsm.Snapshot()
-	if err != nil {
-		t.Fatalf("Snapshot should succeed even if Get fails: %v", err)
+	if err == nil {
+		t.Fatal("Snapshot should fail if an application key cannot be read")
 	}
 
-	// Snapshot should contain empty map since all Gets failed
-	var data map[string][]byte
-	if err := json.Unmarshal(snapshot.Value, &data); err != nil {
-		t.Fatalf("Failed to unmarshal snapshot: %v", err)
-	}
-	if len(data) != 0 {
-		t.Errorf("Expected empty snapshot, got %d entries", len(data))
+	if len(snapshot.Value) != 0 {
+		t.Fatalf("Failed snapshot returned partial data: %s", snapshot.Value)
 	}
 }
 

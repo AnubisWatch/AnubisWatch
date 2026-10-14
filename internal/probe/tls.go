@@ -62,6 +62,15 @@ func (c *TLSChecker) Validate(soul *core.Soul) error {
 		return configError("target", fmt.Sprintf("SSRF validation failed: %v", err))
 	}
 
+	// A protocol floor the checker cannot parse resolves to 0, which makes the
+	// tls_version assertion read `state.Version >= 0` and never fail: the
+	// operator would believe a floor was enforced while nothing was. Refuse it
+	// here, where the probe engine and the journey executor surface the error.
+	if soul.TLS != nil && soul.TLS.MinProtocol != "" && parseTLSVersion(soul.TLS.MinProtocol) == 0 {
+		return configError("min_protocol", fmt.Sprintf(
+			"unrecognized TLS protocol %q (use TLS1.2 or TLS1.3)", soul.TLS.MinProtocol))
+	}
+
 	return nil
 }
 
@@ -470,13 +479,13 @@ func certificateKeyBits(cert *x509.Certificate) int {
 func parseTLSVersion(s string) uint16 {
 	s = strings.ToUpper(strings.ReplaceAll(s, ".", ""))
 	switch s {
-	case "TLS10", "TLS1.0", "TLS1":
+	case "TLS10", "TLS1", "10":
 		return tls.VersionTLS10
-	case "TLS11", "TLS1.1":
+	case "TLS11", "11":
 		return tls.VersionTLS11
-	case "TLS12", "TLS1.2":
+	case "TLS12", "12":
 		return tls.VersionTLS12
-	case "TLS13", "TLS1.3":
+	case "TLS13", "13":
 		return tls.VersionTLS13
 	default:
 		return 0
