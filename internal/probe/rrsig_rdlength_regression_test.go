@@ -53,14 +53,14 @@ func buildRRSIGAnswerFixture(expiration uint32) rrsigAnswerFixture {
 	rdata = append(rdata, signerName...)
 
 	msg := make([]byte, 0, 12+14+4+10+len(rdata))
-	msg = append(msg, 0xAB, 0xCD)                         // ID
-	msg = append(msg, 0x81, 0x80)                         // QR|RD|RA
-	msg = append(msg, 0x00, 0x01)                         // QDCOUNT
-	msg = append(msg, 0x00, 0x01)                         // ANCOUNT
-	msg = append(msg, 0x00, 0x00, 0x00, 0x00)             // NSCOUNT, ARCOUNT
+	msg = append(msg, 0xAB, 0xCD)             // ID
+	msg = append(msg, 0x81, 0x80)             // QR|RD|RA
+	msg = append(msg, 0x00, 0x01)             // QDCOUNT
+	msg = append(msg, 0x00, 0x01)             // ANCOUNT
+	msg = append(msg, 0x00, 0x00, 0x00, 0x00) // NSCOUNT, ARCOUNT
 	msg = append(msg, 4, 't', 'e', 's', 't', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0)
-	msg = append(msg, 0x00, 0x01)             // QTYPE A
-	msg = append(msg, 0x00, 0x01)             // QCLASS IN
+	msg = append(msg, 0x00, 0x01) // QTYPE A
+	msg = append(msg, 0x00, 0x01) // QCLASS IN
 
 	nameStart := len(msg)
 	msg = append(msg, 0xC0, 0x0C)             // answer owner name: pointer to offset 12
