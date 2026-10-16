@@ -5,14 +5,18 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
+	"net"
 	"net/http"
 	"net/smtp"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -350,50 +354,162 @@ type EmailDispatcher struct {
 	logger *slog.Logger
 }
 
-// Send sends an email alert
+// Send sends an email alert.
+//
+// Channel config: smtp_host, smtp_port (default 587), from, to (list),
+// optional username/password, and tls: "auto" (default; implicit TLS on port
+// 465, otherwise STARTTLS when offered), "implicit", "starttls" (required),
+// or "none".
 func (d *EmailDispatcher) Send(ctx context.Context, event *core.AlertEvent, channel *core.AlertChannel) error {
 	smtpHost, _ := channel.Config["smtp_host"].(string)
 	smtpPort := 587
-	if port, ok := channel.Config["smtp_port"].(float64); ok {
+	switch port := channel.Config["smtp_port"].(type) {
+	case float64:
 		smtpPort = int(port)
+	case int:
+		smtpPort = port
+	case string:
+		if n, err := strconv.Atoi(port); err == nil {
+			smtpPort = n
+		}
 	}
 	username, _ := channel.Config["username"].(string)
 	password, _ := channel.Config["password"].(string)
 	from, _ := channel.Config["from"].(string)
+	tlsMode, _ := channel.Config["tls"].(string)
 
 	toList, ok := channel.Config["to"].([]any)
 	if !ok || len(toList) == 0 {
 		return fmt.Errorf("no recipients configured")
 	}
-
-	// Build email body
-	subject := fmt.Sprintf("[%s] %s - %s", event.Status, event.SoulName, event.Severity)
-	body := d.buildEmailBody(event)
-
-	// Send email
-	addr := fmt.Sprintf("%s:%d", smtpHost, smtpPort)
-	auth := &plainAuth{
-		identity: "",
-		username: username,
-		password: password,
-		host:     smtpHost,
-	}
-
 	recipients := make([]string, 0, len(toList))
 	for _, r := range toList {
-		if email, ok := r.(string); ok {
-			recipients = append(recipients, email)
+		if email, ok := r.(string); ok && strings.TrimSpace(email) != "" {
+			recipients = append(recipients, strings.TrimSpace(email))
+		}
+	}
+	if len(recipients) == 0 {
+		return fmt.Errorf("no recipients configured")
+	}
+	if from == "" {
+		from = "anubis@" + smtpHost
+	}
+	for _, addr := range append([]string{from}, recipients...) {
+		if strings.ContainsAny(addr, "\r\n") {
+			return fmt.Errorf("invalid email address %q", addr)
 		}
 	}
 
-	msg := []byte(fmt.Sprintf("To: %s\r\nSubject: %s\r\nContent-Type: text/html; charset=UTF-8\r\n\r\n%s",
-		strings.Join(recipients, ", "), subject, body))
+	subject := fmt.Sprintf("[%s] %s - %s", event.Status, event.SoulName, event.Severity)
+	msg := buildEmailMessage(from, recipients, subject, d.buildEmailBody(event), time.Now())
 
-	if err := smtp.SendMail(addr, auth, from, recipients, msg); err != nil {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+	}
+	if err := sendSMTP(ctx, smtpHost, smtpPort, tlsMode, username, password, from, recipients, msg); err != nil {
 		return fmt.Errorf("failed to send email: %w", err)
 	}
-
 	return nil
+}
+
+// buildEmailMessage renders an RFC 5322 message. Header values are
+// RFC 2047-encoded, which also neutralises CR/LF in soul names.
+func buildEmailMessage(from string, to []string, subject, htmlBody string, now time.Time) []byte {
+	var b strings.Builder
+	b.WriteString("From: " + from + "\r\n")
+	b.WriteString("To: " + strings.Join(to, ", ") + "\r\n")
+	b.WriteString("Subject: " + mime.QEncoding.Encode("utf-8", subject) + "\r\n")
+	b.WriteString("Date: " + now.UTC().Format(time.RFC1123Z) + "\r\n")
+	domain := "anubis.local"
+	if at := strings.LastIndex(from, "@"); at >= 0 && at < len(from)-1 {
+		domain = strings.Trim(from[at+1:], "<> ")
+	}
+	b.WriteString("Message-ID: <" + core.GenerateID() + "@" + domain + ">\r\n")
+	b.WriteString("MIME-Version: 1.0\r\n")
+	b.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
+	b.WriteString("Content-Transfer-Encoding: 8bit\r\n")
+	b.WriteString("\r\n")
+	b.WriteString(strings.ReplaceAll(strings.ReplaceAll(htmlBody, "\r\n", "\n"), "\n", "\r\n"))
+	return []byte(b.String())
+}
+
+// sendSMTP delivers msg honouring ctx for dial and I/O.
+func sendSMTP(ctx context.Context, host string, port int, tlsMode, username, password, from string, to []string, msg []byte) error {
+	if host == "" {
+		return fmt.Errorf("smtp_host is empty")
+	}
+	tlsMode = strings.ToLower(tlsMode)
+	if tlsMode == "" || tlsMode == "auto" {
+		tlsMode = "auto"
+		if port == 465 {
+			tlsMode = "implicit"
+		}
+	}
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	tlsConfig := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
+
+	dialer := &net.Dialer{}
+	var conn net.Conn
+	var err error
+	if tlsMode == "implicit" {
+		conn, err = (&tls.Dialer{NetDialer: dialer, Config: tlsConfig}).DialContext(ctx, "tcp", addr)
+	} else {
+		conn, err = dialer.DialContext(ctx, "tcp", addr)
+	}
+	if err != nil {
+		return err
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+
+	client, err := smtp.NewClient(conn, host)
+	if err != nil {
+		conn.Close()
+		return err
+	}
+	defer client.Close()
+
+	if tlsMode == "auto" || tlsMode == "starttls" {
+		if ok, _ := client.Extension("STARTTLS"); ok {
+			if err := client.StartTLS(tlsConfig); err != nil {
+				return fmt.Errorf("STARTTLS: %w", err)
+			}
+		} else if tlsMode == "starttls" {
+			return fmt.Errorf("server %s does not offer STARTTLS", host)
+		}
+	}
+	if username != "" {
+		if ok, _ := client.Extension("AUTH"); !ok {
+			return fmt.Errorf("server %s does not support AUTH but credentials are configured", host)
+		}
+		if err := client.Auth(&plainAuth{username: username, password: password, host: host}); err != nil {
+			return err
+		}
+	}
+	if err := client.Mail(from); err != nil {
+		return err
+	}
+	for _, rcpt := range to {
+		if err := client.Rcpt(rcpt); err != nil {
+			return err
+		}
+	}
+	w, err := client.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(msg); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return client.Quit()
 }
 
 // Validate validates email configuration

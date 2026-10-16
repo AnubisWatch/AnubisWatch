@@ -415,7 +415,7 @@ func TestJourneyToPB_NilInput(t *testing.T) {
 
 func TestUpdateSoul_MapType(t *testing.T) {
 	store := newMockGRPCStore()
-	store.souls["soul_1"] = &core.Soul{ID: "soul_1", Name: "old-name", Type: "http", Target: "old.com"}
+	store.souls["soul_1"] = &core.Soul{ID: "soul_1", Name: "old-name", Type: "http", Target: "https://old.com"}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
 	name := "updated-name"
@@ -461,7 +461,7 @@ func TestUpdateSoul_WorkspacePermissionDenied(t *testing.T) {
 
 func TestUpdateSoul_UpdateMultipleFields(t *testing.T) {
 	store := newMockGRPCStore()
-	store.souls["soul_1"] = &core.Soul{ID: "soul_1", Name: "old", Type: "http", Target: "old.com"}
+	store.souls["soul_1"] = &core.Soul{ID: "soul_1", Name: "old", Type: "http", Target: "https://old.com"}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
 	name := "new-name"

@@ -226,10 +226,6 @@ func normalizedListWindow(offset, limit int32) (int, int) {
 	return normalizedOffset, normalizedLimit
 }
 
-func listFetchLimit(offset, limit int) int {
-	return offset + limit + 1
-}
-
 func newPagination(total, offset, limit, returned int) *v1.Pagination {
 	hasMore := offset+returned < total
 	var nextOffset *int32
@@ -1045,13 +1041,15 @@ func (s *Server) CreateSoul(ctx context.Context, req *v1.CreateSoulRequest) (*v1
 	if soul.WorkspaceID == "" {
 		soul.WorkspaceID = "default"
 	}
+	soul.ApplyDefaults()
+	if err := soul.Validate(); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 
 	if err := s.store.SaveSoulNoCtx(soul); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create soul: %v", err)
+		return nil, writeError(err, "failed to create soul")
 	}
-	if s.probe != nil {
-		s.probe.UpsertSoul(soul)
-	}
+	s.syncProbeSoul(soul)
 
 	// Retrieve the created soul directly using the generated ID.
 	created, err := s.store.GetSoulNoCtx(soul.ID)
@@ -1083,18 +1081,33 @@ func (s *Server) UpdateSoul(ctx context.Context, req *v1.UpdateSoulRequest) (*v1
 	}
 
 	applySoulUpdates(existing, req)
+	existing.ApplyDefaults()
+	if err := existing.Validate(); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 	if err := s.store.SaveSoulNoCtx(existing); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update soul: %v", err)
+		return nil, writeError(err, "failed to update soul")
 	}
-	if s.probe != nil {
-		s.probe.UpsertSoul(existing)
-	}
+	s.syncProbeSoul(existing)
 
 	updated, err := s.store.GetSoulNoCtx(req.Id)
 	if err != nil || updated == nil {
 		return nil, status.Errorf(codes.Internal, "soul updated but could not be retrieved")
 	}
 	return soulToPB(updated), nil
+}
+
+// syncProbeSoul schedules enabled souls and unschedules disabled ones,
+// matching the REST API.
+func (s *Server) syncProbeSoul(soul *core.Soul) {
+	if s.probe == nil || soul == nil {
+		return
+	}
+	if soul.Enabled {
+		s.probe.UpsertSoul(soul)
+		return
+	}
+	s.probe.RemoveSoul(soul.ID)
 }
 
 func (s *Server) DeleteSoul(ctx context.Context, req *v1.DeleteSoulRequest) (*emptypb.Empty, error) {
@@ -1113,12 +1126,28 @@ func (s *Server) DeleteSoul(ctx context.Context, req *v1.DeleteSoulRequest) (*em
 		return nil, status.Error(codes.PermissionDenied, "access denied: soul belongs to another workspace")
 	}
 	if err := s.store.DeleteSoulNoCtx(req.Id); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to delete soul: %v", err)
+		return nil, writeError(err, "failed to delete soul")
 	}
 	if s.probe != nil {
 		s.probe.RemoveSoul(req.Id)
 	}
 	return &emptypb.Empty{}, nil
+}
+
+// writeError maps a failed store write onto a gRPC status. A write refused
+// because no Raft leader could take it (core.LeaderUnavailable -- the same
+// predicate the REST API answers with 503) is codes.Unavailable, which
+// clients treat as retryable; anything else is codes.Internal. Every mutating
+// RPC reports its store failure through here.
+func writeError(err error, what string) error {
+	if raftErr, unavailable := core.LeaderUnavailable(err); unavailable {
+		msg := what + ": cluster leader unavailable; retry shortly"
+		if raftErr.NodeID != "" {
+			msg += " (leader " + raftErr.NodeID + ")"
+		}
+		return status.Error(codes.Unavailable, msg)
+	}
+	return status.Errorf(codes.Internal, "%s: %v", what, err)
 }
 
 // --- Judgment RPCs ---
@@ -1408,15 +1437,14 @@ func (s *Server) CreateChannel(ctx context.Context, req *v1.CreateChannelRequest
 		return nil, err
 	}
 
-	if err := s.store.SaveChannelNoCtx(ch); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create channel: %v", err)
+	if err := s.saveChannel(ch); err != nil {
+		return nil, writeError(err, "failed to create channel")
 	}
 
 	created, err := s.store.GetChannelNoCtx(ch.ID, workspace)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "channel created but could not be retrieved: %v", err)
 	}
-	s.registerChannel(created)
 	return channelToPB(created), nil
 }
 
@@ -1439,13 +1467,16 @@ func (s *Server) validateChannel(ch *core.AlertChannel) error {
 
 // registerChannel hands a stored channel to the live alert engine. Storage
 // already holds it, so a failure is logged rather than returned.
-func (s *Server) registerChannel(ch *core.AlertChannel) {
-	if s.alerts == nil || ch == nil {
-		return
+// saveChannel persists a channel and activates it with one write, as REST
+// does: the alert engine's RegisterChannel stores it (replicated in cluster
+// mode) and rolls back on failure. Saving to the store first and registering
+// afterwards wrote twice — two consensus rounds in a cluster — and hid a
+// failed activation behind a success response.
+func (s *Server) saveChannel(ch *core.AlertChannel) error {
+	if s.alerts != nil {
+		return s.alerts.RegisterChannel(ch)
 	}
-	if err := s.alerts.RegisterChannel(ch); err != nil && s.logger != nil {
-		s.logger.Warn("channel saved but not activated", "channel", ch.ID, "err", err)
-	}
+	return s.store.SaveChannelNoCtx(ch)
 }
 
 func (s *Server) UpdateChannel(ctx context.Context, req *v1.UpdateChannelRequest) (*v1.Channel, error) {
@@ -1492,12 +1523,11 @@ func (s *Server) UpdateChannel(ctx context.Context, req *v1.UpdateChannelRequest
 	if err := s.validateChannel(&next); err != nil {
 		return nil, err
 	}
-	if err := s.store.SaveChannelNoCtx(&next); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update channel: %v", err)
+	if err := s.saveChannel(&next); err != nil {
+		return nil, writeError(err, "failed to update channel")
 	}
 
 	updated, _ := s.store.GetChannelNoCtx(req.Id, workspace)
-	s.registerChannel(updated)
 	return channelToPB(updated), nil
 }
 
@@ -1516,7 +1546,7 @@ func (s *Server) DeleteChannel(ctx context.Context, req *v1.DeleteChannelRequest
 		return nil, status.Errorf(codes.NotFound, "channel not found: %s", req.Id)
 	}
 	if err := s.store.DeleteChannelNoCtx(req.Id, workspace); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to delete channel: %v", err)
+		return nil, writeError(err, "failed to delete channel")
 	}
 	if s.alerts != nil {
 		if err := s.alerts.DeleteChannel(req.Id); err != nil && s.logger != nil {
@@ -1613,28 +1643,23 @@ func (s *Server) CreateRule(ctx context.Context, req *v1.CreateRuleRequest) (*v1
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	if err := s.store.SaveRuleNoCtx(rule); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create rule: %v", err)
+	if err := s.saveRule(rule); err != nil {
+		return nil, writeError(err, "failed to create rule")
 	}
 
 	created, err := s.store.GetRuleNoCtx(rule.ID, workspace)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "rule created but could not be retrieved: %v", err)
 	}
-	s.registerRule(created)
 	return ruleToPB(created), nil
 }
 
-// registerRule hands a stored rule to the live alert engine. Storage already
-// holds the rule, so a failure here is logged rather than returned: the rule
-// takes effect at the latest on the next restart.
-func (s *Server) registerRule(rule *core.AlertRule) {
-	if s.alerts == nil || rule == nil {
-		return
+// saveRule is saveChannel for rules.
+func (s *Server) saveRule(rule *core.AlertRule) error {
+	if s.alerts != nil {
+		return s.alerts.RegisterRule(rule)
 	}
-	if err := s.alerts.RegisterRule(rule); err != nil && s.logger != nil {
-		s.logger.Warn("rule saved but not activated", "rule", rule.ID, "err", err)
-	}
+	return s.store.SaveRuleNoCtx(rule)
 }
 
 func (s *Server) UpdateRule(ctx context.Context, req *v1.UpdateRuleRequest) (*v1.Rule, error) {
@@ -1677,12 +1702,11 @@ func (s *Server) UpdateRule(ctx context.Context, req *v1.UpdateRuleRequest) (*v1
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	if err := s.store.SaveRuleNoCtx(&next); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update rule: %v", err)
+	if err := s.saveRule(&next); err != nil {
+		return nil, writeError(err, "failed to update rule")
 	}
 
 	updated, _ := s.store.GetRuleNoCtx(req.Id, user.Workspace)
-	s.registerRule(updated)
 	return ruleToPB(updated), nil
 }
 
@@ -1701,7 +1725,7 @@ func (s *Server) DeleteRule(ctx context.Context, req *v1.DeleteRuleRequest) (*em
 		return nil, status.Errorf(codes.NotFound, "rule not found: %s", req.Id)
 	}
 	if err := s.store.DeleteRuleNoCtx(req.Id, workspace); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to delete rule: %v", err)
+		return nil, writeError(err, "failed to delete rule")
 	}
 	if s.alerts != nil {
 		if err := s.alerts.DeleteRule(req.Id); err != nil && s.logger != nil {
@@ -1797,7 +1821,7 @@ func (s *Server) CreateJourney(ctx context.Context, req *v1.CreateJourneyRequest
 	journey.WorkspaceID = workspace
 
 	if err := s.store.SaveJourneyNoCtx(journey); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create journey: %v", err)
+		return nil, writeError(err, "failed to create journey")
 	}
 
 	created, err := s.store.GetJourneyNoCtx(journey.ID)
@@ -1830,7 +1854,7 @@ func (s *Server) UpdateJourney(ctx context.Context, req *v1.UpdateJourneyRequest
 
 	applyJourneyUpdates(existing, req)
 	if err := s.store.SaveJourneyNoCtx(existing); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to update journey: %v", err)
+		return nil, writeError(err, "failed to update journey")
 	}
 
 	updated, _ := s.store.GetJourneyNoCtx(req.Id)
@@ -1856,7 +1880,7 @@ func (s *Server) DeleteJourney(ctx context.Context, req *v1.DeleteJourneyRequest
 		return nil, status.Error(codes.PermissionDenied, "access denied: journey belongs to another workspace")
 	}
 	if err := s.store.DeleteJourneyNoCtx(req.Id); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to delete journey: %v", err)
+		return nil, writeError(err, "failed to delete journey")
 	}
 	return &emptypb.Empty{}, nil
 }

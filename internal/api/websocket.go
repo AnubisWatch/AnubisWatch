@@ -74,7 +74,9 @@ func NewWebSocketServer(logger *slog.Logger, authenticator Authenticator, allowe
 	if len(allowedOrigins) == 0 {
 		// SECURITY: No default origins in production - require explicit configuration
 		// This prevents unintended cross-origin connections
-		logger.Warn("WebSocket allowedOrigins is empty - no origins will be allowed. Configure allowed_origins in server config.")
+		// The handshake still accepts same-origin requests (the embedded
+		// dashboard); only cross-origin clients need server.allowed_origins.
+		logger.Info("WebSocket accepts same-origin connections only; set server.allowed_origins to allow other origins")
 		allowedOrigins = []string{}
 	}
 
@@ -670,13 +672,9 @@ func (s *WebSocketServer) BroadcastStats(workspace string, stats interface{}) {
 		Payload:   stats,
 	}
 
-	if workspace != "" {
-		s.broadcastToRoom(workspaceEventRoom(workspace, "stats"), msg)
-		return
-	}
-
-	s.broadcastToRoom("event:stats", msg)
-	s.broadcast <- msg
+	// Stats are tenant data: an empty workspace means "default", never a
+	// global broadcast to every connected client.
+	s.broadcastTenantEvent(workspace, "stats", msg)
 }
 
 // BroadcastIncident broadcasts an incident update to connected clients
@@ -690,15 +688,36 @@ func (s *WebSocketServer) BroadcastIncident(incident *core.Incident) {
 	s.broadcastTenantEvent(incident.WorkspaceID, "incident", msg)
 }
 
-// BroadcastSoulUpdate broadcasts a soul update to connected clients
+// BroadcastSoulUpdate broadcasts a soul update to connected clients. The
+// payload is the redacted REST view of the soul: a raw core.Soul carries
+// credentials (auth headers, SMTP/IMAP passwords) that must not reach the
+// browser.
 func (s *WebSocketServer) BroadcastSoulUpdate(soul *core.Soul) {
+	if soul == nil {
+		return
+	}
+	s.broadcastSoulChange(soul.WorkspaceID, soulUpdatePayload{
+		soulMonitorDTO: redactedSoulMonitorResponse(soul, "unknown", nil, 0),
+		Action:         "updated",
+	})
+}
+
+// soulUpdatePayload is the soul_update payload: the redacted monitor view
+// the REST API returns for the soul, plus what happened to it ("created",
+// "updated" or "deleted").
+type soulUpdatePayload struct {
+	soulMonitorDTO
+	Action string `json:"action"`
+}
+
+func (s *WebSocketServer) broadcastSoulChange(workspace string, payload soulUpdatePayload) {
 	msg := WSMessage{
 		Type:      "soul_update",
 		Timestamp: time.Now().UTC(),
-		Payload:   soul,
+		Payload:   payload,
 	}
 
-	s.broadcastTenantEvent(soul.WorkspaceID, "soul", msg)
+	s.broadcastTenantEvent(workspace, "soul", msg)
 }
 
 func (s *WebSocketServer) broadcastTenantEvent(workspace, event string, msg WSMessage) {

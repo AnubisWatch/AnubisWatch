@@ -1,0 +1,237 @@
+package alert
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/AnubisWatch/anubiswatch/internal/core"
+)
+
+// The methods in this file let a clustered node bring its in-memory alert state
+// in line with records another node wrote through Raft. They update memory
+// only: the record is already in this node's storage, so persisting it again
+// would turn every replicated write into a second one.
+
+// LoadChannel installs a replicated alert channel.
+func (m *Manager) LoadChannel(channel *core.AlertChannel) {
+	if channel == nil || channel.ID == "" {
+		return
+	}
+	m.mu.Lock()
+	m.channels[channel.ID] = channel
+	m.mu.Unlock()
+}
+
+// UnloadChannel forgets a channel deleted on another node.
+func (m *Manager) UnloadChannel(id string) {
+	m.mu.Lock()
+	delete(m.channels, id)
+	m.mu.Unlock()
+}
+
+// LoadRule installs a replicated alert rule.
+func (m *Manager) LoadRule(rule *core.AlertRule) {
+	if rule == nil || rule.ID == "" {
+		return
+	}
+	m.mu.Lock()
+	m.rules[rule.ID] = rule
+	m.mu.Unlock()
+}
+
+// UnloadRule forgets a rule deleted on another node.
+func (m *Manager) UnloadRule(id string) {
+	m.mu.Lock()
+	delete(m.rules, id)
+	m.mu.Unlock()
+}
+
+// LoadIncident installs an incident opened or changed on another node and
+// tells the incident hook, so live clients of this node see it too.
+func (m *Manager) LoadIncident(incident *core.Incident) {
+	if incident == nil || incident.ID == "" {
+		return
+	}
+	m.mu.Lock()
+	m.incidents[incident.ID] = incident
+	notify := m.incidentNotifier(incident)
+	m.mu.Unlock()
+	notify()
+}
+
+// Resync reloads channels, rules and active incidents from storage, replacing
+// the channel and rule sets. A clustered node calls it after a snapshot
+// replaced its keyspace, which no per-record update describes.
+func (m *Manager) Resync() {
+	if m.storage == nil {
+		return
+	}
+	channels, chErr := m.storage.ListChannels("")
+	rules, ruleErr := m.storage.ListRules("")
+	incidents, incErr := m.storage.ListActiveIncidents()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if chErr == nil {
+		m.channels = make(map[string]*core.AlertChannel, len(channels))
+		for _, ch := range channels {
+			m.channels[ch.ID] = ch
+		}
+	} else {
+		m.logger.Warn("Failed to reload channels", "error", chErr)
+	}
+	if ruleErr == nil {
+		m.rules = make(map[string]*core.AlertRule, len(rules))
+		for _, rule := range rules {
+			m.rules[rule.ID] = rule
+		}
+	} else {
+		m.logger.Warn("Failed to reload rules", "error", ruleErr)
+	}
+	if incErr == nil {
+		for _, incident := range incidents {
+			m.incidents[incident.ID] = incident
+		}
+	} else {
+		m.logger.Warn("Failed to reload active incidents", "error", incErr)
+	}
+	m.loadDedupState()
+}
+
+// DedupStateStore is implemented by alert storage that shares notification
+// dedup state between nodes. Rules are evaluated only on the node that owns a
+// soul, so the record of when a (rule, soul, status) alert was last sent lives
+// in that node's memory; when ownership moves, the new owner would see no
+// record and send the alert again inside the cooldown. With a store that
+// implements this, every new dedup record (an alert about to be sent) and
+// every release (an alert that could not be delivered) is shared, and
+// LoadDedupState applies records shared by other nodes. Storage that does not
+// implement it keeps dedup state node-local, as a standalone node needs.
+type DedupStateStore interface {
+	SaveDedupState(workspaceID string, entry *core.AlertHistoryEntry) error
+	DeleteDedupState(workspaceID, key string) error
+	ListDedupState() ([]*core.AlertHistoryEntry, error)
+}
+
+func dedupKey(ruleID, soulID string, status core.SoulStatus) string {
+	return fmt.Sprintf("dedup:%s:%s:%s", ruleID, soulID, status)
+}
+
+// persistDedup shares the dedup record isDuplicate just created or renewed for
+// event.
+func (m *Manager) persistDedup(event *core.AlertEvent) {
+	store, ok := m.storage.(DedupStateStore)
+	if !ok {
+		return
+	}
+	key := dedupKey(event.RuleID, event.SoulID, event.Status)
+	m.history.Mu.Lock()
+	entry, exists := m.history.Entries[key]
+	var snapshot core.AlertHistoryEntry
+	if exists {
+		snapshot = *entry
+	}
+	m.history.Mu.Unlock()
+	if !exists {
+		return
+	}
+	if err := store.SaveDedupState(defaultWorkspace(event.WorkspaceID), &snapshot); err != nil {
+		m.logger.Warn("Failed to share dedup state", "key", key, "error", err)
+	}
+}
+
+// loadDedupState merges the shared dedup records from storage.
+func (m *Manager) loadDedupState() {
+	store, ok := m.storage.(DedupStateStore)
+	if !ok {
+		return
+	}
+	entries, err := store.ListDedupState()
+	if err != nil {
+		m.logger.Warn("Failed to load shared dedup state", "error", err)
+		return
+	}
+	for _, entry := range entries {
+		m.LoadDedupState(entry)
+	}
+}
+
+// LoadDedupState installs a dedup record shared by another node. A record
+// older than the one this node holds is ignored, so a late replica cannot
+// shorten a cooldown.
+func (m *Manager) LoadDedupState(entry *core.AlertHistoryEntry) {
+	if entry == nil || !strings.HasPrefix(entry.Key, "dedup:") {
+		return
+	}
+	m.history.Mu.Lock()
+	defer m.history.Mu.Unlock()
+	if existing, ok := m.history.Entries[entry.Key]; ok && existing.LastSent.After(entry.LastSent) {
+		return
+	}
+	copied := *entry
+	m.history.Entries[entry.Key] = &copied
+}
+
+// UnloadDedupState forgets a dedup record another node released.
+func (m *Manager) UnloadDedupState(key string) {
+	m.history.Mu.Lock()
+	delete(m.history.Entries, key)
+	m.history.Mu.Unlock()
+}
+
+// SeedFromJudgments primes the per-soul evaluation state of a soul this node
+// has just started evaluating -- it took the soul over from another node, or
+// restarted -- from the soul's recent judgments (any order), so the
+// consecutive_failures streak and the status_for clock continue where the
+// previous owner left them instead of starting from zero. State this node
+// already holds for the soul is left alone.
+func (m *Manager) SeedFromJudgments(soulID string, judgments []*core.Judgment) {
+	if soulID == "" || len(judgments) == 0 {
+		return
+	}
+	ordered := make([]*core.Judgment, 0, len(judgments))
+	for _, j := range judgments {
+		if j != nil {
+			ordered = append(ordered, j)
+		}
+	}
+	if len(ordered) == 0 {
+		return
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Timestamp.Before(ordered[j].Timestamp) })
+
+	latest := ordered[len(ordered)-1]
+	streak := 0
+	since := latest.Timestamp
+	for i := len(ordered) - 1; i >= 0 && ordered[i].Status == latest.Status; i-- {
+		since = ordered[i].Timestamp
+		if latest.Status == core.SoulDead {
+			streak++
+		}
+	}
+	if streak > 1_000_000 {
+		streak = 1_000_000
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.statusSince == nil {
+		m.statusSince = make(map[string]statusHold)
+	}
+	if _, ok := m.statusSince[soulID]; !ok && !since.IsZero() {
+		m.statusSince[soulID] = statusHold{Status: latest.Status, Since: since}
+	}
+	if streak == 0 {
+		return
+	}
+	if m.failureStreak == nil {
+		m.failureStreak = make(map[string]int)
+	}
+	for ruleID := range m.rules {
+		key := ruleID + ":" + soulID
+		if _, ok := m.failureStreak[key]; !ok {
+			m.failureStreak[key] = streak
+		}
+	}
+}

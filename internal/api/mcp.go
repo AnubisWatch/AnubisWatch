@@ -29,10 +29,10 @@ type MCPServer struct {
 
 // MCPTool represents an MCP tool (function)
 type MCPTool struct {
-	Name           string          `json:"name"`
-	Description    string          `json:"description"`
-	InputSchema    json.RawMessage `json:"inputSchema"`
-	Handler        func(args json.RawMessage) (interface{}, error)
+	Name           string                                                               `json:"name"`
+	Description    string                                                               `json:"description"`
+	InputSchema    json.RawMessage                                                      `json:"inputSchema"`
+	Handler        func(args json.RawMessage) (interface{}, error)                      `json:"-"`
 	ContextHandler func(ctx context.Context, args json.RawMessage) (interface{}, error) `json:"-"`
 	// RequiredPermission, when non-empty, gates the tool behind the caller's
 	// workspace role at dispatch time (handleCallTool). Read-only tools leave
@@ -43,19 +43,19 @@ type MCPTool struct {
 
 // MCPResource represents an MCP resource
 type MCPResource struct {
-	URI         string `json:"uri"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	MIMEType    string `json:"mimeType"`
-	Handler     func() (interface{}, error)
+	URI         string                      `json:"uri"`
+	Name        string                      `json:"name"`
+	Description string                      `json:"description"`
+	MIMEType    string                      `json:"mimeType"`
+	Handler     func() (interface{}, error) `json:"-"`
 }
 
 // MCPPrompt represents an MCP prompt
 type MCPPrompt struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	Arguments   []MCPPromptArg `json:"arguments"`
-	Handler     func(args map[string]string) (string, error)
+	Name        string                                       `json:"name"`
+	Description string                                       `json:"description"`
+	Arguments   []MCPPromptArg                               `json:"arguments"`
+	Handler     func(args map[string]string) (string, error) `json:"-"`
 }
 
 // MCPPromptArg represents a prompt argument
@@ -248,9 +248,15 @@ func (s *MCPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp := s.handleRequest(r.Context(), &req)
 
+	body, err := json.Marshal(resp)
+	if err != nil {
+		s.logger.Error("failed to encode MCP response", "method", req.Method, "err", err)
+		s.writeError(w, req.ID, -32603, "Internal error")
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	// Client is gone on write failure; nothing actionable remains.
-	_ = json.NewEncoder(w).Encode(resp)
+	_, _ = w.Write(append(body, '\n'))
 }
 
 // handleRequest processes an MCP request
@@ -645,23 +651,40 @@ func (s *MCPServer) handleCreateSoul(ctx context.Context, args json.RawMessage) 
 		return nil, err
 	}
 
+	now := time.Now()
 	soul := &core.Soul{
-		ID:      core.GenerateID(),
-		Name:    params.Name,
-		Type:    core.CheckType(params.Type),
-		Target:  params.Target,
-		Enabled: true,
+		ID:        core.GenerateID(),
+		Name:      params.Name,
+		Type:      core.CheckType(params.Type),
+		Target:    params.Target,
+		Enabled:   true,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	if workspace := core.WorkspaceIDFromContext(ctx); workspace != "" {
 		soul.WorkspaceID = workspace
 	}
 
 	if params.Interval != "" {
-		d, _ := time.ParseDuration(params.Interval)
+		d, err := time.ParseDuration(params.Interval)
+		if err != nil {
+			return nil, fmt.Errorf("invalid interval %q: %w", params.Interval, err)
+		}
 		soul.Weight = core.Duration{Duration: d}
 	}
+	soul.ApplyDefaults()
+	if err := soul.Validate(); err != nil {
+		return nil, err
+	}
 
-	return soul, s.store.SaveSoul(context.Background(), soul)
+	if err := s.store.SaveSoul(context.Background(), soul); err != nil {
+		return nil, err
+	}
+	// Schedule it like a REST-created soul; it used to sit unchecked until restart.
+	if s.probe != nil {
+		s.probe.UpsertSoul(soul)
+	}
+	return soul, nil
 }
 
 func mcpScopedWorkspace(ctx context.Context, requested string) string {

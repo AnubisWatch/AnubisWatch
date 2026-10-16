@@ -129,8 +129,13 @@ type RESTServer struct {
 	judgmentsTotal   uint64
 	verdictsFired    uint64
 	verdictsResolved uint64
-	uiConfigMu       sync.RWMutex
-	uiConfig         map[string]interface{}
+	// Settings (see settings.go): presentation overrides persisted through
+	// settingsStore, plus read-only values reported from the loaded config.
+	uiConfigMu    sync.RWMutex
+	uiConfig      map[string]interface{}
+	settingsStore SettingsStore
+	storagePath   string
+	retention     time.Duration
 
 	// Rate limiter cleanup channel
 	rateLimitStopCh chan struct{}
@@ -222,6 +227,9 @@ type PaginatedResponse struct {
 	Data       interface{} `json:"data"`
 	Pagination Pagination  `json:"pagination"`
 }
+
+// maxListLimit is the largest page size list endpoints accept.
+const maxListLimit = 100
 
 // parsePagination extracts pagination params from request
 func parsePagination(r *http.Request, defaultLimit, maxLimit int) (offset, limit int) {
@@ -349,10 +357,10 @@ type ClusterManager interface {
 	IsClustered() bool
 	GetStatus() *ClusterStatus
 	// ApplyMutation routes an FSM-backed mutation through the cluster consensus
-	// layer. When the node is not the leader, ApplyMutation returns
-	// *core.RaftError with ErrNotLeader (the caller may forward the request).
-	// When clustering is disabled it returns an error so the caller can write
-	// locally instead.
+	// layer. A follower forwards it to the leader and returns once it applied
+	// the entry itself; with no reachable leader it returns *core.RaftError
+	// with ErrNoLeader, which handlers answer with 503. When clustering is
+	// disabled it returns ErrNotLeader so the caller can write locally instead.
 	ApplyMutation(cmd core.FSMCommand, timeout time.Duration) (uint64, uint64, error)
 }
 
@@ -448,6 +456,7 @@ func (s *RESTServer) setupRoutes() {
 	s.router.Handle("GET", "/public/status", s.handlePublicStatus)
 
 	// Auth
+	s.router.Handle("GET", "/api/v1/auth/methods", s.handleAuthMethods)
 	s.router.Handle("POST", "/api/v1/auth/login", s.handleLogin)
 	s.router.Handle("POST", "/api/v1/auth/logout", s.handleLogout)
 	s.router.Handle("GET", "/api/v1/auth/me", s.requireAuth(s.handleMe))
@@ -506,6 +515,8 @@ func (s *RESTServer) setupRoutes() {
 	// Cluster (Raft)
 	s.router.Handle("GET", "/api/v1/cluster/status", s.requireAuth(s.handleClusterStatus))
 	s.router.Handle("GET", "/api/v1/cluster/peers", s.requireAuth(s.handleClusterPeers))
+	s.router.Handle("POST", "/api/v1/cluster/nodes", s.requireRole(s.handleAddClusterNode, "members:*"))
+	s.router.Handle("DELETE", "/api/v1/cluster/nodes/:id", s.requireRole(s.handleRemoveClusterNode, "members:*"))
 
 	// Config
 	s.router.Handle("GET", "/api/v1/config", s.requireAuth(s.handleGetConfig))
@@ -907,6 +918,25 @@ func (s *RESTServer) handleChangePassword(ctx *Context) error {
 	})
 }
 
+// handleAuthMethods tells the (unauthenticated) login page which sign-in
+// methods exist. It exposes only booleans: no issuer, URL or user data.
+//
+//   - oidc: the authenticator supports the OIDC redirect flow, i.e. the
+//     /api/v1/auth/oidc/login route is registered.
+//   - ldap: auth.type is ldap; the password form authenticates against LDAP.
+//   - local: a local account can sign in with a password. True for local and
+//     OIDC (OIDC keeps the local admin login); false for LDAP, which falls
+//     back to local accounts only while the LDAP server is unreachable.
+func (s *RESTServer) handleAuthMethods(ctx *Context) error {
+	_, oidc := s.auth.(OIDCAuth)
+	ldap := s.authConfig.Type == "ldap"
+	return ctx.JSON(http.StatusOK, map[string]bool{
+		"local": !ldap,
+		"oidc":  oidc,
+		"ldap":  ldap,
+	})
+}
+
 func (s *RESTServer) handleRequestPasswordReset(ctx *Context) error {
 	var req struct {
 		Email string `json:"email"`
@@ -923,7 +953,7 @@ func (s *RESTServer) handleRequestPasswordReset(ctx *Context) error {
 
 	// Always return success (even for unknown emails) to prevent enumeration
 	return ctx.JSON(http.StatusOK, map[string]string{
-		"message": "if the email exists, a reset token has been generated (check server logs)",
+		"message": "if the email exists, a reset token has been generated; this server has no delivery channel for it, so ask an administrator to run `anubis admin reset-password`",
 	})
 }
 
@@ -1070,33 +1100,71 @@ func (s *RESTServer) handleOIDCCallback(ctx *Context) error {
 
 // Soul handlers
 
+// soulMonitorStatus maps a judgment status to the soul status the REST API
+// reports. alive/dead keep their historical healthy/unhealthy names;
+// degraded and embalmed pass through so callers can tell them apart from
+// a soul that has never been checked.
 func soulMonitorStatus(status core.SoulStatus) string {
 	switch status {
 	case core.SoulAlive:
 		return "healthy"
 	case core.SoulDead:
 		return "unhealthy"
+	case core.SoulDegraded:
+		return string(core.SoulDegraded)
+	case core.SoulEmbalmed:
+		return string(core.SoulEmbalmed)
 	default:
 		return "unknown"
 	}
 }
 
+// activeMaintenanceWindows returns the maintenance windows active at now.
+// List endpoints fetch them once per request and test each soul against the
+// result with core.SoulInMaintenance.
+func (s *RESTServer) activeMaintenanceWindows(now time.Time) []*core.MaintenanceWindow {
+	if s.store == nil {
+		return nil
+	}
+	windows, err := s.store.ListMaintenanceWindows()
+	if err != nil {
+		s.logger.Warn("failed to list maintenance windows", "error", err)
+		return nil
+	}
+	active := make([]*core.MaintenanceWindow, 0, len(windows))
+	for _, window := range windows {
+		if window != nil && window.IsActive(now) {
+			active = append(active, window)
+		}
+	}
+	return active
+}
+
 func (s *RESTServer) soulWithLatestJudgment(soul *core.Soul) soulMonitorDTO {
+	now := time.Now()
+	return s.soulWithLatestJudgmentAt(soul, s.activeMaintenanceWindows(now), now)
+}
+
+// soulWithLatestJudgmentAt builds the monitor view of soul. A soul inside an
+// active maintenance window is reported as embalmed whatever its latest
+// judgment says; the stored judgments are left untouched.
+func (s *RESTServer) soulWithLatestJudgmentAt(soul *core.Soul, windows []*core.MaintenanceWindow, now time.Time) soulMonitorDTO {
 	response := redactedSoulMonitorResponse(soul, "unknown", nil, 0)
 
 	if soul == nil {
 		return response
 	}
 
-	judgments, err := s.store.ListJudgmentsNoCtx(soul.ID, time.Time{}, time.Now().Add(time.Hour), 1)
-	if err != nil || len(judgments) == 0 || judgments[0] == nil {
-		return response
+	judgments, err := s.store.ListJudgmentsNoCtx(soul.ID, time.Time{}, now.Add(time.Hour), 1)
+	if err == nil && len(judgments) > 0 && judgments[0] != nil {
+		latest := judgments[0]
+		response.Status = soulMonitorStatus(latest.Status)
+		response.LastCheck = &latest.Timestamp
+		response.Latency = latest.Duration.Milliseconds()
 	}
-
-	latest := judgments[0]
-	response.Status = soulMonitorStatus(latest.Status)
-	response.LastCheck = &latest.Timestamp
-	response.Latency = latest.Duration.Milliseconds()
+	if core.SoulInMaintenance(windows, soul, now) {
+		response.Status = string(core.SoulEmbalmed)
+	}
 	return response
 }
 
@@ -1116,9 +1184,11 @@ func (s *RESTServer) handleListSouls(ctx *Context) error {
 		souls = souls[:limit]
 	}
 	nextOffset := offset + limit
+	now := time.Now()
+	windows := s.activeMaintenanceWindows(now)
 	data := make([]soulMonitorDTO, 0, len(souls))
 	for _, soul := range souls {
-		data = append(data, s.soulWithLatestJudgment(soul))
+		data = append(data, s.soulWithLatestJudgmentAt(soul, windows, now))
 	}
 
 	response := PaginatedResponse{
@@ -1138,15 +1208,28 @@ func (s *RESTServer) handleListSouls(ctx *Context) error {
 }
 
 func (s *RESTServer) handleCreateSoul(ctx *Context) error {
-	var soul core.Soul
-	if err := ctx.Bind(&soul); err != nil {
+	var raw json.RawMessage
+	if err := ctx.Bind(&raw); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid soul data")
+	}
+	var soul core.Soul
+	if err := json.Unmarshal(raw, &soul); err != nil {
+		return ctx.Error(http.StatusBadRequest, "invalid soul data")
+	}
+	// A new soul is enabled unless the request says otherwise; a missing
+	// field used to create a soul that was never scheduled.
+	var presence struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(raw, &presence); err == nil && presence.Enabled == nil {
+		soul.Enabled = true
 	}
 
 	soul.WorkspaceID = ctx.Workspace
 	soul.ID = core.GenerateID()
 	soul.CreatedAt = time.Now()
 	soul.UpdatedAt = time.Now()
+	soul.ApplyDefaults()
 
 	if err := soul.Validate(); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
@@ -1178,15 +1261,28 @@ func (s *RESTServer) handleGetSoul(ctx *Context) error {
 
 func (s *RESTServer) handleUpdateSoul(ctx *Context) error {
 	id := ctx.Params["id"]
-	var soul core.Soul
-	if err := ctx.Bind(&soul); err != nil {
+	var raw json.RawMessage
+	if err := ctx.Bind(&raw); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid soul data")
 	}
+	var soul core.Soul
+	if err := json.Unmarshal(raw, &soul); err != nil {
+		return ctx.Error(http.StatusBadRequest, "invalid soul data")
+	}
+	var presence struct {
+		Enabled *bool `json:"enabled"`
+	}
+	_ = json.Unmarshal(raw, &presence)
 
 	// IDOR protection: Verify soul belongs to user's workspace before updating
 	existing, err := s.store.GetSoulNoCtx(id)
 	if err != nil || existing == nil {
 		return ctx.Error(http.StatusNotFound, "soul not found")
+	}
+	// Like create, a body without "enabled" leaves it as it was instead of
+	// silently disabling the soul.
+	if presence.Enabled == nil {
+		soul.Enabled = existing.Enabled
 	}
 	if existing.WorkspaceID != ctx.Workspace {
 		return ctx.Error(http.StatusForbidden, "access denied: soul belongs to another workspace")
@@ -1198,6 +1294,7 @@ func (s *RESTServer) handleUpdateSoul(ctx *Context) error {
 	soul.CreatedAt = existing.CreatedAt
 	soul.UpdatedAt = time.Now()
 	mergeSoulSecrets(existing, &soul)
+	soul.ApplyDefaults()
 
 	if err := soul.Validate(); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
@@ -1205,6 +1302,9 @@ func (s *RESTServer) handleUpdateSoul(ctx *Context) error {
 
 	if err := s.store.SaveSoul(ctx.Request.Context(), &soul); err != nil {
 		s.logger.Error("failed to update soul", "error", err, "soul_id", id)
+		if unavailable := s.leaderUnavailable(ctx, err); unavailable != nil {
+			return unavailable
+		}
 		return ctx.Error(http.StatusInternalServerError, "failed to update soul")
 	}
 
@@ -1226,6 +1326,9 @@ func (s *RESTServer) handleDeleteSoul(ctx *Context) error {
 	}
 
 	if err := s.store.DeleteSoul(ctx.Request.Context(), id); err != nil {
+		if unavailable := s.leaderUnavailable(ctx, err); unavailable != nil {
+			return unavailable
+		}
 		s.logger.Error("failed to delete soul", "error", err, "soul_id", id)
 		return ctx.Error(http.StatusInternalServerError, "failed to delete soul")
 	}
@@ -1352,7 +1455,7 @@ func (s *RESTServer) handleListJudgments(ctx *Context) error {
 		nextCursor = judgments[len(judgments)-1].ID
 	}
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
-		"data":        redactedJudgmentsFromCore(judgments),
+		"data":        namedJudgmentsFromCore(judgments, map[string]string{soul.ID: soul.Name}),
 		"total":       len(judgments), // page count; global count requires storage support
 		"has_more":    hasMore,
 		"next_cursor": nextCursor,
@@ -1424,7 +1527,7 @@ func (s *RESTServer) handleListAllJudgments(ctx *Context) error {
 		allJudgments = allJudgments[:500]
 	}
 
-	return ctx.JSON(http.StatusOK, redactedJudgmentsFromCore(allJudgments))
+	return ctx.JSON(http.StatusOK, namedJudgmentsFromCore(allJudgments, soulNames(souls)))
 }
 
 // Channel handlers
@@ -1483,6 +1586,9 @@ func (s *RESTServer) handleCreateChannel(ctx *Context) error {
 	channel.UpdatedAt = time.Now()
 
 	if err := s.alert.RegisterChannel(&channel); err != nil {
+		if unavailable := s.leaderUnavailable(ctx, err); unavailable != nil {
+			return unavailable
+		}
 		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 
@@ -1536,6 +1642,9 @@ func (s *RESTServer) handleUpdateChannel(ctx *Context) error {
 	}
 
 	if err := s.alert.RegisterChannel(&channel); err != nil {
+		if unavailable := s.leaderUnavailable(ctx, err); unavailable != nil {
+			return unavailable
+		}
 		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 
@@ -1890,9 +1999,12 @@ func (s *RESTServer) handleStatsOverview(ctx *Context) error {
 	healthy := 0
 	degraded := 0
 	dead := 0
+	unknown := 0
+	embalmed := 0
 	today := 0
 	failures := 0
 	var totalLatency time.Duration
+	windows := s.activeMaintenanceWindows(end)
 
 	for _, soul := range souls {
 		if soul == nil {
@@ -1900,19 +2012,23 @@ func (s *RESTServer) handleStatsOverview(ctx *Context) error {
 		}
 		judgments, err := s.store.ListJudgmentsNoCtx(soul.ID, start, end, 1000)
 		if err != nil {
-			continue
+			judgments = nil
 		}
-		if len(judgments) == 0 {
-			dead++
-			continue
-		}
-		switch judgments[0].Status {
-		case core.SoulAlive:
+		// A soul with no judgment in the window has not been checked (or not
+		// recently): that is unknown, not dead. Maintenance overrides both.
+		switch {
+		case core.SoulInMaintenance(windows, soul, end):
+			embalmed++
+		case len(judgments) == 0 || judgments[0] == nil:
+			unknown++
+		case judgments[0].Status == core.SoulAlive:
 			healthy++
-		case core.SoulDegraded:
+		case judgments[0].Status == core.SoulDegraded:
 			degraded++
-		default:
+		case judgments[0].Status == core.SoulDead:
 			dead++
+		default:
+			unknown++
 		}
 		for _, judgment := range judgments {
 			if judgment == nil {
@@ -1937,6 +2053,8 @@ func (s *RESTServer) handleStatsOverview(ctx *Context) error {
 			"healthy":  healthy,
 			"degraded": degraded,
 			"dead":     dead,
+			"unknown":  unknown,
+			"embalmed": embalmed,
 		},
 		"judgments": map[string]interface{}{
 			"today":          today,
@@ -1971,17 +2089,168 @@ func (s *RESTServer) handleClusterStatus(ctx *Context) error {
 	})
 }
 
+// ClusterPeer is one entry of GET /api/v1/cluster/peers. LastContact is an
+// RFC3339 timestamp, or "" when this node has never heard from the peer.
+type ClusterPeer struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Address     string `json:"address"`
+	State       string `json:"state"`
+	LastContact string `json:"last_contact"`
+	IsLeader    bool   `json:"is_leader"`
+	Region      string `json:"region"`
+}
+
+// clusterPeerLister is implemented by cluster managers that can enumerate
+// members. It is optional so ClusterManager stays small for its other users.
+type clusterPeerLister interface {
+	ClusterPeers() []ClusterPeer
+}
+
+// handleClusterPeers always returns a JSON array of ClusterPeer, this node
+// first. A standalone node reports itself as the leader.
 func (s *RESTServer) handleClusterPeers(ctx *Context) error {
-	if s.cluster == nil {
-		return ctx.JSON(http.StatusOK, []interface{}{})
+	if lister, ok := s.cluster.(clusterPeerLister); ok {
+		if peers := lister.ClusterPeers(); len(peers) > 0 {
+			return ctx.JSON(http.StatusOK, peers)
+		}
 	}
 
-	// Return peer information from cluster status
-	status := s.cluster.GetStatus()
-	return ctx.JSON(http.StatusOK, map[string]interface{}{
-		"peer_count": status.PeerCount,
-		"is_leader":  s.cluster.IsLeader(),
+	self := ClusterPeer{
+		ID:          "standalone",
+		State:       "leader",
+		LastContact: time.Now().UTC().Format(time.RFC3339),
+		IsLeader:    true,
+	}
+	if s.cluster != nil && s.cluster.IsClustered() {
+		if status := s.cluster.GetStatus(); status != nil {
+			if status.NodeID != "" {
+				self.ID = status.NodeID
+			}
+			self.State = status.State
+		}
+		self.IsLeader = s.cluster.IsLeader()
+	}
+	self.Name = self.ID
+	return ctx.JSON(http.StatusOK, []ClusterPeer{self})
+}
+
+// ClusterMembership is implemented by cluster managers that can change Raft
+// membership at runtime. AddNode and RemoveNode may be called on any node; a
+// follower forwards the change to the leader.
+type ClusterMembership interface {
+	AddNode(id, address, region string) error
+	RemoveNode(id string) error
+}
+
+// ClusterAddressMembership is implemented by a ClusterMembership that can add
+// a node known only by its Raft address, learning its node ID from it.
+type ClusterAddressMembership interface {
+	AddNodeByAddress(address, region string) (nodeID, learnedRegion string, err error)
+}
+
+// Membership errors a ClusterMembership reports, mapped onto HTTP statuses.
+var (
+	ErrClusterDisabled   = errors.New("clustering is not enabled on this node")
+	ErrClusterNodeExists = errors.New("node is already a cluster member")
+	ErrClusterNodeAbsent = errors.New("node is not a cluster member")
+	ErrClusterIsLeader   = errors.New("the current leader cannot remove itself")
+	// ErrClusterNodeUnreachable: the node to add by address did not answer.
+	ErrClusterNodeUnreachable = errors.New("the node could not be reached to learn its node ID")
+)
+
+// clusterNodeRequest is the body of POST /api/v1/cluster/nodes.
+type clusterNodeRequest struct {
+	NodeID  string `json:"node_id"`
+	Address string `json:"address"`
+	Region  string `json:"region"`
+}
+
+func (s *RESTServer) clusterMembership() ClusterMembership {
+	if s.cluster == nil || !s.cluster.IsClustered() {
+		return nil
+	}
+	membership, _ := s.cluster.(ClusterMembership)
+	return membership
+}
+
+// membershipError maps a membership change failure onto a response.
+func (s *RESTServer) membershipError(ctx *Context, err error) error {
+	switch {
+	case errors.Is(err, ErrClusterDisabled):
+		return ctx.Error(http.StatusConflict, "clustering is not enabled on this node")
+	case errors.Is(err, ErrClusterNodeExists):
+		return ctx.Error(http.StatusConflict, "node is already a cluster member")
+	case errors.Is(err, ErrClusterNodeAbsent):
+		return ctx.Error(http.StatusNotFound, "node is not a cluster member")
+	case errors.Is(err, ErrClusterIsLeader):
+		return ctx.Error(http.StatusConflict, "the current leader cannot remove itself; retry after leadership moves")
+	case errors.Is(err, ErrClusterNodeUnreachable):
+		return ctx.Error(http.StatusBadGateway, err.Error())
+	}
+	if unavailable := s.leaderUnavailable(ctx, err); unavailable != nil {
+		return unavailable
+	}
+	s.logger.Error("cluster membership change failed", "error", err, "path", ctx.Request.URL.Path)
+	return ctx.Error(http.StatusInternalServerError, "cluster membership change failed")
+}
+
+// handleAddClusterNode adds a voting member through a replicated Raft
+// configuration change (one change at a time).
+func (s *RESTServer) handleAddClusterNode(ctx *Context) error {
+	membership := s.clusterMembership()
+	if membership == nil {
+		return ctx.Error(http.StatusConflict, "clustering is not enabled on this node")
+	}
+	var req clusterNodeRequest
+	if err := ctx.Bind(&req); err != nil {
+		return ctx.Error(http.StatusBadRequest, "invalid JSON")
+	}
+	req.NodeID = strings.TrimSpace(req.NodeID)
+	req.Address = strings.TrimSpace(req.Address)
+	req.Region = strings.TrimSpace(req.Region)
+	host, port, err := net.SplitHostPort(req.Address)
+	if err != nil || host == "" || port == "" {
+		return ctx.Error(http.StatusBadRequest, "address must be host:port")
+	}
+	if req.NodeID == "" {
+		// Add by address: the node itself reports its ID.
+		byAddress, ok := membership.(ClusterAddressMembership)
+		if !ok {
+			return ctx.Error(http.StatusBadRequest, "node_id is required")
+		}
+		nodeID, region, err := byAddress.AddNodeByAddress(req.Address, req.Region)
+		if err != nil {
+			return s.membershipError(ctx, err)
+		}
+		req.NodeID, req.Region = nodeID, region
+	} else {
+		if len(req.NodeID) > 128 || strings.ContainsAny(req.NodeID, "/ \t\n") {
+			return ctx.Error(http.StatusBadRequest, "node_id must not contain '/' or whitespace")
+		}
+		if err := membership.AddNode(req.NodeID, req.Address, req.Region); err != nil {
+			return s.membershipError(ctx, err)
+		}
+	}
+	return ctx.JSON(http.StatusCreated, map[string]string{
+		"node_id": req.NodeID,
+		"address": req.Address,
+		"region":  req.Region,
 	})
+}
+
+// handleRemoveClusterNode removes a member through a replicated Raft
+// configuration change.
+func (s *RESTServer) handleRemoveClusterNode(ctx *Context) error {
+	membership := s.clusterMembership()
+	if membership == nil {
+		return ctx.Error(http.StatusConflict, "clustering is not enabled on this node")
+	}
+	id := ctx.Params["id"]
+	if err := membership.RemoveNode(id); err != nil {
+		return s.membershipError(ctx, err)
+	}
+	return ctx.JSON(http.StatusNoContent, nil)
 }
 
 // Incident handlers
@@ -2035,66 +2304,7 @@ func (s *RESTServer) handleResolveIncident(ctx *Context) error {
 	return ctx.JSON(http.StatusOK, map[string]string{"status": "resolved"})
 }
 
-// Config handlers
-
-func (s *RESTServer) handleGetConfig(ctx *Context) error {
-	config := s.currentUIConfig()
-	return ctx.JSON(http.StatusOK, config)
-}
-
-func (s *RESTServer) defaultUIConfig() map[string]interface{} {
-	config := map[string]interface{}{
-		"instance_name":     "AnubisWatch",
-		"timezone":          "UTC",
-		"language":          "en",
-		"theme":             "dark",
-		"retention_days":    30,
-		"storage_path":      "/var/lib/anubis",
-		"auth_enabled":      s.authConfig.IsEnabled(),
-		"mcp_enabled":       s.mcp != nil,
-		"websocket_enabled": true,
-		"host":              s.config.Host,
-		"port":              s.config.Port,
-		"grpc_port":         s.config.GRPCPort,
-		"tls_enabled":       s.config.TLS.Enabled,
-		"auth_type":         s.authConfig.Type,
-	}
-	return config
-}
-
-func (s *RESTServer) currentUIConfig() map[string]interface{} {
-	config := s.defaultUIConfig()
-	s.uiConfigMu.RLock()
-	defer s.uiConfigMu.RUnlock()
-	for key, value := range s.uiConfig {
-		config[key] = value
-	}
-	return config
-}
-
-func (s *RESTServer) handleUpdateConfig(ctx *Context) error {
-	var input map[string]interface{}
-	// Limit request body size to prevent memory exhaustion
-	ctx.Request.Body = http.MaxBytesReader(ctx.Response, ctx.Request.Body, maxRequestBodySize)
-	if err := json.NewDecoder(ctx.Request.Body).Decode(&input); err != nil {
-		return ctx.Error(http.StatusBadRequest, "invalid JSON")
-	}
-
-	allowed := s.defaultUIConfig()
-	s.uiConfigMu.Lock()
-	for key, value := range input {
-		if _, ok := allowed[key]; !ok {
-			continue
-		}
-		switch value.(type) {
-		case string, bool, float64, nil:
-			s.uiConfig[key] = value
-		}
-	}
-	s.uiConfigMu.Unlock()
-
-	return ctx.JSON(http.StatusOK, s.currentUIConfig())
-}
+// Config handlers live in settings.go.
 
 // Status Page handlers
 
@@ -3318,8 +3528,33 @@ func (c *Context) Error(status int, message string) error {
 // InternalError logs the actual error and returns a generic internal server error
 // Use this for 500 errors to prevent information leakage (CWE-209)
 func (s *RESTServer) internalError(ctx *Context, err error, context string) error {
+	if unavailable := s.leaderUnavailable(ctx, err); unavailable != nil {
+		return unavailable
+	}
 	s.logger.Error("internal server error", "context", context, "error", err, "path", ctx.Request.URL.Path)
 	return ctx.Error(http.StatusInternalServerError, "internal server error")
+}
+
+// leaderRetryAfterSeconds is the Retry-After sent with a 503 for a write the
+// cluster could not commit for want of a leader: about one election.
+const leaderRetryAfterSeconds = 2
+
+// leaderUnavailable answers 503 with Retry-After when err says the write could
+// not reach a Raft leader -- an election is in progress or this node is cut off
+// from the majority. Such a write was not applied and is safe to retry, unlike
+// a 500. It returns nil (writing nothing) for any other error.
+func (s *RESTServer) leaderUnavailable(ctx *Context, err error) error {
+	raftErr, unavailable := core.LeaderUnavailable(err)
+	if !unavailable {
+		return nil
+	}
+	s.logger.Warn("write refused: no cluster leader", "error", err, "path", ctx.Request.URL.Path)
+	ctx.Response.Header().Set("Retry-After", strconv.Itoa(leaderRetryAfterSeconds))
+	body := map[string]string{"error": "cluster leader unavailable; retry shortly"}
+	if raftErr.NodeID != "" {
+		body["leader"] = raftErr.NodeID
+	}
+	return ctx.JSON(http.StatusServiceUnavailable, body)
 }
 
 // Bind parses JSON request body with size limits to prevent DoS
@@ -3547,8 +3782,21 @@ func (s *RESTServer) OnJudgmentCallback() func(*core.Judgment) {
 		s.judgmentsTotal++
 		s.metricsMu.Unlock()
 
-		if s.ws != nil {
-			s.ws.BroadcastJudgment(judgment)
+		if s.ws == nil || judgment == nil {
+			return
 		}
+		// Redact like REST responses (raw HTTP bodies and headers stay
+		// server-side) and name the soul so the live feed can label it.
+		payload := judgmentDTO{Judgment: redactedJudgmentFromCore(judgment)}
+		if s.store != nil {
+			if soul, err := s.store.GetSoulNoCtx(judgment.SoulID); err == nil && soul != nil {
+				payload.SoulName = soul.Name
+			}
+		}
+		s.ws.broadcastTenantEvent(judgment.WorkspaceID, "judgment", WSMessage{
+			Type:      "judgment",
+			Timestamp: time.Now().UTC(),
+			Payload:   payload,
+		})
 	}
 }

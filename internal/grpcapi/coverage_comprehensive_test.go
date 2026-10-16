@@ -642,7 +642,7 @@ func TestServer_CreateSoul_StoreSaveError(t *testing.T) {
 
 func TestServer_UpdateSoul_WithCoreSoulType(t *testing.T) {
 	store := newMockGRPCStore()
-	store.souls["s1"] = &core.Soul{ID: "s1", Name: "old", Type: "http", Target: "old.com"}
+	store.souls["s1"] = &core.Soul{ID: "s1", Name: "old", Type: "http", Target: "https://old.com"}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 	name := "updated"
 	resp, err := srv.UpdateSoul(testUserContext(), &v1.UpdateSoulRequest{Id: "s1", Name: &name})

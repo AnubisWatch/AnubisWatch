@@ -27,13 +27,18 @@ func (s *RESTServer) handleStatusPage(ctx *Context) error {
 	// Calculate overall status
 	overallStatus := "operational"
 	operationalCount := 0
+	now := time.Now()
+	windows := s.activeMaintenanceWindows(now)
 
 	for _, soul := range souls {
 		// Get latest judgment
-		judgments, _ := s.store.ListJudgmentsNoCtx(soul.ID, time.Now().Add(-24*time.Hour), time.Now(), 1)
+		judgments, _ := s.store.ListJudgmentsNoCtx(soul.ID, now.Add(-24*time.Hour), now, 1)
 
 		status := "unknown"
-		if len(judgments) > 0 {
+		if core.SoulInMaintenance(windows, soul, now) {
+			// Planned maintenance is neither an outage nor operational.
+			status = "under_maintenance"
+		} else if len(judgments) > 0 {
 			switch judgments[0].Status {
 			case core.SoulAlive:
 				status = "operational"
@@ -115,9 +120,16 @@ func (s *RESTServer) handlePublicStatus(ctx *Context) error {
 	operational := 0
 	degraded := 0
 	outage := 0
+	maintenance := 0
+	now := time.Now()
+	windows := s.activeMaintenanceWindows(now)
 
 	for _, soul := range souls {
-		judgments, _ := s.store.ListJudgmentsNoCtx(soul.ID, time.Now().Add(-1*time.Hour), time.Now(), 1)
+		if core.SoulInMaintenance(windows, soul, now) {
+			maintenance++
+			continue
+		}
+		judgments, _ := s.store.ListJudgmentsNoCtx(soul.ID, now.Add(-1*time.Hour), now, 1)
 		if len(judgments) == 0 {
 			continue
 		}
@@ -144,6 +156,7 @@ func (s *RESTServer) handlePublicStatus(ctx *Context) error {
 		"operational": operational,
 		"degraded":    degraded,
 		"outage":      outage,
+		"maintenance": maintenance,
 		"total":       len(souls),
 		"updated_at":  time.Now().UTC(),
 	})
@@ -224,6 +237,7 @@ func (s *RESTServer) handleStatusPageHTML(ctx *Context) error {
         .dot-operational { background: #22C55E; box-shadow: 0 0 10px #22C55E; }
         .dot-degraded { background: #F59E0B; }
         .dot-outage { background: #EF4444; }
+        .dot-maintenance { background: #3B82F6; }
         .footer {
             text-align: center;
             margin-top: 40px;
@@ -236,11 +250,19 @@ func (s *RESTServer) handleStatusPageHTML(ctx *Context) error {
         <div class="header">
             <h1>⚖️ System Status</h1>`
 
-	// Calculate overall status
+	// Calculate overall status. Souls under maintenance count as neither
+	// operational nor down.
 	operational := 0
 	outage := 0
+	now := time.Now()
+	windows := s.activeMaintenanceWindows(now)
+	inMaintenance := 0
 	for _, soul := range souls {
-		judgments, _ := s.store.ListJudgmentsNoCtx(soul.ID, time.Now().Add(-1*time.Hour), time.Now(), 1)
+		if core.SoulInMaintenance(windows, soul, now) {
+			inMaintenance++
+			continue
+		}
+		judgments, _ := s.store.ListJudgmentsNoCtx(soul.ID, now.Add(-1*time.Hour), now, 1)
 		if len(judgments) > 0 {
 			switch judgments[0].Status {
 			case core.SoulAlive:
@@ -256,7 +278,7 @@ func (s *RESTServer) handleStatusPageHTML(ctx *Context) error {
 	if outage > 0 {
 		statusClass = "status-outage"
 		statusText = "Major System Outage"
-	} else if operational < len(souls) {
+	} else if operational+inMaintenance < len(souls) {
 		statusClass = "status-degraded"
 		statusText = "Degraded Performance"
 	}
@@ -270,7 +292,10 @@ func (s *RESTServer) handleStatusPageHTML(ctx *Context) error {
 
 		dotClass := "dot-outage"
 		statusText := "Unknown"
-		if len(judgments) > 0 {
+		if core.SoulInMaintenance(windows, soul, now) {
+			dotClass = "dot-maintenance"
+			statusText = "Under Maintenance"
+		} else if len(judgments) > 0 {
 			switch judgments[0].Status {
 			case core.SoulAlive:
 				dotClass = "dot-operational"

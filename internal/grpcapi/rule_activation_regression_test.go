@@ -26,7 +26,9 @@ var _ AlertRegistrar = (*alert.Manager)(nil)
 func newRuleActivationServer(t *testing.T) (*Server, *mockGRPCStore, *alert.Manager) {
 	t.Helper()
 	store := newMockGRPCStore()
-	mgr := alert.NewManager(nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// As in production, the alert engine persists into the same store the
+	// gRPC server reads: Create/Update write once, through the engine.
+	mgr := alert.NewManager(&grpcBackedAlertStorage{store: store}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, false).SetAlertRegistrar(mgr)
 	return srv, store, mgr
 }
@@ -151,4 +153,42 @@ func TestGRPCDeleteRuleDeactivatesRule(t *testing.T) {
 	if _, err := mgr.GetRule(rule.ID); err == nil {
 		t.Fatal("rule deleted over gRPC is still active in the alert manager")
 	}
+}
+
+// grpcBackedAlertStorage stores alert channels and rules in the mock gRPC
+// store; events and incidents are not needed by these tests.
+type grpcBackedAlertStorage struct{ store *mockGRPCStore }
+
+func (a *grpcBackedAlertStorage) SaveChannel(ch *core.AlertChannel) error {
+	return a.store.SaveChannelNoCtx(ch)
+}
+func (a *grpcBackedAlertStorage) GetChannel(id, ws string) (*core.AlertChannel, error) {
+	return a.store.GetChannelNoCtx(id, ws)
+}
+func (a *grpcBackedAlertStorage) ListChannels(ws string) ([]*core.AlertChannel, error) {
+	return a.store.ListChannelsNoCtx(ws)
+}
+func (a *grpcBackedAlertStorage) DeleteChannel(id, ws string) error {
+	return a.store.DeleteChannelNoCtx(id, ws)
+}
+func (a *grpcBackedAlertStorage) SaveRule(rule *core.AlertRule) error {
+	return a.store.SaveRuleNoCtx(rule)
+}
+func (a *grpcBackedAlertStorage) GetRule(id, ws string) (*core.AlertRule, error) {
+	return a.store.GetRuleNoCtx(id, ws)
+}
+func (a *grpcBackedAlertStorage) ListRules(ws string) ([]*core.AlertRule, error) {
+	return a.store.ListRulesNoCtx(ws)
+}
+func (a *grpcBackedAlertStorage) DeleteRule(id, ws string) error {
+	return a.store.DeleteRuleNoCtx(id, ws)
+}
+func (a *grpcBackedAlertStorage) SaveEvent(*core.AlertEvent) error { return nil }
+func (a *grpcBackedAlertStorage) ListEvents(string, int) ([]*core.AlertEvent, error) {
+	return nil, nil
+}
+func (a *grpcBackedAlertStorage) SaveIncident(*core.Incident) error          { return nil }
+func (a *grpcBackedAlertStorage) GetIncident(string) (*core.Incident, error) { return nil, nil }
+func (a *grpcBackedAlertStorage) ListActiveIncidents() ([]*core.Incident, error) {
+	return nil, nil
 }

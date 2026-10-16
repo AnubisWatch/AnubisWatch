@@ -462,16 +462,6 @@ func redactedJudgmentFromCore(judgment *core.Judgment) *core.Judgment {
 	return &out
 }
 
-func redactedJudgmentsFromCore(judgments []*core.Judgment) []*core.Judgment {
-	out := make([]*core.Judgment, 0, len(judgments))
-	for _, judgment := range judgments {
-		if judgment != nil {
-			out = append(out, redactedJudgmentFromCore(judgment))
-		}
-	}
-	return out
-}
-
 func redactChannelConfig(config map[string]interface{}) (map[string]any, bool) {
 	if config == nil {
 		return map[string]any{}, false
