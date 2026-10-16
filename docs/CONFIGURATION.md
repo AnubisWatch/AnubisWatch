@@ -18,6 +18,7 @@
 - [Alert Rules (Verdicts)](#alert-rules-verdicts)
 - [Synthetic Monitoring (Journeys)](#synthetic-monitoring-journeys)
 - [Logging](#logging)
+- [Security](#security)
 - [Environment Variable Expansion](#environment-variable-expansion)
 - [Configuration Validation](#configuration-validation)
 - [Example Configurations](#example-configurations)
@@ -210,9 +211,84 @@ storage:
 | `region` | string | `"default"` | No | Geographic region for routing |
 | `bind_addr` | string | `"0.0.0.0:7946"` | No | Address to bind Raft/gossip |
 | `advertise_addr` | string | Auto-detected | No | Address advertised to peers |
-| `cluster_secret` | string | - | Conditional | Shared HMAC secret for gossip authentication. Leave empty in single-node mode (`anubis serve --single`); the Helm chart enforces presence when `config.necropolis.enabled=true` |
+| `cluster_secret` | string | - | Conditional | Shared HMAC secret. It authenticates gossip and **every Raft RPC** (votes, pre-votes, AppendEntries, heartbeats, snapshots, forwarded writes, joins); see *Cluster traffic authentication* below. Must be identical on every node. Without it cluster traffic is unauthenticated and the node logs a warning at startup. Leave empty in single-node mode (`anubis serve --single`); the Helm chart enforces presence when `config.necropolis.enabled=true` |
 | `discovery` | object | - | No | Node discovery configuration |
 | `raft` | object | - | No | Raft consensus tuning |
+| `distribution` | object | - | No | How souls are shared between nodes |
+
+### `necropolis.distribution` Block
+
+In cluster mode every soul is owned by exactly one live node, which is the
+only node that probes it and evaluates its alert rules. Judgments and
+incidents replicate through Raft, so every node shows every soul's history.
+Ownership is recomputed when souls change or a node joins, leaves or stops
+answering the leader (after five election timeouts), without a restart.
+
+Journeys are shared the same way: each journey (configured or created through
+the API) runs on exactly one live node, chosen by the same strategy over the
+journey ID, and its runs replicate so every node lists them. A standalone node
+runs its configured journeys as before.
+
+When a soul moves to a new owner, alerting continues where the old owner left
+off: the record of when each rule last notified about the soul (its cooldown)
+is replicated, and the new owner seeds the `consecutive_failures` streak and
+the `status_for` clock from the soul's replicated judgments, so a failover
+does not re-send an alert inside the rule's cooldown. Per-channel rate-limit
+counters remain per node.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `strategy` | string | `"hash"` | `hash` (rendezvous hashing: a membership change moves only the affected node's souls), `round-robin` (exactly even counts, but adding or removing a soul can move others), `region-aware` (prefer nodes in the soul's `region`, balance by count), `load-based` (same as round-robin today). Unrecognised values fall back to `hash` with a warning. A soul's `regions` restriction is always honoured. |
+
+`redundancy` and `rebalance_interval` are parsed but not used.
+
+Writes may be sent to any node: a follower forwards them to the leader and
+answers once it has applied them itself. When no leader is reachable a write
+is refused with `503 Service Unavailable` and a `Retry-After` header.
+
+Nodes can be added and removed at runtime. Each change is a replicated
+joint-consensus configuration change, one at a time.
+
+**Joining by address.** Start the new node with one or more existing
+members' Raft addresses and no peers:
+
+```bash
+anubis serve --join 10.0.1.10:7946          # or necropolis.raft.join: ["10.0.1.10:7946"]
+```
+
+A node with `raft.join`, no `raft.peers` and `bootstrap: false` never elects
+itself; it owns no souls or journeys and asks the join addresses to add it
+under its own `raft.node_id`. When it is added it learns every member's real
+node ID and address from the answer and becomes an ordinary voter (the
+membership is persisted, so later restarts do not need `--join`).
+
+- With a `cluster_secret`, the join request is authenticated and the new node
+  is admitted automatically.
+- Without a secret, joining is not automatic (anyone who can reach the Raft
+  port could otherwise add themselves). Add the waiting node from any member
+  with `anubis summon <new-node-raft-addr>`: the server asks the node for its
+  node ID and adds it under that ID. `--name <node-id>` is still accepted to
+  name it explicitly.
+
+`anubis banish <node-id>` removes a member. The REST equivalents are
+`POST /api/v1/cluster/nodes` (`node_id` optional: omitted, it is learned from
+the node at `address`) and `DELETE /api/v1/cluster/nodes/{id}`. Statically
+configured `raft.peers` keep working as before.
+
+### Cluster traffic authentication
+
+With `cluster_secret` set, every frame on the Raft transport carries an
+HMAC-SHA256 signature over the RPC method, the sender's node ID, a timestamp,
+a per-process epoch and sequence number, and the payload; responses are signed
+and bound to their request. A receiver rejects a frame that is unsigned,
+signed with another secret, altered, timestamped more than 60 seconds from its
+own clock, replayed, or sent by a node that is not a current member (a
+removed node holding the secret can no longer vote or replicate). Replay
+protection is a fixed-size sliding window per sender, so it adds no
+per-message allocation to the heartbeat path. Keep node clocks within 60
+seconds of each other (NTP). Every node must use the same secret: a node with
+a different or missing secret cannot talk to the cluster. TLS
+(`raft.tls`) can be layered on top for confidentiality.
 
 ### `necropolis.discovery` Block
 
@@ -227,6 +303,7 @@ storage:
 |-------|------|---------|-------------|
 | `election_timeout` | duration | `1000ms` | Follower → candidate timeout |
 | `heartbeat_timeout` | duration | `300ms` | Leader heartbeat interval |
+| `join` | array | - | Raft addresses of existing members to ask for admission (see *Joining by address*); used only while the node has no peers and is not bootstrapping. `anubis serve --join <addr>` appends to it |
 
 ### Example: Single Node
 
@@ -289,6 +366,18 @@ necropolis:
 |-------|------|---------|----------|-------------|
 | `admin_email` | string | - | Conditional | Admin user email |
 | `admin_password` | string | - | Conditional | Admin password (use env var) |
+
+The configured `admin_password` seeds the account on first start. A password
+changed later (dashboard **Settings → Change Password** or the API) is stored
+hashed in `<storage.path>/sessions.json` and takes precedence over the config
+file after a restart. To recover a lost password, stop the server and run:
+
+```bash
+anubis admin reset-password            # prompts; or --password-stdin
+```
+
+This revokes all sessions. Password reset tokens from
+`POST /api/v1/auth/reset-password` are not delivered anywhere yet.
 
 ### `auth.oidc` Block
 
@@ -1088,6 +1177,30 @@ logging:
   output: "file"
   file: "/var/log/anubis/anubis.log"
 ```
+
+---
+
+## Security
+
+```yaml
+security:
+  # Probes and alert channels refuse private/loopback targets by default
+  # (SSRF protection). Enable to monitor services on your LAN.
+  allow_private_targets: false
+  # Narrower alternative: only these private ranges are reachable.
+  allowed_networks:
+    - "10.20.0.0/16"
+  # Honour per-soul insecure_skip_verify (MITM risk; dev/test only).
+  allow_insecure_skip_verify: false
+```
+
+`allow_private_targets` covers 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
+127.0.0.0/8, fc00::/7 and ::1. Link-local and cloud metadata addresses
+(169.254.0.0/16, 100.100.100.200, …) stay blocked regardless.
+`ANUBIS_SSRF_ALLOW_PRIVATE=1` has the same effect as `allow_private_targets: true`.
+
+A soul whose target is blocked is recorded as `dead` with the reason in the
+judgment message, so it shows up in the dashboard and triggers alert rules.
 
 ---
 

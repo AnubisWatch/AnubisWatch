@@ -112,18 +112,27 @@ anubis watch https://example.com --name "Example"
 # Show current judgments
 anubis judge
 
+# Client commands read the server address and data dir from the same config
+# file the server uses; ANUBIS_HOST/ANUBIS_PORT/ANUBIS_DATA_DIR override it.
+anubis login [--email E] [--password-stdin]   # Save a session token for client commands
+anubis logout
+anubis admin reset-password [--email E]       # Recover the local admin (server stopped)
+
 # Server management
 anubis serve --single                    # Single node mode
 anubis serve --config ./configs/anubis.yaml      # Custom config
 anubis status                            # Show server status
-anubis logs --follow                     # View logs
+anubis health                            # Server liveness (used as the compose healthcheck)
+anubis logs -n 100 --follow              # Tail the log file (needs logging.output: file|both)
 anubis config validate                   # Validate config
-anubis config show                       # Show current config
-anubis export --format json              # Export data
+anubis config show [--reveal]            # Show current config (secrets masked by default)
+anubis export souls|config               # Export to JSON on stdout
+anubis souls export|import|add|remove    # Soul file management
 
 # Backup & Restore
-anubis backup --output ./backup.tar.gz
-anubis restore --input ./backup.tar.gz
+anubis backup create [--output ./backup.json.gz] [--include-history]
+anubis backup list | info <file> | delete <file>
+anubis restore <file>
 
 # Cluster management
 anubis necropolis              # Show cluster status
@@ -208,16 +217,25 @@ Environment variable expansion in config values: `${VAR}` and `${VAR:-default}` 
 
 Key environment variable overrides:
 - `ANUBIS_CONFIG` — Config file path
-- `ANUBIS_DATA_DIR` — Data directory (default: `/var/lib/anubis`)
-- `ANUBIS_LOG_LEVEL` — Log level (debug, info, warn, error)
-- `ANUBIS_PORT` — Server port (default: 8443)
+- `ANUBIS_DATA_DIR` — Data directory (default: `storage.path`, else `/var/lib/anubis`)
+- `ANUBIS_LOG_LEVEL` — Log level (debug, info, warn, error); overrides `logging.level`
+- `ANUBIS_PORT` — Server port (default: 8443; `anubis init` writes 8080 or the next free port)
+- `ANUBIS_SSRF_ALLOW_PRIVATE` — Same as `security.allow_private_targets: true`
+- `ANUBIS_API_TOKEN` / `ANUBIS_TOKEN_FILE` — Token for client commands (default: the file `anubis login` writes)
 - `ANUBIS_ENCRYPTION_KEY` — Storage encryption key (hex-encoded 32 bytes)
 - `ANUBIS_CLUSTER_SECRET` — Cluster shared secret (for HMAC validation)
 - `ANUBIS_ADMIN_PASSWORD` — Initial admin password (only on first startup)
 
-Default ports: server 8443, gRPC 9090, cluster bind 0.0.0.0:7946.
+Default ports: server 8443, gRPC disabled (`server.grpc_port: 0`), cluster bind 0.0.0.0:7946.
 
-Example config generation: `anubis init` creates `anubis.yaml` with sensible defaults.
+Example config generation: `anubis init` creates `anubis.json` with sensible defaults, including
+`logging.output: both` (stdout + `<storage.path>/logs/anubis.log`) and
+`security.allow_private_targets: false`.
+
+Probes and alert channels refuse private/loopback targets unless `security.allow_private_targets`
+or `security.allowed_networks` allows them; a blocked soul records a `dead` judgment that names
+the setting. Soul `weight`/`timeout` must be duration strings ("30s"); bare JSON numbers are
+nanoseconds and are rejected below 1s / 1ms.
 
 ## Testing Guidelines
 
@@ -249,7 +267,7 @@ Example config generation: `anubis init` creates `anubis.yaml` with sensible def
 | `test-frontend` | eslint + Vitest; `web/vitest.config.ts` enforces 80% (measured ~98%) |
 | `e2e-dashboard` | Playwright against a real `anubis` binary |
 | `static-analysis` | golangci-lint, gosec, CodeQL SARIF upload |
-| `script-validation` | shellcheck + `scripts/check-dockerignore.sh` |
+| `script-validation` | `bash -n` on scripts/, script `--help` output, deployment-evidence dry run |
 | `build` | Binary build verification, artifact upload |
 | `chaos-tests` | Raft fault injection, gated on `ANUBIS_RUN_CHAOS_TESTS=1` (main only) |
 | `load-tests` | Performance benchmarks (main only) |
