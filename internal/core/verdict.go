@@ -601,3 +601,50 @@ func (m *MaintenanceWindow) monthlyStart(year int, month time.Month) time.Time {
 	hour, minute, second := m.StartTime.Clock()
 	return time.Date(year, month, day, hour, minute, second, m.StartTime.Nanosecond(), m.StartTime.Location())
 }
+
+// AppliesTo reports whether the window targets soul: same workspace (empty
+// means "default" on either side) and either an untargeted window, a listed
+// soul ID, or a shared tag. It does not check whether the window is active.
+func (m *MaintenanceWindow) AppliesTo(soul *Soul) bool {
+	if m == nil || soul == nil {
+		return false
+	}
+	windowWS, soulWS := m.WorkspaceID, soul.WorkspaceID
+	if windowWS == "" {
+		windowWS = "default"
+	}
+	if soulWS == "" {
+		soulWS = "default"
+	}
+	if windowWS != soulWS {
+		return false
+	}
+	if len(m.SoulIDs) == 0 && len(m.Tags) == 0 {
+		return true
+	}
+	for _, id := range m.SoulIDs {
+		if id == soul.ID {
+			return true
+		}
+	}
+	for _, windowTag := range m.Tags {
+		for _, soulTag := range soul.Tags {
+			if windowTag == soulTag {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// SoulInMaintenance reports whether any of windows is active at now and
+// applies to soul. Callers listing many souls fetch the windows once and pass
+// them here per soul.
+func SoulInMaintenance(windows []*MaintenanceWindow, soul *Soul, now time.Time) bool {
+	for _, window := range windows {
+		if window != nil && window.IsActive(now) && window.AppliesTo(soul) {
+			return true
+		}
+	}
+	return false
+}

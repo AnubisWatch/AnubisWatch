@@ -125,7 +125,7 @@ func (v *SSRFValidator) ValidateTarget(target string) error {
 	// Check if it's an IP address (including decimal/hex/octal notation)
 	if ip := v.parseIP(host); ip != nil {
 		if v.isBlockedIP(ip) {
-			return fmt.Errorf("target IP %q is blocked", ip)
+			return fmt.Errorf("target IP %q is blocked%s", ip, privateHint(ip))
 		}
 		return nil
 	}
@@ -140,7 +140,7 @@ func (v *SSRFValidator) ValidateTarget(target string) error {
 	for _, addr := range addrs {
 		ip := net.ParseIP(addr)
 		if ip != nil && v.isBlockedIP(ip) {
-			return fmt.Errorf("target hostname %q resolves to blocked IP %q", host, addr)
+			return fmt.Errorf("target hostname %q resolves to blocked IP %q%s", host, addr, privateHint(ip))
 		}
 	}
 
@@ -250,7 +250,7 @@ func (v *SSRFValidator) ValidateAddress(address string) error {
 	ip := v.parseIP(host)
 	if ip != nil {
 		if v.isBlockedIP(ip) {
-			return fmt.Errorf("target IP %q is blocked", ip)
+			return fmt.Errorf("target IP %q is blocked%s", ip, privateHint(ip))
 		}
 		return nil
 	}
@@ -264,7 +264,7 @@ func (v *SSRFValidator) ValidateAddress(address string) error {
 	for _, addr := range addrs {
 		ip := net.ParseIP(addr)
 		if ip != nil && v.isBlockedIP(ip) {
-			return fmt.Errorf("target hostname %q resolves to blocked IP %q", host, addr)
+			return fmt.Errorf("target hostname %q resolves to blocked IP %q%s", host, addr, privateHint(ip))
 		}
 	}
 
@@ -282,6 +282,42 @@ func ValidateTarget(target string) error {
 // ValidateAddress is a convenience function using the default validator
 func ValidateAddress(address string) error {
 	return DefaultValidator.ValidateAddress(address)
+}
+
+// privateHint tells the operator how to allow a target that was blocked only
+// because it is in a private range. Hard-blocked ranges get no hint.
+func privateHint(ip net.IP) string {
+	if ipv4 := ip.To4(); ipv4 != nil {
+		ip = ipv4
+	}
+	for _, network := range hardBlockedNetworks {
+		if network.Contains(ip) {
+			return ""
+		}
+	}
+	for _, network := range privateNetworks {
+		if network.Contains(ip) {
+			return " (private address; set security.allow_private_targets: true or list it in security.allowed_networks to monitor internal services)"
+		}
+	}
+	return ""
+}
+
+// ConfigureDefaultValidator applies the operator's SSRF policy to the
+// process-wide validator used by probes and alert dispatchers. It must run
+// before probes start. allowPrivate is OR-ed with ANUBIS_SSRF_ALLOW_PRIVATE.
+func ConfigureDefaultValidator(allowPrivate bool, allowedCIDRs []string) error {
+	v := NewSSRFValidator()
+	v.AllowPrivate = v.AllowPrivate || allowPrivate
+	for _, cidr := range allowedCIDRs {
+		_, network, err := net.ParseCIDR(strings.TrimSpace(cidr))
+		if err != nil {
+			return fmt.Errorf("security.allowed_networks: invalid CIDR %q: %w", cidr, err)
+		}
+		v.AllowedNetworks = append(v.AllowedNetworks, network)
+	}
+	DefaultValidator = v
+	return nil
 }
 
 // ResetDefaultForTest reinitializes DefaultValidator with the current env vars.
@@ -326,7 +362,7 @@ func (v *SSRFValidator) WrapDialer(dial func(network, addr string) (net.Conn, er
 		// If it's a literal IP (including decimal/hex), check directly
 		if ip := v.parseIP(host); ip != nil {
 			if v.isBlockedIP(ip) {
-				return nil, fmt.Errorf("SSRF: target IP %q is blocked", ip)
+				return nil, fmt.Errorf("SSRF: target IP %q is blocked%s", ip, privateHint(ip))
 			}
 			return dial(network, addr)
 		}
@@ -345,7 +381,7 @@ func (v *SSRFValidator) WrapDialer(dial func(network, addr string) (net.Conn, er
 				return nil, fmt.Errorf("SSRF: hostname %q resolved to unparseable address %q", host, resolved)
 			}
 			if v.isBlockedIP(ip) {
-				return nil, fmt.Errorf("SSRF: hostname %q resolves to blocked IP %q", host, resolved)
+				return nil, fmt.Errorf("SSRF: hostname %q resolves to blocked IP %q%s", host, resolved, privateHint(ip))
 			}
 			if pinned == nil {
 				pinned = ip
@@ -373,7 +409,7 @@ func (v *SSRFValidator) WrapDialerContext(dial func(ctx context.Context, network
 
 		if ip := v.parseIP(host); ip != nil {
 			if v.isBlockedIP(ip) {
-				return nil, fmt.Errorf("SSRF: target IP %q is blocked", ip)
+				return nil, fmt.Errorf("SSRF: target IP %q is blocked%s", ip, privateHint(ip))
 			}
 			return dial(ctx, network, addr)
 		}
@@ -393,7 +429,7 @@ func (v *SSRFValidator) WrapDialerContext(dial func(ctx context.Context, network
 				return nil, fmt.Errorf("SSRF: hostname %q resolved to unparseable address %q", host, resolved)
 			}
 			if v.isBlockedIP(ip) {
-				return nil, fmt.Errorf("SSRF: hostname %q resolves to blocked IP %q", host, resolved)
+				return nil, fmt.Errorf("SSRF: hostname %q resolves to blocked IP %q%s", host, resolved, privateHint(ip))
 			}
 			if pinned == nil {
 				pinned = ip

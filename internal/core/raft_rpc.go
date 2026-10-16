@@ -44,6 +44,10 @@ type AppendEntriesRequest struct {
 	PrevLogTerm  uint64         `json:"prev_log_term"`
 	Entries      []RaftLogEntry `json:"entries"`
 	LeaderCommit uint64         `json:"leader_commit"`
+	// LeaderAddr is the leader's advertised Raft address. A follower that does
+	// not yet know where its leader lives (a peer configured under a different
+	// ID, or one added at runtime) learns it here, so it can forward writes.
+	LeaderAddr string `json:"leader_addr,omitempty"`
 }
 
 // AppendEntriesResponse is the response to an AppendEntries RPC
@@ -54,6 +58,53 @@ type AppendEntriesResponse struct {
 	// Used for log inconsistency optimization
 	ConflictTerm  uint64 `json:"conflict_term,omitempty"`
 	ConflictIndex uint64 `json:"conflict_index,omitempty"`
+}
+
+// Forward kinds: the leader-only operations a follower can ask the leader to
+// perform on its behalf.
+const (
+	ForwardApply      = "apply"
+	ForwardAddPeer    = "add_peer"
+	ForwardRemovePeer = "remove_peer"
+)
+
+// ForwardRequest is sent by a follower to the leader to run a leader-only
+// operation (an FSM command or a membership change) on its behalf. When the
+// cluster has a shared secret, MAC is the hex HMAC-SHA256 of the request's
+// canonical form (see raft.forwardMAC) and Timestamp bounds replay.
+type ForwardRequest struct {
+	Kind      string      `json:"kind"`
+	Origin    string      `json:"origin"`
+	Command   *FSMCommand `json:"command,omitempty"`
+	Peer      *RaftPeer   `json:"peer,omitempty"`
+	PeerID    string      `json:"peer_id,omitempty"`
+	TimeoutMs int64       `json:"timeout_ms"`
+	Timestamp int64       `json:"timestamp"`
+	Nonce     string      `json:"nonce"`
+	MAC       string      `json:"mac,omitempty"`
+}
+
+// ForwardResponse reports the outcome of a ForwardRequest. Index and Term
+// identify the committed log entry for an apply; a failure is reported as a
+// RaftError-shaped code and message so the follower can rebuild a typed error.
+type ForwardResponse struct {
+	Index     uint64 `json:"index"`
+	Term      uint64 `json:"term"`
+	ErrorCode string `json:"error_code,omitempty"`
+	Error     string `json:"error,omitempty"`
+	LeaderID  string `json:"leader_id,omitempty"`
+}
+
+// IdentifyRequest asks a node, by its Raft address, who it is; the summon
+// flow uses it to add a node by address alone.
+type IdentifyRequest struct{}
+
+// IdentifyResponse describes the node that answered an IdentifyRequest.
+type IdentifyResponse struct {
+	ID           string `json:"id"`
+	Address      string `json:"address"`
+	Region       string `json:"region,omitempty"`
+	AwaitingJoin bool   `json:"awaiting_join"`
 }
 
 // InstallSnapshotRequest is sent by the leader to transfer a snapshot
@@ -97,7 +148,9 @@ type PeerInfoResponse struct {
 	ClusterState ClusterState `json:"cluster_state"`
 }
 
-// JoinRequest is sent by a node wanting to join the cluster
+// JoinRequest is sent by a node wanting to join the cluster: one started with
+// raft.join sends it to a member's Raft address, naming itself by its real
+// node ID so members never guess IDs from addresses.
 type JoinRequest struct {
 	NodeID                 string           `json:"node_id"`
 	Address                string           `json:"address"`
@@ -108,9 +161,12 @@ type JoinRequest struct {
 	PrevConfigurationIndex uint64           `json:"prev_configuration_index"`
 }
 
-// JoinResponse is the response to a JoinRequest
+// JoinResponse is the response to a JoinRequest. On success Peers lists every
+// other member of the configuration (real IDs and Raft addresses), which the
+// joiner installs as its peers.
 type JoinResponse struct {
 	Success       bool       `json:"success"`
+	ErrorCode     string     `json:"error_code,omitempty"`
 	LeaderID      string     `json:"leader_id,omitempty"`
 	LeaderAddress string     `json:"leader_address,omitempty"`
 	Peers         []RaftPeer `json:"peers,omitempty"`

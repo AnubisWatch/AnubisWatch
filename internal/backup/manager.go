@@ -168,13 +168,18 @@ func (m *Manager) Create(ctx context.Context, opts Options) (*Backup, string, er
 	backup.Data.Workspaces = workspaces
 	backup.Metadata.Workspaces = len(workspaces)
 
+	// The implicit "default" workspace is never stored as a record, so a
+	// fresh install has no workspace entries at all. Collect from it anyway,
+	// otherwise the backup silently contains nothing.
+	workspaceIDs := backupWorkspaceIDs(workspaces)
+
 	// Collect souls from all workspaces
 	var allSouls []*core.Soul
-	for _, ws := range workspaces {
+	for _, wsID := range workspaceIDs {
 		// A zero limit requests all souls; full backups must not truncate a workspace.
-		souls, err := m.storage.ListSouls(ctx, ws.ID, 0, 0)
+		souls, err := m.storage.ListSouls(ctx, wsID, 0, 0)
 		if err != nil {
-			m.logger.Warn("Failed to list souls for workspace", "workspace", ws.ID, "error", err)
+			m.logger.Warn("Failed to list souls for workspace", "workspace", wsID, "error", err)
 			continue
 		}
 		allSouls = append(allSouls, souls...)
@@ -215,10 +220,10 @@ func (m *Manager) Create(ctx context.Context, opts Options) (*Backup, string, er
 
 	// Collect alert channels across all workspaces
 	var allChannels []*core.AlertChannel
-	for _, ws := range workspaces {
-		channels, err := m.storage.ListAlertChannels(ws.ID)
+	for _, wsID := range workspaceIDs {
+		channels, err := m.storage.ListAlertChannels(wsID)
 		if err != nil {
-			m.logger.Warn("Failed to list alert channels for workspace", "workspace", ws.ID, "error", err)
+			m.logger.Warn("Failed to list alert channels for workspace", "workspace", wsID, "error", err)
 			continue
 		}
 		allChannels = append(allChannels, channels...)
@@ -228,10 +233,10 @@ func (m *Manager) Create(ctx context.Context, opts Options) (*Backup, string, er
 
 	// Collect alert rules across all workspaces
 	var allRules []*core.AlertRule
-	for _, ws := range workspaces {
-		rules, err := m.storage.ListAlertRules(ws.ID)
+	for _, wsID := range workspaceIDs {
+		rules, err := m.storage.ListAlertRules(wsID)
 		if err != nil {
-			m.logger.Warn("Failed to list alert rules for workspace", "workspace", ws.ID, "error", err)
+			m.logger.Warn("Failed to list alert rules for workspace", "workspace", wsID, "error", err)
 			continue
 		}
 		allRules = append(allRules, rules...)
@@ -250,10 +255,10 @@ func (m *Manager) Create(ctx context.Context, opts Options) (*Backup, string, er
 
 	// Collect journeys from all workspaces
 	var allJourneys []*core.JourneyConfig
-	for _, ws := range workspaces {
-		journeys, err := m.storage.ListJourneys(ctx, ws.ID)
+	for _, wsID := range workspaceIDs {
+		journeys, err := m.storage.ListJourneys(ctx, wsID)
 		if err != nil {
-			m.logger.Warn("Failed to list journeys for workspace", "workspace", ws.ID, "error", err)
+			m.logger.Warn("Failed to list journeys for workspace", "workspace", wsID, "error", err)
 			continue
 		}
 		allJourneys = append(allJourneys, journeys...)
@@ -307,6 +312,21 @@ func (m *Manager) Create(ctx context.Context, opts Options) (*Backup, string, er
 	)
 
 	return backup, filepath, nil
+}
+
+// backupWorkspaceIDs returns the stored workspace IDs plus the implicit
+// default workspace, without duplicates.
+func backupWorkspaceIDs(workspaces []*core.Workspace) []string {
+	ids := []string{"default"}
+	seen := map[string]bool{"default": true}
+	for _, ws := range workspaces {
+		if ws == nil || seen[ws.ID] {
+			continue
+		}
+		seen[ws.ID] = true
+		ids = append(ids, ws.ID)
+	}
+	return ids
 }
 
 // Restore restores data from a backup file

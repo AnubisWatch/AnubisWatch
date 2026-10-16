@@ -907,3 +907,9 @@ func TestTransportCacheStats_OnlyMisses(t *testing.T) {
 		t.Errorf("Expected ratio 0.0, got %f", ratio)
 	}
 }
+
+// extractJSONPath is a test helper that discards the found flag.
+func extractJSONPath(data []byte, path string) string {
+	value, _ := extractJSONPathValue(data, path)
+	return value
+}

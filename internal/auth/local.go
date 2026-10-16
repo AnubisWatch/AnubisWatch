@@ -25,9 +25,16 @@ type LocalAuthenticator struct {
 	users             map[string]*api.User
 	adminEmail        string
 	adminPasswordHash string // bcrypt hashed password
-	sessionPath       string
-	stopCleanup       chan struct{}
-	cleanupDone       chan struct{}
+	// configSeedHash identifies the config-file password the current hash was
+	// derived from; a different config password at startup replaces a
+	// password changed at runtime (see loadSessions).
+	configSeedHash string
+	// configPassword is the configured password, held only during
+	// construction so loadSessions can compare it against configSeedHash.
+	configPassword string
+	sessionPath    string
+	stopCleanup    chan struct{}
+	cleanupDone    chan struct{}
 	// stopOnce makes Shutdown idempotent — t.Cleanup hooks plus
 	// explicit defer Shutdown() calls in tests can both fire safely.
 	stopOnce sync.Once
@@ -62,6 +69,15 @@ type sessionData struct {
 	Users       map[string]*api.User     `json:"users"`
 	ResetTokens map[string]*resetToken   `json:"reset_tokens"`
 	Lockouts    map[string]*loginAttempt `json:"lockouts,omitempty"`
+	// AdminEmail/AdminPasswordHash persist a password changed at runtime
+	// (change-password, reset, `anubis admin reset-password`). Without them a
+	// restart silently reverted to the config file's password.
+	AdminEmail        string `json:"admin_email,omitempty"`
+	AdminPasswordHash string `json:"admin_password_hash,omitempty"`
+	// AdminSeedHash is a bcrypt hash of the config-file password in effect
+	// when AdminPasswordHash was set, so rotating the password in the config
+	// file still takes effect.
+	AdminSeedHash string `json:"admin_seed_hash,omitempty"`
 }
 
 // NewLocalAuthenticator creates a new local authenticator.
@@ -102,6 +118,8 @@ func NewLocalAuthenticator(sessionPath, adminEmail, adminPassword string) (*Loca
 		users:             make(map[string]*api.User),
 		adminEmail:        adminEmail,
 		adminPasswordHash: passwordHash,
+		configSeedHash:    passwordHash,
+		configPassword:    adminPassword,
 		sessionPath:       sessionPath,
 		stopCleanup:       make(chan struct{}),
 		cleanupDone:       make(chan struct{}),
@@ -116,6 +134,7 @@ func NewLocalAuthenticator(sessionPath, adminEmail, adminPassword string) (*Loca
 	if sessionPath != "" {
 		a.loadSessions()
 	}
+	a.configPassword = ""
 
 	// Create the admin user when credentials were provided and persisted state
 	// does not already represent that account. Minting a new identity on every
@@ -159,6 +178,18 @@ func (a *LocalAuthenticator) loadSessions() {
 	if err := json.Unmarshal(data, &sessionData); err != nil {
 		// Corrupted file, start fresh
 		return
+	}
+
+	// A password changed at runtime survives restarts, but only while the
+	// config file still holds the password it replaced: rotating the password
+	// in the config (or ANUBIS_ADMIN_PASSWORD) takes effect on the next start.
+	// It is also bound to the email, so renaming the admin starts over.
+	if sessionData.AdminPasswordHash != "" && sessionData.AdminEmail == a.adminEmail &&
+		configPasswordMatchesSeed(sessionData.AdminSeedHash, a.configPassword) {
+		a.adminPasswordHash = sessionData.AdminPasswordHash
+		if sessionData.AdminSeedHash != "" {
+			a.configSeedHash = sessionData.AdminSeedHash
+		}
 	}
 
 	// Restore persisted accounts independently of their sessions. An account
@@ -209,6 +240,21 @@ func (a *LocalAuthenticator) loadSessions() {
 	}
 }
 
+// configPasswordMatchesSeed reports whether the configured password is the
+// one recorded as the seed. An empty seed (nothing recorded) matches.
+func configPasswordMatchesSeed(seed, configured string) bool {
+	if seed == "" {
+		return true
+	}
+	if configured == "" {
+		return false
+	}
+	if strings.HasPrefix(configured, "$2a$") || strings.HasPrefix(configured, "$2b$") || strings.HasPrefix(configured, "$2y$") {
+		return configured == seed
+	}
+	return bcrypt.CompareHashAndPassword([]byte(seed), []byte(configured)) == nil
+}
+
 // hasUserWithEmail reports whether an account with this email is already known.
 // It is called from the constructor before the authenticator is shared, so it
 // does not take a.mu.
@@ -248,10 +294,13 @@ func (a *LocalAuthenticator) saveSessionsLocked() {
 	a.attemptsMu.RUnlock()
 
 	data := sessionData{
-		Tokens:      a.tokens,
-		Users:       a.users,
-		ResetTokens: a.resetTokens,
-		Lockouts:    lockoutsCopy,
+		Tokens:            a.tokens,
+		Users:             a.users,
+		ResetTokens:       a.resetTokens,
+		Lockouts:          lockoutsCopy,
+		AdminEmail:        a.adminEmail,
+		AdminPasswordHash: a.adminPasswordHash,
+		AdminSeedHash:     a.configSeedHash,
 	}
 
 	jsonData, err := saveSessionsJSON(data)
@@ -792,4 +841,54 @@ func (a *LocalAuthenticator) ConfirmPasswordReset(token, newPassword string) err
 	a.saveSessionsLocked()
 
 	return nil
+}
+
+// ResetLocalAdminPassword sets the local admin's password directly in the
+// session file at sessionPath, for an operator with access to the data
+// directory (`anubis admin reset-password`). The server must be stopped: a
+// running server would overwrite the file on its next save. All sessions and
+// pending reset tokens are revoked and the account's lockout is cleared.
+func ResetLocalAdminPassword(sessionPath, adminEmail, newPassword string) error {
+	if adminEmail == "" {
+		return errors.New("admin email is required")
+	}
+	if err := validatePassword(newPassword); err != nil {
+		return fmt.Errorf("new password does not meet policy: %w", err)
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcryptCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash new password: %w", err)
+	}
+
+	var data sessionData
+	// #nosec G304 -- operator-supplied data directory.
+	if raw, err := os.ReadFile(sessionPath); err == nil {
+		if err := json.Unmarshal(raw, &data); err != nil {
+			return fmt.Errorf("session file %s is not valid: %w", sessionPath, err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	data.Tokens = nil
+	data.ResetTokens = nil
+	delete(data.Lockouts, adminEmail)
+	data.AdminEmail = adminEmail
+	data.AdminPasswordHash = string(hash)
+
+	out, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(sessionPath), 0750); err != nil {
+		return err
+	}
+	tmp := sessionPath + ".tmp"
+	if err := os.WriteFile(tmp, out, 0600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, sessionPath); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Chmod(sessionPath, 0600)
 }

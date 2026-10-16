@@ -1540,6 +1540,33 @@ func (db *CobaltDB) ApplyFSMCommand(cmd *core.FSMCommand) error {
 	return nil
 }
 
+// indexedResource maps a key's type and remainder onto the secondary index
+// they belong to, using the same layout rebuildIndexes parses: alert channels,
+// rules, incidents and events are nested under "alerts", and an event's
+// indexed ID is the last of its "{soul}/{ts}/{id}" segments. Replicated writes
+// arrive here rather than through the Save* helpers, so without this mapping a
+// channel, rule or judgment applied on a follower was stored but unreachable
+// through the index-backed lookups.
+func indexedResource(resourceType, resourceID string) (string, string) {
+	if resourceType != "alerts" {
+		return resourceType, resourceID
+	}
+	sub := strings.SplitN(resourceID, "/", 2)
+	if len(sub) != 2 {
+		return resourceType, resourceID
+	}
+	switch sub[0] {
+	case "channels", "rules", "incidents":
+		return sub[0], sub[1]
+	case "events":
+		eventParts := strings.SplitN(sub[1], "/", 3)
+		if len(eventParts) == 3 {
+			return "events", eventParts[2]
+		}
+	}
+	return resourceType, resourceID
+}
+
 // updateIndexForSet updates the in-memory secondary index for a stored key
 // using the same workspace/resourceType/resourceID parsing as rebuildIndexes.
 func (db *CobaltDB) updateIndexForSet(key string) {
@@ -1548,18 +1575,16 @@ func (db *CobaltDB) updateIndexForSet(key string) {
 		return
 	}
 	workspaceID := parts[0]
-	resourceType := parts[1]
-	resourceID := parts[2]
-	// Incident keys are nested under alerts, unlike top-level resources.
-	if resourceType == "alerts" && strings.HasPrefix(resourceID, "incidents/") {
-		resourceType = "incidents"
-		resourceID = strings.TrimPrefix(resourceID, "incidents/")
-	}
+	resourceType, resourceID := indexedResource(parts[1], parts[2])
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	db.recordWorkspaceLocked(workspaceID)
 	switch resourceType {
+	case "judgment-idx":
+		db.judgmentIndex[resourceID] = key
+	case "events":
+		db.alertEventIndex[resourceID] = workspaceID
 	case "souls":
 		db.soulIndex[resourceID] = workspaceID
 	case "channels":
@@ -1587,16 +1612,15 @@ func (db *CobaltDB) updateIndexForDelete(key string) {
 	if len(parts) < 3 {
 		return
 	}
-	resourceType := parts[1]
-	resourceID := parts[2]
-	if resourceType == "alerts" && strings.HasPrefix(resourceID, "incidents/") {
-		resourceType = "incidents"
-		resourceID = strings.TrimPrefix(resourceID, "incidents/")
-	}
+	resourceType, resourceID := indexedResource(parts[1], parts[2])
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	switch resourceType {
+	case "judgment-idx":
+		delete(db.judgmentIndex, resourceID)
+	case "events":
+		delete(db.alertEventIndex, resourceID)
 	case "souls":
 		delete(db.soulIndex, resourceID)
 	case "channels":

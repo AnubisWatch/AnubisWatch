@@ -24,6 +24,9 @@ import (
 // Named after Duat, the Egyptian realm of the afterlife through which souls journey
 type journeyRun struct {
 	cancel context.CancelFunc
+	// fingerprint identifies the configuration the loop was started with, so
+	// Assign restarts a journey only when its definition changed.
+	fingerprint string
 }
 
 type Executor struct {
@@ -34,7 +37,22 @@ type Executor struct {
 	nodeID   string                 // identifier of this jackal node
 	region   string                 // region of this jackal node
 	lastHash map[string]string      // journey ID -> last dedup hash
+
+	// saveRun persists a finished run; nil means e.db.SaveJourneyRun. Cluster
+	// mode replaces it so runs replicate to every node.
+	saveRun func(ctx context.Context, run *core.JourneyRun) error
 }
+
+// SetRunSaver replaces how finished runs are persisted (default: the local
+// store). Set it before any journey starts.
+func (e *Executor) SetRunSaver(fn func(ctx context.Context, run *core.JourneyRun) error) {
+	e.mu.Lock()
+	e.saveRun = fn
+	e.mu.Unlock()
+}
+
+// NodeID returns the jackal ID this executor stamps on its runs.
+func (e *Executor) NodeID() string { return e.nodeID }
 
 // NewExecutor creates a new Journey executor
 func NewExecutor(db *storage.CobaltDB, logger *slog.Logger) *Executor {
@@ -74,16 +92,77 @@ func (e *Executor) Start(ctx context.Context, journey *core.JourneyConfig) error
 		return fmt.Errorf("journey %s has invalid weight interval: %v", journey.ID, journey.Weight.Duration)
 	}
 
-	// Create context for this journey
+	e.startLocked(ctx, journey, journeyFingerprint(journey))
+	return nil
+}
+
+// startLocked starts journey's loop. e.mu must be held.
+func (e *Executor) startLocked(ctx context.Context, journey *core.JourneyConfig, fingerprint string) {
 	journeyCtx, cancel := context.WithCancel(ctx)
-	run := &journeyRun{cancel: cancel}
+	run := &journeyRun{cancel: cancel, fingerprint: fingerprint}
 	e.running[journey.ID] = run
 
-	// Start journey execution goroutine
 	go e.runJourneyLoop(journeyCtx, journey, run)
 
 	e.logger.Info("started journey executor", "journey_id", journey.ID, "name", journey.Name)
-	return nil
+}
+
+// Assign makes journeys exactly the set of running journeys: journeys not in
+// it are stopped, new ones are started, and one whose definition changed is
+// restarted. A journey whose definition is unchanged keeps its schedule, so
+// repeated calls with the same set are no-ops. Disabled journeys, journeys
+// without steps and journeys with an invalid interval are not run.
+func (e *Executor) Assign(ctx context.Context, journeys []*core.JourneyConfig) {
+	want := make(map[string]*core.JourneyConfig, len(journeys))
+	for _, j := range journeys {
+		if j == nil || j.ID == "" || !j.Enabled || len(j.Steps) == 0 || j.Weight.Duration <= 0 {
+			continue
+		}
+		want[j.ID] = j
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for id, run := range e.running {
+		if _, keep := want[id]; !keep {
+			run.cancel()
+			delete(e.running, id)
+			e.logger.Info("stopped journey executor", "journey_id", id)
+		}
+	}
+	for id, j := range want {
+		fingerprint := journeyFingerprint(j)
+		if run, ok := e.running[id]; ok {
+			if run.fingerprint == fingerprint {
+				continue
+			}
+			run.cancel()
+			delete(e.running, id)
+		}
+		journey := *j
+		e.startLocked(ctx, &journey, fingerprint)
+	}
+}
+
+// Running returns the IDs of the journeys currently scheduled here.
+func (e *Executor) Running() []string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	ids := make([]string, 0, len(e.running))
+	for id := range e.running {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func journeyFingerprint(j *core.JourneyConfig) string {
+	data, err := json.Marshal(j)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:])
 }
 
 // Stop stops executing a journey
@@ -247,8 +326,14 @@ func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyC
 	}
 
 	// Save the journey run with retry. Failed saves must remain retryable.
+	e.mu.RLock()
+	save := e.saveRun
+	e.mu.RUnlock()
+	if save == nil {
+		save = e.db.SaveJourneyRun
+	}
 	if err := retryWithBackoff(ctx, 3, 100*time.Millisecond, func() error {
-		return e.db.SaveJourneyRun(ctx, run)
+		return save(ctx, run)
 	}); err != nil {
 		e.logger.Error("failed to save journey run after retries", "journey_id", journey.ID, "err", err)
 		// Continue - don't fail the journey execution due to storage issues

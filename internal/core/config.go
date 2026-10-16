@@ -50,6 +50,18 @@ type SecurityConfig struct {
 	// per-soul InsecureSkipVerify=true and instead fails the check
 	// with a clear error. Set to true only in dev/test environments.
 	AllowInsecureSkipVerify bool `yaml:"allow_insecure_skip_verify" json:"allow_insecure_skip_verify"`
+
+	// AllowPrivateTargets lets probes and alert channels reach private and
+	// loopback ranges (10/8, 172.16/12, 192.168/16, 127/8, fc00::/7, ::1).
+	// Off by default as SSRF protection; turn it on to monitor LAN services.
+	// Cloud metadata endpoints and link-local ranges stay blocked regardless.
+	// Also enabled by ANUBIS_SSRF_ALLOW_PRIVATE=1.
+	AllowPrivateTargets bool `yaml:"allow_private_targets" json:"allow_private_targets"`
+
+	// AllowedNetworks is a narrower alternative to AllowPrivateTargets: CIDR
+	// ranges (e.g. "10.20.0.0/16") that probes may reach even though they are
+	// private.
+	AllowedNetworks []string `yaml:"allowed_networks" json:"allowed_networks"`
 }
 
 // LoadConfig reads and parses the configuration file (YAML or JSON)
@@ -245,7 +257,10 @@ func (c *Config) setDefaults() {
 		c.Necropolis.Raft.SnapshotThreshold = 8192
 	}
 	if c.Necropolis.Distribution.Strategy == "" {
-		c.Necropolis.Distribution.Strategy = "round-robin"
+		// Hash ownership moves only the souls of a node that joins or leaves;
+		// round-robin keeps counts exactly even but reshuffles owners whenever
+		// a soul is added or removed (see cluster.PlanOwnership).
+		c.Necropolis.Distribution.Strategy = "hash"
 	}
 	if c.Necropolis.Distribution.Redundancy == 0 {
 		c.Necropolis.Distribution.Redundancy = 1

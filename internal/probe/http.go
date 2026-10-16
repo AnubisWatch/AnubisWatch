@@ -567,12 +567,6 @@ func tlsVersionString(v uint16) string {
 	}
 }
 
-// extractJSONPath extracts a value from JSON using simple path syntax ($.key.subkey)
-func extractJSONPath(data []byte, path string) string {
-	value, _ := extractJSONPathValue(data, path)
-	return value
-}
-
 // extractJSONPathValue distinguishes failed extraction from an empty string value.
 func extractJSONPathValue(data []byte, path string) (string, bool) {
 	// Strip leading "$"
