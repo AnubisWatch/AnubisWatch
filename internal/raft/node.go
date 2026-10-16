@@ -138,8 +138,6 @@ type Node struct {
 	stats        core.ClusterStats
 	applyWaiters sync.Map
 
-	// forwardNonces rejects replayed signed Forward requests.
-	forwardNonces forwardNonces
 	// removed is set once a committed membership change removes this node: it
 	// stops campaigning instead of disrupting the cluster it left.
 	removed atomic.Bool

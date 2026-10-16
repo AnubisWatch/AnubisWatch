@@ -1,26 +1,14 @@
 package raft
 
 import (
-	"crypto/hmac"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
 const (
-	// forwardMaxSkew bounds how old (or how far in the future) a signed
-	// Forward request may be. Together with the nonce cache it limits replay.
-	forwardMaxSkew = 60 * time.Second
-
 	// errCodeForwardRejected is returned to a follower whose Forward request
 	// failed authentication or came from a node outside the membership.
 	errCodeForwardRejected = "FORWARD_REJECTED"
@@ -35,94 +23,16 @@ type forwardTransport interface {
 	SendForward(peerID string, req *core.ForwardRequest, deadline time.Duration) (*core.ForwardResponse, error)
 }
 
-// forwardNonces remembers the nonces of recently accepted signed Forward
-// requests so a captured request cannot be replayed inside the skew window.
-type forwardNonces struct {
-	mu   sync.Mutex
-	seen map[string]time.Time
-}
-
-// claim records nonce and reports whether it was unused.
-func (c *forwardNonces) claim(nonce string, now time.Time) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.seen == nil {
-		c.seen = make(map[string]time.Time)
-	}
-	for k, expiry := range c.seen {
-		if now.After(expiry) {
-			delete(c.seen, k)
-		}
-	}
-	if _, used := c.seen[nonce]; used {
-		return false
-	}
-	c.seen[nonce] = now.Add(2 * forwardMaxSkew)
-	return true
-}
-
-// forwardMAC is the hex HMAC-SHA256 over the request's canonical form. Every
-// field that changes what the leader does is covered, so a signed request
-// cannot be altered in flight.
-func forwardMAC(secret []byte, req *core.ForwardRequest) string {
-	var payload []byte
-	switch {
-	case req.Command != nil:
-		payload, _ = json.Marshal(req.Command)
-	case req.Peer != nil:
-		payload, _ = json.Marshal(req.Peer)
-	}
-	canonical := strings.Join([]string{
-		"anubis-forward-v1",
-		req.Kind,
-		req.Origin,
-		req.PeerID,
-		strconv.FormatInt(req.TimeoutMs, 10),
-		strconv.FormatInt(req.Timestamp, 10),
-		req.Nonce,
-		string(payload),
-	}, "\n")
-	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(canonical))
-	return hex.EncodeToString(mac.Sum(nil))
-}
-
-func newForwardNonce() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return strconv.FormatInt(time.Now().UnixNano(), 36)
-	}
-	return hex.EncodeToString(b)
-}
-
-// verifyForward authenticates an inbound Forward request. The sender must be
-// a member of this node's configuration; with a cluster secret configured the
-// request must also carry a valid, fresh, unreplayed MAC.
+// verifyForward checks that a Forward request comes from a member of this
+// node's configuration. Signing, the timestamp window and replay protection
+// are not repeated here: with a cluster secret every frame, Forward included,
+// is authenticated by the transport (transport_auth.go).
 func (n *Node) verifyForward(req *core.ForwardRequest) error {
 	n.peerMu.RLock()
 	_, member := n.peers[req.Origin]
 	n.peerMu.RUnlock()
 	if !member {
 		return fmt.Errorf("forward from %q, which is not a cluster member", req.Origin)
-	}
-
-	secret := n.config.ClusterSecret
-	if secret == "" {
-		return nil
-	}
-	if req.MAC == "" {
-		return errors.New("unsigned forward request")
-	}
-	expected := forwardMAC([]byte(secret), req)
-	if !hmac.Equal([]byte(expected), []byte(req.MAC)) {
-		return errors.New("forward request signature mismatch")
-	}
-	now := time.Now()
-	if skew := now.Sub(time.Unix(0, req.Timestamp)); skew > forwardMaxSkew || skew < -forwardMaxSkew {
-		return fmt.Errorf("forward request timestamp outside the %v window", forwardMaxSkew)
-	}
-	if req.Nonce == "" || !n.forwardNonces.claim(req.Nonce, now) {
-		return errors.New("forward request replayed")
 	}
 	return nil
 }
@@ -246,12 +156,6 @@ func (n *Node) sendForward(req core.ForwardRequest, timeout time.Duration) (*cor
 			}
 			req.Origin = n.nodeID
 			req.TimeoutMs = remaining.Milliseconds()
-			req.Timestamp = time.Now().UnixNano()
-			req.Nonce = newForwardNonce()
-			req.MAC = ""
-			if secret := n.config.ClusterSecret; secret != "" {
-				req.MAC = forwardMAC([]byte(secret), &req)
-			}
 			resp, err := ft.SendForward(leader, &req, remaining+forwardRPCSlack)
 			switch {
 			case err != nil:

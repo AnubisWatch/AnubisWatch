@@ -51,8 +51,8 @@ const (
 	transportRespDomain = "anubis-raft-resp-v1"
 
 	// transportMaxSkew bounds how far a frame's timestamp may be from the
-	// receiver's clock; it matches the Forward window.
-	transportMaxSkew = forwardMaxSkew
+	// receiver's clock (node clocks must agree within it).
+	transportMaxSkew = 60 * time.Second
 
 	// replayWindowBits is how far below the highest seq seen from a sender a
 	// frame may arrive out of order. Frames are numbered just before they are

@@ -1135,45 +1135,61 @@ func (m *Manager) isRateLimited(channel *core.AlertChannel, event *core.AlertEve
 		return false
 	}
 
-	// Build grouping key
-	key := fmt.Sprintf("%s:%s:%s", channel.ID, event.SoulID, channel.RateLimit.GroupingKey)
+	// Build grouping key. The "ratelimit:" prefix lets the record be shared
+	// like dedup records (persistHistoryEntry), so a node that takes a soul
+	// over keeps counting the window instead of starting from zero.
+	key := rateLimitKey(channel.ID, event.SoulID, channel.RateLimit.GroupingKey)
 
+	limited, snapshot := m.rateLimitStep(key, channel, event)
+	m.persistHistoryEntry(event.WorkspaceID, snapshot)
+	return limited
+}
+
+func rateLimitKey(channelID, soulID, groupingKey string) string {
+	return fmt.Sprintf("ratelimit:%s:%s:%s", channelID, soulID, groupingKey)
+}
+
+// rateLimitStep updates the rate-limit window for key and reports whether
+// this alert exceeds it, returning a copy of the updated record.
+func (m *Manager) rateLimitStep(key string, channel *core.AlertChannel, event *core.AlertEvent) (bool, core.AlertHistoryEntry) {
 	m.history.Mu.Lock()
 	defer m.history.Mu.Unlock()
 
+	now := time.Now()
 	entry, exists := m.history.Entries[key]
 	if !exists {
 		// First alert for this group
-		m.history.Entries[key] = &core.AlertHistoryEntry{
+		entry = &core.AlertHistoryEntry{
 			Key:        key,
 			ChannelID:  channel.ID,
 			Count:      1,
-			FirstSent:  time.Now(),
-			LastSent:   time.Now(),
+			FirstSent:  now,
+			LastSent:   now,
 			SoulStatus: event.Status,
 		}
-		return false
+		m.history.Entries[key] = entry
+		return false, *entry
 	}
 
 	// Check if window has expired
-	if time.Since(entry.FirstSent) > channel.RateLimit.Window.Duration {
+	if now.Sub(entry.FirstSent) > channel.RateLimit.Window.Duration {
 		// Reset window
 		entry.Count = 1
-		entry.FirstSent = time.Now()
-		entry.LastSent = time.Now()
-		return false
+		entry.FirstSent = now
+		entry.LastSent = now
+		return false, *entry
 	}
 
 	// Check limit
 	if entry.Count >= channel.RateLimit.MaxAlerts {
-		entry.LastSent = time.Now()
-		return true
+		entry.LastSent = now
+		return true, *entry
 	}
 
 	// Increment count
 	entry.Count++
-	entry.LastSent = time.Now()
-	return false
+	entry.LastSent = now
+	return false, *entry
 }
 
 // isDuplicate checks if an identical alert was recently sent (deduplication)

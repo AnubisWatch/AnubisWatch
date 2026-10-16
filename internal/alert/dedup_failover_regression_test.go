@@ -132,15 +132,15 @@ func TestLoadDedupStateKeepsNewestRecord(t *testing.T) {
 
 	manager.LoadDedupState(&core.AlertHistoryEntry{Key: key, Count: 1, FirstSent: time.Now(), LastSent: time.Now(), SoulStatus: core.SoulDead})
 	manager.LoadDedupState(&core.AlertHistoryEntry{Key: key, Count: 1, LastSent: time.Now().Add(-2 * time.Hour), SoulStatus: core.SoulDead})
-	manager.LoadDedupState(&core.AlertHistoryEntry{Key: "ratelimit:not-dedup", LastSent: time.Now()})
+	manager.LoadDedupState(&core.AlertHistoryEntry{Key: "other:not-shared", LastSent: time.Now()})
 
 	dedupRegressionJudgment(t, manager, dispatcher, 0)
 	time.Sleep(150 * time.Millisecond)
 	if calls, _ := dispatcher.counts(); calls != 0 {
 		t.Fatalf("a replicated dedup record did not suppress the alert (calls=%d)", calls)
 	}
-	if _, ok := manager.history.Entries["ratelimit:not-dedup"]; ok {
-		t.Fatal("LoadDedupState installed a record that is not a dedup record")
+	if _, ok := manager.history.Entries["other:not-shared"]; ok {
+		t.Fatal("LoadDedupState installed a record that is not shared state")
 	}
 
 	manager.UnloadDedupState(key)

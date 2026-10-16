@@ -141,6 +141,24 @@ func (m *Manager) persistDedup(event *core.AlertEvent) {
 	}
 }
 
+// sharedHistoryKey reports whether a history record is shared across the
+// cluster: notification dedup records and channel rate-limit windows.
+func sharedHistoryKey(key string) bool {
+	return strings.HasPrefix(key, "dedup:") || strings.HasPrefix(key, "ratelimit:")
+}
+
+// persistHistoryEntry shares a dedup or rate-limit record when the storage
+// supports it (cluster mode); standalone it is a no-op.
+func (m *Manager) persistHistoryEntry(workspaceID string, entry core.AlertHistoryEntry) {
+	store, ok := m.storage.(DedupStateStore)
+	if !ok || entry.Key == "" {
+		return
+	}
+	if err := store.SaveDedupState(defaultWorkspace(workspaceID), &entry); err != nil {
+		m.logger.Warn("Failed to share alert history state", "key", entry.Key, "error", err)
+	}
+}
+
 // loadDedupState merges the shared dedup records from storage.
 func (m *Manager) loadDedupState() {
 	store, ok := m.storage.(DedupStateStore)
@@ -161,7 +179,7 @@ func (m *Manager) loadDedupState() {
 // older than the one this node holds is ignored, so a late replica cannot
 // shorten a cooldown.
 func (m *Manager) LoadDedupState(entry *core.AlertHistoryEntry) {
-	if entry == nil || !strings.HasPrefix(entry.Key, "dedup:") {
+	if entry == nil || !sharedHistoryKey(entry.Key) {
 		return
 	}
 	m.history.Mu.Lock()

@@ -157,64 +157,83 @@ func TestForwardWithTheWrongSecretIsRejected(t *testing.T) {
 	nodes := startForwardCluster(t, 3, []string{"leader-secret", "leader-secret", "leader-secret"})
 	leader, follower := waitForForwardLeader(t, nodes)
 
-	// The follower signs with a different key, as an attacker without the
-	// secret would.
-	follower.node.config.ClusterSecret = "wrong-secret"
+	// The follower's frames are signed with a different key, as an attacker
+	// without the secret would sign them; the leader's transport refuses them.
+	follower.transport.SetAuth(follower.node.nodeID, "wrong-secret", follower.node.transportMember)
 	cmd := core.FSMCommand{Op: core.FSMSet, Key: "default/souls/forged", Value: []byte(`{}`)}
-	_, _, err := follower.node.ApplyOrForward(cmd, 3*time.Second)
-	if !isRaftCode(err, errCodeForwardRejected) {
-		t.Fatalf("a forward signed with the wrong secret was not rejected: %v", err)
+	if _, _, err := follower.node.ApplyOrForward(cmd, 3*time.Second); err == nil {
+		t.Fatal("a forward signed with the wrong secret was accepted")
 	}
 	if _, getErr := leader.store.Get(cmd.Key); getErr == nil {
 		t.Fatal("the leader applied a forward signed with the wrong secret")
 	}
 }
 
-func TestVerifyForwardRejectsUnsignedReplayedAndStale(t *testing.T) {
+// Forward requests are checked for membership here; signing, freshness and
+// replay protection are the transport's job (see
+// TestForwardFrameRequiresClusterSecret).
+func TestVerifyForwardRequiresMembership(t *testing.T) {
 	n := createTestNode(t)
-	n.config.ClusterSecret = "secret"
 	n.peers["peer"] = &Peer{ID: "peer"}
-	secret := []byte("secret")
-	signed := func(mutate func(*core.ForwardRequest)) *core.ForwardRequest {
-		req := &core.ForwardRequest{Kind: core.ForwardApply, Origin: "peer", Command: &core.FSMCommand{Key: "k"},
-			TimeoutMs: 1000, Timestamp: time.Now().UnixNano(), Nonce: newForwardNonce()}
-		if mutate != nil {
-			mutate(req)
-		}
-		req.MAC = forwardMAC(secret, req)
-		return req
+	if err := n.verifyForward(&core.ForwardRequest{Kind: core.ForwardApply, Origin: "peer"}); err != nil {
+		t.Fatalf("member rejected: %v", err)
 	}
+	if err := n.verifyForward(&core.ForwardRequest{Kind: core.ForwardApply, Origin: "stranger"}); err == nil {
+		t.Fatal("non-member accepted")
+	}
+}
 
-	tests := []struct {
-		name    string
-		req     *core.ForwardRequest
-		wantErr bool
+// Forward lost its own HMAC/nonce layer, so the transport must refuse an
+// unsigned or wrongly signed Forward frame when the cluster has a secret.
+func TestForwardFrameRequiresClusterSecret(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		clientSecret string
+		wantOK       bool
 	}{
-		{"valid", signed(nil), false},
-		{"unsigned", &core.ForwardRequest{Kind: core.ForwardApply, Origin: "peer", Nonce: "n"}, true},
-		{"stale", signed(func(r *core.ForwardRequest) { r.Timestamp = time.Now().Add(-2 * forwardMaxSkew).UnixNano() }), true},
-		{"not a member", signed(func(r *core.ForwardRequest) { r.Origin = "stranger" }), true},
-		{"tampered", func() *core.ForwardRequest {
-			r := signed(nil)
-			r.Command = &core.FSMCommand{Key: "other"}
-			return r
-		}(), true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := n.verifyForward(tt.req)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("verifyForward error = %v, want error %v", err, tt.wantErr)
+		{"same secret", testTransportSecret, true},
+		{"unsigned", "", false},
+		{"wrong secret", "another-secret", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server, err := NewTCPTransport("127.0.0.1:0", "", nil, newTestTransportLogger())
+			if err != nil {
+				t.Fatal(err)
+			}
+			server.SetAuth("server", testTransportSecret, func(origin, _ string) bool { return origin == "client" })
+			applied := 0
+			server.RegisterHandler(methodForward, func(_ interface{}, response chan interface{}) {
+				applied++
+				response <- &core.ForwardResponse{Index: 1, Term: 1}
+			})
+			if err := server.Start(); err != nil {
+				t.Fatal(err)
+			}
+			defer server.Stop()
+
+			client, err := NewTCPTransport("127.0.0.1:0", "", nil, newTestTransportLogger())
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.SetAuth("client", tc.clientSecret, nil)
+			defer client.Stop()
+			client.RegisterPeer("server", server.listener.Addr().String())
+
+			resp, err := client.SendForward("server", &core.ForwardRequest{Kind: core.ForwardApply, Origin: "client",
+				Command: &core.FSMCommand{Op: core.FSMSet, Key: "k"}, TimeoutMs: 1000}, 2*time.Second)
+			if tc.wantOK {
+				if err != nil || resp == nil || resp.ErrorCode != "" || resp.Index != 1 {
+					t.Fatalf("resp=%+v err=%v, want success", resp, err)
+				}
+				return
+			}
+			if err == nil && resp != nil && resp.ErrorCode == "" {
+				t.Fatal("forward accepted without a valid cluster signature")
+			}
+			if applied != 0 {
+				t.Fatal("handler ran for an unauthenticated forward")
 			}
 		})
-	}
-
-	replayed := signed(nil)
-	if err := n.verifyForward(replayed); err != nil {
-		t.Fatalf("first use rejected: %v", err)
-	}
-	if err := n.verifyForward(replayed); err == nil {
-		t.Fatal("a replayed forward request was accepted")
 	}
 }
 

@@ -69,9 +69,9 @@ const (
 )
 
 // ForwardRequest is sent by a follower to the leader to run a leader-only
-// operation (an FSM command or a membership change) on its behalf. When the
-// cluster has a shared secret, MAC is the hex HMAC-SHA256 of the request's
-// canonical form (see raft.forwardMAC) and Timestamp bounds replay.
+// operation (an FSM command or a membership change) on its behalf. With a
+// cluster secret the transport signs and replay-protects the frame that
+// carries it, like every other Raft RPC.
 type ForwardRequest struct {
 	Kind      string      `json:"kind"`
 	Origin    string      `json:"origin"`
@@ -79,9 +79,6 @@ type ForwardRequest struct {
 	Peer      *RaftPeer   `json:"peer,omitempty"`
 	PeerID    string      `json:"peer_id,omitempty"`
 	TimeoutMs int64       `json:"timeout_ms"`
-	Timestamp int64       `json:"timestamp"`
-	Nonce     string      `json:"nonce"`
-	MAC       string      `json:"mac,omitempty"`
 }
 
 // ForwardResponse reports the outcome of a ForwardRequest. Index and Term
