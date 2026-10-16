@@ -63,5 +63,11 @@ func runPackageTests(m *testing.M) int {
 	// testDataDir rather than the real system data directory.
 	os.Setenv("ANUBIS_DATA_DIR", data)
 	os.Setenv(testRootEnv, root)
+	// Keep client commands from reading the developer's own config file or
+	// `anubis login` token. Tests that need either set these themselves.
+	if os.Getenv("ANUBIS_CONFIG") == "" {
+		os.Setenv("ANUBIS_CONFIG", filepath.Join(root, "no-config.json"))
+	}
+	os.Setenv("ANUBIS_TOKEN_FILE", filepath.Join(root, "token"))
 	return m.Run()
 }

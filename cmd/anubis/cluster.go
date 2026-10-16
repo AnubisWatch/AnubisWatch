@@ -20,6 +20,7 @@ func summonNode() {
 	addr := os.Args[2]
 	nodeID := ""
 	region := "default"
+	regionSet := false
 
 	// Parse flags
 	for i := 3; i < len(os.Args); i++ {
@@ -32,34 +33,47 @@ func summonNode() {
 		case "--region", "-r":
 			if i+1 < len(os.Args) {
 				region = os.Args[i+1]
+				regionSet = true
 				i++
 			}
 		}
 	}
 
-	// Generate node ID from address if not provided
-	if nodeID == "" {
-		nodeID = strings.ReplaceAll(addr, ":", "-")
-		nodeID = strings.ReplaceAll(nodeID, ".", "-")
-	}
-
 	fmt.Printf("⚖️  Summoning Jackal at %s...\n", addr)
 
-	// Try API first
+	// Try API first. Without --name the server asks the node at addr for its
+	// real node ID, so the member is recorded under the ID it actually uses.
 	apiURL := getAPIURL()
 	token := getAPIToken()
 
 	if token != "" {
-		reqBody := fmt.Sprintf(`{"node_id": "%s", "address": "%s", "region": "%s"}`, nodeID, addr, region)
-		resp, err := httpPost(apiURL+"/api/v1/cluster/nodes", "application/json", []byte(reqBody), token)
+		body := map[string]string{"address": addr}
+		if nodeID != "" {
+			body["node_id"] = nodeID
+		}
+		if regionSet {
+			body["region"] = region
+		}
+		reqBody, _ := json.Marshal(body)
+		resp, err := httpPost(apiURL+"/api/v1/cluster/nodes", "application/json", reqBody, token)
 		if err == nil && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated) {
+			var added struct {
+				NodeID string `json:"node_id"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&added)
 			resp.Body.Close()
-			fmt.Printf("✓ Node '%s' added to cluster successfully via API\n", nodeID)
+			fmt.Printf("✓ Node '%s' added to cluster successfully via API\n", firstNonEmptyString(added.NodeID, nodeID, addr))
 			return
 		}
 		if resp != nil {
 			resp.Body.Close()
 		}
+	}
+
+	// The offline fallback cannot ask the node, so it derives an ID.
+	if nodeID == "" {
+		nodeID = strings.ReplaceAll(addr, ":", "-")
+		nodeID = strings.ReplaceAll(nodeID, ".", "-")
 	}
 
 	// Fall back to direct storage
@@ -164,16 +178,10 @@ func showCluster() {
 		// Fall back to storage
 		store, err := openLocalStorage()
 		if err != nil {
-			fmt.Println("Raft State:     Standalone")
-			fmt.Println("Current Leader: this node")
-			fmt.Println("Term:           1")
-			fmt.Println("Nodes:          1")
-			fmt.Println()
-			fmt.Println("Jackals:")
-			fmt.Println("  ID              Region    Address           Role")
-			fmt.Println("  ──────────────  ────────  ────────────────  ────────")
-			fmt.Println("  (this node)     default   localhost:7946    Pharaoh")
-			return
+			// Used to print invented "Standalone / Term 1 / Pharaoh" output.
+			fmt.Fprintf(os.Stderr, "Error: cannot reach the server at %s and cannot open local storage: %v\n", getAPIURL(), err)
+			fmt.Fprintln(os.Stderr, "Start the server, or run `anubis login` if it requires authentication.")
+			os.Exit(1)
 		}
 		defer store.Close()
 
@@ -221,4 +229,13 @@ func showCluster() {
 
 	fmt.Println()
 	fmt.Println("Use 'anubis summon <address>' to add nodes to the cluster.")
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

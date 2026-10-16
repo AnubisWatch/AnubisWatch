@@ -287,7 +287,11 @@ func generateConfig(opts ConfigOptions) string {
   "dashboard": %s,
   "logging": {
     "level": %s,
-    "format": %s
+    "format": %s,
+    "output": "both"
+  },
+  "security": {
+    "allow_private_targets": false
   }
 }
 `, quote(opts.Host), opts.HTTPPort, tlsConfig, quote(opts.DataDir), opts.RetentionDays,

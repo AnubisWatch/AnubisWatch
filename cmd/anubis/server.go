@@ -53,6 +53,10 @@ type ServerDependencies struct {
 	StatusPageHandler http.Handler
 	MCPServer         *api.MCPServer
 	TracerProvider    *telemetry.TracerProvider
+	// ClusterWork shares probing across the cluster; nil when standalone.
+	ClusterWork *clusterWork
+	// Journeys schedules stored journeys when standalone; nil in cluster mode.
+	Journeys *standaloneJourneys
 }
 
 // Server represents the AnubisWatch server
@@ -123,8 +127,10 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}
 
-	// Assign configured souls plus API-created souls persisted in storage.
-	if s.deps.ProbeEngine != nil {
+	// Assign configured souls plus API-created souls persisted in storage. In
+	// cluster mode ClusterWork assigns only the souls this node owns, once the
+	// cluster manager is up.
+	if s.deps.ProbeEngine != nil && s.deps.ClusterWork == nil {
 		soulPtrs := make([]*core.Soul, 0, len(cfg.Souls))
 		seen := make(map[string]struct{}, len(cfg.Souls))
 		for i := range cfg.Souls {
@@ -135,16 +141,7 @@ func (s *Server) Start(ctx context.Context) error {
 			}
 		}
 
-		workspaceIDs := []string{"default"}
-		if workspaces, err := s.deps.Store.ListWorkspaces(ctx); err != nil {
-			logger.Warn("failed to load workspaces for probe assignment", "err", err)
-		} else {
-			for _, workspace := range workspaces {
-				if workspace != nil && workspace.ID != "" && workspace.ID != "default" {
-					workspaceIDs = append(workspaceIDs, workspace.ID)
-				}
-			}
-		}
+		workspaceIDs := allWorkspaceIDs(ctx, s.deps.Store, logger, "probe assignment")
 
 		for _, workspaceID := range workspaceIDs {
 			storedSouls, err := s.deps.Store.ListSouls(ctx, workspaceID, 0, 10000)
@@ -179,10 +176,12 @@ func (s *Server) Start(ctx context.Context) error {
 			if err := s.deps.Store.SaveJourney(ctx, &j); err != nil {
 				logger.Warn("failed to save journey", "journey", j.Name, "err", err)
 			}
-			if err := s.deps.JourneyExecutor.Start(ctx, &j); err != nil {
-				logger.Warn("failed to start journey", "journey", j.Name, "err", err)
-			}
 		}
+	}
+	// In cluster mode the ownership pass schedules each journey on its owner
+	// only; standalone schedules every stored and configured journey.
+	if s.deps.Journeys != nil {
+		s.deps.Journeys.start(ctx)
 	}
 
 	// Start cluster manager.
@@ -192,7 +191,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// node would not join consensus, and nothing would signal that the cluster
 	// it appears in is a fiction. Same reasoning as the REST bind failure
 	// below — a misconfiguration has to look like a crash to supervisors.
-	clusterRequired := cfg.Necropolis.Enabled || cfg.Necropolis.SingleNode || cfg.Necropolis.Raft.Bootstrap || len(cfg.Necropolis.Raft.Peers) > 0
+	clusterRequired := cfg.Necropolis.Enabled || cfg.Necropolis.SingleNode || cfg.Necropolis.Raft.Bootstrap || len(cfg.Necropolis.Raft.Peers) > 0 || len(cfg.Necropolis.Raft.Join) > 0
 	if clusterRequired && s.deps.ClusterManager == nil {
 		return fmt.Errorf("cluster mode is enabled but the cluster manager was not initialized")
 	}
@@ -205,6 +204,9 @@ func (s *Server) Start(ctx context.Context) error {
 		} else {
 			logger.Info("cluster manager initialized", "clustered", s.deps.ClusterManager.IsClustered())
 		}
+	}
+	if s.deps.ClusterWork != nil {
+		s.deps.ClusterWork.start()
 	}
 
 	// Start REST server
@@ -266,7 +268,11 @@ func (s *Server) Stop(ctx context.Context) error {
 		s.deps.GRPCServer.StopWithContext(ctx)
 	}
 
-	// Stop journey executors
+	// Stop journey executors. In cluster mode halt the ownership loop first so
+	// it cannot reschedule them.
+	if s.deps.ClusterWork != nil {
+		s.deps.ClusterWork.halt()
+	}
 	if s.deps.JourneyExecutor != nil {
 		s.deps.JourneyExecutor.StopAll()
 	}
@@ -276,6 +282,11 @@ func (s *Server) Stop(ctx context.Context) error {
 		if err := s.deps.AlertManager.Stop(); err != nil {
 			logger.Warn("failed to stop alert manager", "err", err)
 		}
+	}
+
+	// Flush replication still queued while consensus is up, then stop sharing.
+	if s.deps.ClusterWork != nil {
+		s.deps.ClusterWork.stop(ctx)
 	}
 
 	// Stop cluster manager
@@ -346,9 +357,18 @@ type ServerOptions struct {
 	InsecureSkipVerify bool
 }
 
+// probeController is the part of the probe engine the API surfaces drive:
+// *probe.Engine standalone, *clusterProbe in cluster mode.
+type probeController interface {
+	UpsertSoul(soul *core.Soul)
+	RemoveSoul(soulID string)
+	GetStatus() *core.ProbeStatus
+	ForceCheck(soulID string) (*core.Judgment, error)
+}
+
 // grpcProbeAdapter adapts probe.Engine to grpcapi.ProbeEngine
 type grpcProbeAdapter struct {
-	engine *probe.Engine
+	engine probeController
 }
 
 func (a *grpcProbeAdapter) ForceCheck(soulID string) (*core.Judgment, error) {
@@ -464,6 +484,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 			return nil, fmt.Errorf("failed to load config: %w", err)
 		}
 		logger.Info("config loaded", "path", configPath)
+		warnUnimplementedConfig(cfg, logger)
 	} else {
 		logger.Info("no config file found, using defaults", "path", configPath)
 		cfg = core.GenerateDefaultConfig()
@@ -557,15 +578,48 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		authenticator = localAuth
 	}
 
+	// SSRF policy for probes and alert dispatchers. Applied before either
+	// starts so no check runs under the default policy.
+	if err := probe.ConfigureDefaultValidator(cfg.Security.AllowPrivateTargets, cfg.Security.AllowedNetworks); err != nil {
+		return nil, err
+	}
+	if probe.DefaultValidator.AllowPrivate {
+		logger.Warn("SSRF protection relaxed: probes and alert channels may reach private and loopback addresses",
+			"event", "ssrf_allow_private")
+	}
+
+	// Initialize cluster manager. When clustering was explicitly enabled, an
+	// initialization failure is fatal; falling back to a standalone manager
+	// would violate the requested topology without making the pod unhealthy.
+	clusterMgr, err := cluster.NewManager(cfg.Necropolis, store, logger)
+	if err != nil {
+		if cfg.Necropolis.Enabled {
+			return nil, fmt.Errorf("failed to initialize enabled cluster manager: %w", err)
+		}
+		logger.Warn("failed to initialize standalone cluster manager", "err", err)
+		clusterMgr = nil
+	}
+
+	// In cluster mode monitoring work is shared: each soul is probed by its
+	// owner only, and judgments and alert records replicate through Raft.
+	var work *clusterWork
+	if clusterMgr != nil && clusterMgr.IsClustered() {
+		work = newClusterWork(clusterMgr, cfg, store, timeSeries, logger)
+	}
+
 	// Initialize alert manager
-	alertStorage := &alertStorageAdapter{store: store}
+	alertStorage := &alertStorageAdapter{store: store, work: work}
 	alertMgr := alert.NewManager(alertStorage, logger)
 
 	// Initialize probe engine
-	registry := probe.NewCheckerRegistry()
+	probeStore := &probeStorageAdapter{store: store, timeseries: timeSeries}
+	if work != nil {
+		probeStore.replicate = work.replicateJudgment
+	}
+	registry := newProbeRegistry()
 	probeEngine := probe.NewEngine(probe.EngineOptions{
 		Registry: registry,
-		Store:    &probeStorageAdapter{store: store, timeseries: timeSeries},
+		Store:    probeStore,
 		Alerter:  alertMgr,
 		NodeID:   cfg.Necropolis.NodeName,
 		Region:   cfg.Necropolis.Region,
@@ -595,17 +649,21 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 
 	// Initialize journey executor
 	journeyExec := journey.NewExecutor(store, logger)
+	if work != nil {
+		// Each journey runs on its owner only, and its runs replicate so every
+		// node lists them; runs carry this node's ID like judgments do.
+		journeyExec = journey.NewExecutorWithNodeID(store, logger, clusterMgr.NodeID(), cfg.Necropolis.Region)
+		journeyExec.SetRunSaver(work.replicateJourneyRun)
+		work.journeys = journeyExec
+	}
 
-	// Initialize cluster manager. When clustering was explicitly enabled, an
-	// initialization failure is fatal; falling back to a standalone manager
-	// would violate the requested topology without making the pod unhealthy.
-	clusterMgr, err := cluster.NewManager(cfg.Necropolis, store, logger)
-	if err != nil {
-		if cfg.Necropolis.Enabled {
-			return nil, fmt.Errorf("failed to initialize enabled cluster manager: %w", err)
-		}
-		logger.Warn("failed to initialize standalone cluster manager", "err", err)
-		clusterMgr = nil
+	// The API surfaces schedule souls through probeAPI: the engine itself
+	// standalone, an ownership-aware front in cluster mode.
+	var probeAPI probeController = probeEngine
+	if work != nil {
+		work.engine = probeEngine
+		work.alerts = alertMgr
+		probeAPI = &clusterProbe{engine: probeEngine, work: work}
 	}
 
 	// Initialize REST server dependencies
@@ -613,6 +671,11 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	restStore := &restStorageAdapter{store: store}
 	if clusterMgr != nil && clusterMgr.IsClustered() {
 		restStore.replicator = clusterAdapt
+	}
+	var standaloneJourneySync *standaloneJourneys
+	if work == nil {
+		standaloneJourneySync = &standaloneJourneys{exec: journeyExec, cfg: cfg, store: store, logger: logger}
+		restStore.onJourneyChange = standaloneJourneySync.sync
 	}
 
 	// Initialize dashboard handler
@@ -635,12 +698,27 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		SetSessionValidator(statusPageSessionValidator{auth: authenticator})
 
 	// Initialize MCP server
-	mcpServer := api.NewMCPServer(restStore, probeEngine, alertMgr, logger)
+	mcpServer := api.NewMCPServer(restStore, probeAPI, alertMgr, logger)
 
-	restServer := api.NewRESTServer(cfg.Server, cfg.Auth, restStore, probeEngine, alertMgr, authenticator, clusterAdapt, journeyExec, dashboardHandler, statusPageHandler, mcpServer, logger)
+	restServer := api.NewRESTServer(cfg.Server, cfg.Auth, restStore, probeAPI, alertMgr, authenticator, clusterAdapt, journeyExec, dashboardHandler, statusPageHandler, mcpServer, logger)
+	// The Settings page reports the running storage path and raw-judgment
+	// retention, and persists its presentation preferences in system config.
+	restServer.SetRuntimeConfig(cfg.Storage.Path, cfg.Storage.TimeSeries.Retention.Raw.Duration)
+	// Through restStore so a settings change replicates in cluster mode.
+	restServer.SetSettingsStore(restStore)
 
-	// Wire up WebSocket broadcast for real-time judgment updates
+	// Wire up WebSocket broadcasts for real-time updates: judgments from the
+	// probe engine, incidents and dispatched alerts from Ma'at, and soul
+	// writes from every API surface (they all share restStore).
 	probeEngine.SetOnJudgment(restServer.OnJudgmentCallback())
+	alertMgr.SetIncidentHook(restServer.OnIncidentCallback())
+	alertMgr.SetAlertHook(restServer.OnAlertCallback())
+	restStore.onSoulChange = restServer.OnSoulChangeCallback()
+	if work != nil {
+		// Judgments other nodes produce reach this node's live clients as they
+		// replicate; this node's own are pushed by the probe engine above.
+		work.onJudgment = restServer.OnJudgmentCallback()
+	}
 
 	// Initialize gRPC server
 	var grpcServer *grpcapi.Server
@@ -662,7 +740,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		grpcServer = grpcapi.NewServer(
 			grpcListenAddress(cfg.Server),
 			grpcStore,
-			&grpcProbeAdapter{engine: probeEngine},
+			&grpcProbeAdapter{engine: probeAPI},
 			authenticator,
 			logger,
 			grpcTLSConfig,
@@ -688,6 +766,8 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		StatusPageHandler: statusPageHandler,
 		MCPServer:         mcpServer,
 		TracerProvider:    tracerProvider,
+		ClusterWork:       work,
+		Journeys:          standaloneJourneySync,
 	}, nil
 }
 
@@ -756,12 +836,13 @@ func applyEnvOverrides(cfg *core.Config, opts ServerOptions) {
 		cfg.Necropolis.Raft.AdvertiseAddr = opts.AdvertiseAddr
 	}
 
-	// Add peer addresses
+	// Join addresses: the node asks these members to add it and learns the
+	// real member IDs from them (see raft join.go), rather than listing them
+	// as peers under IDs guessed from their addresses.
 	for _, addr := range opts.JoinAddrs {
-		if addr == "" {
-			continue
+		if addr = strings.TrimSpace(addr); addr != "" {
+			cfg.Necropolis.Raft.Join = append(cfg.Necropolis.Raft.Join, addr)
 		}
-		cfg.Necropolis.Raft.Peers = append(cfg.Necropolis.Raft.Peers, raftPeerFromJoinAddr(addr))
 	}
 }
 
@@ -794,15 +875,26 @@ func applyClusterDefaults(cfg *core.Config, opts ServerOptions) {
 	}
 }
 
+// newProbeRegistry builds the checker registry for a probe engine. Tests
+// replace it to observe which node runs a check.
+var newProbeRegistry = probe.NewCheckerRegistry
+
 // probeStorageAdapter adapts storage.CobaltDB to probe.Storage interface
 type probeStorageAdapter struct {
 	store *storage.CobaltDB
 	// timeseries, when set, saves each judgment and folds it into the
 	// 1-minute summary that compaction downsamples from.
 	timeseries *storage.TimeSeriesStore
+	// replicate, when set (cluster mode), queues the judgment for replication
+	// instead of saving it here: every node, this one included, stores it when
+	// the batch applies, so the soul's history is the same everywhere.
+	replicate func(*core.Judgment) error
 }
 
 func (a *probeStorageAdapter) SaveJudgment(ctx context.Context, j *core.Judgment) error {
+	if a.replicate != nil {
+		return a.replicate(j)
+	}
 	if a.timeseries != nil {
 		return a.timeseries.SaveJudgment(ctx, j)
 	}
@@ -827,6 +919,13 @@ type mutationApplier interface {
 type restStorageAdapter struct {
 	store      *storage.CobaltDB
 	replicator mutationApplier
+	// onSoulChange, when set, is told about every successful soul write
+	// ("created", "updated", "deleted"). REST, MCP and gRPC all write souls
+	// through this adapter, so this one hook feeds the live soul_update stream.
+	onSoulChange func(soul *core.Soul, action string)
+	// onJourneyChange, when set, runs after a local journey write so the
+	// standalone executor picks it up.
+	onJourneyChange func()
 }
 
 // applyMutation routes an FSM command through Raft consensus when clustering
@@ -864,15 +963,27 @@ func (a *restStorageAdapter) ListSoulsNoCtx(workspace string, offset, limit int)
 }
 
 func (a *restStorageAdapter) SaveSoul(ctx context.Context, soul *core.Soul) error {
+	action := "updated"
+	if a.onSoulChange != nil {
+		if existing, err := a.store.GetSoulNoCtx(soul.ID); err != nil || existing == nil {
+			action = "created"
+		}
+	}
+	var err error
 	if a.replicator != nil {
 		key := fmt.Sprintf("%s/souls/%s", soul.WorkspaceID, soul.ID)
-		data, err := json.Marshal(soul)
-		if err != nil {
-			return err
+		data, marshalErr := json.Marshal(soul)
+		if marshalErr != nil {
+			return marshalErr
 		}
-		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
+		err = a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
+	} else {
+		err = a.store.SaveSoul(ctx, soul)
 	}
-	return a.store.SaveSoul(ctx, soul)
+	if err == nil && a.onSoulChange != nil {
+		a.onSoulChange(soul, action)
+	}
+	return err
 }
 
 func (a *restStorageAdapter) DeleteSoul(ctx context.Context, id string) error {
@@ -882,9 +993,14 @@ func (a *restStorageAdapter) DeleteSoul(ctx context.Context, id string) error {
 	}
 	if a.replicator != nil {
 		key := fmt.Sprintf("%s/souls/%s", soul.WorkspaceID, id)
-		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: key})
+		err = a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: key})
+	} else {
+		err = a.store.DeleteSoul(ctx, soul.WorkspaceID, id)
 	}
-	return a.store.DeleteSoul(ctx, soul.WorkspaceID, id)
+	if err == nil && a.onSoulChange != nil {
+		a.onSoulChange(soul, "deleted")
+	}
+	return err
 }
 
 func (a *restStorageAdapter) DeleteSoulNoCtx(id string) error {
@@ -1030,6 +1146,11 @@ func (v statusPageSessionValidator) ValidateStatusPageSession(token, workspaceID
 }
 
 func statusPageWorkspace(workspace string) string {
+	return workspaceOrDefault(workspace)
+}
+
+// workspaceOrDefault maps the empty workspace to "default", as storage does.
+func workspaceOrDefault(workspace string) string {
 	if workspace == "" {
 		return "default"
 	}
@@ -1087,7 +1208,13 @@ func (a *restStorageAdapter) SaveJourneyNoCtx(journey *core.JourneyConfig) error
 		}
 		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
 	}
-	return a.store.SaveJourneyNoCtx(journey)
+	if err := a.store.SaveJourneyNoCtx(journey); err != nil {
+		return err
+	}
+	if a.onJourneyChange != nil {
+		a.onJourneyChange()
+	}
+	return nil
 }
 
 func (a *restStorageAdapter) DeleteJourneyNoCtx(id string) error {
@@ -1098,7 +1225,28 @@ func (a *restStorageAdapter) DeleteJourneyNoCtx(id string) error {
 	if a.replicator != nil {
 		return a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: fmt.Sprintf("%s/journeys/%s", journey.WorkspaceID, id)})
 	}
-	return a.store.DeleteJourneyNoCtx(id)
+	if err := a.store.DeleteJourneyNoCtx(id); err != nil {
+		return err
+	}
+	if a.onJourneyChange != nil {
+		a.onJourneyChange()
+	}
+	return nil
+}
+
+// GetSystemConfig reads a system config entry from the local store, which
+// replicated writes keep current on every node.
+func (a *restStorageAdapter) GetSystemConfig(ctx context.Context, key string) ([]byte, error) {
+	return a.store.GetSystemConfig(ctx, key)
+}
+
+// SaveSystemConfig replicates the entry in cluster mode (same key the store
+// uses) so, e.g., dashboard settings agree across nodes.
+func (a *restStorageAdapter) SaveSystemConfig(ctx context.Context, key string, value []byte) error {
+	if a.replicator != nil {
+		return a.applyMutation(core.FSMCommand{Op: core.FSMSet, Key: "system/config/" + key, Value: value})
+	}
+	return a.store.SaveSystemConfig(ctx, key, value)
 }
 
 func (a *restStorageAdapter) GetDashboardNoCtx(id string) (*core.CustomDashboard, error) {
@@ -1208,6 +1356,31 @@ func (a *clusterAdapter) GetStatus() *api.ClusterStatus {
 	}
 }
 
+// ClusterPeers lists this node and its Raft peers for GET /api/v1/cluster/peers.
+func (a *clusterAdapter) ClusterPeers() []api.ClusterPeer {
+	if a.mgr == nil {
+		return nil
+	}
+	members := a.mgr.Members()
+	peers := make([]api.ClusterPeer, 0, len(members))
+	for _, member := range members {
+		lastContact := ""
+		if !member.LastContact.IsZero() {
+			lastContact = member.LastContact.UTC().Format(time.RFC3339)
+		}
+		peers = append(peers, api.ClusterPeer{
+			ID:          member.ID,
+			Name:        member.Name,
+			Address:     member.Address,
+			State:       member.State,
+			LastContact: lastContact,
+			IsLeader:    member.IsLeader,
+			Region:      member.Region,
+		})
+	}
+	return peers
+}
+
 func (a *clusterAdapter) ApplyMutation(cmd core.FSMCommand, timeout time.Duration) (uint64, uint64, error) {
 	if a.mgr == nil {
 		return 0, 0, &core.RaftError{Code: core.ErrNotLeader, Message: "cluster manager not available"}
@@ -1215,12 +1388,86 @@ func (a *clusterAdapter) ApplyMutation(cmd core.FSMCommand, timeout time.Duratio
 	return a.mgr.ApplyMutation(cmd, timeout)
 }
 
+// AddNode adds a voting member at runtime (POST /api/v1/cluster/nodes).
+func (a *clusterAdapter) AddNode(id, address, region string) error {
+	if a.mgr == nil {
+		return api.ErrClusterDisabled
+	}
+	return clusterMembershipError(a.mgr.AddNode(core.RaftPeer{ID: id, Address: address, Region: region, Role: core.RoleVoter}))
+}
+
+// AddNodeByAddress adds the node at a Raft address as a voter, learning its
+// node ID from it (POST /api/v1/cluster/nodes without node_id).
+func (a *clusterAdapter) AddNodeByAddress(address, region string) (string, string, error) {
+	if a.mgr == nil {
+		return "", "", api.ErrClusterDisabled
+	}
+	peer, err := a.mgr.AddNodeByAddress(address, region)
+	if errors.Is(err, cluster.ErrIdentifyFailed) {
+		return "", "", fmt.Errorf("%w: %v", api.ErrClusterNodeUnreachable, err)
+	}
+	return peer.ID, peer.Region, clusterMembershipError(err)
+}
+
+// RemoveNode removes a member at runtime (DELETE /api/v1/cluster/nodes/:id).
+func (a *clusterAdapter) RemoveNode(id string) error {
+	if a.mgr == nil {
+		return api.ErrClusterDisabled
+	}
+	return clusterMembershipError(a.mgr.RemoveNode(id))
+}
+
+// clusterMembershipError translates cluster membership errors into the api
+// package's, which it maps onto HTTP statuses.
+func clusterMembershipError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, cluster.ErrNotClustered):
+		return api.ErrClusterDisabled
+	case errors.Is(err, cluster.ErrNodeExists):
+		return api.ErrClusterNodeExists
+	case errors.Is(err, cluster.ErrNodeUnknown):
+		return api.ErrClusterNodeAbsent
+	case errors.Is(err, cluster.ErrRemoveLeader):
+		return api.ErrClusterIsLeader
+	}
+	return err
+}
+
 // alertStorageAdapter adapts storage.CobaltDB to alert.AlertStorage interface
 type alertStorageAdapter struct {
 	store *storage.CobaltDB
+	// work, when set and the cluster is running, makes alert records
+	// replicate: channels and rules synchronously (they are API writes),
+	// incidents and events through the batcher (they are written on the probe
+	// path, which must not wait on consensus).
+	work *clusterWork
+}
+
+// replicated reports whether writes must go through Raft. Before the cluster
+// manager starts (configured alerts load first) records are written locally;
+// every node loads the same configuration.
+func (a *alertStorageAdapter) replicated() bool {
+	return a.work != nil && a.work.mgr.Running()
+}
+
+func (a *alertStorageAdapter) applySync(cmd core.FSMCommand) error {
+	if _, _, err := a.work.mgr.ApplyMutation(cmd, 30*time.Second); err != nil {
+		return fmt.Errorf("consensus write failed: %w", err)
+	}
+	return nil
 }
 
 func (a *alertStorageAdapter) SaveChannel(ch *core.AlertChannel) error {
+	if a.replicated() {
+		data, err := json.Marshal(ch)
+		if err != nil {
+			return err
+		}
+		key := fmt.Sprintf("%s/alerts/channels/%s", workspaceOrDefault(ch.WorkspaceID), ch.ID)
+		return a.applySync(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
+	}
 	return a.store.SaveAlertChannel(ch)
 }
 
@@ -1233,10 +1480,22 @@ func (a *alertStorageAdapter) ListChannels(workspace string) ([]*core.AlertChann
 }
 
 func (a *alertStorageAdapter) DeleteChannel(id string, workspace string) error {
+	if a.replicated() {
+		key := fmt.Sprintf("%s/alerts/channels/%s", workspaceOrDefault(workspace), id)
+		return a.applySync(core.FSMCommand{Op: core.FSMDelete, Key: key})
+	}
 	return a.store.DeleteAlertChannel(id, workspace)
 }
 
 func (a *alertStorageAdapter) SaveRule(rule *core.AlertRule) error {
+	if a.replicated() {
+		data, err := json.Marshal(rule)
+		if err != nil {
+			return err
+		}
+		key := fmt.Sprintf("%s/alerts/rules/%s", workspaceOrDefault(rule.WorkspaceID), rule.ID)
+		return a.applySync(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
+	}
 	return a.store.SaveAlertRule(rule)
 }
 
@@ -1249,10 +1508,22 @@ func (a *alertStorageAdapter) ListRules(workspace string) ([]*core.AlertRule, er
 }
 
 func (a *alertStorageAdapter) DeleteRule(id string, workspace string) error {
+	if a.replicated() {
+		key := fmt.Sprintf("%s/alerts/rules/%s", workspaceOrDefault(workspace), id)
+		return a.applySync(core.FSMCommand{Op: core.FSMDelete, Key: key})
+	}
 	return a.store.DeleteAlertRule(id, workspace)
 }
 
 func (a *alertStorageAdapter) SaveEvent(event *core.AlertEvent) error {
+	if a.replicated() {
+		if event.ID == "" {
+			event.ID = core.GenerateID()
+		}
+		event.WorkspaceID = workspaceOrDefault(event.WorkspaceID)
+		key := fmt.Sprintf("%s/alerts/events/%s/%d/%s", event.WorkspaceID, event.SoulID, event.Timestamp.UnixNano(), event.ID)
+		return a.work.replicateAsync(key, event)
+	}
 	return a.store.SaveAlertEvent(event)
 }
 
@@ -1261,7 +1532,73 @@ func (a *alertStorageAdapter) ListEvents(soulID string, limit int) ([]*core.Aler
 }
 
 func (a *alertStorageAdapter) SaveIncident(incident *core.Incident) error {
+	if a.replicated() {
+		incident.WorkspaceID = workspaceOrDefault(incident.WorkspaceID)
+		key := fmt.Sprintf("%s/alerts/incidents/%s", incident.WorkspaceID, incident.ID)
+		return a.work.replicateAsync(key, incident)
+	}
 	return a.store.SaveIncident(incident)
+}
+
+// SaveIncidentDurable is used for operator actions (acknowledge, resolve):
+// unlike SaveIncident it returns only once the change is committed, so the
+// API never reports an ack that a later batch failure loses
+// (alert.DurableIncidentStore).
+func (a *alertStorageAdapter) SaveIncidentDurable(incident *core.Incident) error {
+	if !a.replicated() {
+		return a.store.SaveIncident(incident)
+	}
+	incident.WorkspaceID = workspaceOrDefault(incident.WorkspaceID)
+	data, err := json.Marshal(incident)
+	if err != nil {
+		return err
+	}
+	key := fmt.Sprintf("%s/alerts/incidents/%s", incident.WorkspaceID, incident.ID)
+	return a.applySync(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data})
+}
+
+// SaveDedupState shares a notification dedup record across the cluster, so
+// the node that takes a soul over keeps honouring the rule cooldown (see
+// alert.DedupStateStore). Standalone dedup state stays in memory, as before.
+func (a *alertStorageAdapter) SaveDedupState(workspaceID string, entry *core.AlertHistoryEntry) error {
+	if a.work == nil {
+		return nil
+	}
+	return a.work.replicateAsync(dedupStateKey(workspaceID, entry.Key), entry)
+}
+
+// DeleteDedupState shares the release of a dedup record.
+func (a *alertStorageAdapter) DeleteDedupState(workspaceID, key string) error {
+	if a.work == nil {
+		return nil
+	}
+	a.work.batcher.Enqueue(core.FSMCommand{Op: core.FSMDelete, Key: dedupStateKey(workspaceID, key), Origin: a.work.mgr.NodeID()})
+	return nil
+}
+
+// ListDedupState returns the shared dedup records of every workspace.
+func (a *alertStorageAdapter) ListDedupState() ([]*core.AlertHistoryEntry, error) {
+	if a.work == nil || a.store == nil {
+		return nil, nil
+	}
+	var entries []*core.AlertHistoryEntry
+	for _, ws := range allWorkspaceIDs(context.Background(), a.store, nil, "dedup state") {
+		records, err := a.store.PrefixScan(dedupStateKey(ws, ""))
+		if err != nil {
+			return nil, err
+		}
+		for _, data := range records {
+			var entry core.AlertHistoryEntry
+			if json.Unmarshal(data, &entry) == nil && entry.Key != "" {
+				entries = append(entries, &entry)
+			}
+		}
+	}
+	return entries, nil
+}
+
+func dedupStateKey(workspaceID, key string) string {
+	return fmt.Sprintf("%s/alerts/dedup/%s", workspaceOrDefault(workspaceID), key)
 }
 
 func (a *alertStorageAdapter) GetIncident(id string) (*core.Incident, error) {
@@ -1328,6 +1665,12 @@ func (r *statusPageRepository) GetIncidentsByPage(pageID string) ([]core.Inciden
 		}
 	}
 	return result, nil
+}
+
+// ListMaintenanceWindows lets public pages show souls under maintenance as
+// embalmed (statuspage.MaintenanceSource).
+func (r *statusPageRepository) ListMaintenanceWindows() ([]*core.MaintenanceWindow, error) {
+	return r.store.ListMaintenanceWindows()
 }
 
 func (r *statusPageRepository) GetUptimeHistory(soulID string, days int) ([]core.UptimeDay, error) {
@@ -1414,4 +1757,21 @@ func compactionRetentionConflicts(tsCfg core.TimeSeriesConfig) []string {
 		}
 	}
 	return conflicts
+}
+
+// warnUnimplementedConfig flags config sections that parse but have no
+// effect yet, so operators do not rely on them.
+func warnUnimplementedConfig(cfg *core.Config, logger *slog.Logger) {
+	if cfg.Tenants.Enabled {
+		logger.Warn("tenants.* is not enforced yet: workspace quotas and isolation settings are ignored")
+	}
+	if cfg.Dashboard.Branding.Logo != "" || (cfg.Dashboard.Branding.Title != "" && cfg.Dashboard.Branding.Title != "AnubisWatch") {
+		logger.Warn("dashboard.branding is not applied to the dashboard yet")
+	}
+	if len(cfg.Verdicts.Escalation) > 0 {
+		logger.Warn("verdicts.escalation is ignored; set escalation on individual alert rules instead")
+	}
+	if cfg.Necropolis.Distribution.Redundancy > 1 {
+		logger.Warn("necropolis.distribution.redundancy is ignored: each soul is probed by exactly one node")
+	}
 }

@@ -26,24 +26,24 @@ func fetchJudgeSouls(apiURL, token string) ([]judgeSoul, error) {
 	for offset := 0; ; {
 		resp, err := httpGet(fmt.Sprintf("%s/api/v1/souls?offset=%d&limit=100", apiURL, offset), token)
 		if err != nil {
-			return nil, fmt.Errorf("Error connecting to API: %w", err)
+			return nil, fmt.Errorf("connecting to API: %w", err)
 		}
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
-			return nil, fmt.Errorf("Error: API returned status %d", resp.StatusCode)
+			return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
 		}
 		var raw json.RawMessage
 		err = json.NewDecoder(resp.Body).Decode(&raw)
 		resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("Error parsing response: %w", err)
+			return nil, fmt.Errorf("parsing response: %w", err)
 		}
 		raw = bytes.TrimSpace(raw)
 		// Keep compatibility with older servers that returned a bare array.
 		if len(raw) > 0 && (raw[0] == '[' || bytes.Equal(raw, []byte("null"))) {
 			var legacy []judgeSoul
 			if err := json.Unmarshal(raw, &legacy); err != nil {
-				return nil, fmt.Errorf("Error parsing response: %w", err)
+				return nil, fmt.Errorf("parsing response: %w", err)
 			}
 			if legacy == nil && offset == 0 {
 				return nil, nil
@@ -58,17 +58,17 @@ func fetchJudgeSouls(apiURL, token string) ([]judgeSoul, error) {
 			} `json:"pagination"`
 		}
 		if err := json.Unmarshal(raw, &page); err != nil {
-			return nil, fmt.Errorf("Error parsing response: %w", err)
+			return nil, fmt.Errorf("parsing response: %w", err)
 		}
 		if page.Data == nil {
-			return nil, fmt.Errorf("Error parsing response: missing souls data")
+			return nil, fmt.Errorf("parsing response: missing souls data")
 		}
 		souls = append(souls, (*page.Data)...)
 		if !page.Pagination.HasMore {
 			return souls, nil
 		}
 		if page.Pagination.NextOffset == nil || *page.Pagination.NextOffset <= offset {
-			return nil, fmt.Errorf("Error parsing response: invalid next offset")
+			return nil, fmt.Errorf("parsing response: invalid next offset")
 		}
 		offset = *page.Pagination.NextOffset
 	}
@@ -402,7 +402,7 @@ func judgeSingle(nameOrID string) {
 	// First, find the soul by name or ID
 	souls, err := fetchJudgeSouls(apiURL, token)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		fmt.Fprintf(os.Stderr, "Error %v\n", err)
 		os.Exit(1)
 	}
 
@@ -473,7 +473,7 @@ func judgeAll() {
 	// Get all souls
 	souls, err := fetchJudgeSouls(apiURL, token)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		fmt.Fprintf(os.Stderr, "Error %v\n", err)
 		os.Exit(1)
 	}
 

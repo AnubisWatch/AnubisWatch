@@ -3,12 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -26,11 +29,15 @@ func selfHealth() {
 		"uptime": time.Since(startTime).String(),
 	}
 
-	// Check HTTPS endpoint if configured
-	if port := os.Getenv("ANUBIS_PORT"); port != "" {
-		checks["https_port"] = port
+	// The server itself: this command is the docker-compose healthcheck, so
+	// it must fail when the server is down, not only when the data dir is.
+	apiURL := getAPIURL()
+	checks["api_url"] = apiURL
+	if err := probeServerHealth(apiURL); err != nil {
+		checks["server"] = "unreachable: " + err.Error()
+		status = "unhealthy"
 	} else {
-		checks["https_port"] = "8443"
+		checks["server"] = "healthy"
 	}
 
 	// Check data directory accessibility
@@ -303,26 +310,24 @@ func logsCommand() {
 		}
 	}
 
-	// In a real implementation, this would read from log files
-	// For now, show a message
 	fmt.Println("⚖️  AnubisWatch Logs")
 	fmt.Println("────────────────────────────────────────────")
 	fmt.Println()
-	fmt.Printf("Showing last %d lines...\n", lines)
-	fmt.Println()
 
-	// Check for log file
-	dataDir := getDataDir()
-	logPath := filepath.Join(dataDir, "logs", "anubis.log")
+	// Same path the server writes to (logging.file, or
+	// <storage.path>/logs/anubis.log) when logging.output is file or both.
+	logPath := serverLogFilePath(loadCLIConfig())
 
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {
 		fmt.Printf("Log file not found at %s\n", logPath)
 		fmt.Println()
-		fmt.Println("Logs are written to stderr by default.")
-		fmt.Println("To save logs to file, redirect stderr:")
-		fmt.Println("  anubis serve 2> anubis.log")
+		fmt.Println("The server logs to stdout unless the config enables a log file:")
+		fmt.Println(`  "logging": {"output": "both"}   (stdout + file; or "file" for file only)`)
+		fmt.Println("Under systemd or Docker, use journalctl -u anubis / docker logs instead.")
 		return
 	}
+	fmt.Printf("Showing last %d lines of %s\n", lines, logPath)
+	fmt.Println()
 
 	// Read log file
 	file, err := os.Open(logPath)
@@ -474,7 +479,13 @@ func configCommand() {
 		fmt.Println()
 		fmt.Printf("File: %s\n", configPath)
 		fmt.Println()
-		fmt.Println(string(data))
+		if hasArg(os.Args, "--reveal") {
+			fmt.Println(string(data))
+		} else {
+			fmt.Println(redactConfigSecrets(string(data)))
+			fmt.Println()
+			fmt.Println("(secrets masked; use --reveal to show them)")
+		}
 
 	case "path":
 		configPath := findConfigFromArgs(os.Args)
@@ -597,4 +608,61 @@ func configCommand() {
 		fmt.Println("Run 'anubis config' for usage information")
 		os.Exit(1)
 	}
+}
+
+// configSecretPattern matches JSON or YAML keys that hold credentials, along
+// with their scalar value.
+var configSecretPattern = regexp.MustCompile(`(?im)((?:^|[\s{,])"?(?:[a-z0-9_]*(?:password|secret|token|apikey|webhook_url)|(?:[a-z0-9_]*_)?key)"?\s*:\s*)("(?:[^"\\]|\\.)*"|'[^']*'|[^\s,}#]+)`)
+
+// redactConfigSecrets masks credential values in a config file for display.
+// Environment references such as "${ANUBIS_ADMIN_PASSWORD}" and empty values
+// are left visible because they reveal nothing.
+func redactConfigSecrets(text string) string {
+	return configSecretPattern.ReplaceAllStringFunc(text, func(match string) string {
+		parts := configSecretPattern.FindStringSubmatch(match)
+		value := strings.Trim(parts[2], `"'`)
+		if value == "" || strings.HasPrefix(value, "${") {
+			return match
+		}
+		return parts[1] + `"********"`
+	})
+}
+
+func hasArg(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag {
+			return true
+		}
+	}
+	return false
+}
+
+// probeServerHealth GETs <apiURL>/health. Certificate verification is skipped
+// only for loopback addresses, where the server commonly runs with a
+// self-signed certificate and there is no network path to spoof.
+func probeServerHealth(apiURL string) error {
+	u, err := url.Parse(apiURL)
+	if err != nil {
+		return err
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		// #nosec G402 -- loopback-only liveness probe.
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+	client := &http.Client{Timeout: 3 * time.Second, Transport: transport}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, apiURL+"/health", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return nil
 }
