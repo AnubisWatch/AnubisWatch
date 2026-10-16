@@ -50,6 +50,7 @@ func createChaosTestCluster(t *testing.T, nodeCount int) ([]*Node, func()) {
 			HeartbeatTimeout: core.Duration{Duration: 100 * time.Millisecond},
 			CommitTimeout:    core.Duration{Duration: 50 * time.Millisecond},
 			MaxAppendEntries: 64,
+			ClusterSecret:    chaosClusterSecret,
 		}
 
 		// Every node gets the full static membership (excluding itself) so the
@@ -487,6 +488,7 @@ func createPersistentChaosCluster(t *testing.T, nodeCount int) ([]*Node, []*chao
 			HeartbeatTimeout: core.Duration{Duration: 100 * time.Millisecond},
 			CommitTimeout:    core.Duration{Duration: 50 * time.Millisecond},
 			MaxAppendEntries: 64,
+			ClusterSecret:    chaosClusterSecret,
 		}
 		peers := make([]core.RaftPeer, 0, nodeCount-1)
 		for j := 0; j < nodeCount; j++ {
@@ -533,6 +535,7 @@ func createPersistentChaosCluster(t *testing.T, nodeCount int) ([]*Node, []*chao
 				HeartbeatTimeout: core.Duration{Duration: 100 * time.Millisecond},
 				CommitTimeout:    core.Duration{Duration: 50 * time.Millisecond},
 				MaxAppendEntries: 64,
+				ClusterSecret:    chaosClusterSecret,
 				Peers: func() []core.RaftPeer {
 					pp := make([]core.RaftPeer, 0, nodeCount-1)
 					for j := 0; j < nodeCount; j++ {
@@ -610,6 +613,7 @@ func TestChaos_RestartRecovery_Real(t *testing.T) {
 			HeartbeatTimeout: core.Duration{Duration: 100 * time.Millisecond},
 			CommitTimeout:    core.Duration{Duration: 50 * time.Millisecond},
 			MaxAppendEntries: 64,
+			ClusterSecret:    chaosClusterSecret,
 			Peers: func() []core.RaftPeer {
 				pp := make([]core.RaftPeer, 0, 2)
 				for j := 0; j < 3; j++ {
@@ -712,3 +716,8 @@ func TestChaos_LeaderFailover_Real(t *testing.T) {
 	t.Logf("New leader elected: %s", newLeader.nodeID)
 	t.Log("✅ Leader failover test passed")
 }
+
+// chaosClusterSecret makes the chaos clusters run on the authenticated
+// transport, so fault injection also exercises signed frames and the replay
+// window on the hot AppendEntries/heartbeat path.
+const chaosClusterSecret = "chaos-cluster-secret"

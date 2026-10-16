@@ -434,7 +434,7 @@ func TestTCPTransport_HandleConnection_HandlerTimeout(t *testing.T) {
 func TestTCPTransport_GetConnection_NotFound(t *testing.T) {
 	transport, _ := NewTCPTransport("127.0.0.1:0", "127.0.0.1:7000", nil, newTestTransportLogger())
 
-	_, err := transport.getConnection("non-existent-peer")
+	_, err := transport.getPooledConnection("non-existent-peer", "non-existent-peer")
 	if err == nil {
 		t.Error("Expected error for non-existent connection")
 	}

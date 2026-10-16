@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -17,6 +18,59 @@ type StorageFSM struct {
 	mu    sync.RWMutex
 	store Storage
 	index uint64
+
+	// Application hooks, guarded by hookMu (see SetCommandHandler,
+	// SetApplyObserver, SetRestoreObserver).
+	hookMu          sync.RWMutex
+	handlers        map[string]CommandHandler
+	observer        func(cmd core.FSMCommand)
+	restoreObserver func()
+	logger          *slog.Logger
+}
+
+// CommandHandler applies a command whose Table needs application logic beyond
+// a keyed write -- a judgment also folds into its time-series summaries. It
+// runs under the FSM lock on every node, in log order, and must be
+// deterministic and idempotent: a forwarded command can be applied twice.
+type CommandHandler func(cmd *core.FSMCommand) error
+
+// SetCommandHandler routes commands whose Table equals table to h instead of
+// the store. A nil h removes the route.
+func (f *StorageFSM) SetCommandHandler(table string, h CommandHandler) {
+	f.hookMu.Lock()
+	defer f.hookMu.Unlock()
+	if f.handlers == nil {
+		f.handlers = make(map[string]CommandHandler)
+	}
+	if h == nil {
+		delete(f.handlers, table)
+		return
+	}
+	f.handlers[table] = h
+}
+
+// SetApplyObserver registers fn to be told about every command applied to the
+// store (each element of a batch individually), after the FSM lock is
+// released. It runs on the Raft apply path, so it must not block.
+func (f *StorageFSM) SetApplyObserver(fn func(cmd core.FSMCommand)) {
+	f.hookMu.Lock()
+	f.observer = fn
+	f.hookMu.Unlock()
+}
+
+// SetRestoreObserver registers fn to be called after a snapshot replaced the
+// whole keyspace, which no per-command observation describes.
+func (f *StorageFSM) SetRestoreObserver(fn func()) {
+	f.hookMu.Lock()
+	f.restoreObserver = fn
+	f.hookMu.Unlock()
+}
+
+// SetLogger sets the logger used to report batch elements that failed to apply.
+func (f *StorageFSM) SetLogger(logger *slog.Logger) {
+	f.hookMu.Lock()
+	f.logger = logger
+	f.hookMu.Unlock()
 }
 
 // Storage is the interface for key-value storage
@@ -38,24 +92,39 @@ func NewStorageFSM(store Storage) *StorageFSM {
 
 // Apply applies a Raft log entry to the FSM
 func (f *StorageFSM) Apply(log *core.RaftLogEntry) interface{} {
+	applied, result := f.apply(log)
+	if len(applied) > 0 {
+		f.hookMu.RLock()
+		observer := f.observer
+		f.hookMu.RUnlock()
+		if observer != nil {
+			for _, cmd := range applied {
+				observer(cmd)
+			}
+		}
+	}
+	return result
+}
+
+func (f *StorageFSM) apply(log *core.RaftLogEntry) ([]core.FSMCommand, interface{}) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	// Skip if already applied
 	if log.Index <= f.index {
-		return nil
+		return nil, nil
 	}
 
 	switch log.Type {
 	case core.LogCommand:
 		return f.applyCommand(log)
 	case core.LogConfiguration:
-		return f.applyConfiguration(log)
+		return nil, f.applyConfiguration(log)
 	case core.LogNoOp:
 		f.index = log.Index
-		return nil
+		return nil, nil
 	default:
-		return fmt.Errorf("unknown log entry type: %d", log.Type)
+		return nil, fmt.Errorf("unknown log entry type: %d", log.Type)
 	}
 }
 
@@ -74,41 +143,90 @@ type indexRebuilder interface {
 	RebuildIndexes()
 }
 
-// applyCommand applies a command log entry
-func (f *StorageFSM) applyCommand(log *core.RaftLogEntry) interface{} {
+// applyCommand applies a command log entry and returns the commands that
+// reached the store, for the apply observer.
+func (f *StorageFSM) applyCommand(log *core.RaftLogEntry) ([]core.FSMCommand, interface{}) {
 	cmd, err := f.decodeCommand(log.Data)
 	if err != nil {
-		return fmt.Errorf("failed to decode command: %w", err)
+		return nil, fmt.Errorf("failed to decode command: %w", err)
+	}
+
+	if cmd.Op != core.FSMBatch {
+		if err := f.applyOne(cmd); err != nil {
+			return nil, err
+		}
+		f.index = log.Index
+		return []core.FSMCommand{*cmd}, nil
+	}
+
+	var batch []core.FSMCommand
+	if err := json.Unmarshal(cmd.Value, &batch); err != nil {
+		return nil, fmt.Errorf("failed to decode command batch: %w", err)
+	}
+	// A batch element that fails is skipped rather than failing the entry: the
+	// entry is committed, and an error here would stop this node applying the
+	// log at all, wedging it over one bad judgment.
+	applied := make([]core.FSMCommand, 0, len(batch))
+	for i := range batch {
+		sub := &batch[i]
+		if sub.Origin == "" {
+			sub.Origin = cmd.Origin
+		}
+		var subErr error
+		if sub.Op == core.FSMBatch {
+			subErr = fmt.Errorf("nested command batch")
+		} else {
+			subErr = f.applyOne(sub)
+		}
+		if subErr != nil {
+			f.batchLogger().Error("Skipping batch element that failed to apply",
+				"index", log.Index, "element", i, "table", sub.Table, "key", sub.Key, "error", subErr)
+			continue
+		}
+		applied = append(applied, *sub)
+	}
+	f.index = log.Index
+	return applied, nil
+}
+
+func (f *StorageFSM) batchLogger() *slog.Logger {
+	f.hookMu.RLock()
+	defer f.hookMu.RUnlock()
+	if f.logger != nil {
+		return f.logger
+	}
+	return slog.Default()
+}
+
+// applyOne applies a single (non-batch) command to the store.
+func (f *StorageFSM) applyOne(cmd *core.FSMCommand) error {
+	if cmd.Table != "" {
+		f.hookMu.RLock()
+		handler := f.handlers[cmd.Table]
+		f.hookMu.RUnlock()
+		if handler != nil {
+			return handler(cmd)
+		}
 	}
 
 	// Prefer the typed ApplyFSMCommand path when the store supports it.
 	// This keeps secondary indexes consistent with the consensus log.
 	if applier, ok := f.store.(fsmCommandApplier); ok {
-		if err := applier.ApplyFSMCommand(cmd); err != nil {
-			return err
-		}
-		f.index = log.Index
-		return nil
+		return applier.ApplyFSMCommand(cmd)
 	}
 
 	// Fallback: raw Set/Delete (does not update secondary indexes; used by
 	// in-memory test stores where indexes are not needed).
 	switch cmd.Op {
 	case core.FSMSet:
-		err = f.store.Set(cmd.Key, cmd.Value)
+		return f.store.Set(cmd.Key, cmd.Value)
 	case core.FSMDelete:
-		err = f.store.Delete(cmd.Key)
+		return f.store.Delete(cmd.Key)
 	case core.FSMDeletePrefix:
-		err = f.store.DeletePrefix(cmd.Key)
+		return f.store.DeletePrefix(cmd.Key)
 	default:
 		return fmt.Errorf("unknown command op: %d", cmd.Op)
 	}
-	if err != nil {
-		return err
-	}
-
-	f.index = log.Index
-	return nil
 }
 
 // applyConfiguration applies a configuration change
@@ -171,6 +289,19 @@ func (f *StorageFSM) Snapshot() (core.FSMCommand, error) {
 
 // Restore restores the FSM from a snapshot
 func (f *StorageFSM) Restore(snapshot []byte) error {
+	if err := f.restore(snapshot); err != nil {
+		return err
+	}
+	f.hookMu.RLock()
+	observer := f.restoreObserver
+	f.hookMu.RUnlock()
+	if observer != nil {
+		observer()
+	}
+	return nil
+}
+
+func (f *StorageFSM) restore(snapshot []byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 

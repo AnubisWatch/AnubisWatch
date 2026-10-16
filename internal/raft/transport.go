@@ -3,6 +3,7 @@ package raft
 import (
 	"bufio"
 	"context"
+	"crypto/hmac"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -20,6 +21,15 @@ import (
 const (
 	transportRPCDeadline = 5 * time.Second
 	maxTransportPayload  = 16 << 20
+
+	// methodForward carries a follower's leader-only request to the leader. It
+	// waits for a commit, so it gets its own deadline and its own pooled
+	// connection: sharing the Raft stream would hold vote and replication RPCs
+	// to the same peer behind it.
+	methodForward      = "Forward"
+	forwardPoolSuffix  = "#forward"
+	forwardRPCSlack    = 2 * time.Second
+	maxForwardDeadline = 2 * time.Minute
 )
 
 // TCPTransport implements Transport over TCP with optional TLS
@@ -38,6 +48,10 @@ type TCPTransport struct {
 	peerAddrs   map[string]string     // peerID -> address mapping
 	peerRPCMu   map[string]*sync.Mutex
 	connMu      sync.Mutex
+
+	// auth signs and verifies every frame when a cluster secret is set (see
+	// transport_auth.go); nil leaves frames unsigned.
+	auth atomic.Pointer[transportAuth]
 
 	logger   *slog.Logger
 	shutdown atomic.Bool
@@ -123,6 +137,21 @@ func (t *TCPTransport) Stop() error {
 	return nil
 }
 
+// SetAuth turns on frame authentication with the cluster secret: nodeID is
+// stamped on outbound frames, and isMember (may be nil) decides which origins
+// an inbound frame may come from. An empty secret turns authentication off.
+// Call it before Start.
+func (t *TCPTransport) SetAuth(nodeID, secret string, isMember func(origin, method string) bool) {
+	if secret == "" {
+		t.auth.Store(nil)
+		return
+	}
+	t.auth.Store(newTransportAuth(nodeID, secret, isMember))
+}
+
+// Authenticated reports whether frames are signed and verified.
+func (t *TCPTransport) Authenticated() bool { return t.auth.Load() != nil }
+
 // LocalAddr returns the local address
 func (t *TCPTransport) LocalAddr() string {
 	return t.advertiseAddr
@@ -180,6 +209,60 @@ func (t *TCPTransport) SendHeartbeat(peerID string, req *core.HeartbeatRequest) 
 	return resp.(*core.HeartbeatResponse), nil
 }
 
+// SendForward sends a Forward RPC to a peer, waiting up to deadline for the
+// answer. The exchange uses a connection separate from the Raft RPC stream.
+func (t *TCPTransport) SendForward(peerID string, req *core.ForwardRequest, deadline time.Duration) (*core.ForwardResponse, error) {
+	if deadline <= 0 {
+		deadline = transportRPCDeadline
+	}
+	if deadline > maxForwardDeadline {
+		deadline = maxForwardDeadline
+	}
+	resp, err := t.sendRPCOn(peerID, peerID+forwardPoolSuffix, methodForward, req, deadline)
+	if err != nil {
+		return nil, err
+	}
+	return resp.(*core.ForwardResponse), nil
+}
+
+// SendJoin asks the member listening on addr to add this node (see join.go).
+func (t *TCPTransport) SendJoin(addr string, req *core.JoinRequest, deadline time.Duration) (*core.JoinResponse, error) {
+	key := t.registerAddr(addr)
+	resp, err := t.sendRPCOn(key, key, methodJoin, req, deadline)
+	if err != nil {
+		return nil, err
+	}
+	return resp.(*core.JoinResponse), nil
+}
+
+// SendIdentify asks the node listening on addr for its node ID.
+func (t *TCPTransport) SendIdentify(addr string, deadline time.Duration) (*core.IdentifyResponse, error) {
+	if deadline <= 0 {
+		deadline = transportRPCDeadline
+	}
+	key := t.registerAddr(addr)
+	resp, err := t.sendRPCOn(key, key, methodIdentify, &core.IdentifyRequest{}, deadline)
+	if err != nil {
+		return nil, err
+	}
+	return resp.(*core.IdentifyResponse), nil
+}
+
+// registerAddr names a pool entry for a node known only by address.
+func (t *TCPTransport) registerAddr(addr string) string {
+	key := joinPoolPrefix + addr
+	t.RegisterPeer(key, addr)
+	return key
+}
+
+// HasPeer reports whether the transport knows an address for peerID.
+func (t *TCPTransport) HasPeer(peerID string) bool {
+	t.connMu.Lock()
+	defer t.connMu.Unlock()
+	_, ok := t.peerAddrs[peerID]
+	return ok
+}
+
 // acceptLoop accepts incoming connections
 func (t *TCPTransport) acceptLoop() {
 	for {
@@ -235,10 +318,29 @@ func (t *TCPTransport) handleConnection(conn net.Conn) {
 			continue
 		}
 
-		// Read payload length
+		auth := t.auth.Load()
+		var frame *frameAuth
 		line, err = reader.ReadString('\n')
 		if err != nil {
 			t.logger.Debug("Read error", "error", err)
+			return
+		}
+		if auth != nil {
+			// Authenticated framing: the auth line precedes the length.
+			if frame, err = parseAuthLine(strings.TrimSpace(line)); err == nil {
+				err = auth.precheck(method, frame, time.Now())
+			}
+			if err != nil {
+				t.logger.Warn("Rejected Raft RPC", "method", method, "remote", remoteAddr(conn), "error", err)
+				return
+			}
+			if line, err = reader.ReadString('\n'); err != nil {
+				t.logger.Debug("Read error", "error", err)
+				return
+			}
+		} else if strings.HasPrefix(line, transportAuthPrefix) {
+			t.logger.Warn("Rejected signed Raft RPC: this node has no cluster_secret; set the same necropolis.cluster_secret on every node",
+				"method", method, "remote", remoteAddr(conn))
 			return
 		}
 
@@ -264,6 +366,13 @@ func (t *TCPTransport) handleConnection(conn net.Conn) {
 			return
 		}
 
+		if auth != nil {
+			if err := auth.verify(method, frame, payload, time.Now()); err != nil {
+				t.logger.Warn("Rejected Raft RPC", "method", method, "remote", remoteAddr(conn), "error", err)
+				return
+			}
+		}
+
 		// Handle RPC
 		resp, err := t.handleRPC(method, payload)
 		if err != nil {
@@ -282,6 +391,12 @@ func (t *TCPTransport) handleConnection(conn net.Conn) {
 			t.logger.Debug("Write response header error", "error", err)
 			return
 		}
+		if auth != nil {
+			if _, err := fmt.Fprintf(writer, "%s\n", auth.responseMAC(frame, respData)); err != nil {
+				t.logger.Debug("Write response header error", "error", err)
+				return
+			}
+		}
 		if _, err := writer.Write(respData); err != nil {
 			t.logger.Debug("Write response payload error", "error", err)
 			return
@@ -291,6 +406,13 @@ func (t *TCPTransport) handleConnection(conn net.Conn) {
 			return
 		}
 	}
+}
+
+func remoteAddr(conn net.Conn) string {
+	if addr := conn.RemoteAddr(); addr != nil {
+		return addr.String()
+	}
+	return ""
 }
 
 // handleRPC dispatches to the appropriate handler
@@ -319,6 +441,12 @@ func (t *TCPTransport) handleRPC(method string, payload []byte) (interface{}, er
 		cmd = &core.InstallSnapshotRequest{}
 	case "Heartbeat":
 		cmd = &core.HeartbeatRequest{}
+	case methodForward:
+		cmd = &core.ForwardRequest{}
+	case methodJoin:
+		cmd = &core.JoinRequest{}
+	case methodIdentify:
+		cmd = &core.IdentifyRequest{}
 	default:
 		return nil, fmt.Errorf("unknown method: %s", method)
 	}
@@ -327,13 +455,26 @@ func (t *TCPTransport) handleRPC(method string, payload []byte) (interface{}, er
 		return nil, fmt.Errorf("unmarshal error: %w", err)
 	}
 
+	handlerTimeout := 5 * time.Second
+	if fwd, ok := cmd.(*core.ForwardRequest); ok {
+		// The leader waits for the forwarded command to commit; give it the
+		// sender's own budget (capped) rather than the Raft RPC timeout.
+		handlerTimeout = time.Duration(fwd.TimeoutMs)*time.Millisecond + forwardRPCSlack
+		if handlerTimeout > maxForwardDeadline {
+			handlerTimeout = maxForwardDeadline
+		}
+	}
+	if method == methodJoin {
+		handlerTimeout = joinChangeTimeout + forwardRPCSlack
+	}
+
 	respCh := make(chan interface{}, 1)
 	handler(cmd, respCh)
 
 	select {
 	case resp := <-respCh:
 		return resp, nil
-	case <-time.After(5 * time.Second):
+	case <-time.After(handlerTimeout):
 		return nil, fmt.Errorf("handler timeout")
 	}
 }
@@ -341,15 +482,24 @@ func (t *TCPTransport) handleRPC(method string, payload []byte) (interface{}, er
 // sendRPC sends an RPC to a peer. A peer's complete request/response exchange
 // is serialized because pooled TCP connections are ordered byte streams.
 func (t *TCPTransport) sendRPC(peerID string, method string, req interface{}) (interface{}, error) {
-	rpcMu := t.peerLock(peerID)
+	return t.sendRPCOn(peerID, peerID, method, req, transportRPCDeadline)
+}
+
+// sendRPCOn is sendRPC over the pooled connection named poolKey (dialled to
+// peerID's address) with an explicit deadline for the whole exchange.
+func (t *TCPTransport) sendRPCOn(peerID, poolKey string, method string, req interface{}, deadline time.Duration) (interface{}, error) {
+	rpcMu := t.peerLock(poolKey)
 	rpcMu.Lock()
 	defer rpcMu.Unlock()
 
-	conn, err := t.getConnection(peerID)
+	conn, err := t.getPooledConnection(poolKey, peerID)
 	if err != nil {
 		return nil, err
 	}
-	if err := conn.SetDeadline(time.Now().Add(transportRPCDeadline)); err != nil {
+	// From here on the pool entry is poolKey; shadow peerID so every
+	// connection-management call below addresses that entry.
+	peerID = poolKey
+	if err := conn.SetDeadline(time.Now().Add(deadline)); err != nil {
 		t.removeConnectionIfMatch(peerID, conn)
 		return nil, fmt.Errorf("set RPC deadline: %w", err)
 	}
@@ -361,8 +511,17 @@ func (t *TCPTransport) sendRPC(peerID string, method string, req interface{}) (i
 		return nil, fmt.Errorf("marshal error: %w", err)
 	}
 
+	// Frames are numbered here, after the peer's stream lock is held, so
+	// frames to one peer are written in sequence order.
+	auth := t.auth.Load()
+	authLine := ""
+	var frame *frameAuth
+	if auth != nil {
+		authLine, frame = auth.sign(method, reqData)
+	}
+
 	writer := bufio.NewWriter(conn)
-	if _, err := fmt.Fprintf(writer, "%s\n%d\n", method, len(reqData)); err != nil {
+	if _, err := fmt.Fprintf(writer, "%s\n%s%d\n", method, authLine, len(reqData)); err != nil {
 		t.removeConnectionIfMatch(peerID, conn)
 		return nil, fmt.Errorf("write header error: %w", err)
 	}
@@ -395,11 +554,25 @@ func (t *TCPTransport) sendRPC(peerID string, method string, req interface{}) (i
 		return nil, fmt.Errorf("invalid response length: %d", length)
 	}
 
+	var respMAC string
+	if auth != nil {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.removeConnectionIfMatch(peerID, conn)
+			return nil, fmt.Errorf("read response signature: %w", err)
+		}
+		respMAC = strings.TrimSpace(line)
+	}
+
 	respData := make([]byte, length)
 	_, err = io.ReadFull(reader, respData)
 	if err != nil {
 		t.removeConnectionIfMatch(peerID, conn)
 		return nil, fmt.Errorf("read payload error: %w", err)
+	}
+	if auth != nil && !hmac.Equal([]byte(auth.responseMAC(frame, respData)), []byte(respMAC)) {
+		t.removeConnectionIfMatch(peerID, conn)
+		return nil, fmt.Errorf("%w: response signature mismatch", errTransportAuth)
 	}
 
 	// Parse response based on method
@@ -415,6 +588,12 @@ func (t *TCPTransport) sendRPC(peerID string, method string, req interface{}) (i
 		resp = &core.InstallSnapshotResponse{}
 	case "Heartbeat":
 		resp = &core.HeartbeatResponse{}
+	case methodForward:
+		resp = &core.ForwardResponse{}
+	case methodJoin:
+		resp = &core.JoinResponse{}
+	case methodIdentify:
+		resp = &core.IdentifyResponse{}
 	default:
 		t.removeConnectionIfMatch(peerID, conn)
 		return nil, fmt.Errorf("unknown method: %s", method)
@@ -427,13 +606,15 @@ func (t *TCPTransport) sendRPC(peerID string, method string, req interface{}) (i
 	return resp, nil
 }
 
-// getConnection gets or creates a connection to a peer
-func (t *TCPTransport) getConnection(peerID string) (net.Conn, error) {
+// getPooledConnection returns the pooled connection named poolKey, dialling
+// peerID's registered address when there is none. The Raft RPC stream uses
+// the peer ID as its key; Forward RPCs use their own (see SendForward).
+func (t *TCPTransport) getPooledConnection(poolKey, peerID string) (net.Conn, error) {
 	t.connMu.Lock()
 	defer t.connMu.Unlock()
 
 	// Check existing connection
-	if conn, ok := t.connections[peerID]; ok {
+	if conn, ok := t.connections[poolKey]; ok {
 		// Connection exists, assume it's healthy
 		// The actual RPC will reveal if it's stale
 		return conn, nil
@@ -463,7 +644,7 @@ func (t *TCPTransport) getConnection(peerID string) (net.Conn, error) {
 		return nil, fmt.Errorf("failed to connect to %s (%s): %w", peerID, addr, err)
 	}
 
-	t.connections[peerID] = conn
+	t.connections[poolKey] = conn
 	t.logger.Debug("Created connection to peer", "peer_id", peerID, "address", addr)
 
 	return conn, nil
@@ -550,9 +731,11 @@ func (t *TCPTransport) UnregisterPeer(peerID string) {
 	t.connMu.Lock()
 	defer t.connMu.Unlock()
 
-	if conn, ok := t.connections[peerID]; ok {
-		conn.Close()
-		delete(t.connections, peerID)
+	for _, key := range []string{peerID, peerID + forwardPoolSuffix} {
+		if conn, ok := t.connections[key]; ok {
+			conn.Close()
+			delete(t.connections, key)
+		}
 	}
 	delete(t.peerAddrs, peerID)
 }

@@ -2,9 +2,10 @@ package cluster
 
 import (
 	"fmt"
+	"hash/fnv"
 	"log/slog"
-	"math"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -460,26 +461,162 @@ func (d *Distributor) selectLoadBased(candidates []*NodeLoad) string {
 	return ""
 }
 
-// selectHashBased uses consistent hashing
+// selectHashBased uses rendezvous (highest-random-weight) hashing: each node
+// scores hash(key, node) and the highest score wins. The owner depends only on
+// the key and the candidate set, never on its order, and when a node joins or
+// leaves only the keys that node wins or held change owner -- a modulo hash
+// would reshuffle nearly every key.
 func (d *Distributor) selectHashBased(candidates []*NodeLoad, key string) string {
-	if len(candidates) == 0 {
-		return ""
+	return rendezvousOwner(candidates, key)
+}
+
+func rendezvousOwner(candidates []*NodeLoad, key string) string {
+	best, bestScore := "", uint64(0)
+	for _, node := range candidates {
+		h := fnv.New64a()
+		h.Write([]byte(key))
+		h.Write([]byte{0})
+		h.Write([]byte(node.NodeID))
+		score := h.Sum64()
+		if best == "" || score > bestScore || (score == bestScore && node.NodeID < best) {
+			best, bestScore = node.NodeID, score
+		}
+	}
+	return best
+}
+
+// ParseStrategy maps a necropolis.distribution.strategy value onto a strategy.
+// The empty string and unrecognised values (including the documented
+// "latency-optimized" and "redundant", which have no implementation) fall back
+// to hash-based ownership; ok reports whether the value was recognised.
+func ParseStrategy(name string) (strategy DistributionStrategy, ok bool) {
+	switch strings.NewReplacer("_", "-", " ", "-").Replace(strings.ToLower(strings.TrimSpace(name))) {
+	case "", "hash", "hash-based", "consistent-hash", "consistent-hashing", "rendezvous":
+		return StrategyHashBased, true
+	case "round-robin", "roundrobin":
+		return StrategyRoundRobin, true
+	case "region-aware", "region":
+		return StrategyRegionAware, true
+	case "load-based", "least-loaded":
+		return StrategyLoadBased, true
+	default:
+		return StrategyHashBased, false
+	}
+}
+
+// Rebuild recomputes the owner of every soul over members and replaces the
+// assignment table with the result, so GetNodeForSoul and GetSoulsForNode
+// answer from it. Unlike AssignSoul it is deterministic: the outcome depends
+// only on the soul set, the member set and the strategy -- never on call order,
+// map iteration or this node's own region -- so every node computes the same
+// table from the same replicated inputs without coordinating.
+func (d *Distributor) Rebuild(souls []*core.Soul, members []NodeLoad) map[string]string {
+	d.mu.RLock()
+	strategy := d.strategy
+	d.mu.RUnlock()
+
+	plan := PlanOwnership(strategy, souls, members)
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.soulMap = make(map[string]string, len(plan))
+	counts := make(map[string]int, len(members))
+	for soulID, nodeID := range plan {
+		d.soulMap[soulID] = nodeID
+		counts[nodeID]++
+	}
+	for nodeID, node := range d.nodeLoads {
+		node.SoulCount = counts[nodeID]
+	}
+	return plan
+}
+
+// PlanOwnership assigns each soul to one member under strategy and returns
+// soul ID -> node ID. Souls are visited in ID order and ties go to the lowest
+// node ID, so the plan is a pure function of its inputs. A soul restricted to
+// regions (Soul.Regions) is only given to a member serving one of them, and is
+// left out of the plan when none does -- a standalone probe in the wrong
+// region skips such a soul the same way.
+//
+// Round-robin and load-based keep counts exactly even but may move other souls
+// when one is added or removed; hash-based moves only the souls whose owner
+// joined or left; region-aware prefers members in the soul's Region and
+// balances by count within that choice.
+func PlanOwnership(strategy DistributionStrategy, souls []*core.Soul, members []NodeLoad) map[string]string {
+	nodes := make([]*NodeLoad, 0, len(members))
+	seen := make(map[string]bool, len(members))
+	for i := range members {
+		if members[i].NodeID == "" || seen[members[i].NodeID] {
+			continue
+		}
+		seen[members[i].NodeID] = true
+		member := members[i]
+		nodes = append(nodes, &member)
+	}
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+
+	ordered := make([]*core.Soul, 0, len(souls))
+	for _, soul := range souls {
+		if soul != nil && soul.ID != "" {
+			ordered = append(ordered, soul)
+		}
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
+
+	counts := make(map[string]int, len(nodes))
+	leastLoaded := func(candidates []*NodeLoad) string {
+		best := ""
+		for _, node := range candidates {
+			if best == "" || counts[node.NodeID] < counts[best] {
+				best = node.NodeID
+			}
+		}
+		return best
 	}
 
-	// Map iteration order must not affect the owner selected by the hash.
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].NodeID < candidates[j].NodeID
-	})
+	plan := make(map[string]string, len(ordered))
+	for _, soul := range ordered {
+		candidates := nodes
+		if len(soul.Regions) > 0 {
+			candidates = make([]*NodeLoad, 0, len(nodes))
+			for _, node := range nodes {
+				for _, region := range soul.Regions {
+					if node.Region == region {
+						candidates = append(candidates, node)
+						break
+					}
+				}
+			}
+		}
+		if len(candidates) == 0 {
+			continue
+		}
 
-	// Simple hash-based selection
-	// For production, use a proper consistent hashing implementation
-	hash := 0
-	for i := 0; i < len(key); i++ {
-		hash = 31*hash + int(key[i])
+		var owner string
+		switch strategy {
+		case StrategyHashBased:
+			owner = rendezvousOwner(candidates, soul.ID)
+		case StrategyRegionAware:
+			preferred := candidates
+			if soul.Region != "" {
+				var same []*NodeLoad
+				for _, node := range candidates {
+					if node.Region == soul.Region {
+						same = append(same, node)
+					}
+				}
+				if len(same) > 0 {
+					preferred = same
+				}
+			}
+			owner = leastLoaded(preferred)
+		default:
+			owner = leastLoaded(candidates)
+		}
+		plan[soul.ID] = owner
+		counts[owner]++
 	}
-
-	index := int(math.Abs(float64(hash))) % len(candidates)
-	return candidates[index].NodeID
+	return plan
 }
 
 // rebalanceLoop periodically checks and rebalances load.

@@ -1083,7 +1083,7 @@ func TestStorageFSM_ApplyCommand_UnknownOp(t *testing.T) {
 		Data:  []byte(`{"op":255,"key":"test","value":"data"}`), // Unknown op
 	}
 
-	result := fsm.applyCommand(log)
+	_, result := fsm.applyCommand(log)
 	if result == nil {
 		t.Error("Expected error for unknown operation")
 	}

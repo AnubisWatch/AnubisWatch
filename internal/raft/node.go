@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -17,7 +18,11 @@ import (
 )
 
 const (
-	stableHardState   = "hard_state"
+	stableHardState = "hard_state"
+	stablePeers     = "membership_peers"
+	// stableRemoved marks a node removed from the cluster, so a restart does
+	// not bring it back campaigning against the cluster it left.
+	stableRemoved     = "membership_removed"
 	snapshotChunkSize = 1 << 20
 )
 
@@ -132,6 +137,15 @@ type Node struct {
 	// Stats
 	stats        core.ClusterStats
 	applyWaiters sync.Map
+
+	// forwardNonces rejects replayed signed Forward requests.
+	forwardNonces forwardNonces
+	// removed is set once a committed membership change removes this node: it
+	// stops campaigning instead of disrupting the cluster it left.
+	removed atomic.Bool
+	// awaitingJoin is set while a node started with raft.join waits to be
+	// added to a cluster (see join.go); it never campaigns meanwhile.
+	awaitingJoin atomic.Bool
 }
 
 // Peer represents a remote Raft node
@@ -318,6 +332,9 @@ func (n *Node) SetTransport(transport Transport) {
 	if !ok {
 		return
 	}
+	// With a cluster secret every RPC is signed and verified at the framing
+	// layer, so no handler re-implements authentication.
+	tt.SetAuth(n.nodeID, n.config.ClusterSecret, n.transportMember)
 	handler := func(cmd interface{}, respCh chan interface{}) {
 		select {
 		case n.rpcCh <- &rpcWrapper{cmd: cmd, respCh: respCh}:
@@ -327,6 +344,46 @@ func (n *Node) SetTransport(transport Transport) {
 	for _, method := range []string{"AppendEntries", "RequestVote", "PreVote", "InstallSnapshot", "Heartbeat"} {
 		tt.RegisterHandler(method, handler)
 	}
+	// Forward waits for a commit that the run loop produces, so it must not be
+	// queued on the run loop: answer it from its own goroutine.
+	tt.RegisterHandler(methodForward, func(cmd interface{}, respCh chan interface{}) {
+		req, ok := cmd.(*core.ForwardRequest)
+		if !ok {
+			return
+		}
+		go func() { respCh <- n.handleForward(req) }()
+	})
+	// Join waits for a membership change to commit: its own goroutine too.
+	tt.RegisterHandler(methodJoin, func(cmd interface{}, respCh chan interface{}) {
+		req, ok := cmd.(*core.JoinRequest)
+		if !ok {
+			return
+		}
+		go func() { respCh <- n.handleJoin(req) }()
+	})
+	tt.RegisterHandler(methodIdentify, func(_ interface{}, respCh chan interface{}) {
+		respCh <- n.handleIdentify()
+	})
+}
+
+// transportMember decides which authenticated origins may send RPCs to this
+// node: current members only, so a removed node holding the secret cannot keep
+// voting or replicating. A node that knows no members yet (it is waiting to be
+// added to a cluster) accepts any origin holding the secret, since the leader
+// that adds it is not in its configuration until the first entries arrive.
+func (n *Node) transportMember(origin, method string) bool {
+	// A joiner is by definition not a member yet, and a node being summoned
+	// is asked who it is before it is one.
+	if method == methodJoin || method == methodIdentify || n.awaitingJoin.Load() {
+		return true
+	}
+	n.peerMu.RLock()
+	defer n.peerMu.RUnlock()
+	if len(n.peers) == 0 {
+		return true
+	}
+	_, ok := n.peers[origin]
+	return ok
 }
 
 // Start starts the Raft node
@@ -338,6 +395,10 @@ func (n *Node) Start() error {
 	if err := n.restoreHardState(); err != nil {
 		return fmt.Errorf("failed to restore Raft hard state: %w", err)
 	}
+	if err := n.restorePeers(); err != nil {
+		return fmt.Errorf("failed to restore Raft membership: %w", err)
+	}
+	n.restoreRemoved()
 	if err := n.restoreLatestSnapshot(); err != nil {
 		return fmt.Errorf("failed to restore snapshot: %w", err)
 	}
@@ -373,10 +434,14 @@ func (n *Node) Start() error {
 	go n.run()
 	go n.applyLoop()
 
+	n.peerMu.RLock()
+	peerCount := len(n.peers)
+	n.peerMu.RUnlock()
 	n.logger.Info("Raft node started",
 		"node_id", n.nodeID,
 		"bind_addr", n.bindAddr,
-		"peers", len(n.peers))
+		"peers", peerCount)
+	n.startJoining()
 
 	return nil
 }
@@ -670,16 +735,29 @@ func (n *Node) applyMembershipChange(change core.MembershipChange, index uint64)
 		n.membership.jointState = true
 		n.membership.pendingIndex = index
 
-		// Add the peer to our local map (for AddPeer)
-		if change.Type == core.MembershipAddPeer {
+		// Add the peer to our local map (for AddPeer). Every node, not only the
+		// leader, registers its address: a follower must be able to reach it to
+		// campaign, and the added node itself never lists itself as a peer.
+		// Being added back after a removal makes this node a member again.
+		if change.Type == core.MembershipAddPeer && change.Peer.ID == n.nodeID && n.removed.Load() {
+			n.setRemoved(false)
+			n.logger.Info("This node was added back to the cluster")
+		}
+		if change.Type == core.MembershipAddPeer && change.Peer.ID != n.nodeID {
 			n.peerMu.Lock()
-			n.peers[change.Peer.ID] = &Peer{
-				ID:      change.Peer.ID,
-				Address: change.Peer.Address,
-				Region:  change.Peer.Region,
-				Role:    change.Peer.Role,
+			if _, exists := n.peers[change.Peer.ID]; !exists {
+				n.peers[change.Peer.ID] = &Peer{
+					ID:      change.Peer.ID,
+					Address: change.Peer.Address,
+					Region:  change.Peer.Region,
+					Role:    change.Peer.Role,
+				}
 			}
 			n.peerMu.Unlock()
+			if tt, ok := n.transport.(*TCPTransport); ok {
+				tt.RegisterPeer(change.Peer.ID, change.Peer.Address)
+			}
+			n.persistPeers()
 		}
 
 		n.logger.Info("Entered joint consensus for membership change",
@@ -702,9 +780,18 @@ func (n *Node) applyMembershipChange(change core.MembershipChange, index uint64)
 
 		// Remove the peer from our local map (for RemovePeer)
 		if change.Type == core.MembershipRemovePeer {
-			n.peerMu.Lock()
-			delete(n.peers, change.Peer.ID)
-			n.peerMu.Unlock()
+			if change.Peer.ID == n.nodeID {
+				n.setRemoved(true)
+				n.logger.Warn("This node was removed from the cluster; it will no longer campaign")
+			} else {
+				n.peerMu.Lock()
+				delete(n.peers, change.Peer.ID)
+				n.peerMu.Unlock()
+				if tt, ok := n.transport.(*TCPTransport); ok {
+					tt.UnregisterPeer(change.Peer.ID)
+				}
+			}
+			n.persistPeers()
 		}
 
 		n.logger.Info("Membership change completed",
@@ -770,21 +857,31 @@ func (n *Node) replicateLog() {
 	}
 	n.peerMu.RUnlock()
 
-	for _, peer := range peers {
-		go func(p *Peer) {
-			prevLogIndex := uint64(0)
-			if p.nextIndex > 0 {
-				prevLogIndex = p.nextIndex - 1
-			}
-			req := &core.AppendEntriesRequest{
-				Term:         n.currentTerm,
-				LeaderID:     n.nodeID,
-				PrevLogIndex: prevLogIndex,
-				PrevLogTerm:  n.getLogTerm(prevLogIndex),
-				Entries:      n.getEntriesAfter(p.nextIndex, n.config.MaxAppendEntries),
-				LeaderCommit: n.commitIndex,
-			}
+	// Build the requests under the read lock, as the heartbeat path does:
+	// nextIndex, currentTerm, commitIndex and the log are written by
+	// handleAppendEntriesResponse/checkCommit under n.mu, and reading them
+	// from the sender goroutines raced with those writes.
+	reqs := make([]*core.AppendEntriesRequest, len(peers))
+	n.mu.RLock()
+	for i, p := range peers {
+		prevLogIndex := uint64(0)
+		if p.nextIndex > 0 {
+			prevLogIndex = p.nextIndex - 1
+		}
+		reqs[i] = &core.AppendEntriesRequest{
+			Term:         n.currentTerm,
+			LeaderID:     n.nodeID,
+			PrevLogIndex: prevLogIndex,
+			PrevLogTerm:  n.getLogTerm(prevLogIndex),
+			Entries:      n.getEntriesAfter(p.nextIndex, n.config.MaxAppendEntries),
+			LeaderCommit: n.commitIndex,
+			LeaderAddr:   n.advertiseAddr,
+		}
+	}
+	n.mu.RUnlock()
 
+	for i, peer := range peers {
+		go func(p *Peer, req *core.AppendEntriesRequest) {
 			resp, err := n.transport.SendAppendEntries(p.ID, req)
 			if err != nil {
 				return
@@ -792,7 +889,7 @@ func (n *Node) replicateLog() {
 			n.markPeerContacted(p.ID)
 
 			n.handleAppendEntriesResponse(p, req, resp)
-		}(peer)
+		}(peer, reqs[i])
 	}
 }
 
@@ -944,6 +1041,9 @@ func (n *Node) applyLoop() {
 
 // startElection initiates a leader election with pre-vote
 func (n *Node) startElection() {
+	if n.removed.Load() || n.awaitingJoin.Load() {
+		return
+	}
 	n.mu.Lock()
 
 	// Check if single-node mode (no peers)
@@ -1301,6 +1401,7 @@ func (n *Node) sendHeartbeats(commitIndex uint64) {
 			PrevLogTerm:  n.getLogTerm(prevLogIndex),
 			Entries:      n.getEntriesAfter(p.nextIndex, n.config.MaxAppendEntries),
 			LeaderCommit: commitIndex,
+			LeaderAddr:   n.advertiseAddr,
 		}
 	}
 	n.mu.RUnlock()
@@ -1360,6 +1461,14 @@ func (n *Node) handleAppendEntries(req *core.AppendEntriesRequest) *core.AppendE
 	// Valid heartbeat from leader
 	n.lastContact = time.Now()
 	n.leaderID = req.LeaderID
+	// Learn where the leader lives when it is not a configured peer (a node
+	// added at runtime, or a join address configured under another ID), so
+	// writes can be forwarded to it. A known address is never overwritten.
+	if req.LeaderAddr != "" && req.LeaderID != n.nodeID && dialableAddr(req.LeaderAddr) {
+		if tt, ok := n.transport.(*TCPTransport); ok && !tt.HasPeer(req.LeaderID) {
+			tt.RegisterPeer(req.LeaderID, req.LeaderAddr)
+		}
+	}
 	// Reset the follower's election timer. Without this, the peer's
 	// election timer fires at its scheduled instant regardless of how
 	// recently we heard from the leader; combined with the time it
@@ -2126,6 +2235,100 @@ func (n *Node) persistHardStateLocked() error {
 		return err
 	}
 	return n.stable.Set(stableHardState, data)
+}
+
+// dialableAddr reports whether addr names a host another node can dial: a
+// leader that advertises its wildcard bind address ("0.0.0.0:7946") must not
+// be recorded under it.
+func dialableAddr(addr string) bool {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" || port == "" {
+		return false
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		return false
+	}
+	return true
+}
+
+// persistPeers records the current peer set so membership changes applied at
+// runtime survive a restart: on Start the persisted set replaces the peers from
+// the static configuration. Without a stable store it is a no-op.
+func (n *Node) persistPeers() {
+	if n.stable == nil {
+		return
+	}
+	peers := n.GetPeers()
+	sort.Slice(peers, func(i, j int) bool { return peers[i].ID < peers[j].ID })
+	data, err := json.Marshal(peers)
+	if err != nil {
+		return
+	}
+	if err := n.stable.Set(stablePeers, data); err != nil {
+		n.logger.Error("Failed to persist membership", "error", err)
+	}
+}
+
+// setRemoved records whether this node is out of the cluster, durably when a
+// stable store is configured.
+func (n *Node) setRemoved(removed bool) {
+	n.removed.Store(removed)
+	if n.stable == nil {
+		return
+	}
+	value := []byte("0")
+	if removed {
+		value = []byte("1")
+	}
+	if err := n.stable.Set(stableRemoved, value); err != nil {
+		n.logger.Error("Failed to persist removal state", "error", err)
+	}
+}
+
+// restoreRemoved reloads the removal flag on start.
+func (n *Node) restoreRemoved() {
+	if n.stable == nil {
+		return
+	}
+	if data, err := n.stable.Get(stableRemoved); err == nil && string(data) == "1" {
+		n.removed.Store(true)
+		n.logger.Warn("This node was removed from the cluster; it will not campaign until it is added back")
+	}
+}
+
+// restorePeers replaces the configured peers with the membership persisted by
+// the last applied membership change, if there is one.
+func (n *Node) restorePeers() error {
+	if n.stable == nil {
+		return nil
+	}
+	data, err := n.stable.Get(stablePeers)
+	if err != nil {
+		var notFound *core.NotFoundError
+		if errors.As(err, &notFound) {
+			return nil
+		}
+		return err
+	}
+	var peers []core.RaftPeer
+	if err := json.Unmarshal(data, &peers); err != nil {
+		return err
+	}
+	n.peerMu.Lock()
+	n.peers = make(map[string]*Peer, len(peers))
+	config := []string{n.nodeID}
+	for _, p := range peers {
+		if p.ID == "" || p.ID == n.nodeID {
+			continue
+		}
+		n.peers[p.ID] = &Peer{ID: p.ID, Address: p.Address, Region: p.Region, Role: p.Role}
+		config = append(config, p.ID)
+	}
+	n.peerMu.Unlock()
+	n.membership.mu.Lock()
+	n.membership.config = config
+	n.membership.mu.Unlock()
+	return nil
 }
 
 func (n *Node) restoreHardState() error {
