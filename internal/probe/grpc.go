@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/net/http2"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/protobuf/proto"
 
@@ -107,33 +106,22 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	// the literal IP so an attacker who changes DNS between Validate() and
 	// Judge() cannot redirect the connection to an internal address.
 	grpcDialCtx := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
-	transport := &http2.Transport{
+	// net/http speaks HTTP/2 over TLS (ALPN) and, with UnencryptedHTTP2,
+	// h2c with prior knowledge for http:// targets. HTTP/1 is disabled: gRPC
+	// needs HTTP/2. (golang.org/x/net/http2.Transport is deprecated.)
+	var protocols http.Protocols
+	protocols.SetHTTP2(true)
+	protocols.SetUnencryptedHTTP2(true)
+	transport := &http.Transport{
 		TLSClientConfig: grpcTLSConfig,
-		AllowHTTP:       true,
-		DialTLSContext: func(ctx context.Context, network, addr string, tlsCfg *tls.Config) (net.Conn, error) {
+		Protocols:       &protocols,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			raw, err := grpcDialCtx(ctx, network, addr)
 			if err != nil {
 				return nil, err
 			}
 			context.AfterFunc(connectionCtx, func() { _ = raw.Close() })
-			if tlsCfg == nil {
-				return raw, nil // h2c (plaintext HTTP/2)
-			}
-			handshakeConfig := tlsCfg.Clone()
-			if handshakeConfig.ServerName == "" {
-				host, _, splitErr := net.SplitHostPort(addr)
-				if splitErr != nil {
-					raw.Close()
-					return nil, splitErr
-				}
-				handshakeConfig.ServerName = host
-			}
-			tlsConn := tls.Client(raw, handshakeConfig)
-			if err := tlsConn.HandshakeContext(ctx); err != nil {
-				raw.Close()
-				return nil, err
-			}
-			return tlsConn, nil
+			return raw, nil
 		},
 	}
 	defer transport.CloseIdleConnections()

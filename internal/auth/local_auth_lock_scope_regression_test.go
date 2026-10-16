@@ -32,6 +32,8 @@ func raceDetectorActive() bool {
 // Login and RequestPasswordReset used to take the global auth lock and then run
 // bcrypt at bcrypt.DefaultCost while holding it. Authenticate needs that same
 // lock, so any unauthenticated caller could stall every authenticated request.
+const lockScopeCompletionBudget = 60 * time.Second
+
 func TestLoginRejectionPathsDoNotHoldAuthLock(t *testing.T) {
 	const (
 		adminEmail    = "admin@example.com"
@@ -78,8 +80,12 @@ func TestLoginRejectionPathsDoNotHoldAuthLock(t *testing.T) {
 		adminBlocked <- "empty-password"
 	}()
 
+	// The deadlines only bound how long bcrypt may take; a path blocked on the
+	// lock never completes, so a generous bound proves the same thing. Under
+	// -race on a busy CI runner (other packages' tests run concurrently) the
+	// dummy bcrypt alone has taken over 3s.
 	completed := 0
-	deadline := time.After(3 * time.Second)
+	deadline := time.After(lockScopeCompletionBudget)
 	for completed < 3 {
 		select {
 		case msg := <-rejections:
@@ -107,7 +113,7 @@ func TestLoginRejectionPathsDoNotHoldAuthLock(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		select {
 		case <-adminBlocked:
-		case <-time.After(5 * time.Second):
+		case <-time.After(lockScopeCompletionBudget):
 			t.Fatal("the admin path never completed after the lock was released")
 		}
 	}
