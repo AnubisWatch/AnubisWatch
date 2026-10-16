@@ -177,6 +177,12 @@ type RaftConfig struct {
 	// manager when it builds the Raft config. Empty means
 	// authentication is disabled.
 	ClusterSecret string `json:"cluster_secret" yaml:"cluster_secret"`
+
+	// Join lists Raft addresses of existing members. A node that has no
+	// peers yet, is not bootstrapping and has join addresses does not elect
+	// itself: it asks those members to add it (see raft.Node joinLoop) and
+	// learns the real member IDs from the answer.
+	Join []string `json:"join,omitempty" yaml:"join,omitempty"`
 }
 
 // TLSPeerConfig holds TLS configuration for peer-to-peer communication
@@ -208,7 +214,7 @@ type RaftPeer struct {
 
 // DistributionConfig defines check distribution settings
 type DistributionConfig struct {
-	Strategy          string   `json:"strategy" yaml:"strategy"` // round-robin, region-aware, latency-optimized, redundant
+	Strategy          string   `json:"strategy" yaml:"strategy"` // hash (default), round-robin, region-aware, load-based
 	Redundancy        int      `json:"redundancy" yaml:"redundancy"`
 	RebalanceInterval Duration `json:"rebalance_interval" yaml:"rebalance_interval"`
 }
@@ -524,12 +530,10 @@ func (c LoggingConfig) validate() error {
 	if !validFormats[c.Format] {
 		return &ConfigError{Field: "logging.format", Message: fmt.Sprintf("invalid log format: %s", c.Format)}
 	}
-	validOutputs := map[string]bool{"stdout": true, "file": true}
+	// file and both default logging.file to <storage.path>/logs/anubis.log.
+	validOutputs := map[string]bool{"stdout": true, "stderr": true, "file": true, "both": true}
 	if !validOutputs[c.Output] {
-		return &ConfigError{Field: "logging.output", Message: fmt.Sprintf("invalid log output: %s", c.Output)}
-	}
-	if c.Output == "file" && c.File == "" {
-		return &ConfigError{Field: "logging.file", Message: "log file path is required when output is file"}
+		return &ConfigError{Field: "logging.output", Message: fmt.Sprintf("invalid log output: %s (want stdout, stderr, file or both)", c.Output)}
 	}
 	return nil
 }

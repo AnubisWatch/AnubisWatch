@@ -286,8 +286,8 @@ func TestLogsCommand_NoLogFile(t *testing.T) {
 	if !strings.Contains(output, "Log file not found") {
 		t.Errorf("Expected log not found message, got: %s", output)
 	}
-	if !strings.Contains(output, "Logs are written to stderr") {
-		t.Errorf("Expected stderr hint, got: %s", output)
+	if !strings.Contains(output, `"output": "both"`) {
+		t.Errorf("Expected logging.output hint, got: %s", output)
 	}
 }
 

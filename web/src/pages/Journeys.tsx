@@ -23,6 +23,8 @@ import {
 } from 'lucide-react'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { api } from '../api/client'
+import { fetchAllArrayPages } from '../api/pagination'
+import { useCan } from '../utils/permissions'
 
 interface Journey {
   id: string
@@ -42,6 +44,7 @@ interface Journey {
   updated_at?: string
   steps?: JourneyStepForm[]
   continue_on_failure?: boolean
+  variables?: Record<string, string>
 }
 
 interface JourneyStepForm {
@@ -50,6 +53,9 @@ interface JourneyStepForm {
   target: string
   timeout: number
   assertions: AssertionForm[]
+  // The stored step, so fields the form does not edit (extract, http body and
+  // method, headers, …) survive a save.
+  original?: Record<string, unknown>
 }
 
 interface AssertionForm {
@@ -57,6 +63,19 @@ interface AssertionForm {
   target: string
   operator: string
   expected: string
+}
+
+const stepProtocolKeys = ['http', 'tcp', 'udp', 'dns', 'tls'] as const
+
+// stepBase is the stored step minus the form-only field, and minus its
+// protocol block when the form changed the step type.
+function stepBase(step: JourneyStepForm): Record<string, unknown> {
+  const base: Record<string, unknown> = { ...(step.original ?? {}) }
+  if (base.type !== step.type) {
+    for (const key of stepProtocolKeys) delete base[key]
+  }
+  delete base.original
+  return base
 }
 
 interface JourneyRun {
@@ -218,8 +237,8 @@ function useJourneys() {
   const fetchJourneys = useCallback(async () => {
     setLoading(true)
     try {
-      const result = await api.get<Journey[]>('/journeys')
-      setJourneys(result || [])
+      const result = await fetchAllArrayPages<Journey>('/journeys')
+      setJourneys(result)
       setError(null)
     } catch (err) {
       // If endpoint doesn't exist yet, just show empty state
@@ -272,6 +291,7 @@ function useJourneys() {
 }
 
 export function Journeys() {
+  const can = useCan()
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -331,6 +351,7 @@ export function Journeys() {
       type: step.type || 'http',
       target: step.target || '',
       timeout: step.timeout || 10,
+      original: step as unknown as Record<string, unknown>,
       assertions: (step.assertions || []).map(assertion => ({
         type: assertion.type || 'status_code',
         target: assertion.target || '',
@@ -398,7 +419,9 @@ export function Journeys() {
         avg_duration: editingJourney?.avg_duration || 0,
         success_rate: editingJourney?.success_rate ?? 100,
         last_run: editingJourney?.last_run,
+        variables: editingJourney?.variables,
         steps: formSteps.map(s => ({
+          ...stepBase(s),
           name: s.name,
           type: s.type,
           target: s.target,
@@ -518,6 +541,7 @@ export function Journeys() {
           </button>
           <button
             onClick={handleOpenCreateModal}
+            hidden={!can('souls:write')}
             className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-all font-medium shadow-lg shadow-amber-600/20"
           >
             <Plus className="w-4 h-4" />
@@ -745,6 +769,7 @@ export function Journeys() {
                 <div className="flex items-center gap-1">
                   <button
                     onClick={() => handleRun(journey.id)}
+                    hidden={!can('souls:write')}
                     disabled={runningId === journey.id || !journey.enabled}
                     className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
                     title="Run Now"
@@ -754,6 +779,7 @@ export function Journeys() {
                   </button>
                   <button
                     onClick={() => handleToggleEnabled(journey.id, journey.enabled)}
+                    hidden={!can('souls:write')}
                     className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
                     title={journey.enabled ? 'Disable' : 'Enable'}
                     aria-label={journey.enabled ? `Disable journey ${journey.name}` : `Enable journey ${journey.name}`}
@@ -762,6 +788,7 @@ export function Journeys() {
                   </button>
                   <button
                     onClick={() => handleOpenEditModal(journey)} className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" title="Edit" aria-label={`Edit journey ${journey.name}`}>
+                    hidden={!can('souls:write')}
                     <Edit className="w-4 h-4" />
                   </button>
                   <button
@@ -774,6 +801,7 @@ export function Journeys() {
                   </button>
                   <button
                     onClick={() => handleDelete(journey.id)}
+                    hidden={!can('souls:write')}
                     className="p-2 text-gray-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
                     title="Delete"
                     aria-label={`Delete journey ${journey.name}`}
@@ -788,6 +816,7 @@ export function Journeys() {
           {/* Create New Card */}
           <button
             onClick={handleOpenCreateModal}
+            hidden={!can('souls:write')}
             className="bg-gradient-to-br from-gray-900 to-gray-800/50 border border-dashed border-gray-700/50 rounded-2xl p-6 flex flex-col items-center justify-center gap-4 hover:border-amber-500 transition-all text-gray-500 min-h-[280px]"
           >
             <div className="w-16 h-16 rounded-full bg-gray-800 flex items-center justify-center">
@@ -809,6 +838,7 @@ export function Journeys() {
           </p>
           <button
             onClick={handleOpenCreateModal}
+            hidden={!can('souls:write')}
             className="px-6 py-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-colors"
           >
             Chart First Voyage

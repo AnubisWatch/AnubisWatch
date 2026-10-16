@@ -146,11 +146,28 @@ func (r *soulRunner) setSoul(s *core.Soul) {
 	r.mu.Unlock()
 }
 
+// minSoulInterval guards against intervals that would turn a runner into a hot
+// loop. Records written before the API rejected sub-second intervals (the
+// dashboard once sent seconds that were decoded as nanoseconds) fall back to
+// the default instead of hammering the target and the store.
+var minSoulInterval = core.MinSoulInterval
+
+const defaultSoulInterval = 60 * time.Second
+
 func soulInterval(s *core.Soul) time.Duration {
-	if s.Weight.Duration > 0 {
+	if s.Weight.Duration >= minSoulInterval {
 		return s.Weight.Duration
 	}
-	return 60 * time.Second
+	return defaultSoulInterval
+}
+
+// soulTimeout returns the per-check timeout, treating unset or implausibly
+// small values (see minSoulInterval) as the default.
+func soulTimeout(s *core.Soul) time.Duration {
+	if s.Timeout.Duration >= core.MinSoulTimeout {
+		return s.Timeout.Duration
+	}
+	return 10 * time.Second
 }
 
 func (r *soulRunner) getStatus() core.SoulStatus {
@@ -419,23 +436,18 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 		return
 	}
 
-	// Validate config
-	if err := checker.Validate(soul); err != nil {
-		e.logger.Error("invalid soul config", "soul", soul.Name, "err", err)
-		e.recordFailure(soul.ID)
-		return
+	// A soul that fails validation (e.g. a target blocked by SSRF protection)
+	// is recorded as a dead judgment rather than skipped, so the operator sees
+	// why it never turns alive and alert rules can fire.
+	var judgment *core.Judgment
+	var err error
+	if err = checker.Validate(soul); err != nil {
+		e.logger.Warn("soul failed validation", "soul", soul.Name, "err", err)
+	} else {
+		checkCtx, cancel := context.WithTimeout(ctx, soulTimeout(soul))
+		defer cancel()
+		judgment, err = checker.Judge(checkCtx, soul)
 	}
-
-	// Create timeout context
-	timeout := soul.Timeout.Duration
-	if timeout == 0 {
-		timeout = 10 * time.Second
-	}
-	checkCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	// Execute the check
-	judgment, err := checker.Judge(checkCtx, soul)
 	// The assignment may have been canceled or updated while the check ran.
 	if ctx.Err() != nil || runner.getSoul() != assignedSoul {
 		return
@@ -531,15 +543,11 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 		return nil, &core.ConfigError{Field: "type", Message: "unknown type " + string(soul.Type)}
 	}
 
-	if err := checker.Validate(soul); err != nil {
-		return nil, err
-	}
+	// Validation failures (e.g. a target blocked by SSRF policy) are reported
+	// as a dead judgment, matching scheduled checks, instead of an opaque error.
+	validateErr := checker.Validate(soul)
 
-	timeout := soul.Timeout.Duration
-	if timeout == 0 {
-		timeout = 10 * time.Second
-	}
-	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	checkCtx, cancel := context.WithTimeout(ctx, soulTimeout(soul))
 	defer cancel()
 
 	// The concurrency limit applies to every check, including manual ones: the REST
@@ -562,7 +570,11 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 	// checks honour the global InsecureSkipVerify policy.
 	checkSoul := e.applySecurityGate(soul)
 
-	judgment, err := checker.Judge(checkCtx, checkSoul)
+	var judgment *core.Judgment
+	err := validateErr
+	if err == nil {
+		judgment, err = checker.Judge(checkCtx, checkSoul)
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()

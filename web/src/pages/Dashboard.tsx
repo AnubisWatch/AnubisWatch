@@ -105,8 +105,8 @@ const StatCard = ({ title, value, subtext, icon: Icon, trend, color, delay }: St
 
 export function Dashboard() {
   const { souls, refetch: refetchSouls } = useSouls()
-  const { data: statsData, refetch: refetchStats } = useStats()
-  const { data: clusterData } = useClusterStatus()
+  const { data: statsData, error: statsError, refetch: refetchStats } = useStats()
+  const { data: clusterData, error: clusterError } = useClusterStatus()
   const { data: judgmentsData } = useJudgments()
   const [refreshing, setRefreshing] = useState(false)
 
@@ -196,24 +196,27 @@ export function Dashboard() {
     },
     {
       name: clusterData?.is_clustered ? 'Cluster' : 'Standalone',
-      status: 'operational',
-      value: clusterData?.is_clustered ? `${clusterData.peer_count} nodes` : 'Active',
+      // A clustered node without a leader cannot accept writes.
+      status: clusterError ? 'down' : clusterData?.is_clustered && !clusterData.leader ? 'degraded' : 'operational',
+      value: clusterError ? 'Unreachable' : clusterData?.is_clustered ? `${(clusterData.peer_count ?? 0) + 1} nodes` : 'Active',
       icon: Globe,
-      color: 'text-blue-400'
+      color: clusterError ? 'text-rose-400' : 'text-blue-400'
     },
     {
       name: 'Storage',
-      status: 'operational',
-      value: 'Healthy',
+      // The overview is read from storage, so its failure is the signal.
+      status: statsError ? 'down' : 'operational',
+      value: statsError ? 'Unavailable' : 'Healthy',
       icon: Server,
-      color: 'text-purple-400'
+      color: statsError ? 'text-rose-400' : 'text-purple-400'
     },
     {
       name: 'Alert Manager',
-      status: 'operational',
-      value: 'Active',
+      // Failed deliveries are the one thing the counters can flag.
+      status: (statsData?.alerts?.failed_alerts ?? 0) > 0 ? 'degraded' : 'operational',
+      value: `${statsData?.alerts?.sent_alerts ?? 0} sent · ${statsData?.alerts?.failed_alerts ?? 0} failed`,
       icon: Shield,
-      color: 'text-rose-400'
+      color: (statsData?.alerts?.failed_alerts ?? 0) > 0 ? 'text-amber-400' : 'text-rose-400'
     },
   ]
 

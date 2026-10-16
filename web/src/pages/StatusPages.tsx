@@ -23,6 +23,7 @@ import {
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { useStatusPages, useSouls } from '../api/hooks'
 import type { StatusPage, StatusPageVisibility } from '../api/client'
+import { useCan } from '../utils/permissions'
 
 interface ServiceStatus {
   id: string
@@ -39,8 +40,8 @@ function displayTheme(theme: StatusPage['theme']): string {
   return background === '#ffffff' || background === '#f8fafc' ? 'Light' : 'Custom'
 }
 
-function formThemeFromPage(theme: StatusPage['theme']): 'dark' | 'light' | 'auto' {
-  if (theme === 'light' || theme === 'auto') return theme
+function formThemeFromPage(theme: StatusPage['theme']): 'dark' | 'light' | 'custom' {
+  if (theme === 'light' || theme === 'custom') return theme
   return 'dark'
 }
 
@@ -64,6 +65,7 @@ function statusPageHref(page: StatusPage): string {
 }
 
 export function StatusPages() {
+  const can = useCan()
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -145,7 +147,13 @@ export function StatusPages() {
     const generation = saveGeneration.current
     setSaving(true)
     try {
+      // PUT replaces the whole page: start from the stored page so groups,
+      // incidents, logo, favicon, custom colours and uptime_days survive.
+      const { id: _id, password_set: _passwordSet, ...stored } = editingPage ?? ({} as Partial<StatusPage>)
+      void _id
+      void _passwordSet
       const payload: Omit<StatusPage, 'id'> = {
+        ...stored,
         name: formName,
         slug: formSlug,
         description: formDescription,
@@ -156,7 +164,7 @@ export function StatusPages() {
         custom_domain: editingPage?.custom_domain,
         souls: formSelectedSouls,
         subscribers: editingPage?.subscribers || 0,
-        uptime_days: 90
+        uptime_days: editingPage?.uptime_days || 90
       } as Omit<StatusPage, 'id'>
       // The API reads a present-but-empty "password" as "clear it", so only send
       // the field when the operator changed or cleared it. Sending it on every
@@ -247,7 +255,8 @@ export function StatusPages() {
     name: soul.name,
     status: !soul.enabled ? 'unknown'
       : soul.status === 'healthy' ? 'operational'
-      : soul.status === 'unhealthy' ? 'down' : 'unknown'
+      : soul.status === 'unhealthy' ? 'down'
+      : soul.status === 'degraded' || soul.status === 'maintenance' ? 'degraded' : 'unknown'
   }))
 
   const getStatusIcon = (status: string) => {
@@ -277,6 +286,7 @@ export function StatusPages() {
           </button>
           <button
             onClick={handleOpenCreateModal}
+            hidden={!can('settings:write')}
             className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-all font-medium shadow-lg shadow-amber-600/20"
           >
             <Plus className="w-4 h-4" />
@@ -486,7 +496,7 @@ export function StatusPages() {
                 </a>
               </div>
               <div className="flex items-center gap-1">
-                <button onClick={() => handleOpenEditPage(page)} className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" aria-label={`Edit status page ${page.name}`} title="Edit">
+                <button hidden={!can('settings:write')} onClick={() => handleOpenEditPage(page)} className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" aria-label={`Edit status page ${page.name}`} title="Edit">
                   <Edit className="w-4 h-4" />
                 </button>
                 <button onClick={() => { void handleShareUrl(page) }} className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" aria-label={`Share status page ${page.name}`} title="Share">
@@ -494,6 +504,7 @@ export function StatusPages() {
                 </button>
                 <button
                   onClick={() => handleDelete(page.id)}
+                  hidden={!can('settings:write')}
                   className="p-2 text-gray-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
                   aria-label={`Delete status page ${page.name}`}
                   title="Delete"
@@ -508,6 +519,7 @@ export function StatusPages() {
         {/* Create New Card */}
         <button
           onClick={handleOpenCreateModal}
+          hidden={!can('settings:write')}
           className="bg-gradient-to-br from-gray-900 to-gray-800/50 border border-dashed border-gray-700/50 rounded-2xl p-6 flex flex-col items-center justify-center gap-4 hover:border-amber-500 transition-all text-gray-500 min-h-[400px]"
         >
           <div className="w-16 h-16 rounded-full bg-gray-800 flex items-center justify-center">
@@ -528,6 +540,7 @@ export function StatusPages() {
           <p className="text-gray-400 mb-6">Create your first public status page to communicate service status to your users</p>
           <button
             onClick={handleOpenCreateModal}
+            hidden={!can('settings:write')}
             className="px-6 py-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-colors"
           >
             Create Your First Page
@@ -646,7 +659,7 @@ export function StatusPages() {
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-3">Theme</label>
                 <div className="grid grid-cols-3 gap-3">
-                  {(['dark', 'light', 'auto'] as const).map((theme) => (
+                  {(editingPage?.theme === 'custom' ? ['dark', 'light', 'custom'] as const : ['dark', 'light'] as const).map((theme) => (
                     <button
                       key={theme}
                       onClick={() => setFormTheme(theme)}

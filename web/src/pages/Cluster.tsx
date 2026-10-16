@@ -16,7 +16,8 @@ import {
   Terminal,
   AlertCircle
 } from 'lucide-react'
-import { useClusterStatus, useClusterPeers } from '../api/hooks'
+import { useClusterStatus, useClusterPeers, useStats } from '../api/hooks'
+import { formatDistanceToNow } from '../utils/date'
 import { getClusterStatusColor, getClusterStatusTextColor } from '../utils/statusUtils'
 
 export function Cluster() {
@@ -60,12 +61,17 @@ export function Cluster() {
     }
   ]
 
+  const { data: overview } = useStats()
   const stats = {
-    total_checks: 0,
-    checks_per_minute: 0,
-    active_souls: 0,
-    replicated_logs: 0,
+    total_checks: overview?.judgments?.today ?? 0,
+    active_souls: overview?.souls?.total ?? 0,
   }
+  // The API reports RFC 3339 timestamps; anything else is shown as given.
+  const lastContact = (value: string) => {
+    const parsed = Date.parse(value)
+    return Number.isNaN(parsed) ? value : formatDistanceToNow(value)
+  }
+  const healthyState = (value: string) => value === 'leader' || value === 'follower' || value === 'standalone'
 
   return (
     <div className="space-y-8">
@@ -194,7 +200,7 @@ export function Cluster() {
             <div>
               <p className="text-gray-400 text-sm font-medium">Health Status</p>
               <p className="text-2xl font-bold text-blue-400 mt-1">
-                {clusterData?.state === 'healthy' || clusterData?.state === 'leader' || clusterData?.state === 'follower' ? 'Healthy' : 'Unknown'}
+                {clusterData?.state === 'healthy' || healthyState(clusterData?.state ?? '') ? 'Healthy' : 'Unknown'}
               </p>
             </div>
             <div className="w-12 h-12 bg-blue-500/10 rounded-xl flex items-center justify-center">
@@ -240,7 +246,7 @@ export function Cluster() {
               <tr key={node.id} className="hover:bg-gray-800/30 transition-colors">
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-3">
-                    <div className={`w-2 h-2 rounded-full ${getClusterStatusColor(node.state === 'leader' || node.state === 'follower' ? 'healthy' : 'unknown')}`} />
+                    <div className={`w-2 h-2 rounded-full ${getClusterStatusColor(healthyState(node.state) ? 'healthy' : 'unknown')}`} />
                     <div>
                       <p className="font-semibold text-white flex items-center gap-2">
                         {node.id}
@@ -248,14 +254,14 @@ export function Cluster() {
                       </p>
                       <p className="text-xs text-gray-500 mt-0.5 flex items-center gap-1">
                         <Clock className="w-3 h-3" />
-                        {node.last_contact}
+                        {lastContact(node.last_contact)}
                       </p>
                     </div>
                   </div>
                 </td>
                 <td className="px-6 py-4">
-                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${getClusterStatusTextColor(node.state === 'leader' || node.state === 'follower' ? 'healthy' : 'unknown')} bg-gray-800`}>
-                    {node.state === 'leader' || node.state === 'follower' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
+                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${getClusterStatusTextColor(healthyState(node.state) ? 'healthy' : 'unknown')} bg-gray-800`}>
+                    {healthyState(node.state) ? <CheckCircle2 className="w-3.5 h-3.5" /> : <XCircle className="w-3.5 h-3.5" />}
                     <span className="capitalize">{node.state}</span>
                   </span>
                 </td>
@@ -276,7 +282,7 @@ export function Cluster() {
                   </div>
                 </td>
                 <td className="px-6 py-4">
-                  <span className="text-sm text-gray-400 font-mono">{node.last_contact}</span>
+                  <span className="text-sm text-gray-400 font-mono">{lastContact(node.last_contact)}</span>
                 </td>
               </tr>
             ))}

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { AlertTriangle, CheckCircle, Clock, User, Search, Filter } from 'lucide-react'
 import { api } from '../api/client'
+import { useCan } from '../utils/permissions'
 
 interface Incident {
   id: string
@@ -19,6 +20,7 @@ interface Incident {
 }
 
 export function Incidents() {
+  const can = useCan()
   const [incidents, setIncidents] = useState<Incident[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -248,6 +250,7 @@ export function Incidents() {
                       {inc.status === 'open' && (
                         <button
                           onClick={() => handleAcknowledge(inc.id)}
+                          hidden={!can('rules:write')}
                           className="px-3 py-1.5 text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-lg hover:bg-amber-500/20 transition-colors"
                         >
                           Acknowledge
@@ -256,6 +259,7 @@ export function Incidents() {
                       {(inc.status === 'open' || inc.status === 'acknowledged') && (
                         <button
                           onClick={() => handleResolve(inc.id)}
+                          hidden={!can('rules:write')}
                           className="px-3 py-1.5 text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-lg hover:bg-emerald-500/20 transition-colors"
                         >
                           Resolve

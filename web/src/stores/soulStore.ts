@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { api } from '../api/client'
-import type { Soul, Judgment, ApiResponse } from '../api/client'
+import { fetchAllPages } from '../api/pagination'
+import type { Soul, Judgment } from '../api/client'
 
 const initialCheckRequests = new Map<string, symbol>()
 
@@ -23,6 +24,10 @@ function statusFromJudgment(status: Judgment['status']): Soul['status'] {
       return 'healthy'
     case 'failed':
       return 'unhealthy'
+    case 'degraded':
+      return 'degraded'
+    case 'maintenance':
+      return 'maintenance'
     default:
       return 'unknown'
   }
@@ -54,7 +59,8 @@ export const useSoulStore = create<SoulStore>((set, get) => ({
   fetchSouls: async () => {
     set({ loading: true, error: null })
     try {
-      const result = await api.get<ApiResponse<Soul[]>>('/souls')
+      // Every page: the API defaults to 20 rows and the page lists them all.
+      const result = await fetchAllPages<Soul>('/souls')
       if (result) {
         set({ souls: result.data, pagination: result.pagination ?? null, loading: false })
       } else {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -28,13 +29,32 @@ type journeyListItem struct {
 // handleListJourneys lists all journeys
 func (s *RESTServer) handleListJourneys(ctx *Context) error {
 	workspace := ctx.Workspace
-	offset, limit := parsePagination(ctx.Request, 20, 100)
+	offset, limit := parsePagination(ctx.Request, 20, maxListLimit)
+	// Unlike other lists, a limit above the maximum is clamped rather than
+	// reset to the default, so a client paging with a large limit still gets
+	// full pages and walks the rest via X-Total-Count.
+	if requested, err := strconv.Atoi(ctx.Request.URL.Query().Get("limit")); err == nil && requested > maxListLimit {
+		limit = maxListLimit
+	}
 
-	journeys, err := s.store.ListJourneysNoCtx(workspace, offset, limit)
+	// The response stays a bare array for compatibility, so the total travels
+	// in X-Total-Count. Storage pages an in-memory list anyway; listing once
+	// and slicing here gives the total without a second scan.
+	all, err := s.store.ListJourneysNoCtx(workspace, 0, 0)
 	if err != nil {
 		s.logger.Error("failed to list journeys", "error", err, "workspace", workspace)
 		return ctx.Error(http.StatusInternalServerError, "failed to retrieve journeys")
 	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+	if offset > len(all) {
+		offset = len(all)
+	}
+	end := offset + limit
+	if end > len(all) {
+		end = len(all)
+	}
+	journeys := all[offset:end]
+	ctx.Response.Header().Set("X-Total-Count", strconv.Itoa(len(all)))
 
 	items := make([]journeyListItem, 0, len(journeys))
 	for _, journey := range journeys {
@@ -541,10 +561,14 @@ func (s *RESTServer) querySouls(q core.WidgetQuery, workspace string) (interface
 		distribution := map[string]int{
 			"healthy":   0,
 			"unhealthy": 0,
+			"degraded":  0,
+			"embalmed":  0,
 			"unknown":   0,
 		}
+		now := time.Now()
+		windows := s.activeMaintenanceWindows(now)
 		for _, soul := range souls {
-			status := s.soulWithLatestJudgment(soul).Status
+			status := s.soulWithLatestJudgmentAt(soul, windows, now).Status
 			if _, ok := distribution[status]; !ok {
 				status = "unknown"
 			}
@@ -640,6 +664,9 @@ func (s *RESTServer) queryJudgments(q core.WidgetQuery, workspace string) (inter
 			Failed:     b.Failed,
 		})
 	}
+	// buckets is a map, so iteration order is random; charts need the series
+	// in time order. RFC3339 UTC timestamps sort lexically.
+	sort.Slice(result, func(i, j int) bool { return result[i].Time < result[j].Time })
 
 	return result, nil
 }

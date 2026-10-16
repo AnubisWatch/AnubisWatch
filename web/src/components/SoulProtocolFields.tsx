@@ -189,6 +189,56 @@ export function SoulProtocolFields({ formData, setFormData }: SoulProtocolFields
         </div>
       )}
 
+      {formData.type === 'imap' && (
+        <div className="space-y-4">
+          <label className="flex items-center gap-3 text-sm text-gray-300">
+            <input
+              type="checkbox"
+              checked={formData.imapTLS}
+              onChange={(e) => setFormData({ ...formData, imapTLS: e.target.checked })}
+              className="w-4 h-4 rounded border-gray-600 text-amber-500 focus:ring-amber-500/20"
+            />
+            Use TLS
+          </label>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="imap-username" className="block text-sm font-medium text-gray-300 mb-2">Username</label>
+              <input
+                id="imap-username"
+                type="text"
+                autoComplete="off"
+                value={formData.imapUsername}
+                onChange={(e) => setFormData({ ...formData, imapUsername: e.target.value })}
+                placeholder="Optional; enables login check"
+                className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50"
+              />
+            </div>
+            <div>
+              <label htmlFor="imap-password" className="block text-sm font-medium text-gray-300 mb-2">Password</label>
+              <input
+                id="imap-password"
+                type="password"
+                autoComplete="new-password"
+                value={formData.imapPassword}
+                onChange={(e) => setFormData({ ...formData, imapPassword: e.target.value })}
+                className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50"
+              />
+            </div>
+          </div>
+          <div>
+            <label htmlFor="imap-mailbox" className="block text-sm font-medium text-gray-300 mb-2">Mailbox to Select</label>
+            <input
+              id="imap-mailbox"
+              type="text"
+              value={formData.imapMailbox}
+              onChange={(e) => setFormData({ ...formData, imapMailbox: e.target.value })}
+              placeholder="Optional, e.g. INBOX (requires login)"
+              className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder:text-gray-600 focus:outline-none focus:border-amber-500/50"
+            />
+          </div>
+        </div>
+      )}
+
       {formData.type === 'grpc' && (
         <div>
           <label htmlFor="grpc-service" className="block text-sm font-medium text-gray-300 mb-2">gRPC Service Name</label>

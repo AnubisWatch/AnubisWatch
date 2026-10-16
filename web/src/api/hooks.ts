@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { api, ApiResponse, Soul, Judgment, SoulUptime, UptimeRange, AlertChannel, AlertRule, Incident, Stats, ClusterStatus, StatusPage, User, CustomDashboard } from './client'
+import { fetchAllPages } from './pagination'
 import { useRealtimeRefresh } from '../hooks/useRealtimeRefresh'
 import {
   AUTH_SESSION_CHANGED_EVENT,
@@ -60,47 +61,10 @@ function useApi<T>(
   return { data, loading, error, refetch: fetchData }
 }
 
-const listPageLimit = 100
-const maxListPages = 1000
-
-// Fetch every page for screens that render a complete client-side collection.
-// A non-advancing/missing next_offset is rejected so a malformed response can
-// never trap the dashboard in an infinite pagination loop.
-async function fetchAllPaginated<T>(path: string): Promise<ApiResponse<T[]>> {
-  let offset = 0
-  let firstResponse: ApiResponse<T[]> | null = null
-  const data: T[] = []
-
-  for (let page = 0; page < maxListPages; page += 1) {
-    const response = await api.get<ApiResponse<T[]>>(`${path}?offset=${offset}&limit=${listPageLimit}`)
-    firstResponse ??= response
-    data.push(...(response.data || []))
-
-    if (!response.pagination?.has_more) {
-      if (page === 0) return response
-      return {
-        ...firstResponse,
-        data,
-        pagination: firstResponse.pagination
-          ? { ...firstResponse.pagination, offset: 0, limit: data.length, has_more: false }
-          : undefined,
-      }
-    }
-
-    const nextOffset = response.pagination.next_offset
-    if (typeof nextOffset !== 'number' || nextOffset <= offset) {
-      throw new Error(`Invalid pagination from ${path}: next_offset must advance`)
-    }
-    offset = nextOffset
-  }
-
-  throw new Error(`Pagination limit exceeded for ${path}`)
-}
-
 // Souls API hooks
 export function useSouls() {
   const { data, loading, error, refetch: refetchSouls } = useApi<ApiResponse<Soul[]>>(
-    () => fetchAllPaginated<Soul>('/souls')
+    () => fetchAllPages<Soul>('/souls')
   )
 
   // Keep the list live: refresh on soul lifecycle and judgment events. useApi
@@ -221,7 +185,7 @@ export function useChannels() {
   // useApi owns the request sequence, so a slow response resolving after a
   // newer one can no longer overwrite fresher state with a stale list.
   const { data, loading, error, refetch: refetchChannels } = useApi<ApiResponse<AlertChannel[]>>(
-    () => fetchAllPaginated<AlertChannel>('/channels')
+    () => fetchAllPages<AlertChannel>('/channels')
   )
 
   // The mutation paths await a refresh. A failed refresh is already surfaced
@@ -270,7 +234,7 @@ export function useRules() {
   // useApi owns the request sequence, so a slow response resolving after a
   // newer one can no longer overwrite fresher state with a stale list.
   const { data, loading, error, refetch: refetchRules } = useApi<ApiResponse<AlertRule[]>>(
-    () => fetchAllPaginated<AlertRule>('/rules')
+    () => fetchAllPages<AlertRule>('/rules')
   )
 
   // The mutation paths await a refresh. A failed refresh is already surfaced
@@ -360,6 +324,8 @@ export interface ClusterPeer {
   address: string
   state: string
   last_contact: string
+  is_leader?: boolean
+  region?: string
 }
 
 export function useClusterPeers() {

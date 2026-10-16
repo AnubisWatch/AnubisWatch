@@ -14,7 +14,7 @@ import {
   RefreshCw,
   Wifi
 } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useSoulStore } from '../stores/soulStore'
 import { useRealtimeRefresh } from '../hooks/useRealtimeRefresh'
 import type { Soul } from '../api/client'
@@ -29,12 +29,13 @@ import { ConfirmDialog } from '../components/ConfirmDialog'
 import { SoulStatsCards } from '../components/SoulStatsCards'
 import { SoulFilterBar } from '../components/SoulFilterBar'
 import { SoulCreateModal } from '../components/SoulCreateModal'
+import { useCan } from '../utils/permissions'
 
-type SoulDisplayStatus = 'healthy' | 'unhealthy' | 'unknown' | 'checking' | 'check_failed'
+type SoulDisplayStatus = 'healthy' | 'unhealthy' | 'degraded' | 'maintenance' | 'unknown' | 'checking' | 'check_failed'
 
 // Extended Soul type with UI-specific properties
 interface SoulWithStatus extends Soul {
-  status?: 'healthy' | 'unhealthy' | 'unknown'
+  status?: 'healthy' | 'unhealthy' | 'degraded' | 'maintenance' | 'unknown'
   last_check?: string
   latency?: number
 }
@@ -44,6 +45,7 @@ const typeConfig: Record<SoulType, { label: string; color: string; bg: string; i
   tcp: { label: 'TCP', color: 'text-purple-400', bg: 'bg-purple-500/10', icon: Server },
   udp: { label: 'UDP', color: 'text-yellow-400', bg: 'bg-yellow-500/10', icon: Server },
   smtp: { label: 'SMTP', color: 'text-orange-400', bg: 'bg-orange-500/10', icon: Server },
+  imap: { label: 'IMAP', color: 'text-amber-400', bg: 'bg-amber-500/10', icon: Server },
   dns: { label: 'DNS', color: 'text-cyan-400', bg: 'bg-cyan-500/10', icon: Globe },
   icmp: { label: 'ICMP', color: 'text-pink-400', bg: 'bg-pink-500/10', icon: Activity },
   grpc: { label: 'gRPC', color: 'text-indigo-400', bg: 'bg-indigo-500/10', icon: Server },
@@ -52,9 +54,12 @@ const typeConfig: Record<SoulType, { label: string; color: string; bg: string; i
 }
 
 export function Souls() {
+  const can = useCan()
   const { souls: rawSouls, initialChecks, fetchSouls, createSoul, retryInitialCheck, updateSoul, deleteSoul } = useSoulStore()
   const souls = rawSouls as SoulWithStatus[]
-  const [search, setSearch] = useState('')
+  // The header search box links here with ?q=.
+  const [searchParams] = useSearchParams()
+  const [search, setSearch] = useState(() => searchParams.get('q') ?? '')
   const [filter, setFilter] = useState('all')
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list')
   const [refreshing, setRefreshing] = useState(false)
@@ -164,7 +169,7 @@ export function Souls() {
                            (filter === 'disabled' && !soul.enabled) ||
                            (filter === 'http' && soul.type === 'http') ||
                            (filter === 'tcp' && soul.type === 'tcp') ||
-                           (filter === 'issues' && soul.status === 'unhealthy')
+                           (filter === 'issues' && (soul.status === 'unhealthy' || soul.status === 'degraded'))
       return matchesSearch && matchesFilter
     })
   }, [souls, search, filter])
@@ -173,7 +178,7 @@ export function Souls() {
     total: souls.length,
     active: souls.filter(s => s.enabled).length,
     disabled: souls.filter(s => !s.enabled).length,
-    issues: souls.filter(s => s.status === 'unhealthy').length,
+    issues: souls.filter(s => s.status === 'unhealthy' || s.status === 'degraded').length,
     types: new Set(souls.map(s => s.type)).size
   }), [souls])
 
@@ -202,6 +207,7 @@ export function Souls() {
           </button>
           <button
             onClick={() => setCreateModalOpen(true)}
+            hidden={!can('souls:write')}
             className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-all font-medium shadow-lg shadow-amber-600/20"
           >
             <Plus className="w-4 h-4" />
@@ -288,6 +294,7 @@ export function Souls() {
                       ) : displayStatus === 'check_failed' ? (
                         <button
                           onClick={() => handleRetryInitialCheck(soul)}
+                          hidden={!can('souls:write')}
                           className="inline-flex items-center gap-2 text-sm font-medium text-rose-400 hover:text-rose-300 transition-colors"
                           aria-label={`Retry initial check for ${soul.name || soul.target}`}
                         >
@@ -312,6 +319,7 @@ export function Souls() {
                         </Link>
                         <button
                           onClick={() => handleToggle(soul)}
+                          hidden={!can('souls:write')}
                           className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
                           aria-label={soul.enabled ? `Pause ${soul.name || soul.target}` : `Resume ${soul.name || soul.target}`}
                         >
@@ -319,6 +327,7 @@ export function Souls() {
                         </button>
                         <button
                           onClick={() => handleDelete(soul.id)}
+                          hidden={!can('souls:write')}
                           className="p-2 text-gray-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
                           aria-label={`Delete soul ${soul.name || soul.target}`}
                         >
@@ -368,6 +377,7 @@ export function Souls() {
                   {displayStatus === 'check_failed' && (
                     <button
                       onClick={() => handleRetryInitialCheck(soul)}
+                      hidden={!can('souls:write')}
                       className="flex items-center gap-2 text-sm text-rose-400 hover:text-rose-300 transition-colors"
                       aria-label={`Retry initial check for ${soul.name || soul.target}`}
                     >
@@ -391,6 +401,7 @@ export function Souls() {
                   </Link>
                   <button
                     onClick={() => handleToggle(soul)}
+                    hidden={!can('souls:write')}
                     className="flex-1 p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
                     aria-label={soul.enabled ? `Pause ${soul.name || soul.target}` : `Resume ${soul.name || soul.target}`}
                   >
@@ -398,6 +409,7 @@ export function Souls() {
                   </button>
                   <button
                     onClick={() => handleDelete(soul.id)}
+                    hidden={!can('souls:write')}
                     className="flex-1 p-2 text-gray-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
                     aria-label={`Delete soul ${soul.name || soul.target}`}
                   >
@@ -433,6 +445,7 @@ export function Souls() {
               <p className="text-gray-400 text-sm mb-4">Summon your first soul to begin the eternal watch</p>
               <button
                 onClick={() => setCreateModalOpen(true)}
+                hidden={!can('souls:write')}
                 className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition-colors"
               >
                 Summon First Soul

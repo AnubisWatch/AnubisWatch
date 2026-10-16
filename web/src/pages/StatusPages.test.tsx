@@ -297,9 +297,9 @@ describe("StatusPages", () => {
 		const dialog = screen.getByRole("dialog");
 		fireEvent.change(within(dialog).getByLabelText("Slug"), { target: { value: "UP DATE!" } });
 		fireEvent.change(within(dialog).getByLabelText("Description"), { target: { value: "Changed" } });
-		fireEvent.click(within(dialog).getByRole("button", { name: "Auto" }));
+		fireEvent.click(within(dialog).getByRole("button", { name: "Light" }));
 		fireEvent.click(within(dialog).getByRole("button", { name: "Save Status Page" }));
-		await waitFor(() => expect(mockUpdatePage).toHaveBeenCalledWith("page-1", expect.objectContaining({ slug: "update", description: "Changed", theme: "auto" })));
+		await waitFor(() => expect(mockUpdatePage).toHaveBeenCalledWith("page-1", expect.objectContaining({ slug: "update", description: "Changed", theme: "light" })));
 	});
 
 	it("uses custom_domain for the domain count and external view link", () => {

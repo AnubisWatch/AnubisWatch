@@ -46,10 +46,18 @@ func (m *mockStorage) ListSouls(ctx context.Context, workspaceID string, offset,
 	return result, nil
 }
 
+func mockWorkspace(id string) string {
+	if id == "" {
+		return "default"
+	}
+	return id
+}
+
 func (m *mockStorage) ListAlertChannels(workspace string) ([]*core.AlertChannel, error) {
 	var result []*core.AlertChannel
 	for _, ch := range m.alertChannels {
-		if ch.WorkspaceID == workspace || ch.WorkspaceID == "" {
+		// Mirrors CobaltDB: records without a workspace live under "default".
+		if mockWorkspace(ch.WorkspaceID) == mockWorkspace(workspace) {
 			result = append(result, ch)
 		}
 	}
@@ -59,7 +67,7 @@ func (m *mockStorage) ListAlertChannels(workspace string) ([]*core.AlertChannel,
 func (m *mockStorage) ListAlertRules(workspace string) ([]*core.AlertRule, error) {
 	var result []*core.AlertRule
 	for _, r := range m.alertRules {
-		if r.WorkspaceID == workspace || r.WorkspaceID == "" {
+		if mockWorkspace(r.WorkspaceID) == mockWorkspace(workspace) {
 			result = append(result, r)
 		}
 	}

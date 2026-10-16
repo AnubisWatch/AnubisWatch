@@ -21,6 +21,8 @@ import {
 } from 'lucide-react'
 import { api } from '../api/client'
 import { useAuth, useStats } from '../api/hooks'
+import { ChangePasswordForm } from '../components/ChangePasswordForm'
+import { useCan } from '../utils/permissions'
 import { useThemeStore, applyTheme } from '../stores/themeStore'
 import { Link } from 'react-router-dom'
 
@@ -36,7 +38,12 @@ interface ConfigData {
   auth_enabled?: boolean
   mcp_enabled?: boolean
   websocket_enabled?: boolean
+  read_only_keys?: string[]
 }
+
+// The only settings PUT /config accepts; everything else comes from the
+// config file and is shown read-only.
+const editableKeys = ['instance_name', 'timezone', 'language', 'theme'] as const
 
 // Efficient shallow comparison for config objects (all values are primitives)
 function hasConfigChanged(original: ConfigData, edited: ConfigData): boolean {
@@ -62,6 +69,7 @@ export function Settings() {
   const [hasChanges, setHasChanges] = useState(false)
 
   const { user } = useAuth()
+  const can = useCan()
   const { data: statsData } = useStats()
   const { theme, setTheme } = useThemeStore()
 
@@ -94,8 +102,14 @@ export function Settings() {
     setSaved(false)
     setError(null)
     try {
-      await api.put('/config', editedConfig)
-      setConfig(editedConfig)
+      const changes: Record<string, unknown> = {}
+      for (const key of editableKeys) {
+        if (editedConfig[key] !== config[key]) changes[key] = editedConfig[key] ?? null
+      }
+      const result = await api.put<ConfigData>('/config', changes)
+      const next = result ?? editedConfig
+      setConfig(next)
+      setEditedConfig(next)
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {
@@ -139,6 +153,7 @@ export function Settings() {
           </button>
           <button
             onClick={handleSave}
+            hidden={!can('settings:write')}
             disabled={!hasChanges || saving}
             className={`flex items-center gap-2 px-5 py-2.5 rounded-xl transition-all font-medium ${
               saved
@@ -309,62 +324,24 @@ export function Settings() {
 
                 <div className="space-y-6">
                   <div className="pt-6 border-t border-gray-700/50 space-y-4">
-                    <div className="flex items-center justify-between py-2">
-                      <div>
-                        <p className="font-medium text-white">Authentication</p>
-                        <p className="text-sm text-gray-500">Require login to access dashboard</p>
+                    {([
+                      ['Authentication', 'Require login to access dashboard', editedConfig.auth_enabled],
+                      ['MCP Server', 'Model Context Protocol endpoint', editedConfig.mcp_enabled],
+                      ['WebSocket', 'Real-time WebSocket connections', editedConfig.websocket_enabled],
+                    ] as const).map(([label, description, enabled]) => (
+                      <div key={label} className="flex items-center justify-between py-2">
+                        <div>
+                          <p className="font-medium text-white">{label}</p>
+                          <p className="text-sm text-gray-500">{description}</p>
+                        </div>
+                        <span className={`px-2.5 py-1 rounded-lg text-xs font-semibold ${enabled ? 'bg-emerald-500/10 text-emerald-400' : 'bg-gray-700/50 text-gray-400'}`}>
+                          {enabled ? 'Enabled' : 'Disabled'}
+                        </span>
                       </div>
-                      <button
-                        onClick={() => handleChange('auth_enabled', !editedConfig.auth_enabled)}
-                        role="switch"
-                        aria-checked={editedConfig.auth_enabled}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                          editedConfig.auth_enabled ? 'bg-emerald-500' : 'bg-gray-700'
-                        }`}
-                      >
-                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          editedConfig.auth_enabled ? 'translate-x-6' : 'translate-x-1'
-                        }`} />
-                      </button>
-                    </div>
-
-                    <div className="flex items-center justify-between py-2">
-                      <div>
-                        <p className="font-medium text-white">MCP Server</p>
-                        <p className="text-sm text-gray-500">Enable Model Context Protocol endpoint</p>
-                      </div>
-                      <button
-                        onClick={() => handleChange('mcp_enabled', !editedConfig.mcp_enabled)}
-                        role="switch"
-                        aria-checked={editedConfig.mcp_enabled}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                          editedConfig.mcp_enabled ? 'bg-emerald-500' : 'bg-gray-700'
-                        }`}
-                      >
-                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          editedConfig.mcp_enabled ? 'translate-x-6' : 'translate-x-1'
-                        }`} />
-                      </button>
-                    </div>
-
-                    <div className="flex items-center justify-between py-2">
-                      <div>
-                        <p className="font-medium text-white">WebSocket</p>
-                        <p className="text-sm text-gray-500">Enable real-time WebSocket connections</p>
-                      </div>
-                      <button
-                        onClick={() => handleChange('websocket_enabled', !editedConfig.websocket_enabled)}
-                        role="switch"
-                        aria-checked={editedConfig.websocket_enabled}
-                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                          editedConfig.websocket_enabled ? 'bg-emerald-500' : 'bg-gray-700'
-                        }`}
-                      >
-                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                          editedConfig.websocket_enabled ? 'translate-x-6' : 'translate-x-1'
-                        }`} />
-                      </button>
-                    </div>
+                    ))}
+                    <p className="text-sm text-gray-500">
+                      These are set in the server config file (auth, mcp and server sections) and take effect on restart.
+                    </p>
                   </div>
                 </div>
               </div>
@@ -387,6 +364,8 @@ export function Settings() {
                   </div>
                 </div>
               </div>
+
+              <ChangePasswordForm />
             </div>
           )}
 
@@ -447,13 +426,13 @@ export function Settings() {
                       Data Retention (days)
                     </label>
                     <input
-                      type="number"
-                      value={editedConfig.retention_days || 90}
-                      onChange={(e) => handleChange('retention_days', parseInt(e.target.value))}
-                      className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
+                      type="text"
+                      readOnly
+                      value={editedConfig.retention_days ? String(editedConfig.retention_days) : 'Never pruned'}
+                      className="w-full bg-gray-950/50 border border-gray-700/50 rounded-xl px-4 py-3 text-gray-300 cursor-default focus:outline-none"
                     />
                     <p className="text-sm text-gray-500 mt-2">
-                      Judgments and logs older than this will be automatically deleted
+                      Raw judgments older than this are deleted. Set storage.retention_days in the config file.
                     </p>
                   </div>
 
@@ -463,10 +442,11 @@ export function Settings() {
                     </label>
                     <input
                       type="text"
-                      value={editedConfig.storage_path || '/var/lib/anubis'}
-                      onChange={(e) => handleChange('storage_path', e.target.value)}
-                      className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
+                      readOnly
+                      value={editedConfig.storage_path || ''}
+                      className="w-full bg-gray-950/50 border border-gray-700/50 rounded-xl px-4 py-3 text-gray-300 font-mono cursor-default focus:outline-none"
                     />
+                    <p className="text-sm text-gray-500 mt-2">Set storage.path in the config file.</p>
                   </div>
 
                   <div className="pt-6 border-t border-gray-700/50">

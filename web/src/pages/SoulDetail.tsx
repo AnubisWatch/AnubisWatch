@@ -29,6 +29,7 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import { useSoul, useSoulJudgments, useSoulUptime } from '../api/hooks'
 import type { Judgment, UptimeRange } from '../api/client'
 import type { LucideIcon } from 'lucide-react'
+import { useCan } from '../utils/permissions'
 
 interface UptimeData {
   key: string
@@ -44,6 +45,7 @@ const TABS = ['overview', 'performance', 'history', 'settings'] as const
 type TabId = (typeof TABS)[number]
 
 export function SoulDetail() {
+  const can = useCan()
   const { id } = useParams()
   const navigate = useNavigate()
   const [timeRange, setTimeRange] = useState<UptimeRange>('24h')
@@ -170,6 +172,8 @@ export function SoulDetail() {
       case 'passed': return <CheckCircle2 className="w-5 h-5 text-emerald-400" />
       case 'failed': return <XCircle className="w-5 h-5 text-rose-400" />
       case 'pending': return <Activity className="w-5 h-5 text-amber-400" />
+      case 'degraded': return <Activity className="w-5 h-5 text-amber-400" />
+      case 'maintenance': return <Activity className="w-5 h-5 text-sky-400" />
       default: return <Activity className="w-5 h-5 text-gray-400" />
     }
   }
@@ -179,6 +183,8 @@ export function SoulDetail() {
       case 'passed': return 'text-emerald-400'
       case 'failed': return 'text-rose-400'
       case 'pending': return 'text-amber-400'
+      case 'degraded': return 'text-amber-400'
+      case 'maintenance': return 'text-sky-400'
       default: return 'text-gray-400'
     }
   }
@@ -264,6 +270,7 @@ export function SoulDetail() {
           )}
           <button
             onClick={handleToggleEnabled}
+            hidden={!can('souls:write')}
             className="flex items-center gap-2 px-4 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl transition-all"
           >
             {soul.enabled ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
@@ -271,6 +278,7 @@ export function SoulDetail() {
           </button>
           <button
             onClick={() => navigate(`/souls/${id}/edit`)}
+            hidden={!can('souls:write')}
             className="flex items-center gap-2 px-4 py-2.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl transition-all"
           >
             <Edit3 className="w-4 h-4" />
@@ -278,6 +286,7 @@ export function SoulDetail() {
           </button>
           <button
             onClick={handleForceCheck}
+            hidden={!can('souls:write')}
             disabled={isChecking}
             className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded-xl transition-all shadow-lg shadow-amber-600/20"
           >
@@ -286,6 +295,7 @@ export function SoulDetail() {
           </button>
           <button
             onClick={handleDelete}
+            hidden={!can('souls:write')}
             disabled={isDeleting}
             className="p-2.5 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-xl transition-all disabled:opacity-50"
             aria-label="Delete soul"
@@ -605,6 +615,7 @@ export function SoulDetail() {
                 </h3>
                 <button
                   onClick={() => navigate(`/souls/${id}/edit`)}
+                  hidden={!can('souls:write')}
                   className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm transition-all"
                 >
                   <Edit3 className="w-3.5 h-3.5" />
@@ -654,6 +665,7 @@ export function SoulDetail() {
                   </div>
                   <button
                     onClick={handleToggleEnabled}
+                    hidden={!can('souls:write')}
                     className="flex items-center gap-2 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-xl transition-all"
                   >
                     {soul.enabled ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
@@ -667,6 +679,7 @@ export function SoulDetail() {
                   </div>
                   <button
                     onClick={handleDelete}
+                    hidden={!can('souls:write')}
                     disabled={isDeleting}
                     className="flex items-center gap-2 px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-xl transition-all disabled:opacity-50"
                   >

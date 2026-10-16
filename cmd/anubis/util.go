@@ -48,7 +48,27 @@ func getDataDir() string {
 	if testDataDir != "" {
 		return testDataDir
 	}
+	// Then the config file the server would use, so `anubis init` followed
+	// by client commands agrees on where the data lives.
+	if cfg := loadCLIConfig(); cfg != nil && cfg.Storage.Path != "" {
+		return cfg.Storage.Path
+	}
 	return defaultDataDirForOS(runtime.GOOS)
+}
+
+// loadCLIConfig loads the config file the server would pick up (see
+// findConfigFromArgs), or returns nil if there is none or it does not parse.
+// Client commands use it only for connection defaults; env vars still win.
+func loadCLIConfig() *core.Config {
+	path := findConfigFromArgs(os.Args[1:])
+	if info, err := os.Stat(path); err != nil || info.IsDir() {
+		return nil
+	}
+	cfg, err := core.LoadConfig(path)
+	if err != nil {
+		return nil
+	}
+	return cfg
 }
 
 // defaultDataDirForOS returns the platform-specific data directory.
@@ -65,7 +85,23 @@ func defaultDataDirForOS(goos string) string {
 func getAPIURL() string {
 	host := os.Getenv("ANUBIS_HOST")
 	port := os.Getenv("ANUBIS_PORT")
-	if host == "" {
+	scheme := "http"
+	if host == "" || port == "" {
+		if cfg := loadCLIConfig(); cfg != nil {
+			if host == "" {
+				host = cfg.Server.Host
+			}
+			if port == "" && cfg.Server.Port > 0 {
+				port = fmt.Sprintf("%d", cfg.Server.Port)
+			}
+			if cfg.Server.TLS.Enabled {
+				scheme = "https"
+			}
+		}
+	}
+	// A wildcard bind address is not something a client can dial.
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
 		host = "localhost"
 	}
 	if port == "" {
@@ -78,11 +114,29 @@ func getAPIURL() string {
 			host = host[1 : len(host)-1]
 		}
 	}
-	return (&url.URL{Scheme: "http", Host: net.JoinHostPort(host, port)}).String()
+	return (&url.URL{Scheme: scheme, Host: net.JoinHostPort(host, port)}).String()
 }
 
+// getAPIToken returns ANUBIS_API_TOKEN, or the session token saved by
+// `anubis login`.
 func getAPIToken() string {
-	return os.Getenv("ANUBIS_API_TOKEN")
+	if token := os.Getenv("ANUBIS_API_TOKEN"); token != "" {
+		return token
+	}
+	data, err := os.ReadFile(tokenFilePath())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// tokenFilePath is where `anubis login` stores the session token.
+// ANUBIS_TOKEN_FILE overrides it.
+func tokenFilePath() string {
+	if p := os.Getenv("ANUBIS_TOKEN_FILE"); p != "" {
+		return p
+	}
+	return filepath.Join(filepath.Dir(getUserConfigPath()), "token")
 }
 
 func httpGet(url, token string) (*http.Response, error) {

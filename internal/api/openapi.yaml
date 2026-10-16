@@ -288,6 +288,38 @@ paths:
           description: New password fails the password policy
         '401':
           description: Current password is incorrect
+  /api/v1/auth/methods:
+    get:
+      tags:
+      - Authentication
+      summary: Available sign-in methods
+      description: >-
+        Public. Tells the login page which sign-in methods exist so it can
+        offer an SSO button (GET /api/v1/auth/oidc/login) and/or the password
+        form. Exposes no configuration details or user data. The password
+        form applies when local or ldap is true.
+      security: []
+      responses:
+        '200':
+          description: Sign-in methods
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                - local
+                - oidc
+                - ldap
+                properties:
+                  local:
+                    type: boolean
+                    description: Local accounts can sign in with a password (local and OIDC auth types)
+                  oidc:
+                    type: boolean
+                    description: The OIDC redirect flow is available
+                  ldap:
+                    type: boolean
+                    description: Passwords are checked against LDAP
   /api/v1/auth/login:
     post:
       tags:
@@ -540,12 +572,104 @@ paths:
       summary: Test channel
       tags:
       - Alerts
+  /api/v1/cluster/nodes:
+    post:
+      tags:
+      - Cluster
+      summary: Add a cluster node
+      description: >-
+        Add a voting member to the Raft cluster through a replicated
+        joint-consensus configuration change, so every node agrees on the new
+        membership. Any node accepts the request; a follower forwards it to
+        the leader over the Raft transport. One change is processed at a
+        time. When node_id is omitted the node listening on address is asked
+        for its node ID (and its region, unless region is given) over the
+        Raft transport, so it can be added by address alone. Start the new
+        node with necropolis.raft.join (anubis serve --join) or with the
+        existing members as its peers, so it does not elect itself. Requires
+        the members:* role.
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClusterNodeRequest'
+      responses:
+        '201':
+          description: Node added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClusterNodeRequest'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '403':
+          description: Insufficient role
+        '409':
+          description: >-
+            Clustering is not enabled on this node, or the node is already a
+            member
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '502':
+          description: >-
+            node_id was omitted and the node at address could not be reached
+            to learn it
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/LeaderUnavailableError'
+  /api/v1/cluster/nodes/{id}:
+    delete:
+      tags:
+      - Cluster
+      summary: Remove a cluster node
+      description: >-
+        Remove a member from the Raft cluster through a replicated
+        joint-consensus configuration change. Any node accepts the request; a
+        follower forwards it to the leader. The current leader cannot be
+        removed (there is no leadership transfer). The souls the node owned
+        move to the remaining members. Requires the members:* role.
+      security:
+      - BearerAuth: []
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Node removed
+        '403':
+          description: Insufficient role
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          description: >-
+            Clustering is not enabled on this node, or the node is the current
+            leader
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/LeaderUnavailableError'
   /api/v1/cluster/peers:
     get:
       tags:
       - Cluster
       summary: List peers
-      description: Retrieve information about all cluster peers
+      description: >-
+        This node followed by every Raft peer it knows about. Always an array;
+        a standalone node returns a single entry for itself with state
+        "leader" and is_leader true.
       responses:
         '200':
           description: List of peers
@@ -570,18 +694,44 @@ paths:
                 $ref: '#/components/schemas/ClusterStatus'
   /api/v1/config:
     get:
+      description: >-
+        Settings shown on the Settings page. Presentation keys (instance_name,
+        timezone, language, theme) are editable and persisted; every key in
+        read_only_keys reflects the running config file.
       responses:
         '200':
           description: Configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UIConfig'
       security:
       - BearerAuth: []
       summary: Get config
       tags:
       - Config
     put:
+      description: >-
+        Update presentation settings. Only instance_name, timezone, language
+        and theme are accepted; a string sets the value and null restores the
+        default. Any other key is rejected with 400 ("<key> is set in the
+        config file and cannot be changed at runtime"). Values persist across
+        restarts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UIConfigUpdate'
       responses:
         '200':
-          description: Config updated
+          description: Config updated; the full GET payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UIConfig'
+        '400':
+          description: Invalid JSON, a read-only or unknown key, or an invalid value
       security:
       - BearerAuth: []
       summary: Update config
@@ -727,10 +877,30 @@ paths:
       tags:
       - Journeys
       summary: List journeys
-      description: Retrieve all configured synthetic monitoring journeys
+      description: >-
+        One page of journeys ordered by ID, as a bare array. The total number
+        of journeys is in the X-Total-Count header; page with offset/limit.
+      parameters:
+      - name: offset
+        in: query
+        schema:
+          type: integer
+          default: 0
+      - name: limit
+        in: query
+        description: Page size; values above 100 are clamped to 100.
+        schema:
+          type: integer
+          default: 20
+          maximum: 100
       responses:
         '200':
           description: List of journeys
+          headers:
+            X-Total-Count:
+              description: Total number of journeys in the workspace
+              schema:
+                type: integer
           content:
             application/json:
               schema:
@@ -1159,32 +1329,43 @@ paths:
       tags:
       - Judgments
       summary: List judgments
-      description: Retrieve health check results for a soul
+      description: Health check results for a soul from the last 24 hours, newest first
       parameters:
-      - name: start
+      - name: offset
         in: query
         schema:
-          type: string
-          format: date-time
-      - name: end
-        in: query
-        schema:
-          type: string
-          format: date-time
+          type: integer
+          default: 0
       - name: limit
         in: query
         schema:
           type: integer
-          default: 100
+          default: 20
+          maximum: 100
+      - name: cursor
+        in: query
+        description: ID of the last judgment of the previous page
+        schema:
+          type: string
       responses:
         '200':
-          description: List of judgments
+          description: One page of judgments
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/Judgment'
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Judgment'
+                  total:
+                    type: integer
+                    description: Number of judgments in this page
+                  has_more:
+                    type: boolean
+                  next_cursor:
+                    type: string
   /api/v1/souls/{id}/uptime:
     parameters:
     - name: id
@@ -1283,9 +1464,44 @@ paths:
       - Stats
   /api/v1/stats/overview:
     get:
+      description: >-
+        Soul counts by current status (latest judgment in the last 24 hours;
+        none means unknown, an active maintenance window means embalmed),
+        judgment totals for the last 24 hours, and alert manager statistics.
       responses:
         '200':
           description: Overview
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  souls:
+                    type: object
+                    properties:
+                      total:
+                        type: integer
+                      healthy:
+                        type: integer
+                      degraded:
+                        type: integer
+                      dead:
+                        type: integer
+                      unknown:
+                        type: integer
+                      embalmed:
+                        type: integer
+                  judgments:
+                    type: object
+                    properties:
+                      today:
+                        type: integer
+                      failures:
+                        type: integer
+                      avg_latency_ms:
+                        type: number
+                  alerts:
+                    type: object
       security:
       - BearerAuth: []
       summary: Stats overview
@@ -1601,9 +1817,13 @@ components:
           type: string
         status:
           type: string
+          description: >-
+            Current status from the latest judgment (alive is reported as
+            healthy, dead as unhealthy). embalmed means the soul is inside an
+            active maintenance window; unknown means it has not been checked.
           enum:
-          - alive
-          - dead
+          - healthy
+          - unhealthy
           - degraded
           - unknown
           - embalmed
@@ -1686,11 +1906,18 @@ components:
           type: string
         soul_id:
           type: string
+        soul_name:
+          type: string
+          description: >-
+            Name of the soul, on list responses (GET /api/v1/judgments and
+            GET /api/v1/souls/{id}/judgments)
         status:
           type: string
           enum:
-          - pass
-          - fail
+          - alive
+          - dead
+          - degraded
+          - unknown
         latency_ms:
           type: integer
         timestamp:
@@ -1764,6 +1991,21 @@ components:
         enabled:
           type: boolean
           default: true
+    ClusterNodeRequest:
+      type: object
+      required:
+      - address
+      properties:
+        node_id:
+          type: string
+          description: >-
+            Raft node ID of the member (its necropolis.raft.node_id). Optional
+            on add: when omitted it is learned from the node at address.
+        address:
+          type: string
+          description: The member's Raft address, host:port
+        region:
+          type: string
     ClusterStatus:
       type: object
       properties:
@@ -1781,18 +2023,95 @@ components:
           type: integer
     Peer:
       type: object
+      required:
+      - id
+      - name
+      - address
+      - state
+      - last_contact
+      - is_leader
+      - region
       properties:
         id:
           type: string
+        name:
+          type: string
         address:
           type: string
-        region:
+        state:
           type: string
-        role:
-          type: string
+          description: leader, follower, candidate, unreachable or unknown
         last_contact:
           type: string
-          format: date-time
+          description: RFC3339 time this node last heard from the peer; empty if never
+        is_leader:
+          type: boolean
+        region:
+          type: string
+    UIConfig:
+      type: object
+      properties:
+        instance_name:
+          type: string
+        timezone:
+          type: string
+        language:
+          type: string
+        theme:
+          type: string
+          enum:
+          - dark
+          - light
+          - system
+        retention_days:
+          type: integer
+          description: Raw judgment retention in days; 0 means raw judgments are never pruned
+        storage_path:
+          type: string
+        auth_enabled:
+          type: boolean
+        auth_type:
+          type: string
+        mcp_enabled:
+          type: boolean
+        websocket_enabled:
+          type: boolean
+        host:
+          type: string
+        port:
+          type: integer
+        grpc_port:
+          type: integer
+        tls_enabled:
+          type: boolean
+        read_only_keys:
+          type: array
+          description: Keys that come from the config file and cannot be changed through PUT
+          items:
+            type: string
+    UIConfigUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        instance_name:
+          type: string
+          nullable: true
+          maxLength: 100
+        timezone:
+          type: string
+          nullable: true
+          maxLength: 64
+        language:
+          type: string
+          nullable: true
+          maxLength: 16
+        theme:
+          type: string
+          nullable: true
+          enum:
+          - dark
+          - light
+          - system
     Journey:
       type: object
       properties:
@@ -1924,6 +2243,25 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/Error'
+    LeaderUnavailableError:
+      description: >-
+        The cluster has no reachable Raft leader (an election is in progress
+        or this node is cut off from the majority). The write was not applied
+        and can be retried after Retry-After seconds. The body may name the
+        last known leader.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              leader:
+                type: string
     RateLimitError:
       description: Too many requests
       headers:

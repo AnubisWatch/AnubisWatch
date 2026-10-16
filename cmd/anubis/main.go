@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
-	"net"
 	"os"
 	"runtime"
 	"strings"
@@ -58,6 +56,12 @@ func main() {
 			configCommand()
 		case "souls", "soul":
 			soulsCommand()
+		case "login":
+			loginCommand()
+		case "logout":
+			logoutCommand()
+		case "admin":
+			adminCommand()
 		case "help", "-h", "--help":
 			printUsage()
 		default:
@@ -97,6 +101,9 @@ Commands:
   config          Configuration management
   souls           Souls management
   soul            Alias for souls
+  login           Sign in and save a session token for client commands
+  logout          End the saved session
+  admin           Operator maintenance (admin reset-password)
   help            Show this help
 
 Subcommands:
@@ -108,8 +115,10 @@ Use "anubis <command> --help" for more information about a command.
 
 Environment Variables:
   ANUBIS_CONFIG              Config file path (default: ./anubis.json)
-  ANUBIS_HOST                Server bind host
-  ANUBIS_PORT                Server bind port
+  ANUBIS_HOST                Server bind host (client commands: server to contact)
+  ANUBIS_PORT                Server bind port (client commands default to the config file's port)
+  ANUBIS_API_TOKEN           API token for client commands (default: token saved by anubis login)
+  ANUBIS_TOKEN_FILE          Where anubis login stores the token (default: next to the user config)
   ANUBIS_DATA_DIR            Data directory path
   ANUBIS_ENCRYPTION_KEY      Encryption key for storage
   ANUBIS_CLUSTER_SECRET      Cluster HMAC secret (K9: applied to necropolis.clusterSecret on
@@ -121,6 +130,7 @@ Environment Variables:
                             user when no admin exists yet; ignored after that)
   ANUBIS_LOG_LEVEL           Log level (debug, info, warn, error)
   ANUBIS_ALLOW_INSECURE_TLS  K7: allow per-soul InsecureSkipVerify (default: 0, MITM vector if 1)
+  ANUBIS_SSRF_ALLOW_PRIVATE  Allow probes/alerts to reach private and loopback addresses (default: 0)
 
 Security flags (K7):
   --insecure-skip-verify   Master switch — enables per-soul InsecureSkipVerify
@@ -251,10 +261,6 @@ func printInitHelp() {
 }
 
 func serve() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: getLogLevel(),
-	}))
-
 	serveOpts := parseServeOptions(os.Args)
 
 	// Determine config path
@@ -262,6 +268,20 @@ func serve() {
 	if configPath == "" {
 		configPath = findConfig()
 	}
+
+	// The logging section shapes the logger, so read it before anything is
+	// logged. A config that fails to load is reported by
+	// BuildServerDependencies below; until then log JSON to stdout.
+	var logCfg *core.Config
+	if info, err := os.Stat(configPath); err == nil && !info.IsDir() {
+		logCfg, _ = core.LoadConfig(configPath)
+	}
+	logger, logCloser, err := newServerLogger(logCfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer logCloser.Close()
 
 	instanceName := getInstanceName(configPath)
 
@@ -443,21 +463,5 @@ func parseBoolFlagValue(value string) bool {
 		return true
 	default:
 		return false
-	}
-}
-
-func raftPeerFromJoinAddr(addr string) core.RaftPeer {
-	id := addr
-	if host, _, err := net.SplitHostPort(addr); err == nil && host != "" {
-		id = host
-	}
-	id = strings.NewReplacer(":", "-", ".", "-", "[", "", "]", "").Replace(id)
-	if id == "" {
-		id = addr
-	}
-	return core.RaftPeer{
-		ID:      id,
-		Address: addr,
-		Role:    core.RoleVoter,
 	}
 }

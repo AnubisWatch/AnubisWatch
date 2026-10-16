@@ -70,6 +70,48 @@ get_latest_version() {
     fi
 }
 
+# verify_checksum checks the archive against the release's checksums.txt.
+# Set ANUBIS_SKIP_CHECKSUM=1 to bypass (not recommended).
+verify_checksum() {
+    local dir="$1" file="$2"
+    local sums_url="https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt"
+
+    if [ "${ANUBIS_SKIP_CHECKSUM:-0}" = "1" ]; then
+        log_warn "Skipping checksum verification (ANUBIS_SKIP_CHECKSUM=1)"
+        return 0
+    fi
+
+    if command -v curl &> /dev/null; then
+        curl -fsSL "$sums_url" -o "${dir}/checksums.txt" || true
+    else
+        wget -q "$sums_url" -O "${dir}/checksums.txt" || true
+    fi
+    if [ ! -s "${dir}/checksums.txt" ]; then
+        log_error "Could not download checksums.txt for ${VERSION}; set ANUBIS_SKIP_CHECKSUM=1 to install anyway"
+        return 1
+    fi
+
+    local expected actual
+    expected="$(awk -v f="$file" '$2 == f || $2 == "*"f {print $1}' "${dir}/checksums.txt")"
+    if [ -z "$expected" ]; then
+        log_error "No checksum listed for ${file}"
+        return 1
+    fi
+    if command -v sha256sum &> /dev/null; then
+        actual="$(sha256sum "${dir}/${file}" | awk '{print $1}')"
+    elif command -v shasum &> /dev/null; then
+        actual="$(shasum -a 256 "${dir}/${file}" | awk '{print $1}')"
+    else
+        log_error "sha256sum or shasum required to verify the download"
+        return 1
+    fi
+    if [ "$expected" != "$actual" ]; then
+        log_error "Checksum mismatch for ${file} (expected ${expected}, got ${actual})"
+        return 1
+    fi
+    log_info "Checksum verified"
+}
+
 download_binary() {
     if [ "$VERSION" = "latest" ]; then
         VERSION="$(get_latest_version)"
@@ -78,7 +120,8 @@ download_binary() {
     local binary_name="anubis-${PLATFORM}-${ARCH}"
     local filename="${binary_name}.tar.gz"
     local url="https://github.com/${REPO}/releases/download/${VERSION}/${filename}"
-    local tmpdir=$(mktemp -d)
+    local tmpdir
+    tmpdir=$(mktemp -d)
 
     log_info "Downloading ${VERSION}..."
     if command -v curl &> /dev/null; then
@@ -88,8 +131,17 @@ download_binary() {
             return 1
         }
     else
-        wget -q "$url" -O "${tmpdir}/${filename}"
+        wget -q "$url" -O "${tmpdir}/${filename}" || {
+            log_error "Download failed: $url"
+            rm -rf "$tmpdir"
+            return 1
+        }
     fi
+
+    verify_checksum "$tmpdir" "$filename" || {
+        rm -rf "$tmpdir"
+        return 1
+    }
 
     tar -xzf "${tmpdir}/${filename}" -C "$tmpdir"
     

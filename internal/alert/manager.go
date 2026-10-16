@@ -61,6 +61,59 @@ type Manager struct {
 	// Dependencies
 	logger  *slog.Logger
 	storage AlertStorage
+
+	// Lifecycle hooks (see SetIncidentHook / SetAlertHook). Guarded by hookMu,
+	// not mu, so a hook can call back into the manager without deadlocking.
+	hookMu     sync.RWMutex
+	onIncident func(*core.Incident)
+	onAlert    func(*core.AlertEvent)
+}
+
+// SetIncidentHook registers fn to be called after an incident is opened,
+// acknowledged, resolved (manually or automatically) or escalated. fn gets a
+// snapshot it may keep; it runs outside the manager's locks and must not
+// block. The API layer uses it to push live updates without alert importing
+// api.
+func (m *Manager) SetIncidentHook(fn func(*core.Incident)) {
+	m.hookMu.Lock()
+	m.onIncident = fn
+	m.hookMu.Unlock()
+}
+
+// SetAlertHook registers fn to be called once for every alert event the
+// worker dispatches to channels. fn gets a copy of the event; it runs on the
+// dispatch worker and must not block.
+func (m *Manager) SetAlertHook(fn func(*core.AlertEvent)) {
+	m.hookMu.Lock()
+	m.onAlert = fn
+	m.hookMu.Unlock()
+}
+
+// incidentNotifier captures a snapshot for the incident hook. Callers must hold mu
+// (read or write) so the copy is consistent, and call the returned func after
+// releasing it.
+func (m *Manager) incidentNotifier(incident *core.Incident) func() {
+	m.hookMu.RLock()
+	fn := m.onIncident
+	m.hookMu.RUnlock()
+	if fn == nil || incident == nil {
+		return func() {}
+	}
+	snapshot := *incident
+	snapshot.Events = append([]core.AlertEvent(nil), incident.Events...)
+	snapshot.Notes = append([]core.IncidentNote(nil), incident.Notes...)
+	return func() { fn(&snapshot) }
+}
+
+func (m *Manager) notifyAlert(event *core.AlertEvent) {
+	m.hookMu.RLock()
+	fn := m.onAlert
+	m.hookMu.RUnlock()
+	if fn == nil || event == nil {
+		return
+	}
+	copied := *event
+	fn(&copied)
 }
 
 // statusHold records when a soul first entered a given status.
@@ -169,6 +222,8 @@ func (m *Manager) Start() error {
 				m.incidents[incident.ID] = incident
 			}
 		}
+
+		m.loadDedupState()
 	}
 
 	// Start workers
@@ -236,12 +291,24 @@ func (m *Manager) RegisterChannel(channel *core.AlertChannel) error {
 	}
 
 	m.mu.Lock()
+	previous, hadPrevious := m.channels[channel.ID]
 	m.channels[channel.ID] = channel
 	m.mu.Unlock()
 
 	if m.storage != nil {
 		if err := m.storage.SaveChannel(channel); err != nil {
+			// In a cluster the save is the replicated write; keeping a channel
+			// only this node knows about would make nodes disagree, so undo it
+			// and let the caller report the failure.
+			m.mu.Lock()
+			if hadPrevious {
+				m.channels[channel.ID] = previous
+			} else {
+				delete(m.channels, channel.ID)
+			}
+			m.mu.Unlock()
 			m.logger.Warn("Failed to save channel", "error", err)
+			return fmt.Errorf("save channel: %w", err)
 		}
 	}
 
@@ -316,12 +383,23 @@ func (m *Manager) DeleteChannel(id string) error {
 // RegisterRule adds or updates an alert rule
 func (m *Manager) RegisterRule(rule *core.AlertRule) error {
 	m.mu.Lock()
+	previous, hadPrevious := m.rules[rule.ID]
 	m.rules[rule.ID] = rule
 	m.mu.Unlock()
 
 	if m.storage != nil {
 		if err := m.storage.SaveRule(rule); err != nil {
+			// Undo, as RegisterChannel does: an unsaved rule must not fire on
+			// this node alone.
+			m.mu.Lock()
+			if hadPrevious {
+				m.rules[rule.ID] = previous
+			} else {
+				delete(m.rules, rule.ID)
+			}
+			m.mu.Unlock()
 			m.logger.Warn("Failed to save rule", "error", err)
+			return fmt.Errorf("save rule: %w", err)
 		}
 	}
 
@@ -458,6 +536,9 @@ func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, j
 				"soul_id", event.SoulID)
 			continue
 		}
+		// Share the new dedup record, so a node that takes this soul over
+		// keeps honouring the cooldown instead of re-sending the alert.
+		m.persistDedup(event)
 
 		// Send to queue
 		select {
@@ -503,6 +584,7 @@ func (m *Manager) recordIncident(rule *core.AlertRule, soul *core.Soul, event *c
 		Events:      []core.AlertEvent{*event},
 	}
 	m.incidents[incident.ID] = incident
+	notify := m.incidentNotifier(incident)
 	m.mu.Unlock()
 
 	if m.storage != nil {
@@ -511,6 +593,7 @@ func (m *Manager) recordIncident(rule *core.AlertRule, soul *core.Soul, event *c
 				"soul_id", soul.ID, "rule_id", rule.ID, "error", err)
 		}
 	}
+	notify()
 	m.logger.Info("Incident opened",
 		"incident_id", incident.ID,
 		"soul_id", soul.ID,
@@ -540,6 +623,7 @@ func (m *Manager) autoResolveOpenIncident(ruleID string, soul *core.Soul) {
 	target.ResolvedBy = "auto-resolved"
 	m.stats.resolvedAlerts++
 	incToSave := target
+	notify := m.incidentNotifier(target)
 	m.mu.Unlock()
 
 	if m.storage != nil {
@@ -548,6 +632,7 @@ func (m *Manager) autoResolveOpenIncident(ruleID string, soul *core.Soul) {
 				"incident_id", incToSave.ID, "error", err)
 		}
 	}
+	notify()
 	m.logger.Info("Incident auto-resolved",
 		"incident_id", incToSave.ID,
 		"soul_id", soul.ID,
@@ -567,37 +652,7 @@ func (m *Manager) isSuppressedByMaintenance(soul *core.Soul, now time.Time) bool
 		m.logger.Warn("Failed to list maintenance windows", "error", err)
 		return false
 	}
-	for _, window := range windows {
-		if window == nil || !window.IsActive(now) {
-			continue
-		}
-		if !sameWorkspace(window.WorkspaceID, soul.WorkspaceID) {
-			continue
-		}
-		if maintenanceAppliesToSoul(window, soul) {
-			return true
-		}
-	}
-	return false
-}
-
-func maintenanceAppliesToSoul(window *core.MaintenanceWindow, soul *core.Soul) bool {
-	if len(window.SoulIDs) == 0 && len(window.Tags) == 0 {
-		return true
-	}
-	for _, id := range window.SoulIDs {
-		if id == soul.ID {
-			return true
-		}
-	}
-	for _, windowTag := range window.Tags {
-		for _, soulTag := range soul.Tags {
-			if windowTag == soulTag {
-				return true
-			}
-		}
-	}
-	return false
+	return core.SoulInMaintenance(windows, soul, now)
 }
 
 func defaultWorkspace(workspace string) string {
@@ -605,10 +660,6 @@ func defaultWorkspace(workspace string) string {
 		return "default"
 	}
 	return workspace
-}
-
-func sameWorkspace(left, right string) bool {
-	return defaultWorkspace(left) == defaultWorkspace(right)
 }
 
 // worker processes alert events
@@ -625,6 +676,8 @@ func (m *Manager) worker() {
 
 // dispatch sends an alert through appropriate channels
 func (m *Manager) dispatch(event *core.AlertEvent) {
+	m.notifyAlert(event)
+
 	m.mu.RLock()
 	channels := make([]*core.AlertChannel, 0, len(m.channels))
 	if event.RuleID != "" {
@@ -755,10 +808,15 @@ func (m *Manager) releaseDedup(event *core.AlertEvent) {
 	if event == nil || event.RuleID == "" {
 		return
 	}
-	key := fmt.Sprintf("dedup:%s:%s:%s", event.RuleID, event.SoulID, event.Status)
+	key := dedupKey(event.RuleID, event.SoulID, event.Status)
 	m.history.Mu.Lock()
 	delete(m.history.Entries, key)
 	m.history.Mu.Unlock()
+	if store, ok := m.storage.(DedupStateStore); ok {
+		if err := store.DeleteDedupState(defaultWorkspace(event.WorkspaceID), key); err != nil {
+			m.logger.Warn("Failed to share released dedup state", "key", key, "error", err)
+		}
+	}
 }
 
 // sendToChannel sends an alert to a specific channel
@@ -1077,51 +1135,67 @@ func (m *Manager) isRateLimited(channel *core.AlertChannel, event *core.AlertEve
 		return false
 	}
 
-	// Build grouping key
-	key := fmt.Sprintf("%s:%s:%s", channel.ID, event.SoulID, channel.RateLimit.GroupingKey)
+	// Build grouping key. The "ratelimit:" prefix lets the record be shared
+	// like dedup records (persistHistoryEntry), so a node that takes a soul
+	// over keeps counting the window instead of starting from zero.
+	key := rateLimitKey(channel.ID, event.SoulID, channel.RateLimit.GroupingKey)
 
+	limited, snapshot := m.rateLimitStep(key, channel, event)
+	m.persistHistoryEntry(event.WorkspaceID, snapshot)
+	return limited
+}
+
+func rateLimitKey(channelID, soulID, groupingKey string) string {
+	return fmt.Sprintf("ratelimit:%s:%s:%s", channelID, soulID, groupingKey)
+}
+
+// rateLimitStep updates the rate-limit window for key and reports whether
+// this alert exceeds it, returning a copy of the updated record.
+func (m *Manager) rateLimitStep(key string, channel *core.AlertChannel, event *core.AlertEvent) (bool, core.AlertHistoryEntry) {
 	m.history.Mu.Lock()
 	defer m.history.Mu.Unlock()
 
+	now := time.Now()
 	entry, exists := m.history.Entries[key]
 	if !exists {
 		// First alert for this group
-		m.history.Entries[key] = &core.AlertHistoryEntry{
+		entry = &core.AlertHistoryEntry{
 			Key:        key,
 			ChannelID:  channel.ID,
 			Count:      1,
-			FirstSent:  time.Now(),
-			LastSent:   time.Now(),
+			FirstSent:  now,
+			LastSent:   now,
 			SoulStatus: event.Status,
 		}
-		return false
+		m.history.Entries[key] = entry
+		return false, *entry
 	}
 
 	// Check if window has expired
-	if time.Since(entry.FirstSent) > channel.RateLimit.Window.Duration {
+	if now.Sub(entry.FirstSent) > channel.RateLimit.Window.Duration {
 		// Reset window
 		entry.Count = 1
-		entry.FirstSent = time.Now()
-		entry.LastSent = time.Now()
-		return false
+		entry.FirstSent = now
+		entry.LastSent = now
+		return false, *entry
 	}
 
 	// Check limit
 	if entry.Count >= channel.RateLimit.MaxAlerts {
-		entry.LastSent = time.Now()
-		return true
+		entry.LastSent = now
+		return true, *entry
 	}
 
 	// Increment count
 	entry.Count++
-	entry.LastSent = time.Now()
-	return false
+	entry.LastSent = now
+	return false, *entry
 }
 
 // isDuplicate checks if an identical alert was recently sent (deduplication)
 func (m *Manager) isDuplicate(rule *core.AlertRule, event *core.AlertEvent) bool {
 	// Build dedup key: rule + soul + status
-	key := fmt.Sprintf("dedup:%s:%s:%s", rule.ID, event.SoulID, event.Status)
+	key := dedupKey(rule.ID, event.SoulID, event.Status)
 
 	m.history.Mu.Lock()
 	defer m.history.Mu.Unlock()
@@ -1440,77 +1514,80 @@ func (m *Manager) copyVerdictsBySeverity() map[string]uint64 {
 
 // AcknowledgeIncident acknowledges an incident
 func (m *Manager) AcknowledgeIncident(incidentID, userID, workspace string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	incident, ok := m.incidents[incidentID]
-	if !ok {
-		return fmt.Errorf("incident not found: %s", incidentID)
-	}
-	// Fail-closed: require workspace match (never skip when empty)
-	incidentWs := incident.WorkspaceID
-	if incidentWs == "" {
-		incidentWs = "default"
-	}
-	reqWs := workspace
-	if reqWs == "" {
-		reqWs = "default"
-	}
-	if incidentWs != reqWs {
-		return fmt.Errorf("access denied: incident belongs to another workspace")
-	}
-
-	now := time.Now()
-	incident.Status = core.IncidentAcked
-	incident.AckedAt = &now
-	incident.AckedBy = userID
-
-	m.stats.acknowledgedAlerts++
-
-	if m.storage != nil {
-		if err := m.storage.SaveIncident(incident); err != nil {
-			m.logger.Error("Failed to save incident", "incident_id", incident.ID, "error", err)
-		}
-	}
-
-	return nil
+	return m.updateIncident(incidentID, workspace, func(incident *core.Incident, now time.Time) {
+		incident.Status = core.IncidentAcked
+		incident.AckedAt = &now
+		incident.AckedBy = userID
+	}, func() { m.stats.acknowledgedAlerts++ })
 }
 
 // ResolveIncident marks an incident as resolved
 func (m *Manager) ResolveIncident(incidentID, userID, workspace string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	return m.updateIncident(incidentID, workspace, func(incident *core.Incident, now time.Time) {
+		incident.Status = core.IncidentResolved
+		incident.ResolvedAt = &now
+		incident.ResolvedBy = userID
+	}, func() { m.stats.resolvedAlerts++ })
+}
 
+// DurableIncidentStore is implemented by storage whose SaveIncident may only
+// queue the write (the cluster adapter batches automatic incident updates).
+// Operator actions use SaveIncidentDurable so a success response means the
+// change is stored.
+type DurableIncidentStore interface {
+	SaveIncidentDurable(incident *core.Incident) error
+}
+
+// updateIncident applies an operator change (acknowledge, resolve) to a
+// stored incident. The write happens outside m.mu — a replicated write can
+// take seconds — and the in-memory incident only changes once it succeeded;
+// a failed write is returned instead of being logged and reported as success.
+func (m *Manager) updateIncident(incidentID, workspace string, mutate func(*core.Incident, time.Time), onApplied func()) error {
+	m.mu.RLock()
 	incident, ok := m.incidents[incidentID]
 	if !ok {
+		m.mu.RUnlock()
 		return fmt.Errorf("incident not found: %s", incidentID)
 	}
 	// Fail-closed: require workspace match (never skip when empty)
-	incidentWs := incident.WorkspaceID
-	if incidentWs == "" {
-		incidentWs = "default"
-	}
-	reqWs := workspace
-	if reqWs == "" {
-		reqWs = "default"
-	}
-	if incidentWs != reqWs {
+	if workspaceOrDefault(incident.WorkspaceID) != workspaceOrDefault(workspace) {
+		m.mu.RUnlock()
 		return fmt.Errorf("access denied: incident belongs to another workspace")
 	}
+	updated := *incident
+	updated.Events = append([]core.AlertEvent(nil), incident.Events...)
+	updated.Notes = append([]core.IncidentNote(nil), incident.Notes...)
+	m.mu.RUnlock()
 
-	now := time.Now()
-	incident.Status = core.IncidentResolved
-	incident.ResolvedAt = &now
-	incident.ResolvedBy = userID
-
-	m.stats.resolvedAlerts++
+	mutate(&updated, time.Now())
 
 	if m.storage != nil {
-		if err := m.storage.SaveIncident(incident); err != nil {
-			m.logger.Error("Failed to save resolved incident", "incident_id", incident.ID, "error", err)
+		var err error
+		if durable, ok := m.storage.(DurableIncidentStore); ok {
+			err = durable.SaveIncidentDurable(&updated)
+		} else {
+			err = m.storage.SaveIncident(&updated)
+		}
+		if err != nil {
+			m.logger.Error("Failed to save incident", "incident_id", incidentID, "error", err)
+			return fmt.Errorf("save incident: %w", err)
 		}
 	}
 
+	m.mu.Lock()
+	current, ok := m.incidents[incidentID]
+	if !ok {
+		current = &updated
+		m.incidents[incidentID] = current
+	} else {
+		// Keep events appended while the write was in flight.
+		updated.Events = current.Events
+		*current = updated
+	}
+	onApplied()
+	notify := m.incidentNotifier(current)
+	m.mu.Unlock()
+	notify()
 	return nil
 }
 
@@ -1682,13 +1759,14 @@ func (m *Manager) shouldEscalate(incident *core.Incident, rule *core.AlertRule) 
 		return false
 	}
 
-	// Don't escalate if acknowledged
-	if incident.AckedAt != nil {
-		return false
-	}
-
 	// Get current stage
 	stage := esc.Stages[incident.EscalationLevel]
+
+	// "not_acknowledged" (the default) stops at acknowledgement;
+	// "not_resolved" keeps escalating an acknowledged incident until resolved.
+	if incident.AckedAt != nil && stage.Condition != "not_resolved" {
+		return false
+	}
 
 	// Calculate time since last escalation (or since started if never escalated)
 	var timeSinceLastEvent time.Duration
@@ -1786,10 +1864,20 @@ func (m *Manager) escalateIncident(incident *core.Incident, rule *core.AlertRule
 				"error", err)
 		}
 	}
+	notify := m.incidentNotifier(incident)
 	m.mu.Unlock()
+	notify()
 
 	m.logger.Info("Incident escalated",
 		"incident_id", incident.ID,
 		"level", incident.EscalationLevel,
 		"channels", len(channels))
+}
+
+// workspaceOrDefault maps the empty workspace to "default".
+func workspaceOrDefault(workspace string) string {
+	if workspace == "" {
+		return "default"
+	}
+	return workspace
 }

@@ -1015,14 +1015,6 @@ func TestHandleCreateSoulRejectsInvalidBusinessRules(t *testing.T) {
 			},
 		},
 		{
-			name: "http missing protocol config",
-			soul: core.Soul{
-				Name:   "HTTP Without Config",
-				Type:   core.CheckHTTP,
-				Target: "https://example.com",
-			},
-		},
-		{
 			name: "tcp target missing port",
 			soul: core.Soul{
 				Name:   "TCP Missing Port",

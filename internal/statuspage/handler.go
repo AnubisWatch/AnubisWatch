@@ -54,6 +54,46 @@ type Repository interface {
 	DeleteSubscription(subscriptionID string) error
 }
 
+// MaintenanceSource is optionally implemented by a Repository. When it is,
+// souls inside an active maintenance window are shown as "embalmed" (under
+// maintenance) instead of their latest judgment's status.
+type MaintenanceSource interface {
+	ListMaintenanceWindows() ([]*core.MaintenanceWindow, error)
+}
+
+// activeMaintenance returns the maintenance windows active at now, or nil
+// when the repository cannot list them.
+func (h *Handler) activeMaintenance(now time.Time) []*core.MaintenanceWindow {
+	source, ok := h.repository.(MaintenanceSource)
+	if !ok {
+		return nil
+	}
+	windows, err := source.ListMaintenanceWindows()
+	if err != nil {
+		return nil
+	}
+	active := make([]*core.MaintenanceWindow, 0, len(windows))
+	for _, window := range windows {
+		if window != nil && window.IsActive(now) {
+			active = append(active, window)
+		}
+	}
+	return active
+}
+
+// soulPageStatus is the status a public page shows for soul: "embalmed"
+// during maintenance, otherwise the latest judgment's status, or "unknown"
+// before the first check. Stored judgments are never rewritten.
+func soulPageStatus(soul *core.Soul, last core.Judgment, windows []*core.MaintenanceWindow, now time.Time) string {
+	if core.SoulInMaintenance(windows, soul, now) {
+		return string(core.SoulEmbalmed)
+	}
+	if last.ID == "" {
+		return "unknown"
+	}
+	return string(last.Status)
+}
+
 // Template represents a cached status page template
 type Template struct {
 	HTML      string
@@ -335,6 +375,8 @@ var buildStatusPageDataFn = func(h *Handler, page *core.StatusPage) (*core.Statu
 func (h *Handler) buildStatusPageData(page *core.StatusPage) (*core.StatusPageData, error) {
 	// Get souls status
 	souls := make([]core.SoulStatusInfo, 0, len(page.Souls))
+	now := time.Now()
+	windows := h.activeMaintenance(now)
 	for _, soulID := range page.Souls {
 		soul, err := h.repository.GetSoul(soulID)
 		if err != nil {
@@ -348,11 +390,8 @@ func (h *Handler) buildStatusPageData(page *core.StatusPage) (*core.StatusPageDa
 			lastJudgment = judgments[0]
 		}
 
-		// Determine status from last judgment
-		status := "unknown"
-		if lastJudgment.ID != "" {
-			status = string(lastJudgment.Status)
-		}
+		// Determine status from last judgment; maintenance overrides it.
+		status := soulPageStatus(soul, lastJudgment, windows, now)
 
 		// Calculate uptime from 30-day history.
 		// Only days that actually carry judgments may contribute: the repository
@@ -920,6 +959,8 @@ func (h *Handler) BadgeHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get souls status
 	souls := make([]core.SoulStatusInfo, 0, len(page.Souls))
+	now := time.Now()
+	windows := h.activeMaintenance(now)
 	for _, soulID := range page.Souls {
 		soul, err := h.repository.GetSoul(soulID)
 		if err != nil {
@@ -932,10 +973,7 @@ func (h *Handler) BadgeHandler(w http.ResponseWriter, r *http.Request) {
 			lastJudgment = judgments[0]
 		}
 
-		status := "unknown"
-		if lastJudgment.ID != "" {
-			status = string(lastJudgment.Status)
-		}
+		status := soulPageStatus(soul, lastJudgment, windows, now)
 
 		souls = append(souls, core.SoulStatusInfo{
 			ID:     soul.ID,
@@ -1026,6 +1064,8 @@ func (h *Handler) WidgetHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get souls status
 	souls := make([]core.SoulStatusInfo, 0, len(page.Souls))
+	now := time.Now()
+	windows := h.activeMaintenance(now)
 	for _, soulID := range page.Souls {
 		soul, err := h.repository.GetSoul(soulID)
 		if err != nil {
@@ -1038,10 +1078,7 @@ func (h *Handler) WidgetHandler(w http.ResponseWriter, r *http.Request) {
 			lastJudgment = judgments[0]
 		}
 
-		status := "unknown"
-		if lastJudgment.ID != "" {
-			status = string(lastJudgment.Status)
-		}
+		status := soulPageStatus(soul, lastJudgment, windows, now)
 
 		souls = append(souls, core.SoulStatusInfo{
 			ID:     soul.ID,
@@ -1071,6 +1108,8 @@ func (h *Handler) WidgetHandler(w http.ResponseWriter, r *http.Request) {
 				dotColor = "#22c55e"
 			case "degraded":
 				dotColor = "#f59e0b"
+			case "embalmed":
+				dotColor = "#3b82f6"
 			case "dead", "down":
 				dotColor = "#ef4444"
 			default:

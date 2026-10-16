@@ -8,6 +8,7 @@ import {
   defaultSoulFormData,
   nextSoulFormDataForType,
   soulFormDataFromSoul,
+  mergeSoulEdit,
   soulTargetHints,
   soulTypeOptions,
   type SoulFormData,
@@ -44,7 +45,7 @@ export function SoulEdit() {
     setSaving(true)
     setSaveError(null)
     try {
-      await updateSoul(buildSoulPayload(formData, soul.workspace_id || 'default'))
+      await updateSoul(mergeSoulEdit(soul, buildSoulPayload(formData, soul.workspace_id || 'default')))
       if (sequence === saveSequence.current) navigate(`/souls/${id}`)
     } catch (err) {
       if (sequence === saveSequence.current) {

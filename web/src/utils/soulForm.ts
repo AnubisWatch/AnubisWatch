@@ -23,6 +23,10 @@ export type SoulFormData = {
   icmpMaxLossPercent: number
   smtpStartTLS: boolean
   smtpBannerContains: string
+  imapTLS: boolean
+  imapMailbox: string
+  imapUsername: string
+  imapPassword: string
   grpcService: string
   websocketPingCheck: boolean
   websocketSend: string
@@ -52,6 +56,10 @@ export const defaultSoulFormData: SoulFormData = {
   icmpMaxLossPercent: 100,
   smtpStartTLS: true,
   smtpBannerContains: '',
+  imapTLS: true,
+  imapMailbox: '',
+  imapUsername: '',
+  imapPassword: '',
   grpcService: '',
   websocketPingCheck: true,
   websocketSend: '',
@@ -67,6 +75,7 @@ export const soulTypeOptions: Array<{ value: SoulType; label: string }> = [
   { value: 'dns', label: 'DNS' },
   { value: 'icmp', label: 'ICMP' },
   { value: 'smtp', label: 'SMTP' },
+  { value: 'imap', label: 'IMAP' },
   { value: 'grpc', label: 'gRPC' },
   { value: 'websocket', label: 'WebSocket' },
   { value: 'tls', label: 'TLS' },
@@ -102,6 +111,11 @@ export const soulTargetHints: Record<SoulType, { label: string; placeholder: str
     label: 'SMTP Host and Port',
     placeholder: 'mail.example.com:587',
     help: 'Mail server host:port for SMTP connectivity.',
+  },
+  imap: {
+    label: 'IMAP Host and Port',
+    placeholder: 'mail.example.com:993',
+    help: 'Mail server host:port; 993 for implicit TLS, 143 for plain IMAP.',
   },
   grpc: {
     label: 'gRPC Host and Port',
@@ -187,6 +201,10 @@ export function soulFormDataFromSoul(soul: Soul): SoulFormData {
     icmpMaxLossPercent: soul.icmp?.max_loss_percent ?? 100,
     smtpStartTLS: soul.smtp?.starttls ?? true,
     smtpBannerContains: soul.smtp?.banner_contains || '',
+    imapTLS: soul.imap?.tls ?? true,
+    imapMailbox: soul.imap?.check_mailbox || '',
+    imapUsername: soul.imap?.auth?.username || '',
+    imapPassword: soul.imap?.auth?.password || '',
     grpcService: soul.grpc?.service || '',
     websocketPingCheck: soul.websocket?.ping_check ?? true,
     websocketSend: soul.websocket?.send || '',
@@ -250,6 +268,13 @@ export function buildSoulPayload(
         banner_contains: formData.smtpBannerContains || undefined,
       }
       break
+    case 'imap':
+      payload.imap = {
+        tls: formData.imapTLS,
+        check_mailbox: formData.imapMailbox || undefined,
+        auth: formData.imapUsername ? { username: formData.imapUsername, password: formData.imapPassword } : undefined,
+      }
+      break
     case 'grpc':
       payload.grpc = {
         service: formData.grpcService || undefined,
@@ -273,4 +298,60 @@ export function buildSoulPayload(
   }
 
   return payload
+}
+
+const protocolKeys = ['http', 'tcp', 'udp', 'dns', 'icmp', 'smtp', 'imap', 'grpc', 'websocket', 'tls'] as const
+const legacyProtocolKeys = ['http_config', 'tcp_config', 'dns_config'] as const
+// Fields the server computes or owns; sending them back is pointless.
+const serverManagedSoulKeys = ['id', 'created_at', 'updated_at', 'status', 'last_check', 'latency'] as const
+// Maps the edit form never shows; an empty map from the form means
+// "unchanged", not "delete every header".
+const preservedMapKeys = ['headers', 'metadata'] as const
+
+type SoulRecord = Record<string, unknown>
+
+function isRecord(value: unknown): value is SoulRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Layers an edit-form payload over the soul being edited.
+ *
+ * PUT /souls/:id replaces the whole record and the form only covers a
+ * subset of fields, so saving used to drop everything else (body_regex,
+ * json_path, DNS nameservers, TLS expected_issuer, auth, …). Redacted
+ * secrets come back as their placeholder, which the server maps to the stored
+ * value. When the type changes, the old protocol block is dropped.
+ */
+export function mergeSoulEdit(
+  original: Soul,
+  payload: ReturnType<typeof buildSoulPayload>
+): ReturnType<typeof buildSoulPayload> {
+  const base: SoulRecord = { ...(original as unknown as SoulRecord) }
+  for (const key of serverManagedSoulKeys) delete base[key]
+  const legacy: SoulRecord = {
+    http: base.http ?? base.http_config,
+    tcp: base.tcp ?? base.tcp_config,
+    dns: base.dns ?? base.dns_config,
+  }
+  for (const key of legacyProtocolKeys) delete base[key]
+  for (const key of protocolKeys) {
+    if (key !== payload.type) delete base[key]
+  }
+
+  const merged: SoulRecord = { ...base, ...(payload as unknown as SoulRecord) }
+  const key = payload.type
+  const previous = original.type === payload.type ? (legacy[key] ?? base[key]) : undefined
+  const next = (payload as unknown as SoulRecord)[key]
+  if (isRecord(previous) && isRecord(next)) {
+    const block: SoulRecord = { ...previous, ...next }
+    for (const mapKey of preservedMapKeys) {
+      const incoming = next[mapKey]
+      if (isRecord(incoming) && Object.keys(incoming).length === 0 && isRecord(previous[mapKey])) {
+        block[mapKey] = previous[mapKey]
+      }
+    }
+    merged[key] = block
+  }
+  return merged as unknown as ReturnType<typeof buildSoulPayload>
 }

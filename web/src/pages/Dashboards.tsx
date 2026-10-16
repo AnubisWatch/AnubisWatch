@@ -4,8 +4,10 @@ import { LayoutGrid, Plus, Trash2, BarChart3, Zap, Activity } from 'lucide-react
 import { useDashboards } from '../api/hooks'
 import type { CustomDashboard } from '../api/client'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { useCan } from '../utils/permissions'
 
 export function Dashboards() {
+  const can = useCan()
   const { dashboards, loading, error, deleteDashboard } = useDashboards()
   const [deleting, setDeleting] = useState<string | null>(null)
 
@@ -40,6 +42,7 @@ export function Dashboards() {
         </div>
         <Link
           to="/dashboards/new"
+          hidden={!can('settings:write')}
           className="flex items-center gap-2 px-5 py-3 bg-gradient-to-r from-[#B8860B] via-[#D4AF37] to-[#B8860B]
                      hover:from-[#D4AF37] hover:via-[#F4D03F] hover:to-[#D4AF37] text-gray-950 rounded-xl transition-all duration-300
                      font-cinzel font-bold shadow-lg shadow-[#D4AF37]/30 hover:shadow-[#D4AF37]/50 hover:scale-105 active:scale-95"
@@ -68,6 +71,7 @@ export function Dashboards() {
           </p>
           <Link
             to="/dashboards/new"
+            hidden={!can('settings:write')}
             className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-amber-600 to-amber-500
                        text-white rounded-xl font-semibold hover:shadow-lg hover:shadow-amber-600/30 transition-all hover:scale-105"
           >
@@ -92,6 +96,7 @@ export function Dashboards() {
                 </Link>
                 <button
                   onClick={() => handleDelete(d.id)}
+                  hidden={!can('settings:write')}
                   disabled={deleting === d.id}
                   className="p-2 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
                   aria-label={`Delete dashboard ${d.name}`}

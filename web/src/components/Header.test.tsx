@@ -17,6 +17,7 @@ const mockAuthState = {
 // Mock useAuth hook
 vi.mock('../api/hooks', () => ({
   useAuth: () => mockAuthState,
+  useIncidents: () => ({ incidents: [] }),
 }))
 
 // Mock themeStore
@@ -39,7 +40,7 @@ describe('Header', () => {
       )
     })
 
-    expect(screen.getByPlaceholderText('Search the archives...')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Search souls...')).toBeInTheDocument()
   })
 
   it('renders Hall of Ma\'at badge', async () => {
@@ -130,7 +131,7 @@ describe('Header', () => {
     expect(mockApplyTheme).toHaveBeenCalledWith('light')
   })
 
-  it('toggles notifications when clicking notification button', async () => {
+  it('opens incidents from the notification button', async () => {
     await act(async () => {
       render(
         <MemoryRouter>
@@ -139,7 +140,7 @@ describe('Header', () => {
       )
     })
 
-    const notificationButton = screen.getByLabelText('Toggle notifications')
+    const notificationButton = screen.getByLabelText('No open incidents')
     expect(notificationButton).toBeInTheDocument()
 
     await act(async () => {

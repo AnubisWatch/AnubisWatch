@@ -1,8 +1,14 @@
 import { ArrowRight, Eye, EyeOff, Lock, Mail } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { dispatchAuthSessionChanged } from "../api/authEvents";
+
+interface AuthMethods {
+	local: boolean;
+	oidc: boolean;
+	ldap: boolean;
+}
 
 const AnkhIcon = () => (
 	<svg
@@ -22,6 +28,21 @@ export function Login() {
 	const [showPassword, setShowPassword] = useState(false);
 	const [loading, setLoading] = useState(false);
 	const [error, setError] = useState("");
+	// Servers without /auth/methods only offer local login.
+	const [methods, setMethods] = useState<AuthMethods>({ local: true, oidc: false, ldap: false });
+
+	useEffect(() => {
+		let active = true;
+		api
+			.get<AuthMethods>("/auth/methods")
+			.then((m) => {
+				if (active && m) setMethods(m);
+			})
+			.catch(() => {});
+		return () => {
+			active = false;
+		};
+	}, []);
 
 	const handleSubmit = async (e: React.FormEvent) => {
 		e.preventDefault();
@@ -82,7 +103,9 @@ export function Login() {
 							Sign in
 						</h2>
 						<p className="mt-1 text-sm text-[var(--text-secondary)]">
-							Use the admin credentials configured for this instance.
+							{methods.ldap
+								? "Use your directory credentials."
+								: "Use the admin credentials configured for this instance."}
 						</p>
 					</div>
 
@@ -92,6 +115,16 @@ export function Login() {
 						</div>
 					)}
 
+					{methods.oidc && (
+						<a
+							href="/api/v1/auth/oidc/login"
+							className="mb-5 flex w-full items-center justify-center gap-2 rounded-xl border border-[var(--border-strong)] px-4 py-3 text-sm font-semibold text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-secondary)]"
+						>
+							Sign in with SSO
+						</a>
+					)}
+
+					{(methods.local || methods.ldap) && (
 					<form onSubmit={handleSubmit} className="space-y-5">
 						<div>
 							<label htmlFor="login-email" className="mb-2 block text-sm font-medium text-[var(--text-secondary)]">
@@ -156,6 +189,7 @@ export function Login() {
 							)}
 						</button>
 					</form>
+					)}
 				</div>
 			</div>
 		</div>

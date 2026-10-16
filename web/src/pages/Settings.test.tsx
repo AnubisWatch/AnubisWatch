@@ -91,16 +91,16 @@ describe("Settings", () => {
 		await screen.findByText("Pharaoh's Chamber");
 		expect(mockGet).toHaveBeenCalledWith("/config");
 
+		// Security switches used to save to an in-memory map and change nothing.
 		fireEvent.click(screen.getByRole("tab", { name: /security/i }));
-		fireEvent.click(screen.getAllByRole("switch")[0]);
+		expect(screen.queryAllByRole("switch")).toHaveLength(0);
+		expect(screen.getAllByText("Enabled").length).toBeGreaterThan(0);
 
 		fireEvent.click(screen.getByRole("tab", { name: /notifications/i }));
 		expect(screen.getByText("Email Notifications")).toBeInTheDocument();
 
 		fireEvent.click(screen.getByRole("tab", { name: /storage/i }));
-		fireEvent.change(screen.getByDisplayValue("/var/lib/anubis"), {
-			target: { value: "/srv/anubis" },
-		});
+		expect(screen.getByDisplayValue("/var/lib/anubis")).toHaveAttribute("readonly");
 
 		fireEvent.click(screen.getByRole("tab", { name: /integrations/i }));
 		expect(screen.getByText(/does not issue standalone API keys/i)).toBeInTheDocument();
@@ -120,13 +120,11 @@ describe("Settings", () => {
 		fireEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
 		await waitFor(() => {
-			expect(mockPut).toHaveBeenCalledWith(
-				"/config",
-				expect.objectContaining({
-					instance_name: "Anubis Prime",
-					storage_path: "/srv/anubis",
-				}),
-			);
+			// Only the runtime-editable keys that changed are sent.
+			expect(mockPut).toHaveBeenCalledWith("/config", {
+				instance_name: "Anubis Prime",
+				theme: "light",
+			});
 		});
 		expect(setTheme).toHaveBeenCalledWith("light");
 		expect(applyTheme).toHaveBeenCalledWith("light");
@@ -138,10 +136,8 @@ describe("Settings", () => {
 		fireEvent.change(screen.getByDisplayValue("UTC"), { target: { value: "Europe/Istanbul" } });
 		fireEvent.change(screen.getByDisplayValue("English"), { target: { value: "tr" } });
 		fireEvent.click(screen.getByRole("button", { name: "System" }));
-		fireEvent.click(screen.getByRole("tab", { name: /security/i }));
-		for (const toggle of screen.getAllByRole("switch")) fireEvent.click(toggle);
 		fireEvent.click(screen.getByRole("tab", { name: /storage/i }));
-		fireEvent.change(screen.getByDisplayValue("30"), { target: { value: "45" } });
+		expect(screen.getByDisplayValue("30")).toHaveAttribute("readonly");
 		fireEvent.click(screen.getByRole("tab", { name: /integrations/i }));
 		expect(screen.getByText(/does not issue standalone API keys/i)).toBeInTheDocument();
 		fireEvent.click(screen.getByLabelText("Refresh configuration"));

@@ -586,7 +586,7 @@ func TestServer_CreateSoul(t *testing.T) {
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
 	name := "test-soul"
-	target := "example.com"
+	target := "https://example.com"
 	interval := int32(60)
 	timeout := int32(10)
 
@@ -776,7 +776,7 @@ func TestServer_GetSoul_Found(t *testing.T) {
 
 func TestServer_UpdateSoul(t *testing.T) {
 	store := newMockGRPCStore()
-	store.souls["soul_1"] = &core.Soul{ID: "soul_1", Name: "old", Type: "http", Target: "old.com"}
+	store.souls["soul_1"] = &core.Soul{ID: "soul_1", Name: "old", Type: "http", Target: "https://old.com"}
 	srv := NewServer(":0", store, &mockGRPCProbe{}, &mockAuthenticator{}, nil, nil, true)
 
 	name := "updated"

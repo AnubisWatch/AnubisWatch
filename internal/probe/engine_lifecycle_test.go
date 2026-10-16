@@ -66,6 +66,9 @@ func TestAssignSoulsRestartsRunnerWhenIntervalChanges(t *testing.T) {
 	registry := NewCheckerRegistry()
 	registry.Register(checker)
 	engine := newTestEngine(t, EngineOptions{Registry: registry})
+	prevMin := minSoulInterval
+	minSoulInterval = time.Millisecond
+	t.Cleanup(func() { minSoulInterval = prevMin })
 
 	soul := &core.Soul{
 		ID:     "changing-interval",

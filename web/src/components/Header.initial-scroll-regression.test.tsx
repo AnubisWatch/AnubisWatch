@@ -1,7 +1,7 @@
 import {render, cleanup} from '@testing-library/react'
 import {afterEach, expect, it, vi} from 'vitest'
 import {Header} from './Header'
-vi.mock('../api/hooks',()=>({useAuth:()=>({user:null,logout:vi.fn()})}))
+vi.mock('../api/hooks',()=>({useAuth:()=>({user:null,logout:vi.fn()}),useIncidents:()=>({incidents:[]})}))
 vi.mock('../stores/themeStore',()=>({useThemeStore:()=>({theme:'dark',setTheme:vi.fn()}),getEffectiveTheme:()=> 'dark',applyTheme:vi.fn()}))
 vi.mock('./WorkspaceSwitcher',()=>({WorkspaceSwitcher:()=>null}))
 vi.mock('react-router-dom',()=>({useNavigate:()=>vi.fn()}))

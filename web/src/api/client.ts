@@ -79,11 +79,13 @@ function normalizeJudgmentStatus(status: unknown): Judgment['status'] {
     case 'dead':
       return 'failed'
     case 'degraded':
-    case 'unknown':
+      return 'degraded'
     case 'embalmed':
+      return 'maintenance'
+    case 'unknown':
       return 'pending'
     default:
-      return status === 'failed' || status === 'pending' ? status : 'passed'
+      return status === 'failed' || status === 'pending' || status === 'maintenance' ? status : 'passed'
   }
 }
 
@@ -95,6 +97,12 @@ function normalizeSoulStatus(status: unknown): Soul['status'] {
     case 'dead':
     case 'unhealthy':
       return 'unhealthy'
+    // Used to collapse into unknown, hiding slow services and maintenance.
+    case 'degraded':
+      return 'degraded'
+    case 'embalmed':
+    case 'maintenance':
+      return 'maintenance'
     default:
       return 'unknown'
   }
@@ -147,6 +155,13 @@ function normalizeApiValue(value: unknown): unknown {
   if ('id' in normalized && 'steps' in normalized && ('weight' in normalized || 'timeout' in normalized)) {
     normalized.weight = parseDurationSeconds(normalized.weight, 60)
     normalized.timeout = parseDurationSeconds(normalized.timeout, 30)
+    // Steps have no id, so they skip the soul normalisation above; their
+    // timeouts arrive as "10s" and the edit form needs seconds.
+    if (Array.isArray(normalized.steps)) {
+      normalized.steps = normalized.steps.map((step) =>
+        isRecord(step) ? { ...step, timeout: parseDurationSeconds(step.timeout, 10) } : step
+      )
+    }
   }
 
   if ('id' in normalized && 'conditions' in normalized && 'channels' in normalized && 'enabled' in normalized) {
@@ -165,9 +180,17 @@ function normalizeStatusPage(page: Record<string, unknown>) {
     page.domain = page.custom_domain
   }
   if (isRecord(page.theme)) {
-    const background = page.theme.background_color
-    page.theme = background === '#ffffff' || background === '#f8fafc' ? 'light' : 'dark'
+    // Keep the stored colours so saving the page does not reset a custom theme.
+    page.theme_config = page.theme
+    page.theme = statusPageThemeName(page.theme)
   }
+}
+
+function statusPageThemeName(theme: Record<string, unknown>): 'dark' | 'light' | 'custom' {
+  const background = theme.background_color
+  if (background === '#ffffff' || background === '#f8fafc') return 'light'
+  if (!background || background === '#0f172a') return 'dark'
+  return 'custom'
 }
 
 function normalizeAlertRule(rule: Record<string, unknown>) {
@@ -218,6 +241,8 @@ function serializeApiBody(body: unknown): unknown {
     serialized[key] = serializeApiBody(value)
   }
 
+  // Souls and journey steps (both carry type and target). Protocol defaults
+  // only fill a missing block, so a step's stored http method/body is kept.
   if ('type' in serialized && 'target' in serialized) {
     if (typeof serialized.weight === 'number') {
       serialized.weight = `${serialized.weight}s`
@@ -249,8 +274,11 @@ function serializeApiBody(body: unknown): unknown {
     }
   }
 
-  if ('condition' in serialized && 'threshold' in serialized && !('conditions' in serialized)) {
-    serialized.conditions = [uiRuleToAlertCondition(serialized)]
+  if ('condition' in serialized && 'threshold' in serialized) {
+    // The form edits the primary condition only; any further conditions of a
+    // rule created through the API or config file are kept as they were.
+    const rest = Array.isArray(serialized.conditions) ? serialized.conditions.slice(1) : []
+    serialized.conditions = [uiRuleToAlertCondition(serialized), ...rest]
     serialized.scope = serialized.scope || { type: 'all' }
     serialized.cooldown = serialized.cooldown || '5m'
     delete serialized.condition
@@ -260,8 +288,12 @@ function serializeApiBody(body: unknown): unknown {
   }
 
   if ('slug' in serialized && 'souls' in serialized && 'theme' in serialized && typeof serialized.theme === 'string') {
-    serialized.theme = statusPageThemeFromName(serialized.theme)
+    const stored = serialized.theme_config
+    serialized.theme = isRecord(stored) && (serialized.theme === 'custom' || statusPageThemeName(stored) === serialized.theme)
+      ? stored
+      : statusPageThemeFromName(serialized.theme)
   }
+  delete serialized.theme_config
 
   return serialized
 }
@@ -329,6 +361,11 @@ function addDefaultCheckConfig(soul: Record<string, unknown>) {
     case 'smtp':
       if (!soul.smtp) {
         soul.smtp = {}
+      }
+      break
+    case 'imap':
+      if (!soul.imap) {
+        soul.imap = { tls: true }
       }
       break
     case 'icmp':
@@ -454,7 +491,7 @@ export const api = new ApiClient()
 export interface Soul {
   id: string
   name: string
-  type: 'http' | 'tcp' | 'udp' | 'dns' | 'icmp' | 'smtp' | 'grpc' | 'websocket' | 'tls'
+  type: 'http' | 'tcp' | 'udp' | 'dns' | 'icmp' | 'smtp' | 'imap' | 'grpc' | 'websocket' | 'tls'
   target: string
   enabled: boolean
   weight: number
@@ -465,7 +502,7 @@ export interface Soul {
   workspace_id?: string
   created_at?: string
   updated_at?: string
-  status?: 'healthy' | 'unhealthy' | 'unknown'
+  status?: 'healthy' | 'unhealthy' | 'degraded' | 'maintenance' | 'unknown'
   last_check?: string
   latency?: number
   http_config?: {
@@ -506,6 +543,11 @@ export interface Soul {
     starttls?: boolean
     banner_contains?: string
   }
+  imap?: {
+    tls?: boolean
+    check_mailbox?: string
+    auth?: { username: string; password: string }
+  }
   icmp?: {
     count: number
     interval: string
@@ -532,7 +574,7 @@ export interface Judgment {
   id: string
   soul_id: string
   soul_name?: string
-  status: 'passed' | 'failed' | 'pending'
+  status: 'passed' | 'failed' | 'degraded' | 'maintenance' | 'pending'
   latency: number
   timestamp: string
   region: string
@@ -568,9 +610,13 @@ export interface SoulUptime {
 export interface AlertChannel {
   id: string
   name: string
-  type: 'email' | 'slack' | 'discord' | 'webhook' | 'pagerduty'
+  type: 'email' | 'slack' | 'discord' | 'webhook' | 'pagerduty' | 'telegram' | 'opsgenie' | 'ntfy' | 'sms'
   enabled: boolean
   config: Record<string, unknown>
+  // Delivery settings the form does not edit; kept on save.
+  filters?: unknown
+  rate_limit?: unknown
+  retry_policy?: unknown
   created_at?: string
   updated_at?: string
 }
@@ -585,6 +631,13 @@ export interface AlertRule {
   consecutive?: number
   channels: string[]
   severity: 'critical' | 'warning' | 'info'
+  // Resolve the incident automatically when the soul recovers.
+  auto_resolve?: boolean
+  // Server-side rule fields the form does not edit; kept on save.
+  conditions?: unknown[]
+  scope?: unknown
+  cooldown?: string
+  escalation?: unknown
   created_at?: string
 }
 
@@ -610,16 +663,20 @@ export interface Stats {
     healthy: number
     degraded: number
     dead: number
+    unknown?: number
+    embalmed?: number
   }
   judgments?: {
     today: number
     failures: number
     avg_latency_ms: number
   }
+  // Alert manager counters (core.AlertManagerStats).
   alerts?: {
-    channels: number
-    rules: number
-    active_incidents: number
+    total_alerts?: number
+    sent_alerts?: number
+    failed_alerts?: number
+    active_incidents?: number
   }
 }
 
@@ -652,7 +709,13 @@ export interface StatusPage {
   workspace_id?: string
   domain?: string
   custom_domain?: string
-  theme?: 'dark' | 'light' | 'auto' | 'custom' | Record<string, string>
+  theme?: 'dark' | 'light' | 'custom' | Record<string, string>
+  /** The stored theme colours, kept alongside the derived theme name. */
+  theme_config?: Record<string, string>
+  logo_url?: string
+  favicon_url?: string
+  groups?: unknown[]
+  incidents?: unknown[]
   souls?: string[]
   subscribers?: number
   uptime_days?: number

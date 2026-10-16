@@ -21,14 +21,59 @@ import {
   BellRing,
   ToggleRight,
   Loader2,
+  Send,
+  Smartphone,
   X
 } from 'lucide-react'
 import { useChannels, useIncidents, useRules } from '../api/hooks'
 import type { AlertChannel, AlertRule } from '../api/client'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { useCan } from '../utils/permissions'
 
 type Severity = 'critical' | 'warning' | 'info'
-type ChannelType = 'slack' | 'email' | 'pagerduty' | 'webhook' | 'discord'
+type ChannelType = 'slack' | 'email' | 'pagerduty' | 'webhook' | 'discord' | 'telegram' | 'opsgenie' | 'ntfy' | 'sms'
+
+// Config fields for channel types whose form is generated rather than
+// hand-written. Keys match the backend dispatchers (internal/alert).
+interface ChannelField {
+  key: string
+  label: string
+  placeholder?: string
+  secret?: boolean
+  required?: boolean
+  list?: boolean
+  options?: string[]
+}
+
+const generatedChannelFields: Partial<Record<ChannelType, ChannelField[]>> = {
+  email: [
+    { key: 'username', label: 'SMTP Username', placeholder: 'Optional' },
+    { key: 'password', label: 'SMTP Password', secret: true, placeholder: 'Optional' },
+    { key: 'tls', label: 'TLS', options: ['auto', 'starttls', 'implicit', 'none'] },
+  ],
+  telegram: [
+    { key: 'bot_token', label: 'Bot Token', secret: true, required: true, placeholder: '123456:ABC-DEF…' },
+    { key: 'chat_id', label: 'Chat ID', required: true, placeholder: '-1001234567890' },
+  ],
+  opsgenie: [
+    { key: 'api_key', label: 'API Key', secret: true, required: true },
+    { key: 'region', label: 'Region', options: ['us', 'eu'] },
+  ],
+  ntfy: [
+    { key: 'server', label: 'Server', placeholder: 'https://ntfy.sh' },
+    { key: 'topic', label: 'Topic', required: true, placeholder: 'anubis-alerts' },
+    { key: 'token', label: 'Access Token', secret: true, placeholder: 'Optional' },
+  ],
+  sms: [
+    { key: 'provider', label: 'Provider', required: true, options: ['twilio', 'vonage'] },
+    { key: 'account_sid', label: 'Account SID (Twilio)' },
+    { key: 'auth_token', label: 'Auth Token (Twilio)', secret: true },
+    { key: 'api_key', label: 'API Key (Vonage)' },
+    { key: 'api_secret', label: 'API Secret (Vonage)', secret: true },
+    { key: 'from', label: 'From Number', required: true, placeholder: '+15551234567' },
+    { key: 'to', label: 'Recipients', required: true, list: true, placeholder: '+15557654321, +15550000000' },
+  ],
+}
 
 const severityConfig: Record<Severity, { icon: typeof AlertCircle; color: string; bg: string; label: string }> = {
   critical: { icon: AlertCircle, color: 'text-rose-400', bg: 'bg-rose-500/10', label: 'Critical' },
@@ -42,9 +87,14 @@ const channelConfig: Record<ChannelType, { icon: typeof Mail; color: string; bg:
   pagerduty: { icon: Phone, color: 'text-rose-400', bg: 'bg-rose-500/10', label: 'PagerDuty' },
   webhook: { icon: Webhook, color: 'text-emerald-400', bg: 'bg-emerald-500/10', label: 'Webhook' },
   discord: { icon: MessageSquare, color: 'text-indigo-400', bg: 'bg-indigo-500/10', label: 'Discord' },
+  telegram: { icon: Send, color: 'text-sky-400', bg: 'bg-sky-500/10', label: 'Telegram' },
+  opsgenie: { icon: BellRing, color: 'text-orange-400', bg: 'bg-orange-500/10', label: 'OpsGenie' },
+  ntfy: { icon: BellRing, color: 'text-teal-400', bg: 'bg-teal-500/10', label: 'ntfy' },
+  sms: { icon: Smartphone, color: 'text-lime-400', bg: 'bg-lime-500/10', label: 'SMS' },
 }
 
 export function Alerts() {
+  const can = useCan()
   const [activeTab, setActiveTab] = useState<'rules' | 'channels' | 'history'>('rules')
   const [search, setSearch] = useState('')
   const [severityFilter, setSeverityFilter] = useState('all')
@@ -72,6 +122,7 @@ export function Alerts() {
   const [channelSmtpPort, setChannelSmtpPort] = useState('587')
   const [channelSmtpFrom, setChannelSmtpFrom] = useState('')
   const [channelEnabled, setChannelEnabled] = useState(true)
+  const [channelExtra, setChannelExtra] = useState<Record<string, string>>({})
 
   // Rule form state
   const [ruleName, setRuleName] = useState('')
@@ -81,6 +132,8 @@ export function Alerts() {
   const [ruleConsecutive, setRuleConsecutive] = useState(3)
   const [ruleDuration, setRuleDuration] = useState(60)
   const [ruleEnabled, setRuleEnabled] = useState(true)
+  const [ruleChannels, setRuleChannels] = useState<string[]>([])
+  const [ruleAutoResolve, setRuleAutoResolve] = useState(true)
 
   const resetChannelForm = () => {
     saveGeneration.current += 1
@@ -95,6 +148,7 @@ export function Alerts() {
     setChannelSmtpPort('587')
     setChannelSmtpFrom('')
     setChannelEnabled(true)
+    setChannelExtra({})
     setChannelFormError(null)
     setEditingChannel(null)
     setSaving(false)
@@ -109,6 +163,8 @@ export function Alerts() {
     setRuleConsecutive(3)
     setRuleDuration(60)
     setRuleEnabled(true)
+    setRuleChannels([])
+    setRuleAutoResolve(true)
     setRuleFormError(null)
     setEditingRule(null)
     setSaving(false)
@@ -129,6 +185,13 @@ export function Alerts() {
     setChannelSmtpPort(typeof config.smtp_port === 'number' ? String(config.smtp_port) : typeof config.smtp_port === 'string' ? config.smtp_port : '587')
     setChannelSmtpFrom(typeof config.from === 'string' ? config.from : '')
     setChannelEnabled(channel.enabled)
+    const extra: Record<string, string> = {}
+    for (const field of generatedChannelFields[channel.type as ChannelType] ?? []) {
+      const value = config[field.key]
+      if (Array.isArray(value)) extra[field.key] = value.filter((v): v is string => typeof v === 'string').join(', ')
+      else if (typeof value === 'string' || typeof value === 'number') extra[field.key] = String(value)
+    }
+    setChannelExtra(extra)
     setShowChannelModal(true)
   }
 
@@ -142,7 +205,19 @@ export function Alerts() {
     setRuleConsecutive(rule.consecutive || 3)
     setRuleDuration(rule.duration || 60)
     setRuleEnabled(rule.enabled)
+    setRuleChannels(rule.channels || [])
+    setRuleAutoResolve(rule.auto_resolve ?? false)
     setShowRuleModal(true)
+  }
+
+  const handleOpenNewRule = () => {
+    resetRuleForm()
+    setRuleChannels(channels.filter(channel => channel.enabled).map(channel => channel.id))
+    setShowRuleModal(true)
+  }
+
+  const toggleRuleChannel = (id: string) => {
+    setRuleChannels(current => current.includes(id) ? current.filter(c => c !== id) : [...current, id])
   }
 
   const {
@@ -252,11 +327,21 @@ export function Alerts() {
       else if (channelType === 'slack') config.webhook_url = channelSlackUrl
       else if (channelType === 'discord') config.webhook_url = channelDiscordUrl
       else if (channelType === 'pagerduty') config.integration_key = channelPagerDutyKey
+      for (const field of generatedChannelFields[channelType] ?? []) {
+        const value = (channelExtra[field.key] ?? '').trim()
+        if (value === '') continue
+        config[field.key] = field.list ? value.split(',').map(v => v.trim()).filter(Boolean) : value
+      }
 
+      // PUT replaces the whole channel: keep the stored filters, rate limit,
+      // retry policy and any config keys the form does not show. A type change
+      // starts from a clean config.
+      const sameType = editingChannel?.type === channelType
       const payload = {
+        ...(editingChannel ?? {}),
         name: channelName,
         type: channelType,
-        config,
+        config: sameType ? { ...editingChannel.config, ...config } : config,
         enabled: channelEnabled
       } as Omit<AlertChannel, 'id'>
       if (editingChannel) {
@@ -277,15 +362,19 @@ export function Alerts() {
 
   const handleSaveRule = async () => {
     if (!ruleName.trim()) return
-    const channelIds = editingRule ? editingRule.channels : channels.filter(channel => channel.enabled).map(channel => channel.id)
+    const channelIds = ruleChannels
     if (channelIds.length === 0) {
-      setRuleFormError('At least one enabled channel is required before creating a rule.')
+      setRuleFormError('Select at least one channel to notify.')
       return
     }
     const generation = saveGeneration.current
     setSaving(true)
     try {
+      // PUT replaces the whole rule: start from the stored rule so scope,
+      // cooldown, escalation and extra conditions survive the edit.
       const payload = {
+        ...(editingRule ?? {}),
+        auto_resolve: ruleAutoResolve,
         name: ruleName,
         condition: ruleCondition,
         threshold: ruleThreshold,
@@ -337,6 +426,9 @@ export function Alerts() {
       if (!channelSmtpFrom.trim()) return 'Sender email is required.'
       if (channelEmail.split(',').map(email => email.trim()).filter(Boolean).length === 0) return 'At least one recipient is required.'
     }
+    for (const field of generatedChannelFields[channelType] ?? []) {
+      if (field.required && !(channelExtra[field.key] ?? '').trim()) return `${field.label} is required.`
+    }
     return ''
   })()
 
@@ -379,7 +471,8 @@ export function Alerts() {
           </button>
           {activeTab === 'rules' && (
             <button
-              onClick={() => { resetRuleForm(); setShowRuleModal(true) }}
+              onClick={handleOpenNewRule}
+              hidden={!can('rules:write')}
               className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-all font-medium shadow-lg shadow-amber-600/20"
             >
               <Plus className="w-4 h-4" />
@@ -389,6 +482,7 @@ export function Alerts() {
           {activeTab === 'channels' && (
             <button
               onClick={() => { resetChannelForm(); setShowChannelModal(true) }}
+              hidden={!can('channels:write')}
               className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-all font-medium shadow-lg shadow-amber-600/20"
             >
               <Plus className="w-4 h-4" />
@@ -544,7 +638,8 @@ export function Alerts() {
               <h3 className="text-lg font-semibold text-white mb-2">No alert rules yet</h3>
               <p className="text-gray-400 mb-4">Create your first alert rule to get notified when issues occur</p>
               <button
-                onClick={() => { resetRuleForm(); setShowRuleModal(true) }}
+                onClick={handleOpenNewRule}
+                hidden={!can('rules:write')}
                 className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition-colors"
               >
                 Create Rule
@@ -594,6 +689,7 @@ export function Alerts() {
                     <td className="px-6 py-4">
                       <button
                         onClick={() => handleToggleRule(rule.id, rule.enabled)}
+                        hidden={!can('rules:write')}
                         role="switch"
                         aria-checked={rule.enabled}
                         aria-label={`${rule.enabled ? 'Disable' : 'Enable'} rule ${rule.name}`}
@@ -614,6 +710,7 @@ export function Alerts() {
                           onClick={() => handleOpenEditRule(rule)}
                           className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
                           aria-label={`Edit rule ${rule.name}`}
+                          hidden={!can('rules:write')}
                           title="Edit"
                         >
                           <Edit className="w-4 h-4" />
@@ -622,6 +719,7 @@ export function Alerts() {
                           onClick={() => handleDeleteRule(rule.id)}
                           className="p-2 text-gray-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
                           aria-label={`Delete rule`}
+                          hidden={!can('rules:write')}
                           title="Delete"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -679,12 +777,14 @@ export function Alerts() {
                     disabled={testingChannel === channel.id}
                     className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors disabled:opacity-50"
                     aria-label={`Test channel ${channel.name}`}
+                    hidden={!can('channels:write')}
                     title="Test"
                   >
                     {testingChannel === channel.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <TestTube className="w-4 h-4" />}
                   </button>
                   <button
                     onClick={() => handleToggleChannel(channel.id, channel.enabled)}
+                    hidden={!can('channels:write')}
                     className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
                     aria-label={channel.enabled ? `Disable ${channel.name}` : `Enable ${channel.name}`}
                     title={channel.enabled ? 'Disable' : 'Enable'}
@@ -695,6 +795,7 @@ export function Alerts() {
                     onClick={() => handleOpenEditChannel(channel)}
                     className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
                     aria-label={`Edit channel ${channel.name}`}
+                    hidden={!can('channels:write')}
                     title="Edit"
                   >
                     <Edit className="w-4 h-4" />
@@ -703,6 +804,7 @@ export function Alerts() {
                     onClick={() => handleDeleteChannel(channel.id)}
                     className="p-2 text-gray-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
                     aria-label={`Delete channel ${channel.name}`}
+                    hidden={!can('channels:write')}
                     title="Delete"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -713,6 +815,7 @@ export function Alerts() {
           })}
           <button
             onClick={() => { resetChannelForm(); setShowChannelModal(true) }}
+            hidden={!can('channels:write')}
             className="bg-gradient-to-br from-gray-900 to-gray-800/50 border border-dashed border-gray-700/50 rounded-2xl p-6 flex flex-col items-center justify-center gap-4 hover:border-amber-500 transition-all text-gray-500 min-h-[180px]"
           >
             <div className="w-14 h-14 rounded-full bg-gray-800 flex items-center justify-center">
@@ -852,6 +955,10 @@ export function Alerts() {
                     { value: 'email' as ChannelType, label: 'Email' },
                     { value: 'discord' as ChannelType, label: 'Discord' },
                     { value: 'pagerduty' as ChannelType, label: 'PagerDuty' },
+                    { value: 'telegram' as ChannelType, label: 'Telegram' },
+                    { value: 'opsgenie' as ChannelType, label: 'OpsGenie' },
+                    { value: 'ntfy' as ChannelType, label: 'ntfy' },
+                    { value: 'sms' as ChannelType, label: 'SMS' },
                   ]).map((t) => (
                     <button
                       key={t.value}
@@ -966,6 +1073,35 @@ export function Alerts() {
                   />
                 </div>
               )}
+
+              {(generatedChannelFields[channelType] ?? []).map((field) => (
+                <div key={`${channelType}-${field.key}`}>
+                  <label htmlFor={`channel-field-${field.key}`} className="block text-sm font-medium text-gray-300 mb-2">
+                    {field.label}{field.required ? '' : ' (optional)'}
+                  </label>
+                  {field.options ? (
+                    <select
+                      id={`channel-field-${field.key}`}
+                      value={channelExtra[field.key] ?? (field.required ? '' : field.options[0])}
+                      onChange={(e) => setChannelExtra(current => ({ ...current, [field.key]: e.target.value }))}
+                      className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
+                    >
+                      {field.required && <option value="">Select…</option>}
+                      {field.options.map(option => <option key={option} value={option}>{option}</option>)}
+                    </select>
+                  ) : (
+                    <input
+                      id={`channel-field-${field.key}`}
+                      type={field.secret ? 'password' : 'text'}
+                      autoComplete="off"
+                      value={channelExtra[field.key] ?? ''}
+                      onChange={(e) => setChannelExtra(current => ({ ...current, [field.key]: e.target.value }))}
+                      placeholder={field.placeholder}
+                      className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50"
+                    />
+                  )}
+                </div>
+              ))}
 
               <label className="flex items-center gap-3 cursor-pointer">
                 <input
@@ -1111,6 +1247,38 @@ export function Alerts() {
                 <span className="text-sm text-gray-300">Enabled</span>
               </label>
 
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={ruleAutoResolve}
+                  onChange={(e) => setRuleAutoResolve(e.target.checked)}
+                  className="w-5 h-5 rounded border-gray-600 bg-gray-800 text-emerald-500 focus:ring-emerald-500"
+                />
+                <span className="text-sm text-gray-300">Resolve incidents automatically when the soul recovers</span>
+              </label>
+
+              <fieldset>
+                <legend className="block text-sm font-medium text-gray-300 mb-2">Notify channels</legend>
+                {channels.length === 0 ? (
+                  <p className="text-sm text-gray-500">Create a channel first.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {channels.map(channel => (
+                      <label key={channel.id} className="flex items-center gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={ruleChannels.includes(channel.id)}
+                          onChange={() => toggleRuleChannel(channel.id)}
+                          className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-amber-500 focus:ring-amber-500"
+                        />
+                        <span className="text-sm text-gray-300">{channel.name}</span>
+                        <span className="text-xs text-gray-500">{channel.type}{channel.enabled ? '' : ' · disabled'}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </fieldset>
+
               {ruleFormError && (
                 <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
                   {ruleFormError}
@@ -1122,7 +1290,7 @@ export function Alerts() {
               <button onClick={() => { setShowRuleModal(false); resetRuleForm() }} className="px-5 py-2.5 text-gray-400 hover:text-white transition-colors">Cancel</button>
               <button
                 onClick={handleSaveRule}
-                disabled={saving || !ruleName.trim() || (editingRule ? editingRule.channels.length : channels.filter(channel => channel.enabled).length) === 0}
+                disabled={saving || !ruleName.trim() || ruleChannels.length === 0}
                 className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl transition-colors font-medium"
               >
                 {saving ? 'Saving...' : editingRule ? 'Save Rule' : 'Add Rule'}

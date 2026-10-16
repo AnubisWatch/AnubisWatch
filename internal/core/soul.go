@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -108,6 +109,15 @@ func (d *Duration) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MinSoulInterval and MinSoulTimeout are the smallest check interval and
+// timeout a soul may be configured with. Bare JSON numbers decode as
+// nanoseconds, so a client sending seconds (e.g. 30) would otherwise create a
+// 30ns interval.
+const (
+	MinSoulInterval = time.Second
+	MinSoulTimeout  = time.Millisecond
+)
+
 // MarshalJSON implements json.Marshaler for Duration
 func (d Duration) MarshalJSON() ([]byte, error) {
 	return json.Marshal(d.String())
@@ -115,19 +125,85 @@ func (d Duration) MarshalJSON() ([]byte, error) {
 
 // Validate validates the soul configuration for API and runtime use.
 func (s Soul) Validate() error {
-	return s.validate(0)
+	return s.validateFields("")
 }
 
-// validate validates the soul configuration.
+// ApplyDefaults fills in the protocol block and the fields API clients most
+// often leave out, so a minimal {"name","type","target"} soul is valid:
+// HTTP defaults to GET expecting 200, DNS to an A lookup, and every other
+// type gets an empty protocol block. Explicit values are never overwritten.
+func (s *Soul) ApplyDefaults() {
+	switch s.Type {
+	case CheckHTTP:
+		if s.HTTP == nil {
+			s.HTTP = &HTTPConfig{}
+		}
+		if s.HTTP.Method == "" {
+			s.HTTP.Method = "GET"
+		}
+		s.HTTP.Method = strings.ToUpper(s.HTTP.Method)
+		if len(s.HTTP.ValidStatus) == 0 {
+			s.HTTP.ValidStatus = []int{200}
+		}
+	case CheckTCP:
+		if s.TCP == nil {
+			s.TCP = &TCPConfig{}
+		}
+	case CheckUDP:
+		if s.UDP == nil {
+			s.UDP = &UDPConfig{}
+		}
+	case CheckDNS:
+		if s.DNS == nil {
+			s.DNS = &DNSConfig{}
+		}
+		if s.DNS.RecordType == "" {
+			s.DNS.RecordType = "A"
+		}
+		s.DNS.RecordType = strings.ToUpper(s.DNS.RecordType)
+	case CheckSMTP:
+		if s.SMTP == nil {
+			s.SMTP = &SMTPConfig{}
+		}
+	case CheckIMAP:
+		if s.IMAP == nil {
+			s.IMAP = &IMAPConfig{}
+		}
+	case CheckICMP:
+		if s.ICMP == nil {
+			s.ICMP = &ICMPConfig{}
+		}
+	case CheckGRPC:
+		if s.GRPC == nil {
+			s.GRPC = &GRPCConfig{}
+		}
+	case CheckWebSocket:
+		if s.WebSocket == nil {
+			s.WebSocket = &WebSocketConfig{}
+		}
+	case CheckTLS:
+		if s.TLS == nil {
+			s.TLS = &TLSConfig{}
+		}
+	}
+}
+
+// validate validates a soul from the config file's souls list; errors name
+// the field as souls[<index>].<field>.
 func (s Soul) validate(index int) error {
+	return s.validateFields(fmt.Sprintf("souls[%d].", index))
+}
+
+// validateFields validates the soul configuration, prefixing field names.
+func (s Soul) validateFields(prefix string) error {
 	if s.Name == "" {
-		return &ConfigError{Field: fmt.Sprintf("souls[%d].name", index), Message: "name is required"}
+		return &ConfigError{Field: prefix + "name", Message: "name is required"}
 	}
 	if s.Target == "" {
-		return &ConfigError{Field: fmt.Sprintf("souls[%d].target", index), Message: "target is required"}
+		return &ConfigError{Field: prefix + "target", Message: "target is required"}
 	}
 	if s.Type == "" {
-		return &ConfigError{Field: fmt.Sprintf("souls[%d].type", index), Message: "type is required"}
+		return &ConfigError{Field: prefix + "type", Message: "type is required"}
 	}
 
 	// Validate type-specific config
@@ -137,107 +213,113 @@ func (s Soul) validate(index int) error {
 		CheckWebSocket: true, CheckTLS: true,
 	}
 	if !validTypes[s.Type] {
-		return &ConfigError{Field: fmt.Sprintf("souls[%d].type", index), Message: fmt.Sprintf("invalid type: %s", s.Type)}
+		return &ConfigError{Field: prefix + "type", Message: fmt.Sprintf("invalid type: %s", s.Type)}
 	}
 
-	if err := s.validateTarget(index); err != nil {
+	if err := s.validateTarget(prefix); err != nil {
 		return err
 	}
 
-	// Validate interval
+	// Validate interval (zero means "use the default")
 	if s.Weight.Duration < 0 {
-		return &ConfigError{Field: fmt.Sprintf("souls[%d].weight", index), Message: "interval cannot be negative"}
+		return &ConfigError{Field: prefix + "weight", Message: "interval cannot be negative"}
+	}
+	if s.Weight.Duration > 0 && s.Weight.Duration < MinSoulInterval {
+		return &ConfigError{Field: prefix + "weight", Message: fmt.Sprintf("interval must be at least %s (got %s; use a duration string such as \"30s\")", MinSoulInterval, s.Weight.Duration)}
 	}
 
-	// Validate timeout
+	// Validate timeout (zero means "use the default")
 	if s.Timeout.Duration < 0 {
-		return &ConfigError{Field: fmt.Sprintf("souls[%d].timeout", index), Message: "timeout cannot be negative"}
+		return &ConfigError{Field: prefix + "timeout", Message: "timeout cannot be negative"}
+	}
+	if s.Timeout.Duration > 0 && s.Timeout.Duration < MinSoulTimeout {
+		return &ConfigError{Field: prefix + "timeout", Message: fmt.Sprintf("timeout must be at least %s (got %s; use a duration string such as \"10s\")", MinSoulTimeout, s.Timeout.Duration)}
 	}
 
 	// Type-specific validation
 	switch s.Type {
 	case CheckHTTP:
 		if s.HTTP == nil {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].http", index), Message: "http configuration is required for HTTP checks"}
+			return &ConfigError{Field: prefix + "http", Message: "http configuration is required for HTTP checks"}
 		}
 		if s.HTTP.Method == "" {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].http.method", index), Message: "HTTP method is required"}
+			return &ConfigError{Field: prefix + "http.method", Message: "HTTP method is required"}
 		}
 		validMethods := map[string]bool{"GET": true, "POST": true, "PUT": true, "DELETE": true, "PATCH": true, "HEAD": true, "OPTIONS": true}
 		if !validMethods[s.HTTP.Method] {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].http.method", index), Message: fmt.Sprintf("invalid HTTP method: %s", s.HTTP.Method)}
+			return &ConfigError{Field: prefix + "http.method", Message: fmt.Sprintf("invalid HTTP method: %s", s.HTTP.Method)}
 		}
 		if len(s.HTTP.ValidStatus) == 0 {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].http.valid_status", index), Message: "at least one valid status code is required"}
+			return &ConfigError{Field: prefix + "http.valid_status", Message: "at least one valid status code is required"}
 		}
 	case CheckTCP:
 		if s.TCP == nil {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].tcp", index), Message: "tcp configuration is required for TCP checks"}
+			return &ConfigError{Field: prefix + "tcp", Message: "tcp configuration is required for TCP checks"}
 		}
 	case CheckUDP:
 		if s.UDP == nil {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].udp", index), Message: "udp configuration is required for UDP checks"}
+			return &ConfigError{Field: prefix + "udp", Message: "udp configuration is required for UDP checks"}
 		}
 	case CheckDNS:
 		if s.DNS == nil {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].dns", index), Message: "dns configuration is required for DNS checks"}
+			return &ConfigError{Field: prefix + "dns", Message: "dns configuration is required for DNS checks"}
 		}
 		if s.DNS.RecordType == "" {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].dns.record_type", index), Message: "DNS record type is required"}
+			return &ConfigError{Field: prefix + "dns.record_type", Message: "DNS record type is required"}
 		}
 		validRecordTypes := map[string]bool{"A": true, "AAAA": true, "CNAME": true, "MX": true, "TXT": true, "NS": true, "SOA": true, "PTR": true, "SRV": true}
 		if !validRecordTypes[s.DNS.RecordType] {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].dns.record_type", index), Message: fmt.Sprintf("invalid DNS record type: %s", s.DNS.RecordType)}
+			return &ConfigError{Field: prefix + "dns.record_type", Message: fmt.Sprintf("invalid DNS record type: %s", s.DNS.RecordType)}
 		}
 	case CheckSMTP:
 		if s.SMTP == nil {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].smtp", index), Message: "smtp configuration is required for SMTP checks"}
+			return &ConfigError{Field: prefix + "smtp", Message: "smtp configuration is required for SMTP checks"}
 		}
 	case CheckIMAP:
 		if s.IMAP == nil {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].imap", index), Message: "imap configuration is required for IMAP checks"}
+			return &ConfigError{Field: prefix + "imap", Message: "imap configuration is required for IMAP checks"}
 		}
 	case CheckICMP:
 		if s.ICMP == nil {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].icmp", index), Message: "icmp configuration is required for ICMP checks"}
+			return &ConfigError{Field: prefix + "icmp", Message: "icmp configuration is required for ICMP checks"}
 		}
 		if s.ICMP.Count < 0 {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].icmp.count", index), Message: "ICMP count cannot be negative"}
+			return &ConfigError{Field: prefix + "icmp.count", Message: "ICMP count cannot be negative"}
 		}
 		if s.ICMP.Interval.Duration < 0 {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].icmp.interval", index), Message: "ICMP interval cannot be negative"}
+			return &ConfigError{Field: prefix + "icmp.interval", Message: "ICMP interval cannot be negative"}
 		}
 		if math.IsNaN(s.ICMP.MaxLossPercent) || s.ICMP.MaxLossPercent < 0 || s.ICMP.MaxLossPercent > 100 {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].icmp.max_loss_percent", index), Message: "ICMP max loss percent must be between 0 and 100"}
+			return &ConfigError{Field: prefix + "icmp.max_loss_percent", Message: "ICMP max loss percent must be between 0 and 100"}
 		}
 	case CheckGRPC:
 		if s.GRPC == nil {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].grpc", index), Message: "grpc configuration is required for gRPC checks"}
+			return &ConfigError{Field: prefix + "grpc", Message: "grpc configuration is required for gRPC checks"}
 		}
 	case CheckWebSocket:
 		if s.WebSocket == nil {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].websocket", index), Message: "websocket configuration is required for WebSocket checks"}
+			return &ConfigError{Field: prefix + "websocket", Message: "websocket configuration is required for WebSocket checks"}
 		}
 	case CheckTLS:
 		if s.TLS == nil {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].tls", index), Message: "tls configuration is required for TLS checks"}
+			return &ConfigError{Field: prefix + "tls", Message: "tls configuration is required for TLS checks"}
 		}
 		if s.TLS.ExpiryWarnDays < 0 {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].tls.expiry_warn_days", index), Message: "TLS expiry warn days cannot be negative"}
+			return &ConfigError{Field: prefix + "tls.expiry_warn_days", Message: "TLS expiry warn days cannot be negative"}
 		}
 		if s.TLS.ExpiryCriticalDays < 0 {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].tls.expiry_critical_days", index), Message: "TLS expiry critical days cannot be negative"}
+			return &ConfigError{Field: prefix + "tls.expiry_critical_days", Message: "TLS expiry critical days cannot be negative"}
 		}
 		if s.TLS.ExpiryWarnDays > 0 && s.TLS.ExpiryCriticalDays > s.TLS.ExpiryWarnDays {
-			return &ConfigError{Field: fmt.Sprintf("souls[%d].tls.expiry_critical_days", index), Message: "TLS critical threshold cannot exceed warning threshold"}
+			return &ConfigError{Field: prefix + "tls.expiry_critical_days", Message: "TLS critical threshold cannot exceed warning threshold"}
 		}
 	}
 
 	return nil
 }
 
-func (s Soul) validateTarget(index int) error {
-	field := fmt.Sprintf("souls[%d].target", index)
+func (s Soul) validateTarget(prefix string) error {
+	field := prefix + "target"
 
 	switch s.Type {
 	case CheckHTTP:
@@ -566,6 +648,10 @@ type FSMCommand struct {
 	Table string `json:"table"`
 	Key   string `json:"key"`
 	Value []byte `json:"value"`
+	// Origin is the Raft node ID that proposed the command. Apply observers use
+	// it to skip work the proposing node already did in memory (alert manager
+	// state, live broadcasts); it never changes what is stored.
+	Origin string `json:"origin,omitempty"`
 }
 
 // FSMOp represents FSM operation types
@@ -575,6 +661,10 @@ const (
 	FSMSet FSMOp = iota
 	FSMDelete
 	FSMDeletePrefix
+	// FSMBatch carries a JSON-encoded []FSMCommand in Value, applied in order as
+	// one log entry. High-volume writes (judgments, incidents) are batched this
+	// way so they do not cost one consensus round each.
+	FSMBatch
 )
 
 // DistributionPlan represents the current distribution of souls across the cluster
@@ -626,9 +716,28 @@ func (e *RaftError) Error() string {
 	return fmt.Sprintf("raft error [%s]: %s", e.Code, e.Message)
 }
 
+// LeaderUnavailable reports whether err (or an error it wraps) is a Raft
+// error meaning the write could not reach a leader -- no leader is known, this
+// node is not the leader and could not forward, or leadership was lost while
+// the write was in flight. Such a write may succeed if retried shortly, so API
+// layers answer it as "unavailable" rather than as an internal failure. The
+// RaftError is returned so callers can report the leader hint.
+func LeaderUnavailable(err error) (*RaftError, bool) {
+	var raftErr *RaftError
+	if !errors.As(err, &raftErr) {
+		return nil, false
+	}
+	switch raftErr.Code {
+	case ErrNoLeader, ErrNotLeader, ErrLeadershipLost:
+		return raftErr, true
+	}
+	return nil, false
+}
+
 // Common Raft error codes
 const (
 	ErrNotLeader          = "NOT_LEADER"
+	ErrNoLeader           = "NO_LEADER"
 	ErrLeadershipLost     = "LEADERSHIP_LOST"
 	ErrTimeout            = "TIMEOUT"
 	ErrShutdown           = "SHUTDOWN"

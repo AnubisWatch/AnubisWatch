@@ -8,8 +8,10 @@ import { LineChartWidget } from '../components/widgets/LineChartWidget'
 import { BarChartWidget } from '../components/widgets/BarChartWidget'
 import { GaugeWidget } from '../components/widgets/GaugeWidget'
 import { TableWidget } from '../components/widgets/TableWidget'
+import { useCan } from '../utils/permissions'
 
 export function DashboardDetail() {
+  const can = useCan()
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const isNewDashboard = !id || id === 'new'
@@ -228,6 +230,7 @@ export function DashboardDetail() {
           </button>
           <button
             onClick={() => setEditing(!editing)}
+            hidden={!can('settings:write')}
             className={`px-3 py-2 rounded-lg border text-sm font-medium transition-all ${
               editing
                 ? 'bg-amber-500/20 border-amber-500/40 text-amber-400'
@@ -282,6 +285,7 @@ export function DashboardDetail() {
                   <span className="text-xs text-gray-500">{widget.type}</span>
                   <button
                     onClick={() => handleDeleteWidget(widget.id)}
+                    hidden={!can('settings:write')}
                     className="text-gray-500 hover:text-red-400 transition-colors"
                     aria-label="Delete widget"
                   >

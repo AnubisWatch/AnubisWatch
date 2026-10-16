@@ -1273,8 +1273,19 @@ func TestLoggingConfigValidate(t *testing.T) {
 			wantError: true,
 		},
 		{
+			// The server defaults the path to <storage.path>/logs/anubis.log.
 			name:      "file output without path",
 			config:    LoggingConfig{Level: "info", Format: "json", Output: "file"},
+			wantError: false,
+		},
+		{
+			name:      "both output",
+			config:    LoggingConfig{Level: "info", Format: "json", Output: "both"},
+			wantError: false,
+		},
+		{
+			name:      "unknown output",
+			config:    LoggingConfig{Level: "info", Format: "json", Output: "syslog"},
 			wantError: true,
 		},
 		{
