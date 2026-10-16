@@ -1,7 +1,7 @@
 import { Bell, Search, LogOut, Moon, Sun, Menu } from 'lucide-react'
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../api/hooks'
+import { useAuth, useIncidents } from '../api/hooks'
 import { useThemeStore, applyTheme, getEffectiveTheme } from '../stores/themeStore'
 import { WorkspaceSwitcher } from './WorkspaceSwitcher'
 
@@ -24,8 +24,10 @@ interface HeaderProps {
 }
 
 export function Header({ onMenuClick }: HeaderProps = {}) {
-  const [showNotifications, setShowNotifications] = useState(false)
   const [scrolled, setScrolled] = useState(false)
+  const [query, setQuery] = useState('')
+  const { incidents } = useIncidents()
+  const openIncidents = (incidents ?? []).filter((incident) => incident.status !== 'resolved').length
   const { theme, setTheme } = useThemeStore()
   const { user, logout } = useAuth()
   const navigate = useNavigate()
@@ -74,8 +76,16 @@ export function Header({ onMenuClick }: HeaderProps = {}) {
         <div className="relative flex-1 group">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500 group-focus-within:text-[#D4AF37] transition-colors" />
           <input
-            type="text"
-            placeholder="Search the archives..."
+            type="search"
+            aria-label="Search souls"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && query.trim()) {
+                navigate(`/souls?q=${encodeURIComponent(query.trim())}`)
+              }
+            }}
+            placeholder="Search souls..."
             className="w-full bg-gray-900/50 border border-gray-800 rounded-xl pl-11 pr-4 py-2.5 text-sm text-white placeholder:text-gray-600
                        focus:outline-none focus:border-[#D4AF37]/50 focus:ring-1 focus:ring-[#D4AF37]/20
                        hover:border-gray-700 transition-all duration-300 font-cormorant"
@@ -117,13 +127,17 @@ export function Header({ onMenuClick }: HeaderProps = {}) {
 
         {/* Notifications */}
         <button
-          onClick={() => setShowNotifications(!showNotifications)}
+          onClick={() => navigate('/incidents')}
           className="relative p-2.5 text-gray-400 hover:text-[#F4D03F] hover:bg-[#D4AF37]/10 rounded-xl transition-all group border border-transparent hover:border-[#D4AF37]/20"
-          aria-label="Toggle notifications"
+          aria-label={openIncidents > 0 ? `${openIncidents} open incident${openIncidents === 1 ? '' : 's'}` : 'No open incidents'}
         >
           <Bell className="w-5 h-5 group-hover:animate-swing" />
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#D4AF37] rounded-full animate-pulse shadow-lg shadow-[#D4AF37]/50" />
-          <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#D4AF37] rounded-full animate-ping opacity-75" />
+          {openIncidents > 0 && (
+            <>
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#D4AF37] rounded-full animate-pulse shadow-lg shadow-[#D4AF37]/50" />
+              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[#D4AF37] rounded-full animate-ping opacity-75" />
+            </>
+          )}
         </button>
 
         {/* User Profile - Egyptian themed */}

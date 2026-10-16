@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Header } from './Header'
 
 const mocks = vi.hoisted(() => ({ theme: 'system', effective: 'light', setTheme: vi.fn(), applyTheme: vi.fn(), logout: vi.fn(), navigate: vi.fn(), user: null as null | { name?: string; email?: string } }))
-vi.mock('../api/hooks', () => ({ useAuth: () => ({ user: mocks.user, logout: mocks.logout }) }))
+vi.mock('../api/hooks', () => ({ useAuth: () => ({ user: mocks.user, logout: mocks.logout }), useIncidents: () => ({ incidents: [] }) }))
 vi.mock('../stores/themeStore', () => ({ useThemeStore: () => ({ theme: mocks.theme, setTheme: mocks.setTheme }), applyTheme: mocks.applyTheme, getEffectiveTheme: () => mocks.effective }))
 vi.mock('react-router-dom', async (original) => ({ ...(await original()), useNavigate: () => mocks.navigate }))
 vi.mock('./WorkspaceSwitcher', () => ({ WorkspaceSwitcher: () => null }))

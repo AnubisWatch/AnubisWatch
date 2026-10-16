@@ -14,8 +14,10 @@ vi.mock('react-router-dom', async () => {
 
 const mockSetToken = vi.fn()
 const mockPost = vi.fn()
+const mockGet = vi.fn(() => Promise.reject(new Error('404')))
 vi.mock('../api/client', () => ({
   api: {
+    get: (...args: unknown[]) => mockGet(...(args as [])),
     post: (...args: unknown[]) => mockPost(...args as [string, unknown?]),
     setToken: (token: string) => mockSetToken(token),
   },

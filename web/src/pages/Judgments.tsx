@@ -313,10 +313,16 @@ export function Judgments() {
                       <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-semibold ${
                         judgment.status === 'passed'
                           ? 'bg-emerald-500/10 text-emerald-400'
-                          : 'bg-rose-500/10 text-rose-400'
+                          : judgment.status === 'degraded' || judgment.status === 'pending'
+                            ? 'bg-amber-500/10 text-amber-400'
+                            : judgment.status === 'maintenance'
+                              ? 'bg-sky-500/10 text-sky-400'
+                              : 'bg-rose-500/10 text-rose-400'
                       }`}>
                         {judgment.status === 'passed' ? (
                           <CheckCircle2 className="w-4 h-4" />
+                        ) : judgment.status !== 'failed' ? (
+                          <Activity className="w-4 h-4" />
                         ) : (
                           <XCircle className="w-4 h-4" />
                         )}

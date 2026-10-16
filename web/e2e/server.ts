@@ -72,19 +72,20 @@ export async function startServer(): Promise<TestServer> {
 	};
 }
 
-function ensureE2EBinary() {
-	if (fs.existsSync(binaryPath)) {
-		return;
-	}
-
+// buildE2EBinary compiles the server once per Playwright run (global-setup.ts).
+// It writes to a temporary file and renames it into place, so a worker never
+// executes a half-written binary (ETXTBSY) and every run tests current code.
+export function buildE2EBinary() {
 	fs.mkdirSync(path.dirname(binaryPath), { recursive: true });
-	const build = spawnSync("go", ["build", "-o", binaryPath, "./cmd/anubis"], {
+	const tmpPath = `${binaryPath}.${process.pid}.tmp`;
+	const build = spawnSync("go", ["build", "-o", tmpPath, "./cmd/anubis"], {
 		cwd: rootDir,
 		encoding: "utf8",
 		env: process.env,
 	});
 
 	if (build.status !== 0) {
+		fs.rmSync(tmpPath, { force: true });
 		throw new Error(
 			[
 				`Failed to build E2E binary at ${binaryPath}.`,
@@ -94,6 +95,15 @@ function ensureE2EBinary() {
 				.filter(Boolean)
 				.join("\n"),
 		);
+	}
+	fs.renameSync(tmpPath, binaryPath);
+}
+
+function ensureE2EBinary() {
+	// Normally built by global-setup.ts; build here only when a spec is run
+	// outside the configured project (e.g. a custom config).
+	if (!fs.existsSync(binaryPath)) {
+		buildE2EBinary();
 	}
 }
 

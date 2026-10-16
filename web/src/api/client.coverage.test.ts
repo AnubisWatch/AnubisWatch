@@ -39,7 +39,7 @@ describe('ApiClient exhaustive branches', () => {
     ])) as typeof fetch
     const result = await api.get<Array<{ status: string; latency: number; error?: string }>>('/judgments')
     expect(result.map((item) => item.status)).toEqual([
-      'pending', 'pending', 'pending', 'failed', 'pending', 'passed', 'passed', 'failed',
+      'degraded', 'pending', 'maintenance', 'failed', 'pending', 'passed', 'passed', 'failed',
     ])
     expect(result.map((item) => item.latency)).toEqual([0, 0, 0, 4, 5000, 7_260_000, 0, 0])
     expect(result[3].error).toBe('kept')

@@ -5,6 +5,7 @@ import { Layout } from "../components/Layout";
 
 // Mock useAuth hook
 vi.mock("../api/hooks", () => ({
+  useIncidents: () => ({ incidents: [] }),
   useAuth: () => ({
     user: {
       name: "Test User",

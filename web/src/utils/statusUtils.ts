@@ -1,6 +1,6 @@
 // Shared status utility functions to eliminate duplicated code across components
 
-export type DisplayStatus = 'healthy' | 'unhealthy' | 'unknown' | 'checking' | 'check_failed' | 'degraded' | 'down' | 'up'
+export type DisplayStatus = 'healthy' | 'unhealthy' | 'unknown' | 'checking' | 'check_failed' | 'degraded' | 'maintenance' | 'down' | 'up'
 export type ClusterStatus = 'healthy' | 'unhealthy' | 'offline'
 
 // Status color mappings - single source of truth
@@ -12,6 +12,7 @@ export const statusColors: Record<DisplayStatus, { bg: string; text: string; lab
   checking: { bg: 'bg-amber-400 animate-pulse', text: 'text-amber-400', label: 'Checking' },
   check_failed: { bg: 'bg-rose-500', text: 'text-rose-400', label: 'Check failed' },
   degraded: { bg: 'bg-amber-500', text: 'text-amber-400', label: 'Degraded' },
+  maintenance: { bg: 'bg-sky-500', text: 'text-sky-400', label: 'Maintenance' },
   unknown: { bg: 'bg-gray-500', text: 'text-gray-400', label: 'Unknown' },
 }
 

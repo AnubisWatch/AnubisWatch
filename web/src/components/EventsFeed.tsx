@@ -136,7 +136,8 @@ function messageToEvent(message: WebSocketMessage): Event | null {
       return {
         id,
         type: 'info',
-        message: 'Soul updated',
+        // The server sends action: created | updated | deleted.
+        message: payload.action === 'created' ? 'Soul created' : payload.action === 'deleted' ? 'Soul deleted' : 'Soul updated',
         soulName: stringValue(payload.name) ?? stringValue(payload.id),
         timestamp
       }

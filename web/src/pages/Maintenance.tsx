@@ -21,6 +21,7 @@ import {
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { api } from '../api/client'
 import { useSouls } from '../api/hooks'
+import { useCan } from '../utils/permissions'
 
 interface MaintenanceWindow {
   id: string
@@ -82,6 +83,7 @@ function useMaintenance() {
 }
 
 export function Maintenance() {
+  const can = useCan()
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
   const [showModal, setShowModal] = useState(false)
@@ -250,6 +252,7 @@ export function Maintenance() {
           </button>
           <button
             onClick={handleOpenCreate}
+            hidden={!can('settings:write')}
             className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-all font-medium shadow-lg shadow-amber-600/20"
           >
             <Plus className="w-4 h-4" />
@@ -408,6 +411,7 @@ export function Maintenance() {
                   <div className="flex items-center gap-2 ml-4">
                     <button
                       onClick={() => handleToggle(w)}
+                      hidden={!can('settings:write')}
                       role="switch"
                       aria-checked={w.enabled}
                       aria-label={`${w.enabled ? 'Disable' : 'Enable'} maintenance window ${w.name}`}
@@ -421,6 +425,7 @@ export function Maintenance() {
                     </button>
                     <button
                       onClick={() => handleOpenEdit(w)}
+                      hidden={!can('settings:write')}
                       className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors"
                       aria-label={`Edit maintenance window ${w.name}`}
                       title="Edit"
@@ -429,6 +434,7 @@ export function Maintenance() {
                     </button>
                     <button
                       onClick={() => handleDelete(w.id)}
+                      hidden={!can('settings:write')}
                       className="p-2 text-gray-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
                       aria-label={`Delete maintenance window ${w.name}`}
                       title="Delete"
@@ -450,6 +456,7 @@ export function Maintenance() {
           </p>
           <button
             onClick={handleOpenCreate}
+            hidden={!can('settings:write')}
             className="px-6 py-3 bg-amber-600 hover:bg-amber-500 text-white rounded-xl transition-colors"
           >
             Create Maintenance Window
