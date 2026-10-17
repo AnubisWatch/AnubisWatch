@@ -12,7 +12,6 @@ import {
   Moon,
   Sun,
   Monitor,
-  Clock,
   ChevronRight,
   RefreshCw,
   Loader2,
@@ -33,7 +32,6 @@ type TabId = 'general' | 'security' | 'notifications' | 'storage' | 'integration
 interface ConfigData {
   instance_name?: string
   timezone?: string
-  language?: string
   theme?: 'dark' | 'light' | 'system'
   retention_days?: number
   storage_path?: string
@@ -45,7 +43,7 @@ interface ConfigData {
 
 // The only settings PUT /config accepts; everything else comes from the
 // config file and is shown read-only.
-const editableKeys = ['instance_name', 'timezone', 'language', 'theme'] as const
+const editableKeys = ['instance_name', 'timezone', 'theme'] as const
 
 // Efficient shallow comparison for config objects (all values are primitives)
 function hasConfigChanged(original: ConfigData, edited: ConfigData): boolean {
@@ -277,22 +275,6 @@ export function Settings() {
                       </select>
                       <p className="text-sm text-gray-500 mt-2">Dates across the dashboard are shown in this zone.</p>
                     </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">
-                        Default Language
-                      </label>
-                      <select
-                        value={editedConfig.language || 'en'}
-                        onChange={(e) => handleChange('language', e.target.value)}
-                        className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
-                      >
-                        <option value="en">English</option>
-                        <option value="tr">Türkçe</option>
-                        <option value="de">Deutsch</option>
-                        <option value="fr">Français</option>
-                      </select>
-                    </div>
                   </div>
 
                   <div>
@@ -393,7 +375,6 @@ export function Settings() {
                     { id: 'email', name: 'Email Notifications', desc: 'Receive email alerts for critical events', icon: Mail, color: 'blue' as const },
                     { id: 'slack', name: 'Slack Notifications', desc: 'Send alerts to configured Slack channels', icon: MessageSquare, color: 'purple' as const },
                     { id: 'webhook', name: 'Webhook Notifications', desc: 'POST alerts to custom endpoints', icon: MessageSquare, color: 'emerald' as const },
-                    { id: 'digest', name: 'Digest Emails', desc: 'Daily summary of all activities', icon: Clock, color: 'amber' as const },
                   ].map((item) => {
                     const colorMap: Record<string, { bg: string; text: string }> = {
                       blue: { bg: 'bg-blue-500/10', text: 'text-blue-400' },

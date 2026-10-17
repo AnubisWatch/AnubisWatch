@@ -29,7 +29,6 @@ var editableSettingDefaults = map[string]string{
 	// Empty means each viewer's own local time; otherwise an IANA zone name
 	// the dashboard formats every date in.
 	"timezone": "",
-	"language": "en",
 	"theme":    "dark",
 }
 
@@ -161,15 +160,6 @@ func validateSetting(key, value string) error {
 		// "Local" would mean the server's zone, not the viewer's.
 		if _, err := time.LoadLocation(value); err != nil || value == "Local" {
 			return fmt.Errorf("timezone must be an IANA time zone such as Europe/Istanbul, or empty for the viewer's local time")
-		}
-	case "language":
-		if len(value) > 16 {
-			return fmt.Errorf("language must be at most 16 characters")
-		}
-		for _, r := range value {
-			if r != '-' && r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r) {
-				return fmt.Errorf("language must be a language tag such as en or pt-BR")
-			}
 		}
 	}
 	return nil
