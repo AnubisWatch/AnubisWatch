@@ -30,6 +30,7 @@ import { SoulStatsCards } from '../components/SoulStatsCards'
 import { SoulFilterBar } from '../components/SoulFilterBar'
 import { SoulCreateModal } from '../components/SoulCreateModal'
 import { useCan } from '../utils/permissions'
+import { useSafeTimeout } from '../hooks/useSafeTimeout'
 
 type SoulDisplayStatus = 'healthy' | 'unhealthy' | 'degraded' | 'maintenance' | 'unknown' | 'checking' | 'check_failed'
 
@@ -54,6 +55,7 @@ const typeConfig: Record<SoulType, { label: string; color: string; bg: string; i
 }
 
 export function Souls() {
+  const later = useSafeTimeout()
   const can = useCan()
   const { souls: rawSouls, initialChecks, fetchSouls, createSoul, retryInitialCheck, updateSoul, deleteSoul } = useSoulStore()
   const souls = rawSouls as SoulWithStatus[]
@@ -91,7 +93,7 @@ export function Souls() {
   const handleRefresh = async () => {
     setRefreshing(true)
     await fetchSouls()
-    setTimeout(() => setRefreshing(false), 500)
+    later(() => setRefreshing(false), 500)
   }
 
   const handleCreateSoul = async (e: React.FormEvent) => {

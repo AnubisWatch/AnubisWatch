@@ -25,6 +25,7 @@ import { ChangePasswordForm } from '../components/ChangePasswordForm'
 import { useCan } from '../utils/permissions'
 import { useThemeStore, applyTheme } from '../stores/themeStore'
 import { Link } from 'react-router-dom'
+import { useSafeTimeout } from '../hooks/useSafeTimeout'
 
 type TabId = 'general' | 'security' | 'notifications' | 'storage' | 'integrations'
 
@@ -59,6 +60,7 @@ function hasConfigChanged(original: ConfigData, edited: ConfigData): boolean {
 }
 
 export function Settings() {
+  const later = useSafeTimeout()
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -111,7 +113,7 @@ export function Settings() {
       setConfig(next)
       setEditedConfig(next)
       setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
+      later(() => setSaved(false), 2000)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save configuration')
     } finally {

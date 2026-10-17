@@ -20,9 +20,11 @@ import {
 import { Link } from 'react-router-dom'
 import { useJudgments } from '../api/hooks'
 import { Judgment } from '../api/client'
+import { useSafeTimeout } from '../hooks/useSafeTimeout'
 
 
 export function Judgments() {
+  const later = useSafeTimeout()
   const { data: judgmentsData, loading, error, refetch } = useJudgments()
   const [filter, setFilter] = useState('all')
   const [search, setSearch] = useState('')
@@ -34,7 +36,7 @@ export function Judgments() {
   const handleRefresh = async () => {
     setRefreshing(true)
     await refetch()
-    setTimeout(() => setRefreshing(false), 500)
+    later(() => setRefreshing(false), 500)
   }
 
   const timeRangeCutoff = () => {

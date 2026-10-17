@@ -19,8 +19,10 @@ import {
 import { useClusterStatus, useClusterPeers, useStats } from '../api/hooks'
 import { formatDistanceToNow } from '../utils/date'
 import { getClusterStatusColor, getClusterStatusTextColor } from '../utils/statusUtils'
+import { useSafeTimeout } from '../hooks/useSafeTimeout'
 
 export function Cluster() {
+  const later = useSafeTimeout()
   const [refreshing, setRefreshing] = useState(false)
 
   const {
@@ -40,7 +42,7 @@ export function Cluster() {
   const handleRefresh = async () => {
     setRefreshing(true)
     await Promise.all([refetchCluster(), refetchPeers()])
-    setTimeout(() => setRefreshing(false), 500)
+    later(() => setRefreshing(false), 500)
   }
 
   // Default values when data is not available

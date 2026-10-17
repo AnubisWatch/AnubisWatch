@@ -29,6 +29,7 @@ import { useChannels, useIncidents, useRules } from '../api/hooks'
 import type { AlertChannel, AlertRule } from '../api/client'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { useCan } from '../utils/permissions'
+import { useSafeTimeout } from '../hooks/useSafeTimeout'
 
 type Severity = 'critical' | 'warning' | 'info'
 type ChannelType = 'slack' | 'email' | 'pagerduty' | 'webhook' | 'discord' | 'telegram' | 'opsgenie' | 'ntfy' | 'sms'
@@ -94,6 +95,7 @@ const channelConfig: Record<ChannelType, { icon: typeof Mail; color: string; bg:
 }
 
 export function Alerts() {
+  const later = useSafeTimeout()
   const can = useCan()
   const [activeTab, setActiveTab] = useState<'rules' | 'channels' | 'history'>('rules')
   const [search, setSearch] = useState('')
@@ -270,7 +272,7 @@ export function Alerts() {
       setTestResult({ id, success: false, message: err instanceof Error ? err.message : 'Test failed' })
     } finally {
       setTestingChannel(null)
-      setTimeout(() => setTestResult(null), 5000)
+      later(() => setTestResult(null), 5000)
     }
   }
 

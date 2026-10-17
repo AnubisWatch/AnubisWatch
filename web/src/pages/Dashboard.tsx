@@ -30,6 +30,7 @@ import {
   Bar
 } from 'recharts'
 import { EventsFeed } from '../components/EventsFeed'
+import { useSafeTimeout } from '../hooks/useSafeTimeout'
 
 interface SystemStatus {
   name: string
@@ -104,6 +105,7 @@ const StatCard = ({ title, value, subtext, icon: Icon, trend, color, delay }: St
 }
 
 export function Dashboard() {
+  const later = useSafeTimeout()
   const { souls, refetch: refetchSouls } = useSouls()
   const { data: statsData, error: statsError, refetch: refetchStats } = useStats()
   const { data: clusterData, error: clusterError } = useClusterStatus()
@@ -113,7 +115,7 @@ export function Dashboard() {
   const handleRefresh = async () => {
     setRefreshing(true)
     await Promise.all([refetchSouls(), refetchStats()])
-    setTimeout(() => setRefreshing(false), 500)
+    later(() => setRefreshing(false), 500)
   }
 
   const handleExportPDF = () => {
