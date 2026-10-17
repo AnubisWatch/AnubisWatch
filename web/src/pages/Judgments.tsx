@@ -21,9 +21,12 @@ import { Link } from 'react-router-dom'
 import { useJudgments } from '../api/hooks'
 import { Judgment } from '../api/client'
 import { useSafeTimeout } from '../hooks/useSafeTimeout'
+import { formatDateTime, useDisplayTimeZone } from '../utils/date'
 
 
 export function Judgments() {
+  // Dates follow Settings → Timezone; re-render when it changes.
+  useDisplayTimeZone()
   const later = useSafeTimeout()
   const { data: judgmentsData, loading, error, refetch } = useJudgments()
   const [filter, setFilter] = useState('all')
@@ -376,7 +379,7 @@ export function Judgments() {
                     </td>
                     <td className="px-6 py-4">
                       <span className="text-sm text-gray-400">
-                        {new Date(judgment.timestamp).toLocaleString()}
+                        {formatDateTime(judgment.timestamp)}
                       </span>
                     </td>
                   </tr>

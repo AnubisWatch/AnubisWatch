@@ -1,10 +1,27 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Outlet } from "react-router-dom";
 import { Header } from "./Header";
 import { Sidebar } from "./Sidebar";
+import { api } from "../api/client";
+import { setDisplayTimeZone } from "../utils/date";
 
 export function Layout() {
 	const [sidebarOpen, setSidebarOpen] = useState(false);
+
+	// Apply Settings → Timezone to every date the dashboard shows. On failure
+	// dates stay in the viewer's local time.
+	useEffect(() => {
+		let active = true;
+		api
+			.get<{ timezone?: string }>("/config")
+			.then((config) => {
+				if (active) setDisplayTimeZone(config?.timezone);
+			})
+			.catch(() => {});
+		return () => {
+			active = false;
+		};
+	}, []);
 
 	return (
 		<div className="flex min-h-screen bg-[var(--bg-primary)] relative text-[var(--text-primary)]">

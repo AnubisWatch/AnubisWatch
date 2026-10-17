@@ -918,6 +918,21 @@ func (m *Manager) Members() []Member {
 	self.IsLeader = state.State == core.StateLeader
 	self.LastContact = time.Now().UTC()
 
+	// Only the leader talks to every peer. A follower never hears from the
+	// other followers, so their connection state says nothing; it uses the
+	// leader's replicated live-member list instead (as ownership does).
+	var liveByLeader map[string]bool
+	if !self.IsLeader {
+		m.liveMu.RLock()
+		if len(m.live) > 0 {
+			liveByLeader = make(map[string]bool, len(m.live))
+			for _, l := range m.live {
+				liveByLeader[l.NodeID] = true
+			}
+		}
+		m.liveMu.RUnlock()
+	}
+
 	members := make([]Member, 0, len(state.Peers)+1)
 	members = append(members, self)
 	peers := append([]core.RaftPeerInfo(nil), state.Peers...)
@@ -939,6 +954,13 @@ func (m *Manager) Members() []Member {
 			member.State = string(core.StateLeader)
 		case peer.IsConnected:
 			member.State = string(core.StateFollower)
+		case liveByLeader != nil && liveByLeader[peer.ID]:
+			member.State = string(core.StateFollower)
+		case liveByLeader != nil:
+			member.State = "unreachable"
+		case !self.IsLeader:
+			// No live list yet: this follower cannot tell.
+			member.State = "unknown"
 		default:
 			member.State = "unreachable"
 		}

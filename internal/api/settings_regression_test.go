@@ -195,3 +195,28 @@ func TestGetConfigReloadsStoredSettings(t *testing.T) {
 		t.Fatalf("instance_name = %v, want the stored value", got["instance_name"])
 	}
 }
+
+// The timezone setting accepted any string up to 64 characters, so a typo
+// was saved and silently ignored; it is now an IANA zone or empty (each
+// viewer's local time, the default).
+func TestSettingsTimezoneValidation(t *testing.T) {
+	for _, tt := range []struct {
+		value string
+		ok    bool
+	}{
+		{"", true},
+		{"UTC", true},
+		{"Europe/Istanbul", true},
+		{"America/Argentina/Buenos_Aires", true},
+		{"Europe/Istambul", false},
+		{"Local", false},
+		{"GMT+3 please", false},
+	} {
+		if err := validateSetting("timezone", tt.value); (err == nil) != tt.ok {
+			t.Errorf("timezone %q: err = %v, want ok=%v", tt.value, err, tt.ok)
+		}
+	}
+	if editableSettingDefaults["timezone"] != "" {
+		t.Errorf("default timezone = %q, want empty (viewer's local time)", editableSettingDefaults["timezone"])
+	}
+}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Settings as SettingsIcon,
   Shield,
@@ -23,6 +23,7 @@ import { api } from '../api/client'
 import { useAuth, useStats } from '../api/hooks'
 import { ChangePasswordForm } from '../components/ChangePasswordForm'
 import { useCan } from '../utils/permissions'
+import { listTimeZones, setDisplayTimeZone } from '../utils/date'
 import { useThemeStore, applyTheme } from '../stores/themeStore'
 import { Link } from 'react-router-dom'
 import { useSafeTimeout } from '../hooks/useSafeTimeout'
@@ -59,6 +60,8 @@ function hasConfigChanged(original: ConfigData, edited: ConfigData): boolean {
   return false
 }
 
+const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local'
+
 export function Settings() {
   const later = useSafeTimeout()
   const [activeTab, setActiveTab] = useState<TabId>('general')
@@ -69,6 +72,12 @@ export function Settings() {
   const [config, setConfig] = useState<ConfigData>({})
   const [editedConfig, setEditedConfig] = useState<ConfigData>({})
   const [hasChanges, setHasChanges] = useState(false)
+  // Every IANA zone the browser knows, plus a saved value it does not.
+  const timeZoneOptions = useMemo(() => {
+    const zones = listTimeZones()
+    const saved = config.timezone
+    return saved && !zones.includes(saved) ? [saved, ...zones] : zones
+  }, [config.timezone])
 
   const { user } = useAuth()
   const can = useCan()
@@ -112,6 +121,7 @@ export function Settings() {
       const next = result ?? editedConfig
       setConfig(next)
       setEditedConfig(next)
+      setDisplayTimeZone(next.timezone)
       setSaved(true)
       later(() => setSaved(false), 2000)
     } catch (err) {
@@ -255,16 +265,17 @@ export function Settings() {
                         Timezone
                       </label>
                       <select
-                        value={editedConfig.timezone || 'UTC'}
+                        aria-label="Timezone"
+                        value={editedConfig.timezone || ''}
                         onChange={(e) => handleChange('timezone', e.target.value)}
                         className="w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
                       >
-                        <option value="UTC">UTC</option>
-                        <option value="America/New_York">America/New_York</option>
-                        <option value="Europe/London">Europe/London</option>
-                        <option value="Europe/Istanbul">Europe/Istanbul</option>
-                        <option value="Asia/Tokyo">Asia/Tokyo</option>
+                        <option value="">Viewer&apos;s local time ({browserTimeZone})</option>
+                        {timeZoneOptions.map((zone) => (
+                          <option key={zone} value={zone}>{zone}</option>
+                        ))}
                       </select>
+                      <p className="text-sm text-gray-500 mt-2">Dates across the dashboard are shown in this zone.</p>
                     </div>
 
                     <div>

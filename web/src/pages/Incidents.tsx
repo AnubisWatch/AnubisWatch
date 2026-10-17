@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { AlertTriangle, CheckCircle, Clock, User, Search, Filter } from 'lucide-react'
 import { api } from '../api/client'
 import { useCan } from '../utils/permissions'
+import { formatDateTime, useDisplayTimeZone } from '../utils/date'
 
 interface Incident {
   id: string
@@ -20,6 +21,8 @@ interface Incident {
 }
 
 export function Incidents() {
+  // Dates follow Settings → Timezone; re-render when it changes.
+  useDisplayTimeZone()
   const can = useCan()
   const [incidents, setIncidents] = useState<Incident[]>([])
   const [loading, setLoading] = useState(true)
@@ -91,7 +94,7 @@ export function Incidents() {
 
   const formatDate = (dateStr?: string) => {
     if (!dateStr) return '—'
-    return new Date(dateStr).toLocaleString()
+    return formatDateTime(dateStr)
   }
 
   const openCount = incidents.filter((i) => i.status === 'open').length
