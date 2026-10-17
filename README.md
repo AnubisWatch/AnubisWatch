@@ -140,7 +140,7 @@ make dev            # go run ./cmd/anubis serve --single --config ./configs/anub
 make test           # go test -race -coverprofile=coverage.out ./...
 make test-short     # go test -short ./...
 make lint           # golangci-lint run ./...
-make docker         # Build anubiswatch/anubis:<version>
+make docker         # Build ghcr.io/anubiswatch/anubiswatch:<version>
 ```
 
 ### Full Test Suite and Coverage Commands
@@ -167,11 +167,11 @@ Any remaining uncovered-but-not-yet-practical paths are tracked in
 ### Docker Compose
 
 ```bash
-export ANUBIS_ADMIN_PASSWORD=[REDACTED:high_entropy_env]
+export ANUBIS_ADMIN_PASSWORD='<choose-a-strong-password>'
 docker compose up -d
 ```
 
-The root `docker-compose.yml` builds the local Dockerfile, serves AnubisWatch on `http://localhost:8443`, stores data in the `anubis-data` volume, and mounts `configs/container.anubis.json`.
+The root `docker-compose.yml` builds the local Dockerfile, serves AnubisWatch on `http://localhost:8080`, stores data in the `anubis-data` volume, and mounts `configs/container.anubis.json`.
 
 Cluster and monitoring profiles are also present:
 
@@ -182,12 +182,21 @@ docker compose --profile monitoring up -d
 
 ### Docker Image
 
+Images are published only to GitHub Container Registry, tagged with the
+release (`v0.2.0`, `0.2.0`, `0.2`, `0`) and `latest`:
+
 ```bash
-docker build -t anubiswatch/anubis:local .
-docker run --rm -p 8443:8443 \
-  -e ANUBIS_ADMIN_PASSWORD=[REDACTED:high_entropy_env] \
+docker pull ghcr.io/anubiswatch/anubiswatch:latest
+```
+
+To build locally:
+
+```bash
+docker build -t ghcr.io/anubiswatch/anubiswatch:local .
+docker run --rm -p 8080:8080 \
+  -e ANUBIS_ADMIN_PASSWORD='<choose-a-strong-password>' \
   -v anubis-data:/data \
-  anubiswatch/anubis:local
+  ghcr.io/anubiswatch/anubiswatch:local
 ```
 
 The Dockerfile builds the dashboard, compiles `/bin/anubis`, runs as the non-root `anubis` user, reads `/etc/anubis/anubis.json`, and stores runtime data under `/data`.

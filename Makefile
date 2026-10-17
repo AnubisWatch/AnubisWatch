@@ -111,18 +111,22 @@ build-freebsd-amd64:
 	@echo "Building for freebsd/amd64..."
 	GOOS=freebsd GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o bin/$(BINARY)-freebsd-amd64 ./cmd/anubis
 
-# Docker
-docker: ## Build Docker image
+# Docker images are published only to GitHub Container Registry. Releases push
+# them from .github/workflows/release.yml; docker-push is for manual use and
+# needs `docker login ghcr.io` with a token that can write packages.
+IMAGE ?= ghcr.io/anubiswatch/anubiswatch
+
+docker: ## Build Docker image ($(IMAGE))
 	docker build \
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg COMMIT=$(COMMIT) \
 	  --build-arg BUILD_DATE=$(DATE) \
-	  -t anubiswatch/$(BINARY):$(VERSION) .
-	docker tag anubiswatch/$(BINARY):$(VERSION) anubiswatch/$(BINARY):latest
+	  -t $(IMAGE):$(VERSION) .
+	docker tag $(IMAGE):$(VERSION) $(IMAGE):latest
 
-docker-push: docker ## Push Docker image
-	docker push anubiswatch/$(BINARY):$(VERSION)
-	docker push anubiswatch/$(BINARY):latest
+docker-push: docker ## Push Docker image to ghcr.io
+	docker push $(IMAGE):$(VERSION)
+	docker push $(IMAGE):latest
 
 # Release
 release: clean dashboard build-all ## Prepare release artifacts
