@@ -115,7 +115,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: anubiswatch
-          image: ghcr.io/anubiswatch/anubiswatch:v0.1.4
+          image: ghcr.io/anubiswatch/anubiswatch:v0.2.0
           imagePullPolicy: IfNotPresent
           args:
             - serve
