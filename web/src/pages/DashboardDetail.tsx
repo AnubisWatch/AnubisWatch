@@ -9,8 +9,10 @@ import { BarChartWidget } from '../components/widgets/BarChartWidget'
 import { GaugeWidget } from '../components/widgets/GaugeWidget'
 import { TableWidget } from '../components/widgets/TableWidget'
 import { useCan } from '../utils/permissions'
+import { useSafeTimeout } from '../hooks/useSafeTimeout'
 
 export function DashboardDetail() {
+  const later = useSafeTimeout()
   const can = useCan()
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -64,7 +66,7 @@ export function DashboardDetail() {
   const handleRefresh = async () => {
     setRefreshing(true)
     await fetchDashboard()
-    setTimeout(() => setRefreshing(false), 500)
+    later(() => setRefreshing(false), 500)
   }
 
   const handleDeleteWidget = async (widgetId: string) => {

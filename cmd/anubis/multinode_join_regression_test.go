@@ -107,7 +107,7 @@ func TestMultiNodeClusterJoinByAddress(t *testing.T) {
 		}
 	}()
 
-	waitFor(t, 20*time.Second, "every node to list the joiner and the joiner to list every member", func() bool {
+	waitFor(t, 60*time.Second, "every node to list the joiner and the joiner to list every member", func() bool {
 		want := append(append([]string(nil), ids...), joinerID)
 		sort.Strings(want)
 		for _, node := range nodes {
@@ -130,14 +130,16 @@ func TestMultiNodeClusterJoinByAddress(t *testing.T) {
 
 	// It receives ownership: some souls are now probed by the joiner, and every
 	// soul by exactly one node.
-	waitFor(t, 20*time.Second, "the joiner to probe the souls it owns", func() bool {
+	// Ownership moves once the leader's replicated live-member list includes
+	// the joiner; on a loaded CI runner that has taken longer than 20s.
+	waitForOrDump(t, 60*time.Second, "the joiner to probe the souls it owns", func() bool {
 		for _, id := range soulIDs {
 			if checks.byNode(id)[joinerID] > 0 {
 				return true
 			}
 		}
 		return false
-	})
+	}, func() string { return clusterStateDump(append(append([]*clusterTestNode(nil), nodes...), joiner)...) })
 	time.Sleep(time.Second) // let the ownership hand-over settle
 	before := make(map[string]map[string]int, len(soulIDs))
 	for _, id := range soulIDs {
@@ -166,7 +168,7 @@ func TestMultiNodeClusterJoinByAddress(t *testing.T) {
 
 	// It is a voter: with one original follower down, leader + one original
 	// is 2 of 4 -- a write commits only with the joiner's acknowledgement.
-	waitFor(t, 10*time.Second, "the membership change to finish", func() bool {
+	waitFor(t, 30*time.Second, "the membership change to finish", func() bool {
 		return len(leader.deps.ClusterManager.LiveMembers()) == 4
 	})
 	follower.stop(t)

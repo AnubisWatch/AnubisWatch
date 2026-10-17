@@ -24,6 +24,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog'
 import { useStatusPages, useSouls } from '../api/hooks'
 import type { StatusPage, StatusPageVisibility } from '../api/client'
 import { useCan } from '../utils/permissions'
+import { useSafeTimeout } from '../hooks/useSafeTimeout'
 
 interface ServiceStatus {
   id: string
@@ -65,6 +66,7 @@ function statusPageHref(page: StatusPage): string {
 }
 
 export function StatusPages() {
+  const later = useSafeTimeout()
   const can = useCan()
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
@@ -198,13 +200,13 @@ export function StatusPages() {
   const handleRefresh = async () => {
     setRefreshing(true)
     await refetch()
-    setTimeout(() => setRefreshing(false), 500)
+    later(() => setRefreshing(false), 500)
   }
 
   const handleCopyUrl = async (url: string, id: string) => {
     await navigator.clipboard.writeText(url)
     setCopiedId(id)
-    setTimeout(() => setCopiedId(null), 2000)
+    later(() => setCopiedId(null), 2000)
   }
 
   const handleShareUrl = async (page: StatusPage) => {
