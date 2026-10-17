@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -430,13 +431,39 @@ func waitForClusterLeader(t *testing.T, nodes []*clusterTestNode, timeout time.D
 
 func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool) {
 	t.Helper()
+	waitForOrDump(t, timeout, what, cond, nil)
+}
+
+// waitForOrDump is waitFor that logs dump() on timeout, so a CI failure shows
+// the cluster state that caused it.
+func waitForOrDump(t *testing.T, timeout time.Duration, what string, cond func() bool, dump func() string) {
+	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for !cond() {
 		if time.Now().After(deadline) {
+			if dump != nil {
+				t.Logf("cluster state at timeout:\n%s", dump())
+			}
 			t.Fatalf("timed out after %v waiting for %s", timeout, what)
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
+}
+
+// clusterStateDump describes each node's view: leader, live members (which
+// drive ownership) and how many souls its probe engine runs.
+func clusterStateDump(nodes ...*clusterTestNode) string {
+	var b strings.Builder
+	for _, node := range nodes {
+		live := make([]string, 0)
+		for _, m := range node.deps.ClusterManager.LiveMembers() {
+			live = append(live, m.NodeID)
+		}
+		sort.Strings(live)
+		fmt.Fprintf(&b, "  %s: leader=%q live=%v active_checks=%d\n",
+			node.id, node.deps.ClusterManager.Leader(), live, node.deps.ProbeEngine.GetStatus().ActiveChecks)
+	}
+	return b.String()
 }
 
 // postJSON posts body and returns the "id" of the created resource.
