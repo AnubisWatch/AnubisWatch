@@ -22,6 +22,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog'
 import { api } from '../api/client'
 import { useSouls } from '../api/hooks'
 import { useCan } from '../utils/permissions'
+import { formatDateTime, useDisplayTimeZone } from '../utils/date'
 
 interface MaintenanceWindow {
   id: string
@@ -83,6 +84,8 @@ function useMaintenance() {
 }
 
 export function Maintenance() {
+  // Dates follow Settings → Timezone; re-render when it changes.
+  useDisplayTimeZone()
   const can = useCan()
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
@@ -387,12 +390,12 @@ export function Maintenance() {
                       <div className="flex items-center gap-4 mt-3 text-xs text-gray-500">
                         <span className="flex items-center gap-1">
                           <Calendar className="w-3.5 h-3.5" />
-                          {new Date(w.start_time).toLocaleString()}
+                          {formatDateTime(w.start_time)}
                         </span>
                         <span className="text-gray-600">→</span>
                         <span className="flex items-center gap-1">
                           <Calendar className="w-3.5 h-3.5" />
-                          {new Date(w.end_time).toLocaleString()}
+                          {formatDateTime(w.end_time)}
                         </span>
                         {w.recurring && (
                           <span className="text-amber-400">Recurring: {w.recurring}</span>

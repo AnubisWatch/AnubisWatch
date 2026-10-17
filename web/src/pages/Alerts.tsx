@@ -30,6 +30,7 @@ import type { AlertChannel, AlertRule } from '../api/client'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { useCan } from '../utils/permissions'
 import { useSafeTimeout } from '../hooks/useSafeTimeout'
+import { formatDate, formatDateTime, useDisplayTimeZone } from '../utils/date'
 
 type Severity = 'critical' | 'warning' | 'info'
 type ChannelType = 'slack' | 'email' | 'pagerduty' | 'webhook' | 'discord' | 'telegram' | 'opsgenie' | 'ntfy' | 'sms'
@@ -95,6 +96,8 @@ const channelConfig: Record<ChannelType, { icon: typeof Mail; color: string; bg:
 }
 
 export function Alerts() {
+  // Dates follow Settings → Timezone; re-render when it changes.
+  useDisplayTimeZone()
   const later = useSafeTimeout()
   const can = useCan()
   const [activeTab, setActiveTab] = useState<'rules' | 'channels' | 'history'>('rules')
@@ -666,7 +669,7 @@ export function Alerts() {
                       <div>
                         <p className="font-semibold text-white">{rule.name}</p>
                         {rule.created_at && (
-                          <p className="text-xs text-gray-500 mt-1">Created: {new Date(rule.created_at).toLocaleDateString()}</p>
+                          <p className="text-xs text-gray-500 mt-1">Created: {formatDate(rule.created_at)}</p>
                         )}
                       </div>
                     </td>
@@ -893,7 +896,7 @@ export function Alerts() {
                       </span>
                     </td>
                     <td className="px-6 py-4">
-                      <span className="text-gray-400 text-sm">{new Date(alert.started_at).toLocaleString()}</span>
+                      <span className="text-gray-400 text-sm">{formatDateTime(alert.started_at)}</span>
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center justify-end gap-2">

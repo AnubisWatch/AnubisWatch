@@ -26,9 +26,11 @@ type SettingsStore interface {
 // Everything else GET reports comes from the config file and is read-only.
 var editableSettingDefaults = map[string]string{
 	"instance_name": "AnubisWatch",
-	"timezone":      "UTC",
-	"language":      "en",
-	"theme":         "dark",
+	// Empty means each viewer's own local time; otherwise an IANA zone name
+	// the dashboard formats every date in.
+	"timezone": "",
+	"language": "en",
+	"theme":    "dark",
 }
 
 // SetRuntimeConfig records the loaded config values GET /api/v1/config
@@ -129,6 +131,9 @@ func (s *RESTServer) currentUIConfig() map[string]interface{} {
 // validateSetting checks a presentation value before it is stored.
 func validateSetting(key, value string) error {
 	trimmed := strings.TrimSpace(value)
+	if trimmed == "" && key == "timezone" && value == "" {
+		return nil // the viewer's local time
+	}
 	if trimmed == "" {
 		return fmt.Errorf("%s must not be empty", key)
 	}
@@ -147,8 +152,15 @@ func validateSetting(key, value string) error {
 			return fmt.Errorf("instance_name must be at most 100 characters")
 		}
 	case "timezone":
+		if value == "" {
+			return nil
+		}
 		if len(value) > 64 {
 			return fmt.Errorf("timezone must be at most 64 characters")
+		}
+		// "Local" would mean the server's zone, not the viewer's.
+		if _, err := time.LoadLocation(value); err != nil || value == "Local" {
+			return fmt.Errorf("timezone must be an IANA time zone such as Europe/Istanbul, or empty for the viewer's local time")
 		}
 	case "language":
 		if len(value) > 16 {

@@ -25,6 +25,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog'
 import { api } from '../api/client'
 import { fetchAllArrayPages } from '../api/pagination'
 import { useCan } from '../utils/permissions'
+import { formatDateTime, formatTime, useDisplayTimeZone } from '../utils/date'
 
 interface Journey {
   id: string
@@ -130,7 +131,7 @@ function JourneyRunModal({ journeyId, journeyName, onClose }: JourneyRunModalPro
   }, [fetchRuns])
 
   const formatDate = (timestamp: number) => {
-    return new Date(timestamp).toLocaleString()
+    return formatDateTime(timestamp)
   }
 
   const formatDuration = (ms: number) => {
@@ -291,6 +292,8 @@ function useJourneys() {
 }
 
 export function Journeys() {
+  // Dates follow Settings → Timezone; re-render when it changes.
+  useDisplayTimeZone()
   const can = useCan()
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
@@ -737,7 +740,7 @@ export function Journeys() {
                     </span>
                     {journey.last_run && (
                       <span className="text-gray-500 text-sm">
-                        • {new Date(journey.last_run).toLocaleTimeString()}
+                        • {formatTime(journey.last_run)}
                       </span>
                     )}
                   </div>

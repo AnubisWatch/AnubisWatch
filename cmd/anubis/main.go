@@ -8,6 +8,9 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	// Embed the IANA time zone database: minimal container images may have
+	// no /usr/share/zoneinfo, and settings validate zone names against it.
+	_ "time/tzdata"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )

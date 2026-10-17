@@ -30,6 +30,7 @@ import { useSoul, useSoulJudgments, useSoulUptime } from '../api/hooks'
 import type { Judgment, UptimeRange } from '../api/client'
 import type { LucideIcon } from 'lucide-react'
 import { useCan } from '../utils/permissions'
+import { formatDate, formatTime, useDisplayTimeZone } from '../utils/date'
 
 interface UptimeData {
   key: string
@@ -45,6 +46,8 @@ const TABS = ['overview', 'performance', 'history', 'settings'] as const
 type TabId = (typeof TABS)[number]
 
 export function SoulDetail() {
+  // Dates follow Settings → Timezone; re-render when it changes.
+  useDisplayTimeZone()
   const can = useCan()
   const { id } = useParams()
   const navigate = useNavigate()
@@ -456,13 +459,13 @@ export function SoulDetail() {
                 <div className="flex items-center justify-between">
                   <span className="text-gray-400">Created</span>
                   <span className="text-gray-300">
-                    {soul.created_at ? new Date(soul.created_at).toLocaleDateString() : 'Unknown'}
+                    {soul.created_at ? formatDate(soul.created_at) : 'Unknown'}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-gray-400">Updated</span>
                   <span className="text-gray-300">
-                    {soul.updated_at ? new Date(soul.updated_at).toLocaleDateString() : 'Unknown'}
+                    {soul.updated_at ? formatDate(soul.updated_at) : 'Unknown'}
                   </span>
                 </div>
               </div>
@@ -706,13 +709,13 @@ export function SoulDetail() {
                 <div className="flex items-center justify-between">
                   <span className="text-gray-400">Created</span>
                   <span className="text-gray-300">
-                    {soul.created_at ? new Date(soul.created_at).toLocaleDateString() : 'Unknown'}
+                    {soul.created_at ? formatDate(soul.created_at) : 'Unknown'}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-gray-400">Updated</span>
                   <span className="text-gray-300">
-                    {soul.updated_at ? new Date(soul.updated_at).toLocaleDateString() : 'Unknown'}
+                    {soul.updated_at ? formatDate(soul.updated_at) : 'Unknown'}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
@@ -893,7 +896,7 @@ function JudgmentsList({ judgments, loading, error, getStatusIcon, getStatusText
               {judgment.latency > 1000 ? `${(judgment.latency / 1000).toFixed(1)}s` : `${judgment.latency}ms`}
             </p>
             <p className="text-sm text-gray-500">
-              {new Date(judgment.timestamp).toLocaleTimeString()}
+              {formatTime(judgment.timestamp)}
             </p>
           </div>
         </div>

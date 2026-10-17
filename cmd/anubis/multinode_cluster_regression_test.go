@@ -81,6 +81,25 @@ func TestMultiNodeClusterSharesWork(t *testing.T) {
 	}()
 
 	leader := waitForClusterLeader(t, nodes, 15*time.Second)
+
+	// Followers never talk to each other; each used to report the other
+	// follower as "unreachable". They now go by the leader's live list.
+	waitFor(t, 30*time.Second, "every follower to report the other members as live", func() bool {
+		for _, node := range nodes {
+			if node == leader {
+				continue
+			}
+			for _, member := range node.deps.ClusterManager.Members() {
+				if member.IsSelf {
+					continue
+				}
+				if member.State != "leader" && member.State != "follower" {
+					return false
+				}
+			}
+		}
+		return true
+	})
 	var follower *clusterTestNode
 	for _, node := range nodes {
 		if node != leader {
