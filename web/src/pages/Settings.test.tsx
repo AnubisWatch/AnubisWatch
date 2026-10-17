@@ -43,7 +43,6 @@ vi.mock("../stores/themeStore", () => ({
 const config = {
 	instance_name: "AnubisWatch",
 	timezone: "UTC",
-	language: "en",
 	theme: "dark" as const,
 	retention_days: 30,
 	storage_path: "/var/lib/anubis",
@@ -134,7 +133,6 @@ describe("Settings", () => {
 		render(<MemoryRouter><Settings /></MemoryRouter>);
 		await screen.findByDisplayValue("AnubisWatch");
 		fireEvent.change(screen.getByDisplayValue("UTC"), { target: { value: "Europe/Istanbul" } });
-		fireEvent.change(screen.getByDisplayValue("English"), { target: { value: "tr" } });
 		fireEvent.click(screen.getByRole("button", { name: "System" }));
 		fireEvent.click(screen.getByRole("tab", { name: /storage/i }));
 		expect(screen.getByDisplayValue("30")).toHaveAttribute("readonly");

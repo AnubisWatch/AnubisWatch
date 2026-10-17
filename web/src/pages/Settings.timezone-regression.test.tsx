@@ -11,7 +11,7 @@ vi.mock('../api/hooks', () => ({
   useStats: () => ({ data: null }),
 }))
 
-const config = { instance_name: 'AnubisWatch', timezone: '', language: 'en', theme: 'dark', read_only_keys: [] }
+const config = { instance_name: 'AnubisWatch', timezone: '', theme: 'dark', read_only_keys: [] }
 
 describe('Settings timezone', () => {
   beforeEach(() => {

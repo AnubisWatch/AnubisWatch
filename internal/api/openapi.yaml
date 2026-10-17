@@ -696,7 +696,7 @@ paths:
     get:
       description: >-
         Settings shown on the Settings page. Presentation keys (instance_name,
-        timezone, language, theme) are editable and persisted; every key in
+        timezone, theme) are editable and persisted; every key in
         read_only_keys reflects the running config file.
       responses:
         '200':
@@ -712,7 +712,7 @@ paths:
       - Config
     put:
       description: >-
-        Update presentation settings. Only instance_name, timezone, language
+        Update presentation settings. Only instance_name, timezone
         and theme are accepted; a string sets the value and null restores the
         default. Any other key is rejected with 400 ("<key> is set in the
         config file and cannot be changed at runtime"). Values persist across
@@ -2055,8 +2055,6 @@ components:
           type: string
         timezone:
           type: string
-        language:
-          type: string
         theme:
           type: string
           enum:
@@ -2101,10 +2099,6 @@ components:
           type: string
           nullable: true
           maxLength: 64
-        language:
-          type: string
-          nullable: true
-          maxLength: 16
         theme:
           type: string
           nullable: true

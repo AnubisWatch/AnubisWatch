@@ -142,7 +142,6 @@ func TestSettings_PresentationKeysPersistAcrossRestart(t *testing.T) {
 	code, got := settingsRequest(t, server, http.MethodPut, map[string]any{
 		"instance_name": "Prod Watch",
 		"timezone":      "Europe/Istanbul",
-		"language":      "tr",
 		"theme":         "light",
 	})
 	if code != http.StatusOK {
@@ -159,7 +158,7 @@ func TestSettings_PresentationKeysPersistAcrossRestart(t *testing.T) {
 	restarted := newTestServerWithStorage(newMockStorage())
 	restarted.SetSettingsStore(store)
 	_, after := settingsRequest(t, restarted, http.MethodGet, nil)
-	for key, want := range map[string]string{"instance_name": "Prod Watch", "timezone": "Europe/Istanbul", "language": "tr", "theme": "light"} {
+	for key, want := range map[string]string{"instance_name": "Prod Watch", "timezone": "Europe/Istanbul", "theme": "light"} {
 		if after[key] != want {
 			t.Errorf("after restart %s = %v, want %q", key, after[key], want)
 		}
@@ -218,5 +217,19 @@ func TestSettingsTimezoneValidation(t *testing.T) {
 	}
 	if editableSettingDefaults["timezone"] != "" {
 		t.Errorf("default timezone = %q, want empty (viewer's local time)", editableSettingDefaults["timezone"])
+	}
+}
+
+// The language setting was saved but changed nothing (the dashboard is
+// English only); it was removed rather than left as a dead control.
+func TestSettingsLanguageIsNotASetting(t *testing.T) {
+	server := newTestServerWithStorage(newMockStorage())
+	server.SetSettingsStore(&memorySettingsStore{data: map[string][]byte{}})
+	code, got := settingsRequest(t, server, http.MethodPut, map[string]any{"language": "tr"})
+	if code != http.StatusBadRequest {
+		t.Fatalf("PUT language status = %d (%v), want 400", code, got)
+	}
+	if _, got := settingsRequest(t, server, http.MethodGet, nil); got["language"] != nil {
+		t.Fatalf("GET still reports language = %v", got["language"])
 	}
 }
