@@ -1,0 +1,40 @@
+# Weekly dependency updates. govulncheck and Trivy gate CI on newly published
+# vulnerabilities even when no code changes, so stale dependencies turn main
+# red; grouped minor/patch updates keep the PR count low.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+
+  # The dashboard uses pnpm (web/pnpm-lock.yaml); Dependabot's npm ecosystem
+  # updates pnpm lockfiles.
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      web-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Base images in the Dockerfile (golang builder, alpine runtime). The Go
+  # version in .github/workflows (GO_VERSION) and go.mod's toolchain line must
+  # be bumped together with the builder image by hand.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
