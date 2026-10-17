@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-17
+
+This release makes AnubisWatch work end to end — single-node from `anubis init`
+onward, the dashboard without data loss, and multi-node clustering — and turns
+CI fully green on `main` for the first time (chaos, load and benchmark jobs
+included). Details: PR #10.
+
+### Upgrade notes
+
+- Soul `weight`/`timeout` given as bare JSON numbers are nanoseconds; values
+  below 1s / 1ms are now rejected. Use duration strings such as `"30s"`.
+- Probes and alert channels refuse private/loopback targets unless
+  `security.allow_private_targets` or `security.allowed_networks` allows them;
+  a blocked soul now records a `dead` judgment explaining why.
+- Cluster: the default distribution strategy is `hash`; with `cluster_secret`
+  every Raft RPC is signed, so upgrade all nodes together and keep node clocks
+  within 60s. `--join` sets `necropolis.raft.join` instead of deriving peer IDs.
+- A password changed at runtime now survives restarts; changing the config
+  password still takes effect. Recover a lost admin password with
+  `anubis admin reset-password` (server stopped).
+
+### Added
+
+- `anubis login` / `logout` / `admin reset-password`; client commands read the
+  server address and data directory from the config file.
+- Multi-node: follower write forwarding, single-owner souls and journeys,
+  replicated judgments/incidents/alert dedup and rate-limit state, signed Raft
+  traffic, join by address, `anubis summon` / `banish`
+  (`POST/DELETE /api/v1/cluster/nodes`).
+- Dashboard: Telegram, OpsGenie, ntfy and SMS channels; IMAP souls; rule
+  channel selection with auto-resolve; role-aware controls; SSO button;
+  change-password form; degraded and maintenance states; working header search
+  and incident bell.
+- Live WebSocket events for incidents, alerts and soul changes;
+  `GET /api/v1/auth/methods`.
+
+### Fixed
+
+- Dashboard edit screens no longer drop fields they do not show (souls, rules,
+  status pages, journeys, channels); soul and journey lists load every page.
+- MCP `tools/list`, `resources/list`, `prompts/list` returned empty bodies.
+- Backups were empty on a fresh install; logging config was ignored;
+  `anubis health` reported healthy with the server down; `config show` printed
+  secrets; standalone API-created journeys never ran.
+- Email alerts: missing From/Date headers, no implicit TLS, header injection.
+- Settings saved to an in-memory map and were lost on restart.
+- A data race in Raft log replication.
+
+### Security
+
+- Go 1.26.9 and updated `x/net`, `grpc` and OpenTelemetry dependencies
+  (govulncheck and Trivy clean); `install.sh` verifies release checksums.
+
+### Also in this release (accumulated since 0.1.4)
+
 ### Security
 
 - The Trivy image gate ran with `ignore-unfixed: false`, so it also blocked on vulnerabilities with no published fix — `GO-2026-5932` (`x/crypto/openpgp`) and `CVE-2026-56852` (`x/text`), both transitive, both already at the newest published version of their module, and both reported by `govulncheck` as unreachable from this code ("affected by 0 vulnerabilities"). No change in this repository could have turned that job green. Now `ignore-unfixed: true`: the gate blocks on actionable findings (it is what caught the openssl CVE below), unfixed ones stay visible through the `always()` SARIF upload to the Security tab, and `govulncheck` remains a hard gate with real reachability analysis

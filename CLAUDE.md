@@ -278,7 +278,7 @@ nanoseconds and are rejected below 1s / 1ms.
 
 There is no separate `lint` or `security` job — both are folded into `static-analysis`.
 
-Additional workflows: `docker-build.yml` (multi-arch images), `release.yml` (automated releases with Homebrew).
+Additional workflows: `docker-build.yml` (multi-arch images), `release.yml` (on `v*` tags: cross-platform binaries, checksums.txt, GitHub release, GHCR image).
 
 ## Dependencies
 
