@@ -157,7 +157,9 @@ func NewLocalAuthenticator(sessionPath, adminEmail, adminPassword string) (*Loca
 	}
 
 	// Start background cleanup goroutine
-	go a.cleanupExpiredSessions()
+	// The interval is read here, not in the goroutine, so tests that tune it
+	// never race with a janitor that starts late.
+	go a.cleanupExpiredSessions(cleanupInterval)
 
 	return a, nil
 }
@@ -340,8 +342,8 @@ func (a *LocalAuthenticator) saveSessionsLocked() {
 var cleanupInterval = 5 * time.Minute
 
 // cleanupExpiredSessions removes expired sessions periodically
-func (a *LocalAuthenticator) cleanupExpiredSessions() {
-	ticker := time.NewTicker(cleanupInterval)
+func (a *LocalAuthenticator) cleanupExpiredSessions(interval time.Duration) {
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	defer close(a.cleanupDone)
 

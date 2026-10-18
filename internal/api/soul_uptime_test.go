@@ -203,10 +203,29 @@ func TestSoulUptimeDaysFollowTheCallersTimeZone(t *testing.T) {
 
 	for _, offset := range []int{-600, 0, 330, 840} {
 		_, got := getSoulUptime(t, server, fmt.Sprintf("/api/v1/souls/s1/uptime?tz_offset_minutes=%d", offset))
-		wantDate := at.In(time.FixedZone("", offset*60)).Format("2006-01-02")
-		last := got.Series.Points[6]
-		if day := last.Start.In(time.FixedZone("", offset*60)).Format("2006-01-02"); day != wantDate || last.Checks != 1 {
-			t.Errorf("offset %d: last day = %s with %d checks; want %s with 1", offset, day, last.Checks, wantDate)
+		zone := time.FixedZone("", offset*60)
+		wantDate := at.In(zone).Format("2006-01-02")
+		// The check lands in the bucket for its local calendar day — usually
+		// today, but yesterday when the test runs within an hour after local
+		// midnight; the test used to assume the last bucket and failed then.
+		found := false
+		for _, p := range got.Series.Points {
+			if p.Start.In(zone).Format("2006-01-02") != wantDate {
+				if p.Checks != 0 {
+					t.Errorf("offset %d: day %s has %d checks; the only check is on %s", offset, p.Start.In(zone).Format("2006-01-02"), p.Checks, wantDate)
+				}
+				continue
+			}
+			found = true
+			if p.Checks != 1 {
+				t.Errorf("offset %d: day %s has %d checks; want 1", offset, wantDate, p.Checks)
+			}
+			if l := p.Start.In(zone); l.Hour() != 0 || l.Minute() != 0 {
+				t.Errorf("offset %d: day bucket starts at %s, not local midnight", offset, l)
+			}
+		}
+		if !found {
+			t.Errorf("offset %d: no bucket for %s", offset, wantDate)
 		}
 	}
 }

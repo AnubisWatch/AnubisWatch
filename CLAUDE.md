@@ -303,4 +303,4 @@ Dashboard (web/):
 - Uses pnpm for package management
 
 Module: `github.com/AnubisWatch/anubiswatch`
-Go version: `go 1.26.0`, toolchain `go1.26.9` (see `go.mod`)
+Go version: `go 1.26.0`, toolchain `go1.27.2` (see `go.mod`)
