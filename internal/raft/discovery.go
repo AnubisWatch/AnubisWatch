@@ -454,7 +454,7 @@ func (d *Discovery) gossipListen() {
 		// attacker cannot spam the log.
 		now := time.Now()
 		if err := verifyGossip(msg, d.clusterSecret, d.messageFreshness, now); err != nil {
-			d.logger.Warn("K9: rejected gossip from untrusted source",
+			d.logger.Warn("rejected gossip from untrusted source",
 				"from_addr", addr.String(),
 				"claimed_node_id", msg.NodeID,
 				"reason", err.Error(),
@@ -464,7 +464,7 @@ func (d *Discovery) gossipListen() {
 
 		// Signature is authentic; reject a re-send of it within the window.
 		if err := d.checkReplay(msg.HMAC, now); err != nil {
-			d.logger.Warn("K9: rejected replayed gossip",
+			d.logger.Warn("rejected replayed gossip",
 				"from_addr", addr.String(),
 				"claimed_node_id", msg.NodeID,
 				"reason", err.Error(),
@@ -610,7 +610,7 @@ func (d *Discovery) handleMDNSDiscovery(svc *MDNSService) {
 	if len(d.clusterSecret) > 0 {
 		expected := mdnsSignature(nodeID, region, version, d.clusterSecret)
 		if !hmac.Equal([]byte(expected), []byte(signature)) {
-			d.logger.Warn("K9: rejected mDNS advertisement from untrusted source",
+			d.logger.Warn("rejected mDNS advertisement from untrusted source",
 				"claimed_node_id", nodeID,
 				"address", svc.Host,
 				"reason", "missing or invalid signature")

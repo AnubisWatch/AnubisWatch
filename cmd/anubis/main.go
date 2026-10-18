@@ -124,18 +124,16 @@ Environment Variables:
   ANUBIS_TOKEN_FILE          Where anubis login stores the token (default: next to the user config)
   ANUBIS_DATA_DIR            Data directory path
   ANUBIS_ENCRYPTION_KEY      Encryption key for storage
-  ANUBIS_CLUSTER_SECRET      Cluster HMAC secret (K9: applied to necropolis.clusterSecret on
-                            load; equivalent to setting necropolis.clusterSecret in the
-                            config file. Required for multi-node, ignored in --single)
-  ANUBIS_ADMIN_PASSWORD      Initial admin password (K6: applied to auth.local.adminPassword
-                            on load; equivalent to setting auth.local.adminPassword in
-                            the config file. Used only on first run to seed the admin
-                            user when no admin exists yet; ignored after that)
+  ANUBIS_CLUSTER_SECRET      Cluster HMAC secret; same as necropolis.cluster_secret in the
+                            config file. Required for multi-node, ignored in --single
+  ANUBIS_ADMIN_PASSWORD      Initial admin password; same as auth.local.admin_password in
+                            the config file. Used only on first run, when no admin exists
+                            yet; ignored after that (see anubis admin reset-password)
   ANUBIS_LOG_LEVEL           Log level (debug, info, warn, error)
-  ANUBIS_ALLOW_INSECURE_TLS  K7: allow per-soul InsecureSkipVerify (default: 0, MITM vector if 1)
+  ANUBIS_ALLOW_INSECURE_TLS  Allow per-soul InsecureSkipVerify (default: 0, MITM vector if 1)
   ANUBIS_SSRF_ALLOW_PRIVATE  Allow probes/alerts to reach private and loopback addresses (default: 0)
 
-Security flags (K7):
+Security flags:
   --insecure-skip-verify   Master switch — enables per-soul InsecureSkipVerify
                             on TLS checks. Defaults to off. Use only in dev/test.
 `)
@@ -313,7 +311,7 @@ func serve() {
 	}
 
 	if serveOpts.InsecureSkipVerify {
-		logger.Warn("K7: InsecureSkipVerify enabled — TLS verification is disabled for any check that requests it. THIS IS A MITM VECTOR IN PRODUCTION.",
+		logger.Warn("InsecureSkipVerify enabled — TLS verification is disabled for any check that requests it. THIS IS A MITM VECTOR IN PRODUCTION.",
 			"event", "k7_insecure_skip_verify_enabled",
 			"source", "cli",
 			"flag", "--insecure-skip-verify",

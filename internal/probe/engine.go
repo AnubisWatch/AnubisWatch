@@ -777,7 +777,7 @@ func (e *Engine) applySecurityGate(soul *core.Soul) *core.Soul {
 		c.WebSocket.InsecureSkipVerify = false
 	}
 
-	e.logger.Warn("K7: soul requested InsecureSkipVerify but process has it disabled; running with TLS verification",
+	e.logger.Warn("soul requested InsecureSkipVerify but process has it disabled; running with TLS verification",
 		"event", "k7_insecure_skip_overridden",
 		"soul", c.Name,
 		"soul_id", c.ID,
