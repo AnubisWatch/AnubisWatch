@@ -36,7 +36,7 @@ spec:
             capabilities:
               drop:
                 - ALL
-          image: ghcr.io/anubiswatch/anubiswatch:v0.2.0
+          image: ghcr.io/anubiswatch/anubiswatch:v0.2.1
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
