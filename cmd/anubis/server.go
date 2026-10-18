@@ -635,7 +635,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	})
 
 	if probeEngine.Config().AllowInsecureSkipVerify {
-		logger.Warn("K7: InsecureSkipVerify enabled at engine level — per-soul TLS-skip flags will be honoured",
+		logger.Warn("InsecureSkipVerify enabled at engine level — per-soul TLS-skip flags will be honoured",
 			"event", "k7_insecure_skip_verify_enabled",
 			// Source is the post-resolution view at server startup:
 			// ServerOptions is populated from CLI flag, env var, or
