@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Settings: the timezone list now offers every IANA zone the browser knows,
+  plus "Viewer's local time" (the new default), and the chosen zone is applied
+  to every date the dashboard shows. The binary embeds `time/tzdata`, so zone
+  validation no longer depends on the host's zoneinfo.
+- Cluster: a follower's peer list shows the real state of each node
+  (follower/unreachable/unknown) instead of guessing.
+
+### Removed
+
+- The language setting and the "Digest Emails" entry. Neither was wired to
+  anything; the dashboard is English only.
+
+### Changed
+
+- Container images are published to and documented for GHCR only
+  (`ghcr.io/anubiswatch/anubiswatch`).
+- Built with Go 1.27.2 (toolchain, CI and Dockerfile moved together);
+  govulncheck v1.9.0 and golangci-lint v2.15.0 in CI.
+- Dependency updates: Go minor/patch group, GitHub Actions, jsdom 30,
+  @testing-library/jest-dom 7.
+
 ## [0.2.0] - 2026-10-17
 
 This release makes AnubisWatch work end to end — single-node from `anubis init`
