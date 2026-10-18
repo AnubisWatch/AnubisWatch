@@ -214,6 +214,7 @@ func NewOIDCAuthenticator(cfg core.OIDCAuth, localPath, adminEmail, adminPasswor
 	// decide whether to retry, fail startup, or run in degraded mode.
 	stateHMAC := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, stateHMAC); err != nil {
+		localAuth.Shutdown() // stop its janitor; nothing will own it
 		return nil, fmt.Errorf("failed to generate state HMAC key: %w", err)
 	}
 	return &OIDCAuthenticator{
@@ -706,7 +707,21 @@ func (j *jwk) toECPublicKey() (*cryptoKey, error) {
 		return nil, fmt.Errorf("unsupported EC curve: %s", j.Crv)
 	}
 
-	pubKey := &ecdsa.PublicKey{Curve: curve, X: new(big.Int).SetBytes(xBytes), Y: new(big.Int).SetBytes(yBytes)}
+	// Build the uncompressed point (0x04 || X || Y, coordinates left-padded
+	// to the curve size) and parse it: unlike setting the deprecated raw X/Y
+	// fields, ParseUncompressedPublicKey rejects points not on the curve.
+	size := (curve.Params().BitSize + 7) / 8
+	if len(xBytes) > size || len(yBytes) > size {
+		return nil, fmt.Errorf("EC coordinates too long for %s", j.Crv)
+	}
+	point := make([]byte, 1+2*size)
+	point[0] = 4
+	copy(point[1+size-len(xBytes):1+size], xBytes)
+	copy(point[1+2*size-len(yBytes):], yBytes)
+	pubKey, err := ecdsa.ParseUncompressedPublicKey(curve, point)
+	if err != nil {
+		return nil, fmt.Errorf("invalid EC public key: %w", err)
+	}
 	alg := j.Alg
 	if alg == "" {
 		switch j.Crv {

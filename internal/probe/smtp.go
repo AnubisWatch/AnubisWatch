@@ -179,8 +179,8 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	// STARTTLS if requested
 	if cfg.StartTLS {
 		hasSTARTTLS := false
-		for _, cap := range capabilities {
-			if strings.Contains(cap, "STARTTLS") {
+		for _, capability := range capabilities {
+			if strings.Contains(capability, "STARTTLS") {
 				hasSTARTTLS = true
 				break
 			}
@@ -256,13 +256,13 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		hasAuth := false
 		supportsLogin := false
 		supportsPlain := false
-		for _, cap := range capabilities {
-			if strings.Contains(cap, "AUTH") {
+		for _, capability := range capabilities {
+			if strings.Contains(capability, "AUTH") {
 				hasAuth = true
-				if strings.Contains(cap, "LOGIN") {
+				if strings.Contains(capability, "LOGIN") {
 					supportsLogin = true
 				}
-				if strings.Contains(cap, "PLAIN") {
+				if strings.Contains(capability, "PLAIN") {
 					supportsPlain = true
 				}
 			}

@@ -10,7 +10,7 @@ permissions:
   security-events: write
 
 env:
-  GO_VERSION: '1.26.9'
+  GO_VERSION: '1.27.2'
   NODE_VERSION: '22'
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
@@ -97,7 +97,7 @@ jobs:
 
       - name: Run govulncheck
         run: |
-          go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./... 2>&1 | tee /tmp/vuln.out
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./... 2>&1 | tee /tmp/vuln.out
           grep -Eq '^(No vulnerabilities found\.|Your code is affected by 0 vulnerabilities\.)' /tmp/vuln.out
 
       - name: Install web dependencies
