@@ -25,7 +25,7 @@ AnubisWatch is a zero-dependency, single-binary uptime and synthetic monitoring 
 ┌─────────────────────────────────────────────────────────────┐
 │                        Web Layer                             │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │  React 19   │  │   Vite 6    │  │  Tailwind CSS 4.1   │  │
+│  │  React 19   │  │   Vite 8    │  │  Tailwind CSS 4.1   │  │
 │  │  Dashboard  │  │   Build     │  │    Styling          │  │
 │  └──────┬──────┘  └─────────────┘  └─────────────────────┘  │
 └─────────┼───────────────────────────────────────────────────┘

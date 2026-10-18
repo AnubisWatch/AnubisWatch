@@ -297,7 +297,7 @@ Run `go list -m -f '{{.Path}} {{.Version}}' all` for current versions rather tha
 trusting a pinned list here.
 
 Dashboard (web/):
-- React 19, React Router DOM 7, Tailwind 4, Vite 6
+- React 19, React Router DOM 7, Tailwind 4, Vite 8
 - Recharts, Zustand 5, Lucide React icons
 - Vitest 4 + React Testing Library for unit tests, Playwright for e2e
 - Uses pnpm for package management
