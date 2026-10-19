@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- API: alert channels, alert rules, journeys and maintenance windows created
+  without an `enabled` field are now enabled, as documented (souls already
+  were). They used to be stored disabled and silently do nothing.
+- API: updating an alert rule keeps its `created_at`; updating a workspace
+  rejects a blank name and no longer lets the client set `deleted_at`.
 - Acknowledging or resolving an incident that does not exist (or belongs to
   another workspace) returns 404 instead of 500, and is no longer logged as a
   server error.
