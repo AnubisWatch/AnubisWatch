@@ -1547,12 +1547,13 @@ func (m *Manager) updateIncident(incidentID, workspace string, mutate func(*core
 	incident, ok := m.incidents[incidentID]
 	if !ok {
 		m.mu.RUnlock()
-		return fmt.Errorf("incident not found: %s", incidentID)
+		return &core.NotFoundError{Entity: "incident", ID: incidentID}
 	}
-	// Fail-closed: require workspace match (never skip when empty)
+	// Fail-closed: require workspace match (never skip when empty). Another
+	// workspace's incident is reported as missing, so its ID is not confirmed.
 	if workspaceOrDefault(incident.WorkspaceID) != workspaceOrDefault(workspace) {
 		m.mu.RUnlock()
-		return fmt.Errorf("access denied: incident belongs to another workspace")
+		return &core.NotFoundError{Entity: "incident", ID: incidentID}
 	}
 	updated := *incident
 	updated.Events = append([]core.AlertEvent(nil), incident.Events...)

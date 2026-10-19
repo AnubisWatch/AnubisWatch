@@ -7281,3 +7281,39 @@ func TestContextBindRejectsExcessiveJSONDepth(t *testing.T) {
 		t.Fatal("Bind accepted JSON deeper than maxJSONDepth")
 	}
 }
+
+// missingIncidentAlertManager reports every incident as missing, as the alert
+// manager does for an unknown ID or another workspace's incident.
+type missingIncidentAlertManager struct{ failingAlertManager }
+
+func (a *missingIncidentAlertManager) AcknowledgeIncident(incidentID, userID, workspace string) error {
+	return &core.NotFoundError{Entity: "incident", ID: incidentID}
+}
+func (a *missingIncidentAlertManager) ResolveIncident(incidentID, userID, workspace string) error {
+	return &core.NotFoundError{Entity: "incident", ID: incidentID}
+}
+
+func TestHandleIncidentActions_MissingIncidentIs404(t *testing.T) {
+	router := &Router{routes: make(map[string]map[string]Handler)}
+	server := &RESTServer{
+		config:     core.ServerConfig{Host: "localhost", Port: 8080},
+		authConfig: core.AuthConfig{Enabled: core.BoolPtr(true)},
+		store:      newMockStorage(),
+		alert:      &missingIncidentAlertManager{},
+		router:     router,
+		auth:       &mockAuthenticator{},
+		logger:     newTestLogger(),
+	}
+	router.Handle("POST", "/api/v1/incidents/:id/acknowledge", server.requireRole(server.handleAcknowledgeIncident, "rules:*"))
+	router.Handle("POST", "/api/v1/incidents/:id/resolve", server.requireRole(server.handleResolveIncident, "rules:*"))
+
+	for _, action := range []string{"acknowledge", "resolve"} {
+		req := httptest.NewRequest("POST", "/api/v1/incidents/no-such-incident/"+action, nil)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("%s: expected status 404, got %d: %s", action, w.Code, w.Body.String())
+		}
+	}
+}
