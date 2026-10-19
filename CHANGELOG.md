@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Acknowledging or resolving an incident that does not exist (or belongs to
+  another workspace) returns 404 instead of 500, and is no longer logged as a
+  server error.
 - `anubis help` no longer shows internal tracking codes (K6/K7/K9) and names
   the config keys as they are written in the file (`necropolis.cluster_secret`,
   `auth.local.admin_password`) instead of the Go field names. The same codes

@@ -2287,6 +2287,9 @@ func (s *RESTServer) handleAcknowledgeIncident(ctx *Context) error {
 	userID := ctx.User.ID
 
 	if err := s.alert.AcknowledgeIncident(id, userID, ctx.Workspace); err != nil {
+		if isNotFoundError(err) {
+			return ctx.Error(http.StatusNotFound, "incident not found")
+		}
 		return s.internalError(ctx, err, "internal server error")
 	}
 
@@ -2298,6 +2301,9 @@ func (s *RESTServer) handleResolveIncident(ctx *Context) error {
 	userID := ctx.User.ID
 
 	if err := s.alert.ResolveIncident(id, userID, ctx.Workspace); err != nil {
+		if isNotFoundError(err) {
+			return ctx.Error(http.StatusNotFound, "incident not found")
+		}
 		return s.internalError(ctx, err, "internal server error")
 	}
 

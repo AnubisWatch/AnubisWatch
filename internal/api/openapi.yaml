@@ -851,6 +851,8 @@ paths:
       responses:
         '200':
           description: Acknowledged
+        '404':
+          $ref: '#/components/responses/NotFoundError'
       security:
       - BearerAuth: []
       summary: Acknowledge incident
@@ -867,6 +869,8 @@ paths:
       responses:
         '200':
           description: Resolved
+        '404':
+          $ref: '#/components/responses/NotFoundError'
       security:
       - BearerAuth: []
       summary: Resolve incident

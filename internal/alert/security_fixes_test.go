@@ -1,6 +1,7 @@
 package alert
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -87,6 +88,14 @@ func TestAcknowledgeIncident_WorkspaceFailClosed(t *testing.T) {
 	err = mgr.AcknowledgeIncident("inc-1", "user-1", "workspace-b")
 	if err == nil {
 		t.Error("Expected error when acknowledging with wrong workspace, got nil")
+	}
+	// Another workspace's incident looks missing, so its ID is not confirmed.
+	var notFound *core.NotFoundError
+	if !errors.As(err, &notFound) {
+		t.Errorf("Expected NotFoundError for another workspace's incident, got %T: %v", err, err)
+	}
+	if err := mgr.AcknowledgeIncident("no-such-incident", "user-1", "workspace-a"); !errors.As(err, &notFound) {
+		t.Errorf("Expected NotFoundError for an unknown incident, got %T: %v", err, err)
 	}
 
 	// Try to acknowledge with correct workspace — should succeed
