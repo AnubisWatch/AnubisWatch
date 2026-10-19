@@ -67,8 +67,12 @@ func (s *RESTServer) handleListJourneys(ctx *Context) error {
 // handleCreateJourney creates a new journey
 func (s *RESTServer) handleCreateJourney(ctx *Context) error {
 	var journey core.JourneyConfig
-	if err := ctx.Bind(&journey); err != nil {
+	enabledSet, err := ctx.bindCreate(&journey)
+	if err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid journey data")
+	}
+	if !enabledSet {
+		journey.Enabled = true
 	}
 	if err := validateJourneyForAPI(&journey); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())

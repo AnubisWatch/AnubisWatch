@@ -1576,8 +1576,12 @@ func (s *RESTServer) handleListChannels(ctx *Context) error {
 
 func (s *RESTServer) handleCreateChannel(ctx *Context) error {
 	var channel core.AlertChannel
-	if err := ctx.Bind(&channel); err != nil {
+	enabledSet, err := ctx.bindCreate(&channel)
+	if err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid channel data")
+	}
+	if !enabledSet {
+		channel.Enabled = true
 	}
 
 	channel.ID = core.GenerateID()
@@ -1723,8 +1727,12 @@ func (s *RESTServer) handleListRules(ctx *Context) error {
 
 func (s *RESTServer) handleCreateRule(ctx *Context) error {
 	var rule core.AlertRule
-	if err := ctx.Bind(&rule); err != nil {
+	enabledSet, err := ctx.bindCreate(&rule)
+	if err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid rule data")
+	}
+	if !enabledSet {
+		rule.Enabled = true
 	}
 
 	rule.ID = core.GenerateID()
@@ -1785,6 +1793,7 @@ func (s *RESTServer) handleUpdateRule(ctx *Context) error {
 
 	rule.ID = id
 	rule.WorkspaceID = ctx.Workspace
+	rule.CreatedAt = existing.CreatedAt
 
 	if err := rule.Validate(); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
@@ -1930,6 +1939,10 @@ func (s *RESTServer) handleUpdateWorkspace(ctx *Context) error {
 	if err := ctx.Bind(&ws); err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid workspace data")
 	}
+	ws.Name = strings.TrimSpace(ws.Name)
+	if ws.Name == "" {
+		return ctx.Error(http.StatusBadRequest, "workspace name is required")
+	}
 
 	// Mass assignment protection: preserve all sensitive fields from existing.
 	// Only Name, Description, and Settings can be updated by the client.
@@ -1940,6 +1953,7 @@ func (s *RESTServer) handleUpdateWorkspace(ctx *Context) error {
 	ws.Features = existing.Features // immutable - prevent feature escalation
 	ws.Status = existing.Status     // immutable - prevent status manipulation
 	ws.CreatedAt = existing.CreatedAt
+	ws.DeletedAt = existing.DeletedAt // server-managed
 	ws.UpdatedAt = time.Now()
 
 	if err := s.store.SaveWorkspaceNoCtx(&ws); err != nil {
@@ -3570,6 +3584,27 @@ func (c *Context) Bind(v interface{}) error {
 	return json.NewDecoder(&maxDepthReader{r: c.Request.Body}).Decode(v)
 }
 
+// bindCreate binds a create request into v and reports whether the body set
+// "enabled". New channels, rules, journeys and maintenance windows are enabled
+// unless the request says otherwise; a missing field used to store them
+// disabled, so they silently did nothing.
+func (c *Context) bindCreate(v interface{}) (enabledSet bool, err error) {
+	var raw json.RawMessage
+	if err := c.Bind(&raw); err != nil {
+		return false, err
+	}
+	if err := json.Unmarshal(raw, v); err != nil {
+		return false, err
+	}
+	var presence struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if err := json.Unmarshal(raw, &presence); err != nil {
+		return false, err
+	}
+	return presence.Enabled != nil, nil
+}
+
 // Maintenance Window handlers
 
 func (s *RESTServer) handleListMaintenanceWindows(ctx *Context) error {
@@ -3589,8 +3624,12 @@ func (s *RESTServer) handleListMaintenanceWindows(ctx *Context) error {
 
 func (s *RESTServer) handleCreateMaintenanceWindow(ctx *Context) error {
 	var w core.MaintenanceWindow
-	if err := ctx.Bind(&w); err != nil {
+	enabledSet, err := ctx.bindCreate(&w)
+	if err != nil {
 		return ctx.Error(http.StatusBadRequest, "invalid JSON")
+	}
+	if !enabledSet {
+		w.Enabled = true
 	}
 	if err := normalizeMaintenanceWindowForSave(&w); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
