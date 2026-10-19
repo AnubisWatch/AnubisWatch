@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Documentation
+
+- OpenAPI request bodies now match what the server reads. Souls take `http`
+  (not `http_config`) and `weight`/`timeout` as duration strings, with no
+  `interval`; rules take a `conditions` array (not `condition`) and require
+  `channels`; journey steps put the method under `http.method`;
+  `/auth/workspace` takes `workspace`. The 16 POST/PUT operations that had no
+  documented body now have one, channel and soul types list every supported
+  value, and the login response no longer claims to return a token (it is set
+  as the `auth_token` cookie). A test now fails if a documented field is not a
+  JSON field of the Go type the server decodes.
+
 ### Fixed
 
 - Acknowledging or resolving an incident that does not exist (or belongs to

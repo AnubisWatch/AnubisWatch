@@ -150,6 +150,12 @@ paths:
         '404':
           description: Not found
     put:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertChannelCreate'
       summary: Update an alert channel
       tags:
       - Alerts
@@ -236,6 +242,12 @@ paths:
         '404':
           description: Not found
     put:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertRuleCreate'
       summary: Update an alert rule
       tags:
       - Alerts
@@ -347,15 +359,14 @@ paths:
                   example: secret123
       responses:
         '200':
-          description: Login successful
+          description: >-
+            Login successful. The session token is set as the httpOnly
+            auth_token cookie, not returned in the body.
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  token:
-                    type: string
-                    example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
                   user:
                     $ref: '#/components/schemas/User'
         '401':
@@ -488,9 +499,9 @@ paths:
             schema:
               type: object
               required:
-              - workspace_id
+              - workspace
               properties:
-                workspace_id:
+                workspace:
                   type: string
       responses:
         '200':
@@ -508,6 +519,12 @@ paths:
       tags:
       - Alerts
     post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertChannelCreate'
       responses:
         '201':
           description: Channel created
@@ -548,6 +565,12 @@ paths:
       tags:
       - Alerts
     put:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertChannelCreate'
       responses:
         '200':
           description: Channel updated
@@ -748,6 +771,12 @@ paths:
       tags:
       - Dashboards
     post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomDashboardInput'
       responses:
         '201':
           description: Created
@@ -798,6 +827,12 @@ paths:
       tags:
       - Dashboards
     put:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CustomDashboardInput'
       responses:
         '200':
           description: Updated
@@ -808,6 +843,12 @@ paths:
       - Dashboards
   /api/v1/dashboards/{id}/query:
     post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WidgetQuery'
       parameters:
       - in: path
         name: id
@@ -961,6 +1002,12 @@ paths:
       tags:
       - Journeys
     put:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JourneyCreate'
       responses:
         '200':
           description: Updated
@@ -1076,6 +1123,12 @@ paths:
       tags:
       - Maintenance
     post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MaintenanceWindowCreate'
       responses:
         '201':
           description: Created
@@ -1116,6 +1169,12 @@ paths:
       tags:
       - Maintenance
     put:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MaintenanceWindowUpdate'
       responses:
         '200':
           description: Updated
@@ -1126,6 +1185,12 @@ paths:
       - Maintenance
   /api/v1/mcp:
     post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MCPRequest'
       responses:
         '200':
           description: MCP response
@@ -1155,6 +1220,12 @@ paths:
       tags:
       - Alerts
     post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertRuleCreate'
       responses:
         '201':
           description: Rule created
@@ -1195,6 +1266,12 @@ paths:
       tags:
       - Alerts
     put:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AlertRuleCreate'
       responses:
         '200':
           description: Rule updated
@@ -1576,6 +1653,12 @@ paths:
       tags:
       - Status Pages
     put:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StatusPageCreate'
       responses:
         '200':
           description: Updated
@@ -1605,6 +1688,12 @@ paths:
       tags:
       - Workspaces
     post:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceInput'
       responses:
         '201':
           description: Workspace created
@@ -1645,6 +1734,12 @@ paths:
       tags:
       - Workspaces
     put:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkspaceInput'
       responses:
         '200':
           description: Workspace updated
@@ -1798,25 +1893,36 @@ components:
         created_at:
           type: string
           format: date-time
+    Duration:
+      type: string
+      description: >-
+        Go duration string such as "30s", "5m" or "1h30m". A bare JSON number
+        is read as nanoseconds.
+      example: 30s
+    SoulType:
+      type: string
+      enum:
+      - http
+      - tcp
+      - udp
+      - dns
+      - smtp
+      - imap
+      - icmp
+      - grpc
+      - websocket
+      - tls
     Soul:
       type: object
       properties:
         id:
           type: string
+        workspace_id:
+          type: string
         name:
           type: string
         type:
-          type: string
-          enum:
-          - http
-          - tcp
-          - udp
-          - dns
-          - smtp
-          - icmp
-          - grpc
-          - websocket
-          - tls
+          $ref: '#/components/schemas/SoulType'
         target:
           type: string
         status:
@@ -1832,12 +1938,22 @@ components:
           - unknown
           - embalmed
         weight:
-          type: integer
+          $ref: '#/components/schemas/Duration'
         timeout:
-          type: integer
-        interval:
-          type: integer
-        http_config:
+          $ref: '#/components/schemas/Duration'
+        enabled:
+          type: boolean
+        tags:
+          type: array
+          items:
+            type: string
+        regions:
+          type: array
+          items:
+            type: string
+        region:
+          type: string
+        http:
           $ref: '#/components/schemas/HTTPConfig'
         created_at:
           type: string
@@ -1855,25 +1971,79 @@ components:
         name:
           type: string
         type:
-          type: string
+          $ref: '#/components/schemas/SoulType'
         target:
           type: string
+          description: >-
+            http(s):// URL for http, ws(s):// URL for websocket, host:port for
+            the other types.
         weight:
-          type: integer
+          allOf:
+          - $ref: '#/components/schemas/Duration'
+          description: Check interval, at least 1s.
         timeout:
-          type: integer
-        interval:
-          type: integer
-        http_config:
+          allOf:
+          - $ref: '#/components/schemas/Duration'
+          description: Per-check timeout, at least 1ms.
+        enabled:
+          type: boolean
+          default: true
+        tags:
+          type: array
+          items:
+            type: string
+        regions:
+          type: array
+          description: Restrict the soul to probes in these regions.
+          items:
+            type: string
+        http:
           $ref: '#/components/schemas/HTTPConfig'
+        tcp:
+          type: object
+          description: TCP settings (banner_match, send, expect_regex).
+        udp:
+          type: object
+          description: UDP settings.
+        dns:
+          type: object
+          description: DNS settings; record_type is one of A, AAAA, CNAME, MX, TXT, NS, SOA, PTR, SRV.
+        smtp:
+          type: object
+          description: SMTP settings.
+        imap:
+          type: object
+          description: IMAP settings.
+        icmp:
+          type: object
+          description: ICMP settings.
+        grpc:
+          type: object
+          description: gRPC health-check settings.
+        websocket:
+          type: object
+          description: WebSocket settings.
+        tls:
+          type: object
+          description: TLS certificate settings.
     SoulUpdate:
       allOf:
       - $ref: '#/components/schemas/SoulCreate'
+      description: >-
+        Replaces the whole soul. An omitted enabled keeps the stored value.
     HTTPConfig:
       type: object
       properties:
         method:
           type: string
+          enum:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - PATCH
+          - HEAD
+          - OPTIONS
         headers:
           type: object
           additionalProperties:
@@ -1884,10 +2054,34 @@ components:
           type: array
           items:
             type: integer
+        body_contains:
+          type: string
+        body_regex:
+          type: string
+        json_path:
+          type: object
+          description: JSONPath expression → expected value.
+          additionalProperties:
+            type: string
+        json_schema:
+          type: string
+        json_schema_strict:
+          type: boolean
+        response_headers:
+          type: object
+          additionalProperties:
+            type: string
+        feather:
+          allOf:
+          - $ref: '#/components/schemas/Duration'
+          description: Latency budget; slower responses are degraded.
         follow_redirects:
           type: boolean
-        verify_tls:
+        max_redirects:
+          type: integer
+        insecure_skip_verify:
           type: boolean
+          description: Only honoured when the server runs with --insecure-skip-verify.
     UptimeWindow:
       type: object
       properties:
@@ -1929,6 +2123,18 @@ components:
           format: date-time
         error:
           type: string
+    AlertChannelType:
+      type: string
+      enum:
+      - slack
+      - discord
+      - telegram
+      - sms
+      - email
+      - pagerduty
+      - opsgenie
+      - ntfy
+      - webhook
     AlertChannel:
       type: object
       properties:
@@ -1937,17 +2143,33 @@ components:
         name:
           type: string
         type:
-          type: string
-          enum:
-          - email
-          - webhook
-          - slack
-          - discord
-          - pagerduty
-        config:
-          type: object
+          $ref: '#/components/schemas/AlertChannelType'
         enabled:
           type: boolean
+        workspace_id:
+          type: string
+        config:
+          type: object
+          description: Type-specific settings; secret values are redacted.
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/AlertFilter'
+        rate_limit:
+          $ref: '#/components/schemas/AlertRateLimit'
+        retry_policy:
+          $ref: '#/components/schemas/AlertRetryPolicy'
+        has_secrets:
+          type: object
+          description: Which secret config keys are set.
+          additionalProperties:
+            type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
     AlertChannelCreate:
       type: object
       required:
@@ -1957,12 +2179,65 @@ components:
         name:
           type: string
         type:
-          type: string
+          $ref: '#/components/schemas/AlertChannelType'
         config:
           type: object
+          description: >-
+            Type-specific settings, validated per type (for example url for
+            webhook, webhook_url for slack and discord). On update, redacted
+            secret values keep the stored secret.
         enabled:
           type: boolean
           default: true
+        filters:
+          type: array
+          items:
+            $ref: '#/components/schemas/AlertFilter'
+        rate_limit:
+          $ref: '#/components/schemas/AlertRateLimit'
+        retry_policy:
+          $ref: '#/components/schemas/AlertRetryPolicy'
+    AlertFilter:
+      type: object
+      properties:
+        field:
+          type: string
+        operator:
+          type: string
+          enum:
+          - eq
+          - ne
+          - in
+          - not_in
+          - contains
+        value:
+          type: string
+        values:
+          type: array
+          items:
+            type: string
+    AlertRateLimit:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+        max_alerts:
+          type: integer
+        window:
+          $ref: '#/components/schemas/Duration'
+        grouping_key:
+          type: string
+    AlertRetryPolicy:
+      type: object
+      properties:
+        max_retries:
+          type: integer
+        initial_wait:
+          $ref: '#/components/schemas/Duration'
+        max_wait:
+          $ref: '#/components/schemas/Duration'
+        backoff:
+          type: string
     AlertRule:
       type: object
       properties:
@@ -1970,31 +2245,154 @@ components:
           type: string
         name:
           type: string
-        condition:
+        enabled:
+          type: boolean
+        workspace_id:
           type: string
+        scope:
+          $ref: '#/components/schemas/AlertRuleScope'
+        conditions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AlertCondition'
         channels:
           type: array
           items:
             type: string
-        enabled:
+        severity:
+          type: string
+          enum:
+          - critical
+          - warning
+          - info
+        cooldown:
+          $ref: '#/components/schemas/Duration'
+        auto_resolve:
           type: boolean
+        escalation:
+          type: object
+        created_at:
+          type: string
+          format: date-time
     AlertRuleCreate:
       type: object
       required:
       - name
-      - condition
+      - conditions
+      - channels
       properties:
         name:
           type: string
-        condition:
-          type: string
-        channels:
-          type: array
-          items:
-            type: string
         enabled:
           type: boolean
           default: true
+        scope:
+          $ref: '#/components/schemas/AlertRuleScope'
+        conditions:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/AlertCondition'
+        channels:
+          type: array
+          minItems: 1
+          description: Alert channel IDs to notify.
+          items:
+            type: string
+        severity:
+          type: string
+          enum:
+          - critical
+          - warning
+          - info
+        cooldown:
+          $ref: '#/components/schemas/Duration'
+        auto_resolve:
+          type: boolean
+        escalation:
+          type: object
+    AlertRuleScope:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+          - all
+          - tag
+          - type
+          - specific
+        tags:
+          type: array
+          items:
+            type: string
+        soul_types:
+          type: array
+          items:
+            type: string
+        soul_ids:
+          type: array
+          items:
+            type: string
+        workspaces:
+          type: array
+          items:
+            type: string
+    AlertCondition:
+      type: object
+      required:
+      - type
+      properties:
+        type:
+          type: string
+          enum:
+          - consecutive_failures
+          - threshold
+          - percentage
+          - anomaly
+          - compound
+          - status_change
+          - status_for
+          - failure_rate
+        threshold:
+          type: integer
+          minimum: 0
+        metric:
+          type: string
+          description: >-
+            For threshold: latency, latency_ms, duration, status_code or
+            tls_expiry_days. For anomaly: the same without tls_expiry_days.
+        operator:
+          type: string
+          description: Comparison such as >, <, ==, >=, <=, !=.
+        value:
+          description: Value to compare the metric against.
+        window:
+          $ref: '#/components/schemas/Duration'
+        from:
+          type: string
+          description: Previous status, for status_change.
+        to:
+          type: string
+          description: New status, for status_change.
+        status:
+          type: string
+          description: Status to hold, for status_for.
+        duration:
+          allOf:
+          - $ref: '#/components/schemas/Duration'
+          description: How long the status must hold, for status_for.
+        sub_conditions:
+          type: array
+          description: For compound.
+          items:
+            $ref: '#/components/schemas/AlertCondition'
+        logic:
+          type: string
+          enum:
+          - and
+          - or
+        anomaly_std_dev:
+          type: number
     ClusterNodeRequest:
       type: object
       required:
@@ -2115,16 +2513,34 @@ components:
       properties:
         id:
           type: string
+        workspace_id:
+          type: string
         name:
           type: string
         description:
           type: string
+        weight:
+          $ref: '#/components/schemas/Duration'
+        timeout:
+          $ref: '#/components/schemas/Duration'
+        continue_on_failure:
+          type: boolean
+        variables:
+          type: object
+          additionalProperties:
+            type: string
         steps:
           type: array
           items:
             $ref: '#/components/schemas/JourneyStep'
         enabled:
           type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
     JourneyCreate:
       type: object
       required:
@@ -2135,8 +2551,24 @@ components:
           type: string
         description:
           type: string
+        weight:
+          allOf:
+          - $ref: '#/components/schemas/Duration'
+          description: Run interval; defaults to 1m.
+        timeout:
+          allOf:
+          - $ref: '#/components/schemas/Duration'
+          description: Timeout for the whole journey; defaults to 30s.
+        continue_on_failure:
+          type: boolean
+        variables:
+          type: object
+          description: Default variables, usable in steps as ${name}.
+          additionalProperties:
+            type: string
         steps:
           type: array
+          minItems: 1
           items:
             $ref: '#/components/schemas/JourneyStep'
         enabled:
@@ -2144,21 +2576,64 @@ components:
           default: true
     JourneyStep:
       type: object
+      required:
+      - name
+      - target
       properties:
         name:
           type: string
+        type:
+          allOf:
+          - $ref: '#/components/schemas/SoulType'
+          description: Defaults to http.
         target:
           type: string
-        method:
-          type: string
+          description: May use ${variable}.
+        timeout:
+          allOf:
+          - $ref: '#/components/schemas/Duration'
+          description: Defaults to 10s.
+        http:
+          $ref: '#/components/schemas/HTTPConfig'
+        tcp:
+          type: object
+        udp:
+          type: object
+        dns:
+          type: object
+        tls:
+          type: object
+        extract:
+          type: object
+          description: Variable name → extraction rule {from (body, header, cookie), path, regex}.
+          additionalProperties:
+            type: object
         assertions:
           type: array
           items:
-            type: object
+            $ref: '#/components/schemas/JourneyAssertion'
+    JourneyAssertion:
+      type: object
+      properties:
+        type:
+          type: string
+          description: status_code, body_contains, json_path, header, response_time, ...
+        target:
+          type: string
+          description: JSON path, header name, etc.
+        operator:
+          type: string
+          description: equals, not_equals, contains, greater_than, less_than, regex
+        expected:
+          type: string
+        message:
+          type: string
     StatusPage:
       type: object
       properties:
         id:
+          type: string
+        workspace_id:
           type: string
         name:
           type: string
@@ -2166,12 +2641,41 @@ components:
           type: string
         description:
           type: string
+        logo_url:
+          type: string
+        favicon_url:
+          type: string
+        custom_domain:
+          type: string
+        theme:
+          type: object
+        visibility:
+          type: string
+          enum:
+          - public
+          - private
+          - protected
+        password_set:
+          type: boolean
+          description: Whether a password is configured; the password itself is never returned.
         enabled:
           type: boolean
         souls:
           type: array
           items:
             type: string
+        groups:
+          type: array
+          items:
+            type: object
+        uptime_days:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
     StatusPageCreate:
       type: object
       required:
@@ -2182,15 +2686,296 @@ components:
           type: string
         slug:
           type: string
+          pattern: '^[a-z0-9-]+$'
+          maxLength: 100
         description:
           type: string
+        logo_url:
+          type: string
+        favicon_url:
+          type: string
+        custom_domain:
+          type: string
+        theme:
+          type: object
+          properties:
+            primary_color:
+              type: string
+            background_color:
+              type: string
+            text_color:
+              type: string
+            accent_color:
+              type: string
+            font_family:
+              type: string
+            custom_css:
+              type: string
+        visibility:
+          type: string
+          enum:
+          - public
+          - private
+          - protected
+        password:
+          type: string
+          format: password
+          description: >-
+            Required for a protected page. On update, omit to keep the stored
+            password; an empty string clears it.
         enabled:
           type: boolean
           default: true
         souls:
           type: array
+          description: Soul IDs to show; each must belong to the caller's workspace.
           items:
             type: string
+        groups:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+              description:
+                type: string
+              soul_ids:
+                type: array
+                items:
+                  type: string
+              order:
+                type: integer
+        uptime_days:
+          type: integer
+          default: 90
+    MaintenanceWindowCreate:
+      type: object
+      required:
+      - name
+      - start_time
+      - end_time
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        soul_ids:
+          type: array
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+        start_time:
+          type: string
+          format: date-time
+        end_time:
+          type: string
+          format: date-time
+          description: Must be after start_time.
+        recurring:
+          type: string
+          enum:
+          - ''
+          - none
+          - daily
+          - weekly
+          - monthly
+        enabled:
+          type: boolean
+          default: true
+    MaintenanceWindowUpdate:
+      type: object
+      description: Partial update; only the fields sent are changed.
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        soul_ids:
+          type: array
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+        start_time:
+          type: string
+          format: date-time
+        end_time:
+          type: string
+          format: date-time
+        recurring:
+          type: string
+          enum:
+          - ''
+          - none
+          - daily
+          - weekly
+          - monthly
+        enabled:
+          type: boolean
+    CustomDashboardInput:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        refresh_sec:
+          type: integer
+        widgets:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              title:
+                type: string
+              type:
+                type: string
+                enum:
+                - line_chart
+                - bar_chart
+                - gauge
+                - stat
+                - table
+              grid:
+                type: object
+                properties:
+                  x:
+                    type: integer
+                  y:
+                    type: integer
+                  width:
+                    type: integer
+                    minimum: 1
+                    maximum: 12
+                  height:
+                    type: integer
+              query:
+                $ref: '#/components/schemas/WidgetQuery'
+              thresholds:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    value:
+                      type: number
+                    color:
+                      type: string
+                    op:
+                      type: string
+    WidgetQuery:
+      type: object
+      required:
+      - source
+      properties:
+        source:
+          type: string
+          enum:
+          - souls
+          - judgments
+          - stats
+          - alerts
+        metric:
+          type: string
+          description: For souls, one of count, list, status_distribution.
+        filters:
+          type: object
+          description: For example soul_id.
+          additionalProperties:
+            type: string
+        time_range:
+          type: string
+          description: Number with an h, d or w suffix, such as 24h or 7d.
+        aggregation:
+          type: string
+    WorkspaceInput:
+      type: object
+      required:
+      - name
+      properties:
+        name:
+          type: string
+        slug:
+          type: string
+          description: >-
+            Create only; derived from name when omitted. Reserved slugs are
+            rejected. Ignored on update.
+        description:
+          type: string
+        settings:
+          type: object
+          properties:
+            timezone:
+              type: string
+            date_format:
+              type: string
+            status_page_theme:
+              type: string
+            branding:
+              type: object
+              properties:
+                logo_url:
+                  type: string
+                favicon_url:
+                  type: string
+                primary_color:
+                  type: string
+                accent_color:
+                  type: string
+                custom_css:
+                  type: string
+                hide_powered_by:
+                  type: boolean
+            notifications:
+              type: object
+              properties:
+                digest_enabled:
+                  type: boolean
+                digest_frequency:
+                  type: string
+                  enum:
+                  - hourly
+                  - daily
+                  - weekly
+                alert_threshold:
+                  type: integer
+                excluded_channels:
+                  type: array
+                  items:
+                    type: string
+    MCPRequest:
+      type: object
+      required:
+      - jsonrpc
+      - method
+      properties:
+        jsonrpc:
+          type: string
+          enum:
+          - '2.0'
+        id:
+          description: Request ID (string or number), echoed in the response.
+        method:
+          type: string
+          enum:
+          - initialize
+          - tools/list
+          - tools/call
+          - resources/list
+          - resources/read
+          - prompts/list
+          - prompts/get
+        params:
+          type: object
     PaginatedSouls:
       type: object
       properties:
