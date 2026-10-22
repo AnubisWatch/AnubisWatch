@@ -21,6 +21,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Storage: the data directory is now locked (`<data>/LOCK`). Client commands
+  that open storage directly (`judge` without a login, `backup`, `restore`,
+  `souls import`, cluster commands) used to open it next to a running server;
+  their startup rewrote `wal.log` and every later server write was lost on
+  restart. They now refuse and say to use the API or stop the server.
+- Storage: a WAL write that fails halfway (for example on a full disk) is
+  cut off again, so it no longer hides every later write on restart. After a
+  failed fsync the store refuses further writes until restarted.
+- Storage: recovery skips a damaged entry in the middle of the WAL and
+  continues with the next valid one, instead of discarding everything after
+  it. The damaged original is kept as `wal.log.corrupt-<time>`. The data
+  directory is fsynced after the WAL is replaced.
+- CLI: commands that open storage directly now use the configured encryption
+  key. On an encrypted store, `backup create` used to report no data and
+  `restore` wrote plaintext the server could not read.
+- Backup: backups (format 1.1) now contain every stored record — dashboards,
+  maintenance windows, incidents, verdicts, status-page subscriptions — plus
+  local user accounts and the admin password hash (not login sessions).
+  `--include-history` also covers uptime summaries, journey runs and alert
+  events, and restore now writes judgment history back. Format 1.0 backups
+  still restore.
+- Config: `storage.retention_days`, which `anubis init` writes, now sets raw
+  judgment retention. It was ignored and every install kept 90 days.
 - API: alert channels, alert rules, journeys and maintenance windows created
   without an `enabled` field are now enabled, as documented (souls already
   were). They used to be stored disabled and silently do nothing.
