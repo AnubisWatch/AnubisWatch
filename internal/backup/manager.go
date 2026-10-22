@@ -54,6 +54,19 @@ type BackupStorage interface {
 	GetSystemConfig(ctx context.Context, key string) ([]byte, error)
 }
 
+// RecordSource is implemented by stores that can list every raw record
+// (CobaltDB does). Backups taken from one capture the whole keyspace, so
+// dashboards, maintenance windows, incidents, subscriptions and anything added
+// later are included without a typed section for each.
+type RecordSource interface {
+	PrefixScan(prefix string) (map[string][]byte, error)
+}
+
+// RecordSink is the restore-side counterpart of RecordSource.
+type RecordSink interface {
+	Put(key string, value []byte) error
+}
+
 // RestoreStorage interface for restoring data
 type RestoreStorage interface {
 	SaveSoul(ctx context.Context, soul *core.Soul) error
@@ -107,7 +120,23 @@ type BackupData struct {
 	StatusPages   []*core.StatusPage         `json:"status_pages"`
 	Journeys      []*core.JourneyConfig      `json:"journeys"`
 	SystemConfig  map[string]json.RawMessage `json:"system_config,omitempty"`
+
+	// Records holds every stored record by key (format 1.1). When present,
+	// restore uses it instead of the typed sections above, which are kept
+	// for readability and for `backup info`.
+	Records map[string][]byte `json:"records,omitempty"`
+	// Auth holds the local user accounts and admin password hash from
+	// sessions.json. Login sessions and reset tokens are left out.
+	Auth json.RawMessage `json:"auth,omitempty"`
 }
+
+const (
+	backupVersionTyped   = "1.0"
+	backupVersionRecords = "1.1"
+)
+
+// sessionsFile is where the local authenticator persists accounts.
+const sessionsFile = "sessions.json"
 
 // Options for backup operations
 type Options struct {
@@ -154,7 +183,7 @@ func (m *Manager) Create(ctx context.Context, opts Options) (*Backup, string, er
 	m.logger.Info("Starting backup", "type", "full")
 
 	backup := &Backup{
-		Version:    "1.0",
+		Version:    backupVersionTyped,
 		CreatedAt:  time.Now().UTC(),
 		BackupType: "full",
 		Data:       BackupData{},
@@ -186,6 +215,20 @@ func (m *Manager) Create(ctx context.Context, opts Options) (*Backup, string, er
 	}
 	backup.Data.Souls = allSouls
 	backup.Metadata.Souls = len(allSouls)
+
+	records, hasRecords, err := m.collectRecords(opts.IncludeJudgments)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to collect records: %w", err)
+	}
+	if hasRecords {
+		backup.Version = backupVersionRecords
+		backup.Data.Records = records
+	}
+	auth, err := m.collectAuth()
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read user accounts: %w", err)
+	}
+	backup.Data.Auth = auth
 
 	// Collect recent judgment history when the operator asked for it. The
 	// storage interface declares ListJudgments for exactly this purpose; the
@@ -345,18 +388,78 @@ func (m *Manager) Restore(ctx context.Context, storage RestoreStorage, backupPat
 	}
 
 	// Validate backup version
-	if backup.Version != "1.0" {
+	if backup.Version != backupVersionTyped && backup.Version != backupVersionRecords {
 		return fmt.Errorf("unsupported backup version: %s", backup.Version)
 	}
 
+	// A store that cannot take this archive must be rejected before
+	// anything is written, and in particular before the local accounts are
+	// replaced: a restore that cannot succeed must not touch the node.
+	sink, hasRecordSink := storage.(RecordSink)
+	if len(backup.Data.Records) > 0 && !hasRecordSink {
+		return fmt.Errorf("backup version %s needs a store that accepts raw records", backup.Version)
+	}
+	if len(backup.Data.Judgments) > 0 && opts.IncludeSouls {
+		if _, ok := storage.(JudgmentSink); !ok {
+			return fmt.Errorf("store cannot restore judgment history")
+		}
+	}
+
+	failed := 0
+	if len(backup.Data.Records) > 0 {
+		failedRecords, err := m.restoreRecords(sink, backup.Data.Records, opts)
+		if err != nil {
+			return err
+		}
+		failed += failedRecords
+	} else {
+		failedRecords, err := m.restoreTypedData(ctx, storage, backup, opts)
+		if err != nil {
+			return err
+		}
+		failed += failedRecords
+	}
+
+	failedJudgments, err := m.restoreJudgments(ctx, storage, backup.Data.Judgments, opts)
+	if err != nil {
+		return err
+	}
+	failed += failedJudgments
+
+	// The accounts are replaced last, and only when everything else made it
+	// in. A restore that failed part way through the data has to leave the
+	// existing accounts and their login sessions in place, otherwise the
+	// operator loses access to the very node they are trying to recover.
+	if failed > 0 {
+		m.logger.Error("Restore finished with errors; the existing user accounts and sessions were kept",
+			"failed_records", failed)
+		return nil
+	}
+	if opts.IncludeUsers && len(backup.Data.Auth) > 0 {
+		if err := m.restoreAuth(backup.Data.Auth); err != nil {
+			return fmt.Errorf("failed to restore user accounts: %w", err)
+		}
+		m.logger.Info("Restored user accounts")
+	}
+
+	m.logger.Info("Restore completed successfully")
+	return nil
+}
+
+// restoreTypedData restores the typed sections of a backup (version 1.0),
+// which are used when the archive carries no raw records. It returns the
+// number of records that could not be written.
+func (m *Manager) restoreTypedData(ctx context.Context, storage RestoreStorage, backup *Backup, opts RestoreOptions) (int, error) {
+	failed := 0
 	// Restore based on options
 	if opts.IncludeWorkspaces {
 		for _, ws := range backup.Data.Workspaces {
 			if err := storage.SaveWorkspace(ctx, ws); err != nil {
 				m.logger.Warn("Failed to restore workspace", "id", ws.ID, "error", err)
 				if !opts.ContinueOnError {
-					return fmt.Errorf("failed to restore workspace %s: %w", ws.ID, err)
+					return failed, fmt.Errorf("failed to restore workspace %s: %w", ws.ID, err)
 				}
+				failed++
 			}
 		}
 		m.logger.Info("Restored workspaces", "count", len(backup.Data.Workspaces))
@@ -367,8 +470,9 @@ func (m *Manager) Restore(ctx context.Context, storage RestoreStorage, backupPat
 			if err := storage.SaveSoul(ctx, soul); err != nil {
 				m.logger.Warn("Failed to restore soul", "id", soul.ID, "error", err)
 				if !opts.ContinueOnError {
-					return fmt.Errorf("failed to restore soul %s: %w", soul.ID, err)
+					return failed, fmt.Errorf("failed to restore soul %s: %w", soul.ID, err)
 				}
+				failed++
 			}
 		}
 		m.logger.Info("Restored souls", "count", len(backup.Data.Souls))
@@ -379,8 +483,9 @@ func (m *Manager) Restore(ctx context.Context, storage RestoreStorage, backupPat
 			if err := storage.SaveAlertChannel(ch); err != nil {
 				m.logger.Warn("Failed to restore alert channel", "id", ch.ID, "error", err)
 				if !opts.ContinueOnError {
-					return fmt.Errorf("failed to restore alert channel %s: %w", ch.ID, err)
+					return failed, fmt.Errorf("failed to restore alert channel %s: %w", ch.ID, err)
 				}
+				failed++
 			}
 		}
 
@@ -388,8 +493,9 @@ func (m *Manager) Restore(ctx context.Context, storage RestoreStorage, backupPat
 			if err := storage.SaveAlertRule(rule); err != nil {
 				m.logger.Warn("Failed to restore alert rule", "id", rule.ID, "error", err)
 				if !opts.ContinueOnError {
-					return fmt.Errorf("failed to restore alert rule %s: %w", rule.ID, err)
+					return failed, fmt.Errorf("failed to restore alert rule %s: %w", rule.ID, err)
 				}
+				failed++
 			}
 		}
 		m.logger.Info("Restored alerts",
@@ -402,8 +508,9 @@ func (m *Manager) Restore(ctx context.Context, storage RestoreStorage, backupPat
 			if err := storage.SaveStatusPage(page); err != nil {
 				m.logger.Warn("Failed to restore status page", "id", page.ID, "error", err)
 				if !opts.ContinueOnError {
-					return fmt.Errorf("failed to restore status page %s: %w", page.ID, err)
+					return failed, fmt.Errorf("failed to restore status page %s: %w", page.ID, err)
 				}
+				failed++
 			}
 		}
 		m.logger.Info("Restored status pages", "count", len(backup.Data.StatusPages))
@@ -414,8 +521,9 @@ func (m *Manager) Restore(ctx context.Context, storage RestoreStorage, backupPat
 			if err := storage.SaveJourney(ctx, journey); err != nil {
 				m.logger.Warn("Failed to restore journey", "id", journey.ID, "error", err)
 				if !opts.ContinueOnError {
-					return fmt.Errorf("failed to restore journey %s: %w", journey.ID, err)
+					return failed, fmt.Errorf("failed to restore journey %s: %w", journey.ID, err)
 				}
+				failed++
 			}
 		}
 		m.logger.Info("Restored journeys", "count", len(backup.Data.Journeys))
@@ -426,14 +534,14 @@ func (m *Manager) Restore(ctx context.Context, storage RestoreStorage, backupPat
 			if err := storage.SaveSystemConfig(ctx, key, value); err != nil {
 				m.logger.Warn("Failed to restore system config", "key", key, "error", err)
 				if !opts.ContinueOnError {
-					return fmt.Errorf("failed to restore system config %s: %w", key, err)
+					return failed, fmt.Errorf("failed to restore system config %s: %w", key, err)
 				}
+				failed++
 			}
 		}
 	}
 
-	m.logger.Info("Restore completed successfully")
-	return nil
+	return failed, nil
 }
 
 // RestoreOptions contains options for restore operations
@@ -444,6 +552,7 @@ type RestoreOptions struct {
 	IncludeStatusPages  bool
 	IncludeJourneys     bool
 	IncludeSystemConfig bool
+	IncludeUsers        bool
 	ContinueOnError     bool
 }
 
@@ -456,6 +565,7 @@ func DefaultRestoreOptions() RestoreOptions {
 		IncludeStatusPages:  true,
 		IncludeJourneys:     true,
 		IncludeSystemConfig: true,
+		IncludeUsers:        true,
 		ContinueOnError:     false,
 	}
 }
@@ -602,13 +712,20 @@ func (m *Manager) writeBackupFile(backup *Backup, path string, opts Options) err
 		jsonData = encrypted
 	}
 
-	// Write to a temp file first for atomic backup creation
-	// This prevents corrupted backups if the process is interrupted
-	tmpPath := path + ".tmp"
-	file, err := os.Create(tmpPath)
+	// Write to a private temporary file first, then rename it into place.
+	// This prevents corrupted backups if the process is interrupted. The
+	// archive holds user accounts and password hashes, so the temporary
+	// file is created with 0600 under a unique name: a fixed name would let
+	// a leftover file (or a symlink planted by another user) be written
+	// through, and os.Create would hand the archive the process umask.
+	// A leftover "<name>.tmp" from an earlier run is not ours, so it is
+	// left completely alone.
+	tmpFile, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
 	if err != nil {
 		return err
 	}
+	tmpPath := tmpFile.Name()
+	file := tmpFile
 	defer os.Remove(tmpPath)
 
 	var writer io.Writer = file
@@ -1034,15 +1151,31 @@ func copyFile(src, dst string) error {
 	}
 	defer srcFile.Close()
 
-	dstFile, err := os.Create(dst)
+	// The destination holds a secret (the backup encryption key), so it is
+	// written through a private temporary file and renamed into place. That
+	// keeps it unreadable for others even for a moment and never writes
+	// through a symlink planted at the destination path.
+	tmp, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".tmp-*")
 	if err != nil {
 		return err
 	}
-	defer dstFile.Close()
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
 
-	if _, err := io.Copy(dstFile, srcFile); err != nil {
+	if _, err := io.Copy(tmp, srcFile); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0600); err != nil {
 		return err
 	}
 
-	return dstFile.Sync()
+	return os.Rename(tmpPath, dst)
 }
