@@ -118,7 +118,7 @@ func (c *HTTPChecker) getTransport(cfg *core.HTTPConfig, timeout time.Duration) 
 		},
 		// SSRF: wrap DialContext with DNS-rebinding protection so the
 		// blocklist is enforced at connection time, not just at config time.
-		DialContext: DefaultValidator.WrapDialerContext((&net.Dialer{
+		DialContext: DefaultValidator.Load().WrapDialerContext((&net.Dialer{
 			Timeout:   10 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext),

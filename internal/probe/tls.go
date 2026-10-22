@@ -114,7 +114,7 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 	// SSRF protection: dial the pinned literal IP so DNS rebinding between
 	// Validate() and Judge() cannot redirect the connection, then perform
 	// the TLS handshake with the original ServerName for SNI/verification.
-	pinnedDial := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+	pinnedDial := DefaultValidator.Load().WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
 	rawConn, err := pinnedDial(opCtx, "tcp", soul.Target)
 	if err != nil {
 		return failJudgment(soul, fmt.Errorf("TLS connection failed: %w", err)), nil
@@ -387,7 +387,7 @@ func (c *TLSChecker) diagnoseTLSFailure(ctx context.Context, soul *core.Soul, di
 	// The handshake uses the original hostname for SNI.
 	tlsConfig.ServerName = tlsServerName(soul.Target)
 	var diagConn net.Conn
-	pinnedDiagDial := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+	pinnedDiagDial := DefaultValidator.Load().WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
 	rawDiagConn, dialDiagErr := pinnedDiagDial(ctx, "tcp", soul.Target)
 	if dialDiagErr != nil {
 		return failJudgment(soul, fmt.Errorf("TLS connection failed: %w", dialErr))

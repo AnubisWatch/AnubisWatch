@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -271,17 +272,34 @@ func (v *SSRFValidator) ValidateAddress(address string) error {
 	return nil
 }
 
-// DefaultValidator is the default SSRF validator instance
-var DefaultValidator = NewSSRFValidator()
+// DefaultValidator is the default SSRF validator instance.
+//
+// It is published atomically. Probe checks and alert dispatchers read it on
+// every operation, while ConfigureDefaultValidator replaces it: a plain
+// variable made that replacement a data race, and a reader could even
+// observe a validator that was still being constructed. The validator itself
+// is immutable once published, so a reader that loads the pointer always
+// sees a complete and consistent policy.
+var DefaultValidator = newDefaultValidatorRef()
+
+// newDefaultValidatorRef returns the holder for the process-wide validator,
+// already populated with the default policy. It runs during package variable
+// initialization, so the validator exists before any init function or check
+// can read it.
+func newDefaultValidatorRef() *atomic.Pointer[SSRFValidator] {
+	ref := &atomic.Pointer[SSRFValidator]{}
+	ref.Store(NewSSRFValidator())
+	return ref
+}
 
 // ValidateTarget is a convenience function using the default validator
 func ValidateTarget(target string) error {
-	return DefaultValidator.ValidateTarget(target)
+	return DefaultValidator.Load().ValidateTarget(target)
 }
 
 // ValidateAddress is a convenience function using the default validator
 func ValidateAddress(address string) error {
-	return DefaultValidator.ValidateAddress(address)
+	return DefaultValidator.Load().ValidateAddress(address)
 }
 
 // privateHint tells the operator how to allow a target that was blocked only
@@ -316,14 +334,14 @@ func ConfigureDefaultValidator(allowPrivate bool, allowedCIDRs []string) error {
 		}
 		v.AllowedNetworks = append(v.AllowedNetworks, network)
 	}
-	DefaultValidator = v
+	DefaultValidator.Store(v)
 	return nil
 }
 
 // ResetDefaultForTest reinitializes DefaultValidator with the current env vars.
 // Test-only: call after setting ANUBIS_SSRF_ALLOW_PRIVATE=1.
 func ResetDefaultForTest() {
-	DefaultValidator = NewSSRFValidator()
+	DefaultValidator.Store(NewSSRFValidator())
 }
 
 // bindConnDeadline bounds connection I/O by both the configured timeout and

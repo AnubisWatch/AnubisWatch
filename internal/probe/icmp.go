@@ -71,7 +71,7 @@ func (c *ICMPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		return failJudgment(soul, fmt.Errorf("DNS resolution failed: %w", err)), nil
 	}
 	if !addr.IP.IsUnspecified() {
-		if err := DefaultValidator.ValidateAddress(net.JoinHostPort(addr.IP.String(), "0")); err != nil {
+		if err := DefaultValidator.Load().ValidateAddress(net.JoinHostPort(addr.IP.String(), "0")); err != nil {
 			return failJudgment(soul, fmt.Errorf("ICMP SSRF validation failed: %w", err)), nil
 		}
 	}

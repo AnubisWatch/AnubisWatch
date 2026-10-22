@@ -82,7 +82,7 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	// literal IP, closing the TOCTOU window between config validation
 	// and connection time.
 	start := time.Now()
-	dialCtx := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+	dialCtx := DefaultValidator.Load().WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
 	conn, err := dialCtx(opCtx, "tcp", soul.Target)
 	if err != nil {
 		return failJudgment(soul, fmt.Errorf("SMTP connection failed: %w", err)), nil
@@ -416,7 +416,7 @@ func (c *IMAPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		if splitErr != nil {
 			host = soul.Target
 		}
-		pinnedDial := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+		pinnedDial := DefaultValidator.Load().WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
 		rawConn, dialErr := pinnedDial(opCtx, "tcp", soul.Target)
 		if dialErr != nil {
 			return failJudgment(soul, fmt.Errorf("IMAP connection failed: %w", dialErr)), nil
@@ -431,7 +431,7 @@ func (c *IMAPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 			return failJudgment(soul, fmt.Errorf("IMAP TLS handshake failed: %w", err)), nil
 		}
 	} else {
-		dialCtx := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+		dialCtx := DefaultValidator.Load().WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
 		conn, err = dialCtx(opCtx, "tcp", soul.Target)
 	}
 

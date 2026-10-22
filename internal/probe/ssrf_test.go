@@ -225,7 +225,7 @@ func TestResetDefaultForTest(t *testing.T) {
 	ResetDefaultForTest()
 
 	// After reset, DefaultValidator should reflect the env var
-	if !DefaultValidator.AllowPrivate {
+	if !DefaultValidator.Load().AllowPrivate {
 		t.Error("Expected AllowPrivate to be true after reset with env var set")
 	}
 

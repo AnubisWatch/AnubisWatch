@@ -59,7 +59,7 @@ func (c *TCPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 	// SSRF: wrap dialer with DNS-rebinding protection (re-resolves hostname
 	// and dials the validated literal IP, preventing TOCTOU attacks)
 	start := time.Now()
-	dialCtx := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+	dialCtx := DefaultValidator.Load().WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
 	conn, err := dialCtx(ctx, "tcp", soul.Target)
 	duration := time.Since(start)
 
@@ -211,7 +211,7 @@ func (c *UDPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 		return failJudgment(soul, fmt.Errorf("failed to resolve address: %w", err)), nil
 	}
 	if !addr.IP.IsUnspecified() {
-		if err := DefaultValidator.ValidateAddress(net.JoinHostPort(addr.IP.String(), "0")); err != nil {
+		if err := DefaultValidator.Load().ValidateAddress(net.JoinHostPort(addr.IP.String(), "0")); err != nil {
 			return failJudgment(soul, fmt.Errorf("UDP SSRF validation failed: %w", err)), nil
 		}
 	}

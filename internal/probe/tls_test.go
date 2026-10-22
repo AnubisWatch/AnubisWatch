@@ -18,7 +18,7 @@ func init() {
 	// Allow private IPs in tests (for localhost test servers)
 	os.Setenv("ANUBIS_SSRF_ALLOW_PRIVATE", "1")
 	// Reset the DefaultValidator so it picks up the env var
-	DefaultValidator = NewSSRFValidator()
+	DefaultValidator.Store(NewSSRFValidator())
 }
 
 func TestTLSServerNameExcludesPort(t *testing.T) {
@@ -1108,9 +1108,9 @@ func TestTLSChecker_Judge_TargetWithHTTP_StripScheme(t *testing.T) {
 
 // TestTLSChecker_Validate_SSRFBlocked tests SSRF protection in TLS Validate
 func TestTLSChecker_Validate_SSRFBlocked(t *testing.T) {
-	oldValidator := DefaultValidator
-	DefaultValidator = &SSRFValidator{AllowPrivate: false}
-	defer func() { DefaultValidator = oldValidator }()
+	oldValidator := DefaultValidator.Load()
+	DefaultValidator.Store(&SSRFValidator{AllowPrivate: false})
+	defer func() { DefaultValidator.Store(oldValidator) }()
 
 	checker := NewTLSChecker()
 

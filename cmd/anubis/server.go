@@ -583,7 +583,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	if err := probe.ConfigureDefaultValidator(cfg.Security.AllowPrivateTargets, cfg.Security.AllowedNetworks); err != nil {
 		return nil, err
 	}
-	if probe.DefaultValidator.AllowPrivate {
+	if probe.DefaultValidator.Load().AllowPrivate {
 		logger.Warn("SSRF protection relaxed: probes and alert channels may reach private and loopback addresses",
 			"event", "ssrf_allow_private")
 	}

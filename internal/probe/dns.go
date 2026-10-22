@@ -328,7 +328,7 @@ func (c *DNSChecker) queryDNSSEC(ctx context.Context, domain, nameserver string)
 	// Query for the original record type, not RRSIG, since AD flag is what matters
 	msg := buildDNSQueryWithEDNS0(domain, 0x01 /* A record */, true /* DO bit */)
 
-	dnsDial := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: 5 * time.Second}).DialContext)
+	dnsDial := DefaultValidator.Load().WrapDialerContext((&net.Dialer{Timeout: 5 * time.Second}).DialContext)
 	conn, err := dnsDial(ctx, "udp", nameserver)
 	if err != nil {
 		return nil, false, err
@@ -671,7 +671,7 @@ func (c *DNSChecker) resolve(ctx context.Context, domain, recordType, nameserver
 	if err != nil {
 		return nil, err
 	}
-	dnsDial := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: 5 * time.Second}).DialContext)
+	dnsDial := DefaultValidator.Load().WrapDialerContext((&net.Dialer{Timeout: 5 * time.Second}).DialContext)
 
 	// Create resolver with custom nameserver. Preserve the resolver-requested
 	// network so UDP truncation can fall back to TCP while still pinning the

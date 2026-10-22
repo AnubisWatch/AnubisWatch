@@ -75,8 +75,8 @@ func TestForceCheckReturnsDeadJudgmentWhenValidationFails(t *testing.T) {
 }
 
 func TestConfigureDefaultValidator(t *testing.T) {
-	prev := DefaultValidator
-	t.Cleanup(func() { DefaultValidator = prev })
+	prev := DefaultValidator.Load()
+	t.Cleanup(func() { DefaultValidator.Store(prev) })
 	t.Setenv("ANUBIS_SSRF_ALLOW_PRIVATE", "")
 
 	if err := ConfigureDefaultValidator(false, nil); err != nil {

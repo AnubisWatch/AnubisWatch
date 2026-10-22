@@ -105,7 +105,7 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	// WrapDialerContext resolves the hostname, validates all IPs, and dials
 	// the literal IP so an attacker who changes DNS between Validate() and
 	// Judge() cannot redirect the connection to an internal address.
-	grpcDialCtx := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+	grpcDialCtx := DefaultValidator.Load().WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
 	// net/http speaks HTTP/2 over TLS (ALPN) and, with UnencryptedHTTP2,
 	// h2c with prior knowledge for http:// targets. HTTP/1 is disabled: gRPC
 	// needs HTTP/2. (golang.org/x/net/http2.Transport is deprecated.)
