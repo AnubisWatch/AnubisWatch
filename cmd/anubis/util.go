@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -24,19 +25,30 @@ var startTime = time.Now()
 // testDataDir is set by TestMain (testmain_test.go) to a temporary directory
 var testDataDir string
 
-// openLocalStorage opens storage directly for CLI operations
+// openLocalStorage opens storage directly for CLI operations. It uses the
+// server's storage settings (notably encryption) so data written here is
+// readable by the server and vice versa. It fails while the server is running,
+// because two engines on one directory lose writes.
 func openLocalStorage() (*storage.CobaltDB, error) {
-	dataDir := getDataDir()
-
-	cfg := core.StorageConfig{
-		Path: dataDir,
+	var cfg core.StorageConfig
+	if c := loadCLIConfig(); c != nil {
+		cfg = c.Storage
+	}
+	cfg.Path = getDataDir()
+	if v := os.Getenv("ANUBIS_ENCRYPTION_KEY"); v != "" {
+		cfg.Encryption.Enabled = true
+		cfg.Encryption.Key = v
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelError,
 	}))
 
-	return storage.NewEngine(cfg, logger)
+	store, err := storage.NewEngine(cfg, logger)
+	if errors.Is(err, storage.ErrDataDirLocked) {
+		return nil, fmt.Errorf("%w; the server is running, so use the API instead (run `anubis login` first) or stop the server", err)
+	}
+	return store, err
 }
 
 func getDataDir() string {

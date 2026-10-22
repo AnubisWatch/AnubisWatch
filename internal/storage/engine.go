@@ -22,6 +22,7 @@ import (
 // optimized for time-series monitoring data with MVCC support.
 type CobaltDB struct {
 	path       string
+	lock       *os.File // exclusive lock on <path>/LOCK, held until Close
 	data       *btreeIndex
 	wal        *writeAheadLog
 	mu         sync.RWMutex
@@ -151,8 +152,12 @@ type writeAheadLog struct {
 	mu   sync.Mutex
 	// size tracks bytes written to the current WAL generation. It resets on
 	// recovery/rewrite and drives checkpoint (compaction) decisions so the WAL
-	// cannot grow without bound at runtime.
+	// cannot grow without bound at runtime. It is also the offset of the end
+	// of the last complete entry, used to cut off a partially written one.
 	size int64
+	// broken is set when a failed write or fsync could not be rolled back;
+	// every later write is refused so nothing is acknowledged after garbage.
+	broken error
 }
 
 // NewEngine creates a new CobaltDB storage engine
@@ -178,6 +183,19 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 	if err := os.MkdirAll(config.Path, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
 	}
+
+	// Refuse to share the directory: recovery rewrites wal.log, which would
+	// orphan the WAL file another live engine is still appending to.
+	lock, err := acquireDirLock(config.Path)
+	if err != nil {
+		return nil, err
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = lock.Close()
+		}
+	}()
 
 	// Initialize WAL
 	walPath := filepath.Join(config.Path, "wal.log")
@@ -210,6 +228,7 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 		var err error
 		enc, err = newEncryptor(config.Encryption.Key)
 		if err != nil {
+			_ = wal.Close()
 			return nil, fmt.Errorf("failed to initialize encryption: %w", err)
 		}
 		logger.Info("Encryption enabled (AES-256-GCM)")
@@ -217,6 +236,7 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 
 	db := &CobaltDB{
 		path:       config.Path,
+		lock:       lock,
 		data:       index,
 		wal:        wal,
 		logger:     logger.With("component", "cobaltdb"),
@@ -263,6 +283,7 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 	db.bgWG.Add(1)
 	go db.checkpointLoop()
 
+	ok = true
 	logger.Info("CobaltDB initialized", "path", config.Path, "btree_order", btreeOrder)
 	return db, nil
 }
@@ -290,6 +311,9 @@ func (db *CobaltDB) Close() error {
 	// Sync WAL
 	if db.wal != nil {
 		db.wal.Close()
+	}
+	if db.lock != nil {
+		_ = db.lock.Close()
 	}
 
 	db.logger.Info("CobaltDB closed")
@@ -1087,58 +1111,71 @@ func writeEntryLocked(f *os.File, entry walEntry) (int, error) {
 		return 0, fmt.Errorf("WAL entry exceeds maximum encoded size of %d bytes", maxWALEntryBytes)
 	}
 
-	length := []byte{
-		byte(len(data) >> 24 & 0xff),
-		byte(len(data) >> 16 & 0xff),
-		byte(len(data) >> 8 & 0xff),
-		byte(len(data) & 0xff),
+	buf := make([]byte, 4+len(data))
+	buf[0] = byte(len(data) >> 24 & 0xff)
+	buf[1] = byte(len(data) >> 16 & 0xff)
+	buf[2] = byte(len(data) >> 8 & 0xff)
+	buf[3] = byte(len(data) & 0xff)
+	copy(buf[4:], data)
+	return walWriteSeam(f, buf)
+}
+
+// walWriteSeam and walSyncSeam are overwritten by tests to inject short
+// writes and fsync failures.
+var (
+	walWriteSeam = func(f *os.File, b []byte) (int, error) { return f.Write(b) }
+	walSyncSeam  = func(f *os.File) error { return f.Sync() }
+)
+
+// appendLocked writes one entry and fsyncs it. The caller must hold w.mu.
+//
+// A failed write can leave part of the entry on disk (for example when the
+// disk fills up). Recovery reads that partial entry as the end of the log, so
+// any later entry appended after it would be silently dropped on the next
+// restart. To keep later writes durable the partial bytes are cut off again;
+// if that is not possible the WAL refuses all further writes.
+func (w *writeAheadLog) appendLocked(entry walEntry) error {
+	if w.broken != nil {
+		return fmt.Errorf("WAL is unusable after an earlier write failure, restart required: %w", w.broken)
 	}
-	if _, err := f.Write(length); err != nil {
-		return 0, err
+	n, err := writeEntryLocked(w.file, entry)
+	if err == nil {
+		err = walSyncSeam(w.file)
+		if err != nil {
+			// After a failed fsync the kernel may have dropped the dirty
+			// pages; nothing written since the last good sync can be trusted.
+			w.broken = err
+			_ = w.file.Truncate(w.size)
+			return err
+		}
+		w.size += int64(n)
+		return nil
 	}
-	if _, err := f.Write(data); err != nil {
-		return 0, err
+	if terr := w.file.Truncate(w.size); terr != nil {
+		w.broken = fmt.Errorf("%w (truncating partial entry: %v)", err, terr)
 	}
-	return len(length) + len(data), nil
+	return err
 }
 
 func (w *writeAheadLog) Append(key string, value []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
-	n, err := writeEntryLocked(w.file, walEntry{
+	return w.appendLocked(walEntry{
 		Op:    "PUT",
 		Key:   key,
 		Value: value,
 		Time:  time.Now().UnixNano(),
 	})
-	if err != nil {
-		return err
-	}
-	if err := w.file.Sync(); err != nil {
-		return err
-	}
-	w.size += int64(n)
-	return nil
 }
 
 func (w *writeAheadLog) AppendDelete(key string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
-	n, err := writeEntryLocked(w.file, walEntry{
+	return w.appendLocked(walEntry{
 		Op:   "DELETE",
 		Key:  key,
 		Time: time.Now().UnixNano(),
 	})
-	if err != nil {
-		return err
-	}
-	if err := w.file.Sync(); err != nil {
-		return err
-	}
-	w.size += int64(n)
-	return nil
 }
 
 // currentSize returns the number of bytes in the current WAL generation.
@@ -1212,6 +1249,12 @@ func (w *writeAheadLog) rewriteLocked(entries []walEntry) error {
 	}
 	w.file = f
 	w.size = total
+
+	// Without this the rename can be lost on power failure, bringing back
+	// the old WAL without the writes made since.
+	if err := syncDir(filepath.Dir(w.path)); err != nil {
+		return fmt.Errorf("failed to sync WAL directory: %w", err)
+	}
 	return nil
 }
 
@@ -1256,6 +1299,87 @@ func (db *CobaltDB) logWALTornTail(where string, err error) {
 	}
 }
 
+// readWALEntryAt decodes the entry starting at offset. It returns the entry,
+// its encoded size including the length prefix, and a non-empty reason when
+// no well-formed entry starts there.
+func readWALEntryAt(f *os.File, offset, fileSize int64) (walEntry, int64, string) {
+	var entry walEntry
+	if fileSize-offset < 4 {
+		return entry, 0, "length prefix"
+	}
+	var prefix [4]byte
+	if _, err := f.ReadAt(prefix[:], offset); err != nil {
+		return entry, 0, "length prefix"
+	}
+	length := int64(prefix[0])<<24 | int64(prefix[1])<<16 | int64(prefix[2])<<8 | int64(prefix[3])
+	if length <= 0 || length > maxWALEntryBytes {
+		return entry, 0, "entry length out of range"
+	}
+	if offset+4+length > fileSize {
+		return entry, 0, "entry body"
+	}
+	body := make([]byte, length)
+	if _, err := f.ReadAt(body, offset+4); err != nil {
+		return entry, 0, "entry body"
+	}
+	if err := json.Unmarshal(body, &entry); err != nil {
+		return entry, 0, "entry decode"
+	}
+	return entry, 4 + length, ""
+}
+
+// findNextWALEntry scans forward from start for the next offset holding an
+// entry that decodes, carries a checksum and matches it. Requiring a valid
+// checksum makes a false match on arbitrary bytes practically impossible.
+func findNextWALEntry(f *os.File, start, fileSize int64) (int64, bool) {
+	const window = 1 << 20
+	buf := make([]byte, 0, window)
+	var bufStart int64
+	byteAt := func(off int64) (byte, bool) {
+		if off < bufStart || off >= bufStart+int64(len(buf)) {
+			n := int64(window)
+			if fileSize-off < n {
+				n = fileSize - off
+			}
+			if n <= 0 {
+				return 0, false
+			}
+			buf = buf[:n]
+			if _, err := f.ReadAt(buf, off); err != nil && err != io.EOF {
+				return 0, false
+			}
+			bufStart = off
+		}
+		return buf[off-bufStart], true
+	}
+	for off := start; off+4 < fileSize; off++ {
+		// Cheap pre-checks before decoding: a plausible length prefix
+		// followed by a JSON object.
+		b0, _ := byteAt(off)
+		if b0 != 0 {
+			continue
+		}
+		b1, _ := byteAt(off + 1)
+		b2, _ := byteAt(off + 2)
+		b3, _ := byteAt(off + 3)
+		length := int64(b1)<<16 | int64(b2)<<8 | int64(b3)
+		if length <= 0 || length > maxWALEntryBytes || off+4+length > fileSize {
+			continue
+		}
+		if c, ok := byteAt(off + 4); !ok || c != '{' {
+			continue
+		}
+		entry, _, reason := readWALEntryAt(f, off, fileSize)
+		if reason != "" || entry.Crc32 == 0 {
+			continue
+		}
+		if sum, err := walChecksum(entry); err == nil && sum == entry.Crc32 {
+			return off, true
+		}
+	}
+	return 0, false
+}
+
 func (db *CobaltDB) recoverFromWAL() error {
 	// Lock ordering: acquire wal.mu first, then data.mu to avoid deadlock
 	// This matches the order in Put() which does wal.Append() first, then data.mu
@@ -1265,50 +1389,41 @@ func (db *CobaltDB) recoverFromWAL() error {
 	db.data.mu.Lock()
 	defer db.data.mu.Unlock()
 
-	// Seek to beginning for reading
-	if _, err := db.wal.file.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("failed to seek WAL: %w", err)
+	info, err := db.wal.file.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat WAL: %w", err)
 	}
+	fileSize := info.Size()
 
 	// Read entries. A crash can leave a torn tail (a partial length prefix,
 	// a truncated body, or an entry whose fsync did not complete). That is a
 	// normal recovery scenario, not corruption of the whole log: every entry
 	// read cleanly before the torn tail is applied to memory and then written
-	// into the clean recovery checkpoint. Treat a malformed tail as end-of-log
-	// (break + warn) instead of aborting the entire replay; aborting would discard
-	// every good entry that preceded it and make startup fail repeatedly.
-	buf := make([]byte, 4)
-	for {
-		// Read length prefix — use io.ReadFull to ensure we get all 4 bytes
-		if _, err := io.ReadFull(db.wal.file, buf); err != nil {
-			if err == io.EOF {
-				break // Normal end of WAL
+	// into the clean recovery checkpoint.
+	//
+	// A malformed entry is not necessarily the tail, though: a flipped bit in
+	// a length prefix mid-log used to end replay there, and the rewrite below
+	// then discarded every later entry for good. Instead, look for the next
+	// entry that decodes and passes its checksum and resume from it; only when
+	// none follows is the damage a torn tail.
+	var offset int64
+	skipped := false
+	for offset < fileSize {
+		entry, size, reason := readWALEntryAt(db.wal.file, offset, fileSize)
+		if reason != "" {
+			next, ok := findNextWALEntry(db.wal.file, offset+1, fileSize)
+			if !ok {
+				db.logWALTornTail(reason, fmt.Errorf("offset=%d", offset))
+				break
 			}
-			// A partial length prefix (ErrUnexpectedEOF) is a torn tail.
-			db.logWALTornTail("length prefix", err)
-			break
+			db.logger.Error("WAL corruption detected, skipping damaged bytes",
+				"reason", reason, "offset", offset, "skipped_bytes", next-offset)
+			skipped = true
+			offset = next
+			continue
 		}
+		offset += size
 
-		length := int(buf[0])<<24 | int(buf[1])<<16 | int(buf[2])<<8 | int(buf[3])
-		if length <= 0 || length > maxWALEntryBytes {
-			db.logWALTornTail("entry length out of range", fmt.Errorf("length=%d", length))
-			break
-		}
-
-		// Read entry data
-		entryBuf := make([]byte, length)
-		if _, err := io.ReadFull(db.wal.file, entryBuf); err != nil {
-			db.logWALTornTail("entry body", err)
-			break
-		}
-
-		var entry walEntry
-		if err := json.Unmarshal(entryBuf, &entry); err != nil {
-			db.logWALTornTail("entry decode", err)
-			break
-		}
-
-		// Verify CRC32 checksum for entries that carry one (Crc32 != 0).
 		// Entries without a checksum (zero value, written before the field
 		// was introduced) are accepted for backward compatibility.
 		if entry.Crc32 != 0 {
@@ -1317,13 +1432,12 @@ func (db *CobaltDB) recoverFromWAL() error {
 				db.logger.Warn("WAL entry checksum computation failed, skipping verification",
 					"err", err, "key", entry.Key)
 			} else if expected != entry.Crc32 {
-				db.logger.Warn("WAL entry checksum mismatch — skipping corrupted entry",
+				db.logger.Error("WAL entry checksum mismatch — skipping corrupted entry",
 					"key", entry.Key, "op", entry.Op,
 					"expected", expected, "got", entry.Crc32)
-				// Unlike a torn tail (where we don't know the entry boundary),
-				// we already read this entry's length prefix successfully, so we
-				// know exactly where the next entry starts. Skip this entry and
-				// continue recovery with the next one.
+				// The length prefix was read successfully, so we know exactly
+				// where the next entry starts.
+				skipped = true
 				continue
 			}
 		}
@@ -1340,6 +1454,17 @@ func (db *CobaltDB) recoverFromWAL() error {
 			if err := db.data.insert(entry.Key, nil); err != nil {
 				db.logger.Error("WAL replay: failed to apply tombstone", "key", entry.Key, "err", err)
 			}
+		}
+	}
+
+	// The rewrite below drops whatever recovery skipped. Keep the damaged
+	// original next to it so an operator can still inspect or salvage it.
+	if skipped {
+		kept := fmt.Sprintf("%s.corrupt-%d", db.wal.path, time.Now().Unix())
+		if err := os.Link(db.wal.path, kept); err != nil {
+			db.logger.Error("Could not keep a copy of the damaged WAL", "err", err)
+		} else {
+			db.logger.Error("Kept a copy of the damaged WAL", "path", kept)
 		}
 	}
 
