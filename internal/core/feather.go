@@ -93,6 +93,9 @@ type StorageConfig struct {
 	Encryption EncryptionConfig `json:"encryption" yaml:"encryption"`
 	TimeSeries TimeSeriesConfig `json:"timeseries" yaml:"timeseries"`
 	BTreeOrder int              `json:"btree_order" yaml:"btree_order"` // B+Tree order (default: 32)
+	// RetentionDays is how long raw judgments are kept. `anubis init` has
+	// always written it; it sets timeseries.retention.raw when that is unset.
+	RetentionDays int `json:"retention_days,omitempty" yaml:"retention_days,omitempty"`
 }
 
 // EncryptionConfig defines at-rest encryption settings

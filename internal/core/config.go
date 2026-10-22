@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -208,6 +209,9 @@ func (c *Config) setDefaults() {
 		// once all its hours are past this threshold, so a threshold equal to
 		// the hourly retention would have its first hours deleted first.
 		c.Storage.TimeSeries.Compaction.HourToDay.Duration = 30 * 24 * 60 * 60 * 1e9 // 30d
+	}
+	if c.Storage.TimeSeries.Retention.Raw.Duration == 0 && c.Storage.RetentionDays > 0 {
+		c.Storage.TimeSeries.Retention.Raw.Duration = time.Duration(c.Storage.RetentionDays) * 24 * time.Hour
 	}
 	if c.Storage.TimeSeries.Retention.Raw.Duration == 0 {
 		// 90d: status pages draw 90 days of uptime bars, and soul logs and
