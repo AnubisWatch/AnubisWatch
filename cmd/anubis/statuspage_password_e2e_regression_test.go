@@ -17,9 +17,15 @@ import (
 // public again. The dashboard editor drives exactly these calls.
 
 const (
-	passwordE2ESlug     = "password-e2e"
 	passwordE2ESoulName = "password-e2e-component"
 )
+
+// passwordE2ESlug returns a slug unique to this run. The package's tests share
+// one data directory, so a fixed slug would collide with the page a previous
+// run left behind, and a slug names exactly one public URL.
+func passwordE2ESlug() string {
+	return "password-e2e-" + core.GenerateID()
+}
 
 func passwordE2EValue() string {
 	return "pw-" + core.GenerateID() + "-" + core.GenerateID()
@@ -82,9 +88,11 @@ func TestStatusPagePasswordEndToEnd(t *testing.T) {
 
 	password := passwordE2EValue()
 
+	slug := passwordE2ESlug()
+
 	// 1. Create the page as password-protected through the API.
 	status, raw = passwordE2EJSON(t, "POST", ts.baseURL+"/api/v1/status-pages", client, map[string]any{
-		"name": "Password E2E", "slug": passwordE2ESlug,
+		"name": "Password E2E", "slug": slug,
 		"visibility": core.VisibilityProtected, "password": password,
 		"souls": []string{soul.ID},
 	})
@@ -102,7 +110,7 @@ func TestStatusPagePasswordEndToEnd(t *testing.T) {
 		t.Errorf("the create response does not report password_set: %s", strings.TrimSpace(string(raw)))
 	}
 
-	publicURL := ts.baseURL + "/status/" + passwordE2ESlug
+	publicURL := ts.baseURL + "/status/" + slug
 
 	// 2. The public route refuses it: no password, then a wrong one.
 	status, raw = passwordE2EJSON(t, "GET", publicURL, client, nil)
@@ -125,7 +133,7 @@ func TestStatusPagePasswordEndToEnd(t *testing.T) {
 
 	// 4. Clearing the password makes the page public again.
 	status, raw = passwordE2EJSON(t, "PUT", ts.baseURL+"/api/v1/status-pages/"+page.ID, client, map[string]any{
-		"name": "Password E2E", "slug": passwordE2ESlug,
+		"name": "Password E2E", "slug": slug,
 		"visibility": core.VisibilityPublic, "password": "",
 		// "enabled" is deliberately omitted: an update must preserve it instead of
 		// disabling the page. The public fetch below is the assertion.

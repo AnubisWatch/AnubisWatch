@@ -2453,6 +2453,50 @@ func jsonHasTopLevelKey(raw []byte, key string) bool {
 	return false
 }
 
+// statusPageKeepOmittedFields restores the stored value of every optional field
+// the request body did not mention.
+//
+// A PUT body is a partial update: the StatusPageCreate schema in openapi.yaml
+// requires only "name" and "slug", and documents the same "omit to keep the
+// stored password" rule for "password" that "enabled" and "visibility" already
+// follow. Binding the body into a fresh core.StatusPage cannot tell an omitted
+// field from an explicit zero value, so every omitted field was overwritten
+// with its zero value: the description, logo, favicon, custom domain and
+// uptime window were cleared, the theme was reset to the default, and the
+// soul list, groups and incidents were dropped.
+//
+// A field the body does mention stays authoritative, so an explicit "" or []
+// still clears it, exactly as an empty password clears the password.
+func statusPageKeepOmittedFields(raw []byte, page *core.StatusPage, existing *core.StatusPage) {
+	if !jsonHasTopLevelKey(raw, "description") {
+		page.Description = existing.Description
+	}
+	if !jsonHasTopLevelKey(raw, "logo_url") {
+		page.LogoURL = existing.LogoURL
+	}
+	if !jsonHasTopLevelKey(raw, "favicon_url") {
+		page.FaviconURL = existing.FaviconURL
+	}
+	if !jsonHasTopLevelKey(raw, "custom_domain") {
+		page.CustomDomain = existing.CustomDomain
+	}
+	if !jsonHasTopLevelKey(raw, "theme") {
+		page.Theme = existing.Theme
+	}
+	if !jsonHasTopLevelKey(raw, "uptime_days") {
+		page.UptimeDays = existing.UptimeDays
+	}
+	if !jsonHasTopLevelKey(raw, "souls") {
+		page.Souls = existing.Souls
+	}
+	if !jsonHasTopLevelKey(raw, "groups") {
+		page.Groups = existing.Groups
+	}
+	if !jsonHasTopLevelKey(raw, "incidents") {
+		page.Incidents = existing.Incidents
+	}
+}
+
 // applyStatusPagePassword sets, clears or preserves the page password. A body that
 // carries "password" is authoritative: an empty value clears the password, a
 // non-empty one replaces it, and an absent field keeps previousHash. Preserving is
@@ -2596,6 +2640,35 @@ func (s *RESTServer) handleListStatusPages(ctx *Context) error {
 	return ctx.JSON(http.StatusOK, redactedStatusPages(filtered))
 }
 
+// statusPageSlugInUse reports whether slug is already claimed by another
+// published status page.
+//
+// The public /status/{slug} URL carries no workspace and Storage resolves a
+// slug on its own, so the slug namespace is global: two published pages
+// sharing one slug make that URL ambiguous, and the lookup answers with
+// whichever page it reaches first. A password-protected page's URL can then
+// serve another page's content without asking for the password.
+//
+// Only published pages occupy the URL -- a disabled page is not reachable
+// there -- so a page that will not be published cannot shadow one that is.
+// A page that will be published may not take a slug another published page
+// already holds; a page that is being updated is excluded, because it
+// re-sends its own slug.
+func statusPageSlugInUse(pages []*core.StatusPage, slug, ownID string, published bool) bool {
+	if !published {
+		return false
+	}
+	for _, page := range pages {
+		if page == nil || page.ID == ownID {
+			continue
+		}
+		if page.Enabled && page.Slug == slug {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *RESTServer) handleCreateStatusPage(ctx *Context) error {
 	// On create, default Enabled=true unless the caller explicitly opts
 	// out. Storage's GetStatusPageBySlug filters out !Enabled pages,
@@ -2620,6 +2693,17 @@ func (s *RESTServer) handleCreateStatusPage(ctx *Context) error {
 	}
 	if err := normalizeStatusPageForSave(&page); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
+
+	// A slug names one public URL, so it may name one status page. The
+	// namespace is global because the public /status/{slug} URL carries no
+	// workspace and Storage resolves a slug on its own.
+	pages, err := s.store.ListStatusPagesNoCtx()
+	if err != nil {
+		return s.internalError(ctx, err, "internal server error")
+	}
+	if statusPageSlugInUse(pages, page.Slug, "", page.Enabled) {
+		return ctx.Error(http.StatusConflict, "status page slug already in use")
 	}
 
 	page.ID = core.GenerateID()
@@ -2656,6 +2740,7 @@ func (s *RESTServer) handleUpdateStatusPage(ctx *Context) error {
 	raw, _ := io.ReadAll(ctx.Request.Body)
 	ctx.Request.Body = io.NopCloser(bytes.NewReader(raw))
 	enabledExplicit := jsonHasTopLevelKey(raw, "enabled")
+	visibilityExplicit := jsonHasTopLevelKey(raw, "visibility")
 
 	var req statusPageRequest
 	if err := ctx.Bind(&req); err != nil {
@@ -2678,11 +2763,34 @@ func (s *RESTServer) handleUpdateStatusPage(ctx *Context) error {
 	if !enabledExplicit {
 		page.Enabled = existing.Enabled
 	}
+	// The same rule applies to "visibility": binding the zero value would let
+	// normalizeStatusPageForSave default the page to public, so an update that
+	// omits the field would silently publish a protected page's contents at
+	// the public /status/{slug} URL without its password.
+	if !visibilityExplicit {
+		page.Visibility = existing.Visibility
+	}
+	// The same rule applies to the remaining optional fields: a PUT body is a
+	// partial update, so a field it does not mention must keep its stored
+	// value instead of being overwritten with the zero value binding produced.
+	statusPageKeepOmittedFields(raw, &page, existing)
 	if err := applyStatusPagePassword(&page, raw, req.Password, existing.PasswordHash); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 	if err := normalizeStatusPageForSave(&page); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
+
+	// A slug names one public URL, so it may name one status page. The
+	// namespace is global because the public /status/{slug} URL carries no
+	// workspace and Storage resolves a slug on its own. This page is excluded
+	// by ID: an update re-sends its own slug, and that is not a collision.
+	pages, err := s.store.ListStatusPagesNoCtx()
+	if err != nil {
+		return s.internalError(ctx, err, "internal server error")
+	}
+	if statusPageSlugInUse(pages, page.Slug, id, page.Enabled) {
+		return ctx.Error(http.StatusConflict, "status page slug already in use")
 	}
 
 	page.ID = id
