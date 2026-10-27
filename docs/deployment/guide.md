@@ -223,8 +223,7 @@ kubectl apply -f deploy/k8s/pvc.yaml \
   -f deploy/k8s/deployment.yaml
 ```
 
-`deploy/k8s/base.yaml` is an equivalent aggregate bundle, but its intentionally
-empty Secret must be populated before the Deployment can start.
+`deploy/k8s/ingress.yaml` is optional; set its host and TLS secret first.
 
 ### Production Helm Values
 

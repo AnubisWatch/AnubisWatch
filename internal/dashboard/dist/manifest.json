@@ -1,7 +1,7 @@
 {
   "name": "AnubisWatch — The Judgment Never Sleeps",
   "short_name": "AnubisWatch",
-  "description": "Zero-dependency uptime and synthetic monitoring platform",
+  "description": "Single-binary uptime and synthetic monitoring platform",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f172a",
