@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Restores refuse archives they cannot verify
+
+- `anubis restore` refused a tampered signed archive but restored the same
+  archive once its `signature` field was removed (checksums are unkeyed), and
+  restored signed archives on a node without the backup key, with only a
+  warning the CLI never printed. Both are now refused with
+  `ErrUnauthenticatedBackup`; `--allow-unsigned` restores them deliberately
+  (pre-signature archives, trusted sources). A wrong signature is always
+  refused. Plain archives are also checked against their legacy
+  `<archive>.key` sidecar, like encrypted ones.
+- **Upgrade note:** restoring onto a fresh node needs the original node's
+  backup key (`<data>/backup.key` or `ANUBIS_BACKUP_ENCRYPTION_KEY`).
+
+### WebSocket per-user limit and duplicate session checks
+
+- Concurrent handshakes of one user could exceed `maxConnsPerUser`: the slot
+  was counted only once the connection was registered, after the client had
+  already seen the upgrade succeed. The slot is now reserved before the
+  upgrade.
+- The dashboard checked the session (`/auth/me`) three times per page load
+  (App, Header, Sidebar), spending the per-IP rate budget; concurrent checks
+  now share one request.
+
 ### Dashboard fields the API never sent, and null dashboard widgets
 
 - `POST`/`PUT /api/v1/dashboards` without a `widgets` array stored and

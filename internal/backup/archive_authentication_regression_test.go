@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,7 +75,8 @@ func TestTamperedArchiveWithRecomputedChecksumIsRejected(t *testing.T) {
 	}
 }
 
-// Archives written before signatures existed still restore.
+// Archives written before signatures existed restore only with an explicit
+// opt-in; without it, stripping a signature would bypass verification.
 func TestUnsignedLegacyArchiveStillRestores(t *testing.T) {
 	t.Setenv(backupKeyEnv, "")
 	m := newAuthTestManager(t)
@@ -89,8 +91,18 @@ func TestUnsignedLegacyArchiveStillRestores(t *testing.T) {
 	if err := os.WriteFile(path, raw, 0600); err != nil {
 		t.Fatal(err)
 	}
+	refused := &mockRestoreStorage{}
+	err = m.Restore(context.Background(), refused, path, DefaultRestoreOptions())
+	if !errors.Is(err, ErrUnauthenticatedBackup) {
+		t.Fatalf("legacy restore without opt-in: err = %v, want ErrUnauthenticatedBackup", err)
+	}
+	if len(refused.workspaces) != 0 {
+		t.Fatal("refused archive wrote data")
+	}
 	restored := &mockRestoreStorage{}
-	if err := m.Restore(context.Background(), restored, path, DefaultRestoreOptions()); err != nil {
+	opts := DefaultRestoreOptions()
+	opts.AllowUnauthenticated = true
+	if err := m.Restore(context.Background(), restored, path, opts); err != nil {
 		t.Fatalf("legacy restore: %v", err)
 	}
 	if len(restored.workspaces) != 1 || restored.workspaces[0].ID != "legacy" {
@@ -177,5 +189,45 @@ func TestHexBackupKeyCompatibleWithRawForm(t *testing.T) {
 		if err := m.Restore(context.Background(), &mockRestoreStorage{}, p, DefaultRestoreOptions()); err != nil {
 			t.Fatalf("restore %s: %v", filepath.Base(p), err)
 		}
+	}
+}
+
+// Removing the signature from a signed archive must not turn the tamper
+// rejection into a successful restore.
+func TestStrippedSignatureIsRefused(t *testing.T) {
+	t.Setenv(backupKeyEnv, "")
+	m := newAuthTestManager(t)
+	b := &Backup{Version: backupVersionTyped, CreatedAt: time.Unix(1e9, 0).UTC(), BackupType: "full",
+		Data: BackupData{Workspaces: []*core.Workspace{{ID: "evil", Name: "Evil"}}}}
+	path := filepath.Join(m.backupsDir, "anubis_signed.json")
+	if err := m.writeBackupFile(b, path, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stripped Backup
+	if err := json.Unmarshal(raw, &stripped); err != nil {
+		t.Fatal(err)
+	}
+	if stripped.Signature == "" {
+		t.Fatal("control: archive was written unsigned")
+	}
+	stripped.Signature = ""
+	if stripped.Checksum, err = m.calculateChecksum(&stripped); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = json.Marshal(&stripped)
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	restored := &mockRestoreStorage{}
+	err = m.Restore(context.Background(), restored, path, DefaultRestoreOptions())
+	if !errors.Is(err, ErrUnauthenticatedBackup) {
+		t.Fatalf("stripped restore err = %v, want ErrUnauthenticatedBackup", err)
+	}
+	if len(restored.workspaces) != 0 {
+		t.Fatal("stripped archive wrote data before being rejected")
 	}
 }

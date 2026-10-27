@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -392,7 +393,7 @@ func (m *Manager) Restore(ctx context.Context, storage RestoreStorage, backupPat
 	if err := m.verifyChecksum(backup); err != nil {
 		return fmt.Errorf("backup verification failed: %w", err)
 	}
-	if err := m.verifySignature(backup, usedKey); err != nil {
+	if err := m.verifySignature(backup, backupPath, usedKey, opts.AllowUnauthenticated); err != nil {
 		return fmt.Errorf("backup verification failed: %w", err)
 	}
 
@@ -563,6 +564,11 @@ type RestoreOptions struct {
 	IncludeSystemConfig bool
 	IncludeUsers        bool
 	ContinueOnError     bool // Attempt remaining records; still return PartialRestoreError on failures.
+	// AllowUnauthenticated restores an archive whose integrity this node
+	// cannot verify: unsigned and unencrypted, or signed with a key this node
+	// does not hold. Without it such a restore is refused, because stripping
+	// the signature would otherwise turn a tamper rejection into a warning.
+	AllowUnauthenticated bool
 }
 
 // PartialRestoreError reports a completed attempt with records missing from the
@@ -1185,23 +1191,34 @@ func signBackup(backup *Backup, key []byte) (string, error) {
 	return signaturePrefix + hex.EncodeToString(mac.Sum(nil)), nil
 }
 
+// ErrUnauthenticatedBackup reports an archive whose integrity this node
+// cannot verify. RestoreOptions.AllowUnauthenticated accepts it anyway.
+var ErrUnauthenticatedBackup = errors.New("backup integrity cannot be verified")
+
 // verifySignature authenticates an archive. decryptKey is the key that opened
 // an encrypted archive (AES-GCM already authenticated it). A plain archive is
-// checked against every key this node holds; when none is available, or the
-// archive predates signatures, the restore proceeds with a warning because
-// its integrity rests on an unkeyed checksum anyone can recompute.
-func (m *Manager) verifySignature(backup *Backup, decryptKey []byte) error {
+// checked against every key this node holds and its "<archive>.key" sidecar. An unsigned plain archive, or a
+// signed one this node holds no key for, rests on an unkeyed checksum anyone
+// can recompute: it is refused unless allowUnauthenticated is set.
+func (m *Manager) verifySignature(backup *Backup, path string, decryptKey []byte, allowUnauthenticated bool) error {
 	if backup.Signature == "" {
-		if decryptKey == nil {
-			m.logger.Warn("backup is unsigned and unencrypted: its integrity is NOT authenticated; only restore archives you trust")
+		if decryptKey != nil {
+			return nil
 		}
+		if !allowUnauthenticated {
+			return fmt.Errorf("%w: the archive is unsigned and unencrypted (written before signed backups, or its signature was removed); restore it only if you trust its source, with --allow-unsigned", ErrUnauthenticatedBackup)
+		}
+		m.logger.Warn("restoring an unsigned, unencrypted backup: its integrity is NOT authenticated")
 		return nil
 	}
 	keys := [][]byte{decryptKey}
 	if decryptKey == nil {
-		keys = m.storedKeyCandidates()
+		keys = m.decryptionKeyCandidates(path)
 	}
 	if len(keys) == 0 {
+		if !allowUnauthenticated {
+			return fmt.Errorf("%w: this node holds no backup key to check the signature; set %s to the key of the node that wrote it, or pass --allow-unsigned if you trust its source", ErrUnauthenticatedBackup, backupKeyEnv)
+		}
 		m.logger.Warn("backup signature cannot be verified on this node (no backup key); its integrity is NOT authenticated",
 			"action", "set "+backupKeyEnv+" to the key of the node that wrote it")
 		return nil
