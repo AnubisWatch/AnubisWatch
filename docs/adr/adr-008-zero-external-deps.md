@@ -1,4 +1,4 @@
-# ADR-008: Zero External Dependencies Policy
+# ADR-008: Embedded Runtime and Dependency Policy
 
 ## Status
 
@@ -15,7 +15,10 @@ Go projects often accumulate many dependencies:
 
 ## Decision
 
-AnubisWatch maintains a **zero external dependencies** policy for core functionality.
+AnubisWatch requires no external database or coordination service for its core
+runtime. It uses reviewed Go modules for protocol, identity, cryptography,
+telemetry and retry behavior, and frontend build dependencies. `go.mod`,
+`go.sum` and `web/pnpm-lock.yaml` define the actual dependency inventory.
 
 ### What We Use
 
@@ -31,7 +34,7 @@ AnubisWatch maintains a **zero external dependencies** policy for core functiona
 
 ### Allowed Exceptions
 
-External dependencies are only allowed for:
+Prefer the standard library; review external dependencies for:
 1. **Protocol-specific libraries** where stdlib is insufficient (e.g., HPACK for HTTP/2)
 2. **Well-established security libraries** (cryptographic primitives if needed)
 3. **Development tools** (linters, formatters) - not shipped in binary
@@ -57,11 +60,11 @@ type Router struct {
 
 ### Positive
 - Minimal attack surface
-- No supply chain vulnerabilities
+- Explicit dependency inventory and blocking vulnerability checks
 - Full control over all code paths
 - Easier security audits
 - Smaller binary size
-- No license compliance complexity
+- Dependency licenses and advisories still require review
 - Faster builds (fewer dependencies)
 
 ### Negative

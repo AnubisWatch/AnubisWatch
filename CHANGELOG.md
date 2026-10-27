@@ -7,6 +7,401 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Dashboard fields the API never sent, and null dashboard widgets
+
+- `POST`/`PUT /api/v1/dashboards` without a `widgets` array stored and
+  returned `"widgets": null`, and the dashboard detail page crashed on it.
+  Create and update now store `[]`, list and get serve `[]` for records
+  stored with `null` (the stored record is not rewritten), the spec declares
+  `widgets` a non-null array, and the dashboard client reads a `null` from an
+  older server as `[]`.
+- Maintenance windows always send `description` (`""` when unset) instead of
+  omitting an empty one; the spec lists it as required.
+- Status page list, get, create and update responses carry
+  `subscriber_count`: the number of confirmed email subscribers, counted
+  server-side in one scan (pending subscriptions are not counted, no address
+  is returned, and only pages of the caller's workspace are served). The
+  Status Pages view shows it per page and in total, and no longer sends the
+  `subscribers` field it used to invent on save.
+- The Judgments view showed a "Purity" score the backend has never had (it
+  always read 0). The column is now the judgment's `status_code` (— when the
+  check type has none), the "Avg Purity" card is a p95 latency from
+  `duration`, and the CSV export's `purity` column is `status_code`.
+- Soul detail rendered the interval as `{interval || weight}s` from a field
+  the API does not send; interval and timeout now render as compact
+  durations (`30s`, `1m`, `5m`, `1h 30m`, `500ms`).
+
+### Dashboard API types generated from the OpenAPI spec
+
+- `web/src/api/schema.generated.ts` is generated from
+  `internal/api/openapi.yaml` by `openapi-typescript` 7.13.0 (pinned
+  devDependency, offline). `pnpm run gen:api` regenerates it;
+  `pnpm run check:api` fails when it is stale and runs in the `test-frontend`
+  CI job (followed by a new `tsc --noEmit` step) and in `make dashboard`
+  (`make dashboard-api-types` / `make dashboard-check-api` run them alone).
+- The dashboard's API types (`web/src/api/client.ts`, `reports.ts`,
+  `hooks.ts` and the Journeys, Incidents, Maintenance, Settings, Login and
+  status-page incident views) now derive from the generated types; the
+  presentation mappings (alive/dead to the UI status words, durations to
+  seconds, rule and theme reshaping) keep their behaviour but are typed
+  against the spec, so a renamed field or a new status fails `tsc`.
+- OpenAPI fixes found on the way, each checked against the Go handlers:
+  `Judgment` documented `latency_ms`/`error`, which the API never sent (it
+  sends `duration` in nanoseconds, `message`, `status_code`, `jackal_id`,
+  `region`, `details`, `tls_info`, and `embalmed` status); `Soul` lacked the
+  tcp/udp/dns/smtp/imap/icmp/grpc/websocket/tls blocks, `last_check`,
+  `latency` and `has_secrets`, and `SoulCreate` typed those blocks as empty
+  objects; the journey list omitted `step_count`, `last_status`, `last_run`,
+  `avg_duration` and `success_rate`; journey runs, incidents, workspaces,
+  dashboards, maintenance windows, the paginated `/channels` and `/rules`
+  lists and the stats `alerts` block had no response schema; alert channel
+  `config` and status page `theme`/`groups` were untyped; `ClusterStatus`
+  lacked `commit_index` and `User` lacked `api_key_id`. Response schemas now
+  list `required` fields and `nullable` ones, and
+  `TestOpenAPIResponseSchemasMatchGoTypes` checks both against the Go
+  structs (a required field must never be omitted, and a required slice,
+  map or pointer must be nullable unless the server guarantees a value).
+
+### Confirmation retries and flap detection
+
+- Souls accept `retries` (0–5, default 0) and `retry_interval` (default 5s,
+  ≥ 100ms and shorter than the check interval). A failed check is re-run up
+  to `retries` times before the soul is recorded dead; exactly one judgment
+  is stored per scheduled check, with `details.attempts`. The concurrency
+  slot is released while a retry waits, retries stop at the next scheduled
+  check or on cancellation, and heartbeat souls and manual checks do not
+  retry. `retries: 0` keeps the previous behaviour.
+- Flap detection (`probe.flap_detection`, per-soul `flap_detection`; off by
+  default, threshold 5 changes in 10m): a flapping soul's judgments carry
+  `details.flapping`, soul payloads (REST, WebSocket, MCP) carry
+  `"flapping": true` beside the unchanged `status`, and alert rules pause
+  for it. Each covering rule sends one `flapping_started` and one
+  `flapping_stopped` notice (new `kind` field on alert events, deduplicated
+  separately from status alerts); PagerDuty/Opsgenie do not treat a
+  "flapping started" notice as a recovery. Flapping also ends after
+  `threshold` steady checks, and on stabilizing rules compare against the
+  pre-flap status (`details.flap_baseline`), so a soul that went hard down
+  while flagged still opens an incident and one that recovered resolves.
+  New runners restore flap state from the latest stored judgment, so an
+  interval change or owner move neither drops the flag nor the "stopped"
+  notice. gRPC `Soul.retries` and
+  Create/UpdateSoul `retries` are now wired.
+- Dashboard: Retries, retry interval and flap settings under an "Advanced"
+  disclosure on the soul create/edit forms; a "Flapping" badge on the soul
+  list and detail page. CLI: `anubis watch --retries N --retry-interval D`.
+
+### SLA reports and judgment export
+
+- `GET /api/v1/reports/sla` (+ `.csv`): availability, failed checks,
+  estimated downtime, incident count and MTTR, p50/p95/p99 latency and, with
+  `target`, the error budget, per soul and per workspace over any period up
+  to the retention horizon (at most 1,830 days). Whole hours and days are read
+  from the time-series rollups, so 90-day and 1-year reports do not scan raw
+  judgments. Maintenance windows (including recurrences) are excluded time.
+  Requires `judgments:read`.
+- `GET /api/v1/souls/:id/judgments/export?format=csv|ndjson`: streams a
+  soul's judgments oldest first, an hour of storage at a time, clipped to
+  raw retention and capped by `limit` (default 100,000, max 1,000,000; the
+  `X-Export-Truncated` trailer says when more remained). Workspace-scoped,
+  `judgments:read`. CSV text cells starting with `= + - @` are prefixed with
+  `'` against formula injection; downloads carry `Content-Disposition`.
+  Exports are limited to 2 per user / 8 per server (429), and a client that
+  stops reading is cut off after 30 s idle.
+- Report latency percentiles use a bounded log-linear histogram (±1%), so a
+  long report cannot go quadratic; reports have a 60 s budget (503) and stop
+  on client disconnect; the day hourly retention cuts through is no longer
+  dropped (daily rollup minus surviving hours).
+- CLI: `anubis report sla [--from --to --target --soul --format]` and
+  `anubis export judgments --soul ID [--from --to --format --limit -o]`,
+  using the `anubis login` session or `ANUBIS_API_TOKEN`.
+- Dashboard: a Reports page ("Scrolls of Ma'at") with 7d/30d/90d/1y/custom
+  periods (custom limited by retention), a per-soul SLA table, an SLO target
+  with error budget, and CSV/NDJSON downloads. Soul uptime charts add 90-day
+  and 1-year ranges (`/souls/:id/uptime?range=90d|1y`).
+
+### Status page incidents and scheduled maintenance
+
+- Dedicated, workspace-scoped endpoints (`settings:write`) to declare a status
+  page incident (title, impact none/minor/major/critical, affected souls,
+  status investigating/identified/monitoring/resolved), post timeline
+  updates, resolve, edit and delete it, and to announce scheduled
+  maintenance (start/end, affected souls, optional link to a one-off
+  maintenance window whose schedule it follows). Writes are a locked
+  read-modify-write of the page, so concurrent editors never lose an update;
+  the whole-page PUT takes the same lock. `incidents` and `announcements`
+  are read-only on page create/PUT (ignored; stored values kept), so that
+  path can no longer bypass their validation. They replicate through the
+  status-page save path.
+- A page record is capped at 256 KiB serialized (well under the 1 MiB WAL
+  entry limit after the Raft/WAL base64 wrapping; writes that would grow past
+  it get 413), and every incident write drops resolved incidents and
+  finished maintenance older than the 90-day public history.
+- Each created incident, posted update and new announcement emails confirmed
+  subscribers exactly once; metadata edits and deletes send nothing.
+- The public page shows an active-incident banner coloured by impact,
+  component status raised by incident impact (and "under maintenance" during
+  announced work), upcoming/in-progress maintenance and a 90-day incident
+  history with timelines. The JSON view adds `incident_history`,
+  `maintenance` and `incident_impact`; the RSS feed lists page incidents and
+  announcements. Text is plain text, escaped in HTML, JSON and RSS, with
+  http(s) URLs linked (`rel="nofollow noopener noreferrer"`).
+- Dashboard: an Incidents & maintenance panel per status page (list, create,
+  post update, resolve, delete with confirmation, announcement editor, live
+  preview link). Editing a page no longer re-sends its incidents.
+
+### Heartbeat (push / cron) monitors
+
+- New soul type `heartbeat`: the monitored job pings AnubisWatch instead of
+  being probed, so a cron job, batch worker or backup that silently stops is
+  detected. `weight` is the expected period (up to 31 days), `heartbeat.grace`
+  how late a ping may be (1s-7d, default half the interval). No target.
+- Public, token-authenticated `GET|POST /api/v1/heartbeat/{token}` (success),
+  `/start` (measures run duration) and `/fail` (dead judgment; body or `?msg=`
+  is the message, 1KB max, any content type). Plain-text `OK`; unknown tokens
+  get 404; 30 pings per token per minute on top of the per-IP limit. Tokens
+  are 256-bit, generated server-side, looked up by SHA-256 and compared in
+  constant time, and redacted from request logs, traces and audit records.
+- A ping records an `alive` judgment; a missed `weight + grace` deadline
+  records `dead`, repeated every interval until a ping arrives, through the
+  normal judgment path (storage, live updates, Ma'at alert rules and
+  maintenance windows). The probe engine judges heartbeat souls with a
+  checker that never dials.
+- Cluster mode: any node accepts a ping and writes the soul's ping record
+  (`{workspace}/heartbeats/{soul}`) through Raft; the owner, woken by the
+  replicated write, is the only node that judges pings and deadlines.
+- `GET /api/v1/souls/{id}/heartbeat` returns ping URLs (token only for
+  editors and above) and the last ping; `POST .../heartbeat/rotate` replaces
+  the token. Soul list/get responses return the token as `[REDACTED]`;
+  updates keep it. Force check on a heartbeat soul answers 409.
+- Type accepted by the config file (with an explicit `token`), REST, MCP
+  `create_soul` (target now optional), gRPC (string type), `anubis watch
+  --type heartbeat` and `anubis souls add|import` (token generated).
+- Dashboard: Heartbeat type in the create/edit forms (interval + grace, no
+  target); the soul page shows the ping URL with copy button, an example
+  crontab line, token rotation and the last ping, result and run time.
+
+### API keys for automation
+
+- New `GET/POST /api/v1/api-keys` and `DELETE /api/v1/api-keys/{id}` issue,
+  list and revoke workspace API keys (`anb_<id>_<secret>`). The plaintext is
+  shown once; only its SHA-256 is stored (under `{workspace}/apikeys/`,
+  replicated through Raft in cluster mode) and compared in constant time.
+  Keys carry a role that may not rank above their creator's, an optional
+  expiry of at most 366 days, a throttled `last_used_at`, and revocation.
+- `Authorization: Bearer anb_...` authenticates REST, gRPC metadata,
+  WebSocket, SSE and MCP; open streams close once the key is revoked. A key
+  acts as `apikey:<id>`, so the audit log names it on every request. Keys
+  cannot manage keys, change passwords or switch workspaces (403).
+- RBAC: `admin` gains `apikeys:*` (owners have everything); `admin` and
+  `editor` gain `judgments:read`, which gRPC judgment reads check and REST
+  never required.
+- CLI: `anubis apikey list|create|revoke`; `ANUBIS_API_TOKEN` accepts a key.
+- Dashboard: Settings → API & Integrations has an API Keys panel (create with
+  one-time reveal and copy, list, revoke with confirmation).
+
+### Team members and invitations
+
+- Local auth is multi-user. Accounts have an email (unique, case-insensitive),
+  name, bcrypt password (same cost and policy), a role per workspace, a
+  disabled flag and last sign-in. The configured admin becomes the owner of
+  the default workspace and keeps its config/env password semantics,
+  `anubis admin reset-password` and the persisted `admin_password_hash`.
+  Brute-force lockout applies per account and client IP for every account.
+- Existing `sessions.json` files migrate on load: identities, sessions and the
+  admin record keep their shape (older binaries still read the admin), and
+  the directory is added under new `accounts` / `invitations` keys.
+- New endpoints (interactive sessions with `members:*` only; API keys get
+  403): `GET|POST /api/v1/members`, `PATCH|DELETE /api/v1/members/{id}`,
+  `DELETE /api/v1/users/{id}`, `GET|POST /api/v1/invitations`,
+  `DELETE /api/v1/invitations/{id}`, and the public
+  `POST /api/v1/auth/accept-invite`.
+- Invitations: a single-use token, stored as SHA-256 and never logged,
+  valid 7 days. With mail configured the `/accept-invite` link is emailed;
+  otherwise the API returns it once for the admin to share. Admins can also
+  create an account with an initial password, which must be changed at first
+  sign-in (until then only `/auth/me` and `/auth/change-password` answer).
+- Nobody can grant or manage a role above their own, and every workspace
+  keeps an enabled owner. Disabling, deleting, removing or downgrading an
+  account ends its sessions and live WebSocket/SSE streams at once, and its
+  API keys stop authenticating while it lacks the key's role.
+- OIDC and LDAP sign-ins are provisioned into the same persisted directory
+  (first sign-in: viewer of the default workspace, as before); roles set in
+  the members list are kept and applied on the next sign-in, and disabling
+  takes effect on open sessions. An IdP account whose email belongs to a
+  local account is refused rather than linked.
+- HA: the directory is part of the shared authentication state, so every
+  change commits through the same compare-and-swap as sessions. That state is
+  one Raft entry capped at 192 KiB, so everything in it is capped so that all
+  caps together still fit: 150 accounts, 25 pending invitations, 10 sessions
+  per account and 200 in total (oldest evicted), 20 reset tokens (one per
+  account, replaced), 64 replicated lockout sources.
+- Security review fixes: account emails are ASCII-only and compared with
+  ASCII case folding only (a Unicode look-alike such as `opſ@` could become
+  the configured admin); reset links go to the account's stored address;
+  without outgoing mail no reset token is issued at all (each grew the shared
+  state for an unauthenticated caller); a refused member update changes
+  nothing; invitations are void once the inviter loses the authority to issue
+  them; existing accounts join another workspace only by accepting an
+  invitation with their own password, and names are changed only by the user
+  or someone with authority over all of its workspaces; `api` now ranks below
+  `editor`, so an api member cannot mint editor keys; OIDC requires
+  `email_verified: true` unless `auth.oidc.allow_unverified_email` is set;
+  SSO first sign-ins count against `max_team_members`; gRPC
+  `StreamJudgments`/`StreamVerdicts` re-check their credentials before each
+  batch and every 30s and end with `Unauthenticated`/`PermissionDenied`;
+  status page subscription limits key on the mailbox (case and `+tag`
+  folded) and a page sends at most 100 confirmation emails an hour.
+- `tenants.default_quotas.max_team_members` is enforced again (members plus
+  pending invitations, at invite/create time) and reported by
+  `GET /api/v1/quota` as `team_members`.
+- Dashboard: Settings → Members (list, invite with copy-once link, create,
+  role change, disable/enable, remove, pending invitations with revoke), an
+  `/accept-invite` page, a forced password change screen, and the current
+  user's name in Settings → Security.
+
+### Outgoing mail: status page subscriptions and password reset
+
+- New `mail:` section (host, port, username, password, from, tls
+  `starttls|implicit|none`, timeout) and `server.public_url` for links; mail is
+  off until `mail.host` is set, and then `server.public_url` is required.
+  `mail.password` supports `${ENV}` expansion and is masked by
+  `anubis config show`. Helm: `config.mail.*`, `config.server.publicURL`,
+  `secrets.mailPassword` (key `mail-password`).
+- New `internal/mail` package: SMTP transport, header-injection-safe
+  multipart messages (Date, Message-ID, MIME) and an asynchronous retrying
+  queue. The alert email channel now uses the same transport, so both dial
+  through `probe.SafeDialContext`.
+- Status page subscriptions work: double opt-in with a single-use, 48-hour,
+  hashed confirmation token; confirm and unsubscribe links render a button
+  (POST) so link scanners cannot act; RFC 8058 `List-Unsubscribe` one-click.
+  Subscribe is rate limited per IP and per address and never reveals whether
+  an address is subscribed. Confirmed subscribers are emailed when an alert
+  incident for one of the page's souls opens, is acknowledged or resolves, and
+  when an operator posts, updates or resolves a page incident; in a cluster
+  only the leader sends. Without mail, `POST /status/subscribe` answers 503
+  and pages hide the form (`subscriptions_available` in the page JSON). Only
+  email subscriptions exist (webhook requests get 400). The slugs `subscribe`
+  and `subscriptions` are reserved. Subscription writes replicate in cluster
+  mode.
+- Password reset: with mail configured, `POST /api/v1/auth/reset-password`
+  emails a `<public_url>/reset-password?token=...` link (enumeration-safe,
+  3 per address per hour), `/api/v1/auth/methods` reports `password_reset`,
+  and the dashboard shows "Forgot password?" and a reset page. Without mail
+  the response still points to `anubis admin reset-password`. Tokens are never
+  logged.
+
+### Workspace quotas are enforced
+
+- With `tenants.enabled: true`, `tenants.default_quotas` now limits every
+  workspace: `max_souls`, `max_journeys` and `max_alert_channels` refuse creates
+  past the limit from REST, gRPC, MCP and config-file alert channels (one check
+  in the shared storage adapters). Refusals name the quota and limit: HTTP 409
+  `{"code":"quota_exceeded","quota":…,"limit":…}`, gRPC `RESOURCE_EXHAUSTED`,
+  MCP error `-32002`. Updates are never refused for a count quota, so data over
+  a lowered limit stays readable and editable.
+- `check_interval_min` refuses a soul or journey created with, or changed to, a
+  shorter interval; `retention_days` caps every time-series retention tier.
+- Quotas are no longer defaulted to 100/20/10/…: 0 or unset means unlimited, and
+  nothing is limited while tenants are disabled, so upgrading blocks nobody.
+- `max_team_members` is enforced since member management exists (see Team
+  members and invitations). The "tenants.* is not enforced yet" startup
+  warning is gone.
+- New `GET /api/v1/quota` reports the workspace's usage against its limits;
+  Settings → Storage shows it, and the soul, journey and channel forms show a
+  readable message when a create hits a quota.
+
+### Storage and backup integrity
+
+- Storage encryption keys shorter than 16 bytes are rejected (32+, e.g.
+  `openssl rand -hex 32`, recommended); the key string is still used verbatim,
+  so existing data stays readable. `ANUBIS_ALLOW_WEAK_ENCRYPTION_KEY=1` opens a
+  store with a shorter key once for migration. An `encryption.keycheck` file in
+  the data directory now makes startup fail on a wrong key, or on a missing key
+  for an encrypted store, instead of mixing data under two keys.
+- `/ready` reports not-ready after a WAL fsync failure (writes are refused until
+  restart).
+- WAL damage followed by valid entries now stops startup instead of being
+  skipped (a skipped DELETE could resurrect a key). Set
+  `ANUBIS_WAL_SKIP_CORRUPT=1` to skip it; a torn tail is still cut off silently.
+- Backups carry an HMAC signature, so an edited archive is rejected. The
+  generated backup key moves from `backups/.backup_key` to `<data dir>/backup.key`
+  (migrated automatically) and is no longer copied beside each archive;
+  `ANUBIS_BACKUP_ENCRYPTION_KEY` accepts 64-character hex. Older archives,
+  `<archive>.key` sidecars and raw keys still restore; unsigned plain archives
+  restore with an "unauthenticated" warning.
+
+### Standalone binary and Docker completion
+
+- Preserve distinct Judgment IDs at the same timestamp. New records use a
+  timestamp/ID key suffix; legacy timestamp-only records remain readable and
+  legacy same-ID rewrites stay in place. Replication deduplicates by ID. Older
+  writers must not reopen new-format data directories; restore a pre-upgrade
+  backup into empty storage to roll back.
+- Private/protected status HTML, JSON, badges, widgets, feeds and password forms
+  now use `private, no-store`. Private pages accept the normal login cookie,
+  with legacy-cookie compatibility and canonical-cookie precedence. Password
+  POST redirects remain on the same origin.
+- Journey edit controls now follow viewer/editor/owner permissions correctly.
+- CLI, Prometheus and tracing use the linked build version. Release image builds
+  receive version, commit and a shared timestamp.
+- Standalone Compose no longer needs a cluster secret for a disabled profile;
+  the standalone service uses a read-only root and loopback port publishing.
+  `ANUBIS_IMAGE` selects the release/candidate reference.
+- The launcher preserves existing config and uses foreground `exec` instead of
+  process-name-wide termination. Init credential files use owner-only access.
+- Update the test-only undici dependency to 8.12.3 and retain the audit gate.
+- Document supported standalone scope and cold-volume recovery in
+  `docs/deployment/binary-and-docker.md`; optional HA/Kubernetes acceptance is
+  separate from this release target.
+
+### HA and production readiness
+
+- **Journey persistence and ownership**: manual runs now return exhausted
+  save/retry errors with the completed check result instead of reporting a
+  successful save. A stopped or reassigned scheduled run whose saver finishes
+  late no longer overwrites the replacement run's deduplication state. In
+  cluster mode, manual runs wait for consensus and local application before
+  acknowledging the record; scheduled runs retain asynchronous batching.
+- **Alert ownership return**: a node reacquiring a Soul rebuilds its failure
+  streak and status-duration clock from current replicated history, so an old
+  ownership period cannot open an incident before the configured threshold.
+  Notification cooldowns and channel rate limits are retained.
+- **WAL format boundary (downgrade restriction)**: Judgment primary records,
+  lookup indexes and live rollups now commit together in one checksummed
+  `BATCH` frame and one fsync. Failed writes no longer acknowledge missing
+  rollups or leave a primary record without its index. This binary reads
+  legacy `PUT`/`DELETE` WAL records; older binaries do not understand `BATCH`
+  and may silently discard those writes when recovering/checkpointing.
+  Never open a newly written data directory with an older binary. Roll back
+  using a pre-upgrade backup restored into a separate data directory.
+- **HA shared authentication (opt-in, three-voter clusters)**: sessions, password
+  changes, password-reset state, logout and lockouts now use a quorum-backed
+  shared authority, so a user session is valid on every voter and revocation is
+  cluster-wide. Failed or uncertain quorum commits never return successful
+  credentials. Enabled by the chart when `statefulSet.replicas: 3` with
+  verified peer mTLS and shared secrets; see
+  `deploy/helm/anubiswatch/values-ha.example.yaml`.
+- **Snapshot format boundary (downgrade restriction)**: large snapshots are now
+  stored as immutable encrypted chunks with a small atomic manifest. New
+  binaries read legacy snapshots, but **older binaries cannot read the new
+  chunk-manifest format** — a Helm or binary rollback does not reverse the
+  on-disk format. Before crossing this boundary, restore a pre-upgrade backup
+  into a separate data directory; a Helm rollback alone is not a data rollback.
+- **Credential rotation**: a global password change or logout is enforced on
+  all voters (old passwords and revoked sessions are rejected everywhere
+  immediately after the change commits). Local (non-cluster) installs keep
+  single-node semantics.
+- **Deployment settings required for HA**: explicit image reference (historical
+  releases do not gain the shared-auth/Raft fixes from chart values alone),
+  persistent storage per voter, autoscaling disabled, `Parallel` pod
+  management, verified peer mTLS secret shared by all voters, and anti-affinity
+  across workers. The chart rejects unsafe HA topologies and in-place
+  standalone↔HA topology changes; config or managed-secret changes trigger a
+  rollout. See `docs/deployment/production-runbook.md`.
+- **CI**: the `load-tests` job now sets `ANUBIS_RUN_LOAD_TESTS=true` and asserts
+  that the six `TestLoad_*` tests actually executed; previously the tests
+  self-skipped and the job passed while running nothing.
+
 ### Documentation
 
 - OpenAPI request bodies now match what the server reads. Souls take `http`

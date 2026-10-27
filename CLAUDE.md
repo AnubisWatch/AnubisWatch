@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-AnubisWatch is a zero-dependency, single-binary uptime and synthetic monitoring platform written in Go. It uses Egyptian mythology theming throughout the codebase.
+AnubisWatch is a single-binary uptime and synthetic monitoring platform written in Go that needs no external runtime services (database, broker, cache). It uses Egyptian mythology theming throughout the codebase.
 
 ## Common Commands
 
@@ -172,9 +172,9 @@ Type() core.CheckType
 Judge(ctx context.Context, soul *core.Soul) (*core.Judgment, error)
 Validate(soul *core.Soul) error
 ```
-10 protocols registered via `CheckerRegistry`: HTTP, TCP, UDP, DNS, SMTP, IMAP, ICMP, gRPC, WebSocket, TLS.
+10 protocols registered via `CheckerRegistry`: HTTP, TCP, UDP, DNS, SMTP, IMAP, ICMP, gRPC, WebSocket, TLS — plus the `heartbeat` push monitor (`internal/probe/heartbeat.go`), whose checker never dials: it judges the replicated ping state (`{ws}/heartbeats/{soul}`) written by the public `/api/v1/heartbeat/:token[/start|/fail]` endpoints (`internal/api/heartbeat.go`) and returns `probe.ErrNoJudgment` while the deadline holds. Only the soul's owner judges; any node accepts pings.
 
-Security: HTTP checker includes SSRF protection that blocks private/reserved IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, 169.254.0.0/16, 0.0.0.0/8, 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 192.0.0.0/24, 240.0.0.0/4, fc00::/7, fe80::/10, ::1/128) with support for hex/octal IP notation and CIDR parsing.
+Security: probes and alert channels share one SSRF policy (`internal/probe/ssrf.go`). Every checker and every alert dispatcher (HTTP and SMTP) dials through `probe.SafeDialContext`, which resolves once, checks every address and dials only a checked IP (DNS-rebinding safe). Blocked unless `security.allow_private_targets` / `allowed_networks` allow them: RFC 1918, loopback, link-local, CGNAT 100.64.0.0/10, 0.0.0.0/8, 192.0.0.0/24, documentation (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32), benchmarking 198.18.0.0/15, 240.0.0.0/4, fc00::/7, fe80::/10, ::1. NAT64 (64:ff9b::/96), 6to4 (2002::/16) and IPv4-compatible addresses are judged by their embedded IPv4. Never allowed: cloud metadata (169.254.169.254, fd00:ec2::254), local-use NAT64 64:ff9b:1::/48, Teredo 2001::/32. Hex/octal/decimal IP spellings are parsed. Alert HTTP channels ignore HTTP(S)_PROXY; an explicit `alerting.proxy` URL is the opt-in for proxy-only egress.
 
 ### Storage Engine (Feather/CobaltDB)
 
@@ -182,14 +182,16 @@ In-memory B+Tree with configurable order (default 32, range 4–256), WAL for cr
 
 ### API Layer
 
-Custom router (no third-party library) with parameterized routes (`:param` syntax). Middleware chain: logging → security headers → CORS → recovery → JSON validation → path param validation → rate limiting. Auth via `requireAuth()` (token) and `requireRole()` (RBAC). ~94 registered routes, most under `/api/v1/`. SSE fallback at `/api/v1/events`.
+Custom router (no third-party library) with parameterized routes (`:param` syntax). Middleware chain: logging → security headers → CORS → recovery → JSON validation → path param validation → rate limiting. Auth via `requireAuth()` (token) and `requireRole()` (RBAC); per-user rate limits are charged inside `requireAuth`. Client IP comes from `internal/api/client_ip.go` (X-Forwarded-For read right-to-left, only through `trusted_proxies`, which accepts CIDRs). The SPA and status-page fallbacks also get the security-header middleware (CSP `script-src 'self'`). Live WS/SSE streams close on logout/password change and re-check their token every 30s. 133 `router.Handle` registrations in `rest.go` (12 are deprecated aliases that answer with `Deprecation` + `Link`), most under `/api/v1/`. SSE fallback at `/api/v1/events`.
 
 The OpenAPI spec is **`internal/api/openapi.yaml`** — a single document, embedded with `go:embed`, served as JSON at `/api/openapi.json`, as YAML at `/api/openapi.yaml`, and rendered by `/api/docs`. It covers every registered route; `TestOpenAPISpecCoversEveryRoute` and `TestOpenAPISpecHasNoPhantomOperations` fail the build if the spec and the router disagree in either direction. Add the operation in the same change that adds the route.
 
+The dashboard's API types are generated from the spec into `web/src/api/schema.generated.ts` (`cd web && pnpm run gen:api`; never edit it by hand). CI runs `pnpm run check:api` and fails when the file is stale. When a generated type is wrong, fix the spec: `TestOpenAPIResponseSchemasMatchGoTypes` checks response schemas' properties, `required` and `nullable` against the Go structs.
+
 ### Authentication (`internal/auth/`)
 
-Three authenticator implementations selected by `auth.type` in config:
-- **Local** (`local.go`) — bcrypt (cost 12), session persistence, brute-force protection (5 attempts / 15-min lockout), password policy (12+ chars, 3 of 4 classes), timing-attack resistant enumeration prevention, password reset tokens (24h expiry)
+Three authenticator implementations selected by `auth.type` in config. Local auth is multi-user: `internal/auth/users.go` holds the directory (accounts, per-workspace roles, invitations) in the same persisted/HA-shared state as sessions, and OIDC/LDAP provision their users into it; the members API is `internal/api/members.go`:
+- **Local** (`local.go`) — bcrypt (cost 12), session persistence, brute-force protection (5 failures lock one account+client-IP pair for 15 min; 50 account-wide failures in 30 min start an exponential backoff capped at 15 min, skipping IPs that logged in successfully in the last 30 days, so a remote attacker cannot lock the admin out), password policy (12+ chars, 3 of 4 classes), timing-attack resistant enumeration prevention, password reset tokens (24h expiry)
 - **OIDC** (`oidc.go`) — OpenID Connect with `.well-known` discovery, JWK caching (24h TTL), RSA/EC key support, full JWT validation (exp, nbf, iss, aud, azp), HMAC state for clusters, local auth fallback
 - **LDAP** (`ldap.go`) — LDAP/Active Directory with StartTLS, service account search, DN/filter escaping (injection prevention), local auth fallback
 
@@ -203,7 +205,7 @@ All implementations use constant-time comparison for secrets and secure random t
 - `embalmed` — Maintenance mode
 
 ### Check Types
-`http`, `tcp`, `udp`, `dns`, `smtp`, `imap`, `icmp`, `grpc`, `websocket`, `tls`
+`http`, `tcp`, `udp`, `dns`, `smtp`, `imap`, `icmp`, `grpc`, `websocket`, `tls`, `heartbeat` (push; no target)
 
 ## Configuration
 
@@ -222,7 +224,7 @@ Key environment variable overrides:
 - `ANUBIS_PORT` — Server port (default: 8443; `anubis init` writes 8080 or the next free port)
 - `ANUBIS_SSRF_ALLOW_PRIVATE` — Same as `security.allow_private_targets: true`
 - `ANUBIS_API_TOKEN` / `ANUBIS_TOKEN_FILE` — Token for client commands (default: the file `anubis login` writes)
-- `ANUBIS_ENCRYPTION_KEY` — Storage encryption key (hex-encoded 32 bytes)
+- `ANUBIS_ENCRYPTION_KEY` — Storage encryption key, used verbatim (not hex-decoded); at least 16 bytes, 64 hex chars (`openssl rand -hex 32`) recommended. `<data>/encryption.keycheck` makes a wrong key refuse to start
 - `ANUBIS_CLUSTER_SECRET` — Cluster shared secret (for HMAC validation)
 - `ANUBIS_ADMIN_PASSWORD` — Initial admin password (only on first startup)
 
@@ -251,7 +253,7 @@ nanoseconds and are rejected below 1s / 1ms.
 
 ## Security Considerations
 
-- SSRF protection: HTTP checker validates targets against private/reserved IP ranges
+- SSRF protection: every probe and alert channel dials through the shared, rebinding-safe SSRF dialer
 - Authentication: bcrypt cost 12, constant-time comparison, brute-force protection
 - Storage: Optional AES-256-GCM encryption for data at rest
 - Cluster: HMAC-signed messages, shared secret validation
@@ -259,7 +261,7 @@ nanoseconds and are rejected below 1s / 1ms.
 
 ## CI Pipeline
 
-12 jobs in `.github/workflows/ci.yml`:
+13 jobs in `.github/workflows/ci.yml` (all actions pinned by commit SHA):
 
 | Job | What it gates |
 |---|---|
@@ -272,13 +274,14 @@ nanoseconds and are rejected below 1s / 1ms.
 | `chaos-tests` | Raft fault injection, gated on `ANUBIS_RUN_CHAOS_TESTS=1` (main only) |
 | `load-tests` | Performance benchmarks (main only) |
 | `benchmarks` | `go test -bench`, artifact upload |
-| `integration-tests` | Full stack against the built binary (main only) |
+| `integration-tests` | Full stack against the built binary |
 | `helm-tests` | `helm lint` / template validation |
+| `k8s-drill` | kind-based Kubernetes acceptance drill (main only) |
 | `docker-security` | Trivy container scanning |
 
 There is no separate `lint` or `security` job — both are folded into `static-analysis`.
 
-Additional workflows: `docker-build.yml` (multi-arch images), `release.yml` (on `v*` tags: cross-platform binaries, checksums.txt, GitHub release, GHCR image).
+Additional workflows: `docker-build.yml` (multi-arch images), `release.yml` (on `v*` tags: cross-platform binaries, checksums.txt, signed build provenance via `actions/attest-build-provenance`, GitHub release gated on the Trivy-scanned GHCR image). Workflows default to `contents: read`; jobs request write scopes individually.
 
 ## Dependencies
 
@@ -303,4 +306,4 @@ Dashboard (web/):
 - Uses pnpm for package management
 
 Module: `github.com/AnubisWatch/anubiswatch`
-Go version: `go 1.26.0`, toolchain `go1.27.2` (see `go.mod`)
+Go version: `go 1.26.0`, toolchain `go1.27.3` (see `go.mod`)

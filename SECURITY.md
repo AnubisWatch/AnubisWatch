@@ -33,7 +33,7 @@ AnubisWatch is pre-1.0 software (`v0.x.y`). Only the **latest minor release** re
 
 | Version | Supported | Notes |
 |---|---|---|
-| `v0.2.x` (latest: `v0.2.0`) | ✅ Active | Current release line |
+| `v0.2.x` (latest: `v0.2.1`) | ✅ Active | Current release line |
 | `v0.1.x` | ❌ Unsupported | Upgrade to `v0.2.x` |
 | `< v0.1.0` | ❌ Unsupported | Early development builds |
 

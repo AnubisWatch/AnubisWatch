@@ -15,13 +15,13 @@ need before they touch this codebase.
 
 - **Build:** `go build ./...`
 - **Test:** `go test ./...`
-- **Run locally:** `go run ./cmd/anubis serve --single`
+- **Run locally:** `go run ./cmd/anubis serve --single --config ./configs/anubis.yaml`
 - Never commit generated binaries, `.db` files, or credentials.
 - `configs/anubis.yaml` is the canonical example config; runtime config is typically at `data/anubis.json`.
 
 ## Architecture notes
 
-- **CobaltDB** (`internal/storage/`): Embedded B+Tree engine with WAL. Key format: `{workspaceID}/souls/{soulID}`, `{workspaceID}/judgments/{soulID}/{timestamp}`.
+- **CobaltDB** (`internal/storage/`): Embedded B+Tree engine with WAL. Key format: `{workspaceID}/souls/{soulID}`, `{workspaceID}/judgments/{soulID}/{timestamp}/{judgmentID}` (legacy timestamp-only keys remain readable).
 - **Probe Engine** (`internal/probe/`): Scheduler + worker pool. Check types live in `internal/probe/*.go` (http, tcp, dns, icmp, smtp, imap, grpc, websocket, tls).
 - **Alert Engine / Ma'at** (`internal/alert/`): Routes Verdicts to dispatchers (webhook, Slack, Discord, email, PagerDuty, etc.).
 - **Journey Executor / Duat** (`internal/journey/`): Multi-step synthetic monitoring. Steps produce probe Judgments; JourneyContext carries state between steps.
@@ -33,19 +33,19 @@ need before they touch this codebase.
 - **Soul** = monitored target. **Judgment** = single check result. **Verdict** = alert decision. **Journey** = multi-step synthetic scenario.
 - **SoulStatus values:** `alive`, `dead`, `degraded`, `unknown`, `embalmed` (maintenance window).
 - **Auth auto-enable:** When `auth.type=local` with admin credentials, or `oidc` with issuer, or `ldap` with URL — auth is automatically enabled.
-- **Config defaults:** Set by `c.SetDefaults()` in `internal/core/config.go`. Call it before `validate()`.
+- **Config loading:** Use `core.LoadConfig(path)`; it applies environment overrides, private `setDefaults()`, then validation. Defaults/validation are not exported Config methods.
 
 ## Verification checklist
 
 - `go build ./...` — must compile clean
 - `go test ./...` — all tests pass
 - `go vet ./...` — no warnings
-- Manual smoke: `go run ./cmd/anubis serve --single` → hit `http://localhost:8080`, login, create a Soul, trigger a judge
+- Manual smoke: `go run ./cmd/anubis serve --single --config ./configs/anubis.yaml` → hit `http://localhost:8080`, login, create a Soul, trigger a judge
 
 ## Useful pointers
 
 - Ports depend on which config you start with, so check before assuming:
-  - **Code default** (`internal/core/config.go` `SetDefaults`): HTTP **8443**, data dir `/var/lib/anubis/data`.
+  - **Code default** (`internal/core/config.go` `setDefaults`): HTTP **8443**, data dir `/var/lib/anubis/data`.
   - **`configs/anubis.yaml`** (what `make dev` / `--config ./configs/anubis.yaml` uses): HTTP **8080**, data dir `./data`.
   - **`configs/container.anubis.json`** (baked into the Docker image): HTTP **8080**.
   - gRPC: 9090. Cluster bind: 0.0.0.0:7946. Both are config-independent defaults.
@@ -54,4 +54,5 @@ need before they touch this codebase.
   (`./data/.admin_password` under `configs/anubis.yaml`).
 - Config reference: `configs/anubis.yaml`
 - Architecture: `ARCHITECTURE.md`
+- Binary/Docker installation: `docs/deployment/binary-and-docker.md`
 - Deployment runbook: `docs/deployment/production-runbook.md`

@@ -19,6 +19,15 @@ AnubisWatch is a self-hosted uptime, synthetic monitoring, alerting, and status-
 [![Go Report Card](https://goreportcard.com/badge/github.com/AnubisWatch/anubiswatch)](https://goreportcard.com/report/github.com/AnubisWatch/anubiswatch)
 [![License](https://img.shields.io/github/license/AnubisWatch/anubiswatch)](LICENSE)
 
+## Supported installation target
+
+The current completion target is a standalone binary or Docker container with
+persistent storage. Follow [Binary and Docker installation](docs/deployment/binary-and-docker.md)
+for current commands, authentication, retention, backup and rollback boundaries.
+The opt-in cluster deployment has separate prerequisites; do not scale one
+standalone data volume. Unsupported quotas, branding and subscription delivery
+are documented in that guide.
+
 ### Gate-Level Status
 
 Each badge above maps to a specific CI gate. A green badge means the gate
@@ -73,45 +82,22 @@ cd anubiswatch
 ./run.sh
 ```
 
-That's it! The `run.sh` script will:
-- Build the binary if not present
-- Create a default config with random admin password
-- Start the server and wait for it to be ready
-- Print the dashboard URL and credentials
-
-```
-⚖️  AnubisWatch — The Judgment Never Sleeps
-
-[✓] Binary found: ./anubis
-[✓] Config created: ~/.anubiswatch/anubis.json
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Admin Password: randomgeneratedpassword
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-[✓] Starting AnubisWatch...
-Waiting for server..........
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ⚖️  AnubisWatch is ready!
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-  Dashboard: http://localhost:8443
-  Health:    http://localhost:8443/health
-
-  Press Ctrl+C to stop
-```
+The launcher builds a missing binary, initializes only a missing config, and
+runs one standalone instance in the foreground. First initialization prints the
+administrator credentials. Existing config and other AnubisWatch processes are
+preserved. Its default HTTP port is 8443; Ctrl+C stops the launched instance.
+For a release deployment use [the binary/Docker guide](docs/deployment/binary-and-docker.md).
 
 ### run.sh Options
 
 ```bash
 ./run.sh --port 9000          # Custom port
 ./run.sh --data-dir /opt/anubis  # Custom data directory
-./run.sh --password secret123   # Set admin password
+./run.sh --password "$ANUBIS_ADMIN_PASSWORD" # Initial admin password
 ./run.sh --log-level debug       # Debug logging
 
 # All options combined
-./run.sh --port 9443 --data-dir /data --password mypass --log-level debug
+./run.sh --port 9443 --data-dir /data --log-level debug
 ```
 
 ### Build And Run Manually
@@ -121,14 +107,14 @@ git clone https://github.com/AnubisWatch/anubiswatch.git
 cd anubiswatch
 
 go mod download
-cd web && npm ci && npm run build:embed && cd ..
+cd web && pnpm install --frozen-lockfile && pnpm run build:embed && cd ..
 
 go build -o anubis ./cmd/anubis
 ./anubis init
 ./anubis serve
 ```
 
-`anubis init` creates `./anubis.json` by default, chooses an available port starting at `8443`, generates a local admin password, and prints the dashboard URL.
+`anubis init` creates `./anubis.json` by default, chooses an available port starting at `8080`, generates a local admin password, and prints the dashboard URL.
 
 ### Make Targets
 
@@ -150,11 +136,11 @@ make docker         # Build ghcr.io/anubiswatch/anubiswatch:<version>
 go test ./... -coverprofile=coverage.out -covermode=atomic
 
 # Frontend unit/integration suite + HTML/JSON coverage artifacts
-cd web && npm run test:coverage
+pnpm --dir web run test:coverage
 # (runs with --sequence.concurrent false for stable module-mock isolation)
 
 # Frontend browser smoke coverage
-cd web && npm run e2e
+pnpm --dir web run e2e
 ```
 
 Coverage artifacts produced by these commands:
@@ -162,7 +148,7 @@ Coverage artifacts produced by these commands:
 - Web: `web/coverage/index.html` and `web/coverage/coverage-final.json`
 
 Any remaining uncovered-but-not-yet-practical paths are tracked in
-`TEST_COVERAGE_EXCEPTIONS.md`.
+[docs/TEST_COVERAGE_EXCEPTIONS.md](docs/TEST_COVERAGE_EXCEPTIONS.md).
 
 ### Docker Compose
 
@@ -432,7 +418,7 @@ Dashboard routes include Overview, Souls, Judgments, Alerts, Incidents, Maintena
 Prerequisites:
 
 - Go matching [go.mod](go.mod), currently `1.25.0`
-- Node.js and npm for the dashboard
+- Node.js 22+ and pnpm for the dashboard
 - Make, Docker, and Docker Compose for the optional helper workflows
 
 Common commands:
@@ -443,12 +429,12 @@ go test -race -coverprofile=coverage.out ./...
 go test ./internal/raft -run SingleNode
 
 cd web
-npm ci
-npm run dev
-npm run build
-npm run build:embed
-npm run test
-npm run e2e
+pnpm install --frozen-lockfile
+pnpm run dev
+pnpm run build
+pnpm run build:embed
+pnpm run test
+pnpm run e2e
 ```
 
 The production build path is:
