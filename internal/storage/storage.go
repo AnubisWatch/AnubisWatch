@@ -1570,6 +1570,55 @@ func (db *CobaltDB) ApplyFSMCommand(cmd *core.FSMCommand) error {
 	return nil
 }
 
+// DurableState reports that CobaltDB's contents survive a restart (WAL).
+func (db *CobaltDB) DurableState() bool { return true }
+
+// ReplaceApplicationState replaces every key outside "raft/" with data, in
+// batched WAL frames. Like the per-key restore it replaces, it is not atomic:
+// a crash midway leaves a mix, which the node repairs by restoring again.
+func (db *CobaltDB) ReplaceApplicationState(data map[string][]byte) error {
+	keys, err := db.List("")
+	if err != nil {
+		return err
+	}
+	var stale []string
+	for _, key := range keys {
+		if strings.HasPrefix(key, "raft/") {
+			continue
+		}
+		if _, kept := data[key]; !kept {
+			stale = append(stale, key)
+		}
+	}
+	for len(stale) > 0 {
+		n := min(len(stale), 2048)
+		if err := db.deleteMany(stale[:n]); err != nil {
+			return err
+		}
+		stale = stale[n:]
+	}
+	values := make(map[string][]byte)
+	size := 0
+	for key, value := range data {
+		if strings.HasPrefix(key, "raft/") {
+			continue
+		}
+		cost := walBatchCost(key, value)
+		if size > 0 && size+cost > walBatchBudget {
+			if err := db.putMany(values); err != nil {
+				return err
+			}
+			values, size = make(map[string][]byte), 0
+		}
+		values[key] = value
+		size += cost
+	}
+	if len(values) > 0 {
+		return db.putMany(values)
+	}
+	return nil
+}
+
 // ApplyFSMSets applies consecutive FSMSet commands like ApplyFSMCommand would,
 // in as few WAL frames (and fsyncs) as fit. A later set of the same key wins,
 // as it would applied in order.

@@ -165,6 +165,24 @@ type fsmCommandApplier interface {
 	ApplyFSMCommand(cmd *core.FSMCommand) error
 }
 
+// applicationStateReplacer is implemented by stores that can replace every
+// non-"raft/" key with a snapshot image in batched writes.
+type applicationStateReplacer interface {
+	ReplaceApplicationState(data map[string][]byte) error
+}
+
+// durableState is implemented by stores whose contents survive a restart.
+type durableState interface {
+	DurableState() bool
+}
+
+// StateIsDurable reports whether the FSM's state survives a restart. A node
+// then need not rebuild it from its snapshot when it already applied past it.
+func (f *StorageFSM) StateIsDurable() bool {
+	d, ok := f.store.(durableState)
+	return ok && d.DurableState()
+}
+
 // fsmSetBatcher is implemented by stores that can apply several FSMSet
 // commands as one durable write. CobaltDB writes them as one WAL frame, so a
 // replicated batch of judgments costs one fsync instead of one per command.
@@ -446,6 +464,18 @@ func (f *StorageFSM) restore(snapshot []byte) error {
 	data := make(map[string][]byte)
 	if err := json.Unmarshal(snapshot, &data); err != nil {
 		return err
+	}
+
+	// Stores that can replace the image in batched writes do so: one fsync
+	// per key took minutes for a real dataset.
+	if r, ok := f.store.(applicationStateReplacer); ok {
+		if err := r.ReplaceApplicationState(data); err != nil {
+			return err
+		}
+		if ir, ok := f.store.(indexRebuilder); ok {
+			ir.RebuildIndexes()
+		}
+		return nil
 	}
 
 	// Clear only application state. Raft metadata shares the database and must

@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Upgrade note:** restoring onto a fresh node needs the original node's
   backup key (`<data>/backup.key` or `ANUBIS_BACKUP_ENCRYPTION_KEY`).
 
+### HA: restarted nodes rejoin in seconds
+
+- Found by the HA soak: once a snapshot existed, every restart rewrote the
+  node's whole store from it, deleting and re-writing each key with its own
+  fsync — minutes for a real dataset, during which the node did not start
+  its Raft transport. A node whose durable store already applied past the
+  snapshot now skips the rewrite (its persisted `lastApplied` proves the
+  state is there). Installing a snapshot sent by the leader, which must
+  replace the store, now does it in batched frames.
+
 ### HA: log compaction no longer stalls the cluster for a minute
 
 - Found by the HA soak: after a snapshot, compaction deleted every compacted

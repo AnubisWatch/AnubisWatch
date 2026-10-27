@@ -2373,6 +2373,17 @@ func (n *Node) restoreLatestSnapshot() error {
 	if meta.Index < n.logBase {
 		return nil
 	}
+	// A durable FSM that already applied past the snapshot holds its state
+	// and more: lastApplied is persisted only after an entry is applied.
+	// Rewriting the whole store from the snapshot on every restart took
+	// minutes for a real dataset and kept the node from rejoining.
+	if d, ok := n.fsm.(interface{ StateIsDurable() bool }); ok && d.StateIsDurable() && n.lastApplied >= meta.Index {
+		n.lastSnapshotIndex = meta.Index
+		if fsm, ok := n.fsm.(interface{ SetLastApplied(uint64) }); ok {
+			fsm.SetLastApplied(n.lastApplied)
+		}
+		return nil
+	}
 	source, err := n.snapshot.Open(meta.ID)
 	if err != nil {
 		return err
