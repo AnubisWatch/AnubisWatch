@@ -92,13 +92,14 @@ func TestOIDCAuthorizationRequestCarriesNonce(t *testing.T) {
 
 	// The provider issues the ID token a conformant provider would issue.
 	idToken = createTestJWT(t, priv, map[string]interface{}{
-		"iss":   server.URL,
-		"aud":   "regression-client-id",
-		"sub":   "regression-subject",
-		"email": "regression@example.com",
-		"name":  "Regression User",
-		"exp":   time.Now().Add(time.Hour).Unix(),
-		"nonce": providerNonce,
+		"iss":            server.URL,
+		"aud":            "regression-client-id",
+		"sub":            "regression-subject",
+		"email":          "regression@example.com",
+		"email_verified": true,
+		"name":           "Regression User",
+		"exp":            time.Now().Add(time.Hour).Unix(),
+		"nonce":          providerNonce,
 	})
 
 	user, token, err := auth.OIDCCallback("regression-code", state, nonce)

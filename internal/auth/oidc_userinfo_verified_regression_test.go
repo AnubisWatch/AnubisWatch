@@ -30,6 +30,19 @@ func runOIDCUserInfoFlow(
 	userinfoBody map[string]interface{},
 ) (*api.User, string, error) {
 	t.Helper()
+	return runOIDCUserInfoFlowWith(t, false, priv, idTokenClaims, userinfoBody)
+}
+
+// runOIDCUserInfoFlowWith is runOIDCUserInfoFlow with
+// auth.oidc.allow_unverified_email set to allowUnverified.
+func runOIDCUserInfoFlowWith(
+	t *testing.T,
+	allowUnverified bool,
+	priv *rsa.PrivateKey,
+	idTokenClaims map[string]interface{},
+	userinfoBody map[string]interface{},
+) (*api.User, string, error) {
+	t.Helper()
 
 	var idToken string
 
@@ -61,6 +74,8 @@ func runOIDCUserInfoFlow(
 		Issuer:      server.URL,
 		ClientID:    "regression-client-id",
 		RedirectURL: "http://localhost:8080/api/v1/auth/oidc/callback",
+
+		AllowUnverifiedEmail: allowUnverified,
 	}, "", "admin@test.com", "TestPass1234!")
 
 	_, state, nonce, err := auth.OIDCLoginURL()
@@ -151,8 +166,14 @@ func TestOIDCCallbackAcceptsUserInfoEmailWhenClaimOmitted(t *testing.T) {
 		t.Fatalf("failed to generate RSA key: %v", err)
 	}
 
-	user, token, err := runOIDCUserInfoFlow(
+	// By default an omitted claim is not proof of ownership: accounts are
+	// matched by email.
+	if _, _, err := runOIDCUserInfoFlow(t, priv, nil, map[string]interface{}{"email": "claim-omitted@example.com"}); err == nil {
+		t.Fatal("an email without email_verified signed in without auth.oidc.allow_unverified_email")
+	}
+	user, token, err := runOIDCUserInfoFlowWith(
 		t,
+		true,
 		priv,
 		nil,
 		map[string]interface{}{
@@ -160,7 +181,7 @@ func TestOIDCCallbackAcceptsUserInfoEmailWhenClaimOmitted(t *testing.T) {
 		},
 	)
 	if err != nil {
-		t.Fatalf("userinfo email without an email_verified claim was rejected: %v", err)
+		t.Fatalf("with allow_unverified_email, userinfo email without an email_verified claim was rejected: %v", err)
 	}
 	if user.Email != "claim-omitted@example.com" {
 		t.Errorf("expected email claim-omitted@example.com, got %s", user.Email)

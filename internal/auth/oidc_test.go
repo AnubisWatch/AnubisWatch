@@ -1154,13 +1154,14 @@ func TestOIDCAuthenticator_OIDCCallback_Success(t *testing.T) {
 
 	now := time.Now()
 	claims := map[string]interface{}{
-		"iss":   server.URL,
-		"aud":   "client-id",
-		"sub":   "user-123",
-		"nonce": nonce,
-		"email": "oidcuser@example.com",
-		"name":  "OIDC User",
-		"exp":   now.Add(time.Hour).Unix(),
+		"iss":            server.URL,
+		"aud":            "client-id",
+		"sub":            "user-123",
+		"nonce":          nonce,
+		"email":          "oidcuser@example.com",
+		"email_verified": true,
+		"name":           "OIDC User",
+		"exp":            now.Add(time.Hour).Unix(),
 	}
 	idToken = createTestJWT(t, priv, claims)
 
@@ -1306,13 +1307,14 @@ func TestOIDCAuthenticator_OIDCCallback_GetUserInfoError(t *testing.T) {
 
 	now := time.Now()
 	claims := map[string]interface{}{
-		"iss":   server.URL,
-		"aud":   "client-id",
-		"sub":   "user-123",
-		"nonce": nonce,
-		"email": "oidcuser@example.com",
-		"name":  "OIDC User",
-		"exp":   now.Add(time.Hour).Unix(),
+		"iss":            server.URL,
+		"aud":            "client-id",
+		"sub":            "user-123",
+		"nonce":          nonce,
+		"email":          "oidcuser@example.com",
+		"email_verified": true,
+		"name":           "OIDC User",
+		"exp":            now.Add(time.Hour).Unix(),
 	}
 	idToken = createTestJWT(t, priv, claims)
 

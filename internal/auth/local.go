@@ -2,19 +2,21 @@ package auth
 
 import (
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/api"
+	"github.com/AnubisWatch/anubiswatch/internal/core"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -38,11 +40,38 @@ type LocalAuthenticator struct {
 	// stopOnce makes Shutdown idempotent — t.Cleanup hooks plus
 	// explicit defer Shutdown() calls in tests can both fire safely.
 	stopOnce sync.Once
-	// login attempts tracking for brute force protection
-	loginAttempts map[string]*loginAttempt
-	attemptsMu    sync.RWMutex
+	// Brute-force protection, all guarded by attemptsMu.
+	//
+	// loginAttempts holds failures per (account, client IP) source; five of
+	// them lock that source out (see loginSourceKey). accountFailures counts
+	// failures for an account across every source and, past
+	// accountBackoffThreshold, slows the account down with an exponential
+	// backoff instead of a hard lock. knownLoginIPs records the client IPs an
+	// account recently signed in from successfully; they are exempt from the
+	// account-wide backoff, so a flood of failures from elsewhere cannot lock
+	// the legitimate user out of their own machine.
+	loginAttempts   map[string]*loginAttempt
+	accountFailures map[string]*loginAttempt
+	knownLoginIPs   map[string]time.Time
+	attemptsMu      sync.RWMutex
 	// password reset tokens (protected by a.mu)
-	resetTokens map[string]*resetToken
+	resetTokens     map[string]*resetToken
+	comparePassword func([]byte, []byte) error
+	// accounts and invitations make up the multi-user directory (users.go),
+	// guarded by a.mu and persisted with the sessions.
+	accounts    map[string]*accountRecord
+	invitations map[string]*invitationRecord
+	// memberQuota enforces tenants.default_quotas.max_team_members.
+	memberQuota func(workspace string, current int) error
+	// onRevokeUser lets an embedding OIDC/LDAP authenticator end the
+	// sessions it keeps itself when an account loses access. Called with
+	// a.mu held.
+	onRevokeUser func(userID string)
+	// credIndex maps each normalized email that can sign in with a password
+	// to its bcrypt hash. It is an immutable snapshot rebuilt after every
+	// mutation, so Login and RequestPasswordReset reject unknown addresses
+	// without touching a.mu (see TestLoginRejectionPathsDoNotHoldAuthLock).
+	credIndex atomic.Pointer[map[string]string]
 }
 
 type resetToken struct {
@@ -69,6 +98,11 @@ type sessionData struct {
 	Users       map[string]*api.User     `json:"users"`
 	ResetTokens map[string]*resetToken   `json:"reset_tokens"`
 	Lockouts    map[string]*loginAttempt `json:"lockouts,omitempty"`
+	// AccountBackoff and KnownLoginIPs persist the account-wide backoff and
+	// the sources exempt from it, so a restart neither resets the backoff nor
+	// forgets the user's own address.
+	AccountBackoff map[string]*loginAttempt `json:"account_backoff,omitempty"`
+	KnownLoginIPs  map[string]time.Time     `json:"known_login_ips,omitempty"`
 	// AdminEmail/AdminPasswordHash persist a password changed at runtime
 	// (change-password, reset, `anubis admin reset-password`). Without them a
 	// restart silently reverted to the config file's password.
@@ -78,6 +112,10 @@ type sessionData struct {
 	// when AdminPasswordHash was set, so rotating the password in the config
 	// file still takes effect.
 	AdminSeedHash string `json:"admin_seed_hash,omitempty"`
+	// Accounts and Invitations hold the multi-user directory (users.go).
+	// Files written before it have neither; loading migrates them.
+	Accounts    map[string]*accountRecord    `json:"accounts,omitempty"`
+	Invitations map[string]*invitationRecord `json:"invitations,omitempty"`
 }
 
 // NewLocalAuthenticator creates a new local authenticator.
@@ -124,7 +162,11 @@ func NewLocalAuthenticator(sessionPath, adminEmail, adminPassword string) (*Loca
 		stopCleanup:       make(chan struct{}),
 		cleanupDone:       make(chan struct{}),
 		loginAttempts:     make(map[string]*loginAttempt),
+		accountFailures:   make(map[string]*loginAttempt),
+		knownLoginIPs:     make(map[string]time.Time),
 		resetTokens:       make(map[string]*resetToken),
+		accounts:          make(map[string]*accountRecord),
+		invitations:       make(map[string]*invitationRecord),
 	}
 
 	// Load persisted state before seeding the admin account. A persisted user
@@ -155,6 +197,8 @@ func NewLocalAuthenticator(sessionPath, adminEmail, adminPassword string) (*Loca
 		}
 		a.users[adminUser.ID] = adminUser
 	}
+	a.migrateDirectoryLocked()
+	a.refreshCredIndexLocked()
 
 	// Start background cleanup goroutine
 	// The interval is read here, not in the goroutine, so tests that tune it
@@ -203,6 +247,20 @@ func (a *LocalAuthenticator) loadSessions() {
 		}
 		a.users[id] = user
 	}
+	for id, rec := range sessionData.Accounts {
+		if rec != nil && sessionData.Users[id] != nil {
+			if rec.Memberships == nil {
+				rec.Memberships = make(map[string]core.MemberRole)
+			}
+			a.accounts[id] = rec
+		}
+	}
+	now0 := time.Now()
+	for id, inv := range sessionData.Invitations {
+		if inv != nil && now0.Before(inv.ExpiresAt) {
+			a.invitations[id] = inv
+		}
+	}
 
 	// Only load non-expired sessions
 	now := time.Now()
@@ -240,6 +298,22 @@ func (a *LocalAuthenticator) loadSessions() {
 		}
 		a.attemptsMu.Unlock()
 	}
+	a.attemptsMu.Lock()
+	for email, att := range sessionData.AccountBackoff {
+		if att == nil {
+			continue
+		}
+		if (!att.LockedUntil.IsZero() && now.Before(att.LockedUntil)) ||
+			(!att.LastTry.IsZero() && now.Sub(att.LastTry) <= attemptResetWindow) {
+			a.accountFailures[email] = att
+		}
+	}
+	for key, at := range sessionData.KnownLoginIPs {
+		if now.Sub(at) <= knownLoginIPTTL {
+			a.knownLoginIPs[key] = at
+		}
+	}
+	a.attemptsMu.Unlock()
 }
 
 // configPasswordMatchesSeed reports whether the configured password is the
@@ -274,9 +348,9 @@ var saveSessionsJSON = json.Marshal
 
 // saveSessionsLocked persists sessions and users to disk
 // Must be called with a.mu held (at least RLock)
-func (a *LocalAuthenticator) saveSessionsLocked() {
+func (a *LocalAuthenticator) saveSessionsLocked() error {
 	if a.sessionPath == "" {
-		return
+		return nil
 	}
 
 	// Snapshot lockouts under attemptsMu so the persist path doesn't race
@@ -293,6 +367,21 @@ func (a *LocalAuthenticator) saveSessionsLocked() {
 		dup := *att
 		lockoutsCopy[email] = &dup
 	}
+	var backoffCopy map[string]*loginAttempt
+	if len(a.accountFailures) > 0 {
+		backoffCopy = make(map[string]*loginAttempt, len(a.accountFailures))
+		for email, att := range a.accountFailures {
+			if att == nil {
+				continue
+			}
+			dup := *att
+			backoffCopy[email] = &dup
+		}
+	}
+	var knownCopy map[string]time.Time
+	if len(a.knownLoginIPs) > 0 {
+		knownCopy = maps.Clone(a.knownLoginIPs)
+	}
 	a.attemptsMu.RUnlock()
 
 	data := sessionData{
@@ -300,41 +389,102 @@ func (a *LocalAuthenticator) saveSessionsLocked() {
 		Users:             a.users,
 		ResetTokens:       a.resetTokens,
 		Lockouts:          lockoutsCopy,
+		AccountBackoff:    backoffCopy,
+		KnownLoginIPs:     knownCopy,
 		AdminEmail:        a.adminEmail,
 		AdminPasswordHash: a.adminPasswordHash,
 		AdminSeedHash:     a.configSeedHash,
+		Accounts:          a.accounts,
+		Invitations:       a.invitations,
 	}
 
 	jsonData, err := saveSessionsJSON(data)
 	if err != nil {
-		return
+		return fmt.Errorf("persist authentication state: %w", err)
 	}
 
 	// Ensure directory exists
 	dir := filepath.Dir(a.sessionPath)
 	if err := os.MkdirAll(dir, 0750); err != nil {
-		return
+		return fmt.Errorf("persist authentication state: %w", err)
 	}
 
 	// Write atomically using temp file
 	tmpPath := a.sessionPath + ".tmp"
-	if err := os.WriteFile(tmpPath, jsonData, 0600); err != nil {
-		return
+	file, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return fmt.Errorf("persist authentication state: %w", err)
 	}
-	// Ensure permissions are set correctly before rename (race condition protection)
-	if err := os.Chmod(tmpPath, 0600); err != nil {
+	if err = file.Chmod(0600); err == nil {
+		_, err = file.Write(jsonData)
+	}
+	if err == nil {
+		err = sessionFileSync(file)
+	}
+	closeErr := file.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		os.Remove(tmpPath)
-		return
+		return fmt.Errorf("persist authentication state: %w", err)
 	}
 	if err := os.Rename(tmpPath, a.sessionPath); err != nil {
 		os.Remove(tmpPath)
-		return
+		return fmt.Errorf("persist authentication state: %w", err)
 	}
-	// Ensure final file has correct permissions (defense in depth).
-	// A failed chmod leaves the file with the umask default; surfaced
-	// nowhere because the authenticator has no logger — acceptable as
-	// the write itself already used 0600 creation semantics.
-	_ = os.Chmod(a.sessionPath, 0600)
+	if err := sessionDirectorySync(dir); err != nil {
+		return &authPersistenceError{err: fmt.Errorf("authentication state renamed but directory sync failed: %w", err), committed: true}
+	}
+	return nil
+}
+
+// A post-rename error reports uncertain crash durability. Keep the new memory
+// state in that case because the pathname already names the new file.
+type authPersistenceError struct {
+	err       error
+	committed bool
+}
+
+func (e *authPersistenceError) Error() string { return e.err.Error() }
+func (e *authPersistenceError) Unwrap() error { return e.err }
+
+var sessionFileSync = (*os.File).Sync
+var sessionDirectorySync = syncSessionDirectory
+
+// rollbackStateLocked snapshots the fields changed by security-sensitive mutations.
+// Callers keep a.mu held through persistence and rollback.
+func (a *LocalAuthenticator) rollbackStateLocked() func() {
+	tokens, resets := maps.Clone(a.tokens), maps.Clone(a.resetTokens)
+	users := make(map[string]*api.User, len(a.users))
+	for id, u := range a.users {
+		users[id] = copyUser(u)
+	}
+	hash := a.adminPasswordHash
+	accounts := make(map[string]*accountRecord, len(a.accounts))
+	for id, rec := range a.accounts {
+		accounts[id] = rec.clone()
+	}
+	invitations := maps.Clone(a.invitations)
+	return func() {
+		a.tokens = tokens
+		a.resetTokens = resets
+		a.users = users
+		a.adminPasswordHash = hash
+		a.accounts = accounts
+		a.invitations = invitations
+	}
+}
+func (a *LocalAuthenticator) persistOrRollbackLocked(rollback func()) error {
+	defer a.refreshCredIndexLocked()
+	if err := a.saveSessionsLocked(); err != nil {
+		var persisted *authPersistenceError
+		if !errors.As(err, &persisted) || !persisted.committed {
+			rollback()
+		}
+		return err
+	}
+	return nil
 }
 
 // cleanupInterval is the interval between session cleanup runs.
@@ -366,12 +516,16 @@ func (a *LocalAuthenticator) cleanupExpiredSessions(interval time.Duration) {
 					delete(a.resetTokens, token)
 				}
 			}
-			a.saveSessionsLocked()
+			if err := a.saveSessionsLocked(); err != nil {
+				slog.Warn("failed to persist session cleanup", "error", err)
+			}
 			a.mu.Unlock()
 
 		case <-a.stopCleanup:
 			a.mu.Lock()
-			a.saveSessionsLocked()
+			if err := a.saveSessionsLocked(); err != nil {
+				slog.Warn("failed to persist sessions during shutdown", "error", err)
+			}
 			a.mu.Unlock()
 			return
 		}
@@ -400,7 +554,9 @@ func (a *LocalAuthenticator) Authenticate(token string) (*api.User, error) {
 
 	if time.Now().After(sess.ExpiresAt) {
 		delete(a.tokens, token)
-		a.saveSessionsLocked()
+		if err := a.saveSessionsLocked(); err != nil {
+			slog.Warn("failed to persist expired session removal", "error", err)
+		}
 		return nil, errors.New("token expired")
 	}
 
@@ -409,32 +565,46 @@ func (a *LocalAuthenticator) Authenticate(token string) (*api.User, error) {
 		return nil, errors.New("user not found")
 	}
 
-	return copyUser(user), nil
+	return a.resolveLocked(user)
 }
 
-// Login creates a new session and returns a token
+// Login creates a new session and returns a token. Failures are booked
+// against an unknown client address; the REST layer calls LoginFrom so
+// they are keyed by the caller's IP instead.
 func (a *LocalAuthenticator) Login(email, password string) (*api.User, string, error) {
+	return a.LoginFrom(email, password, "")
+}
+
+// LoginFrom is Login for a caller at clientIP. Brute-force protection keys
+// failed attempts by (account, clientIP), so guessing from one address locks
+// out only that address; see checkBruteForceProtectionFrom.
+func (a *LocalAuthenticator) LoginFrom(email, password, clientIP string) (*api.User, string, error) {
+	// Accounts are matched case-insensitively, and failures are booked under
+	// the same normalized address, so "Admin@x" cannot sidestep a lockout.
+	email = normalizeEmail(email)
+
 	// Check brute force protection first
-	if err := a.checkBruteForceProtection(email); err != nil {
+	if err := a.checkBruteForceProtectionFrom(email, clientIP); err != nil {
 		return nil, "", err
 	}
 
 	// An empty password does the same work for every address, so the response time
-	// cannot reveal whether the address is the configured account.
+	// cannot reveal whether the address is an account.
 	if password == "" {
 		dummyHash, _ := bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing"), bcrypt.DefaultCost)
 		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
 		a.mu.Lock()
-		a.recordFailedAttempt(email)
+		a.recordFailedAttemptFrom(email, clientIP)
 		a.mu.Unlock()
 		return nil, "", errors.New("invalid credentials")
 	}
 
-	// Anything that is not the configured account is rejected before the auth lock
-	// is taken: adminEmail is immutable, this branch mutates nothing, and holding
-	// the lock across the dummy bcrypt let an unauthenticated caller stall every
-	// other request, because Authenticate needs the same lock.
-	if subtle.ConstantTimeCompare([]byte(email), []byte(a.adminEmail)) != 1 {
+	// Snapshot the credential under the lock, then verify it outside: bcrypt at
+	// the configured cost takes hundreds of milliseconds and every
+	// authenticated request needs that lock.
+	expectedHash := a.lookupCredential(email)
+
+	if expectedHash == "" {
 		// MED-11: Run dummy bcrypt comparison to prevent timing-based user enumeration
 		// This ensures the response time is consistent whether the email exists or not
 		dummyHash, _ := bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing"), bcrypt.DefaultCost)
@@ -442,58 +612,60 @@ func (a *LocalAuthenticator) Login(email, password string) (*api.User, string, e
 		return nil, "", errors.New("invalid credentials")
 	}
 
-	// Verify the password outside the auth lock: bcrypt at the configured cost
-	// takes hundreds of milliseconds and every authenticated request needs that
-	// lock. The credential is snapshotted first so the comparison has a stable
-	// input.
-	a.mu.Lock()
-	expectedHash := a.adminPasswordHash
-	a.mu.Unlock()
-
-	if bcrypt.CompareHashAndPassword([]byte(expectedHash), []byte(password)) != nil {
+	compare := a.comparePassword
+	if compare == nil {
+		compare = bcrypt.CompareHashAndPassword
+	}
+	if compare([]byte(expectedHash), []byte(password)) != nil {
 		a.mu.Lock()
-		a.recordFailedAttempt(email)
+		a.recordFailedAttemptFrom(email, clientIP)
 		a.mu.Unlock()
 		return nil, "", errors.New("invalid credentials")
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	rollback := a.rollbackStateLocked()
 
 	// The password was verified outside the lock, so re-check it here: a rotation
 	// that interleaved must not let the previous password open a session that
 	// outlives it.
-	if a.adminPasswordHash != expectedHash {
+	if a.passwordHashForLocked(email) != expectedHash {
 		return nil, "", errors.New("invalid credentials")
 	}
 
-	// Clear failed attempts on successful login
-	a.clearFailedAttempts(email)
-
-	// Get or create admin user
-	var user *api.User
-	for _, u := range a.users {
-		if u.Email == email {
-			user = u
-			break
-		}
-	}
-
-	// Create admin user if not found
+	user := a.findByEmailLocked(email)
 	if user == nil {
+		// Only the configured admin can get here without an identity: create
+		// it.
 		newID, err := generateID()
 		if err != nil {
 			return nil, "", err
 		}
 		user = &api.User{
 			ID:        newID,
-			Email:     email,
+			Email:     a.adminEmail,
 			Name:      "Administrator",
 			Role:      "admin",
 			Workspace: "default",
 			CreatedAt: time.Now(),
 		}
 		a.users[user.ID] = user
+		a.migrateDirectoryLocked()
+	}
+	resolved, err := a.resolveLocked(user)
+	if err != nil {
+		// Disabled, or no workspace left. The password was right, so this is
+		// not a failed guess; it still answers like one.
+		rollback()
+		return nil, "", errors.New("invalid credentials")
+	}
+
+	// Clear failed attempts on successful login
+	a.clearFailedAttemptsFrom(email, clientIP)
+	if rec := a.accounts[user.ID]; rec != nil {
+		now := time.Now().UTC()
+		rec.LastLoginAt = &now
 	}
 
 	// Generate token
@@ -501,15 +673,90 @@ func (a *LocalAuthenticator) Login(email, password string) (*api.User, string, e
 	if err != nil {
 		return nil, "", err
 	}
+	a.capSessionsLocked(user.ID, time.Now())
 	a.tokens[token] = &session{
 		UserID:    user.ID,
 		ExpiresAt: time.Now().Add(24 * time.Hour),
 	}
 
 	// Persist sessions if configured
-	a.saveSessionsLocked()
+	if err := a.persistOrRollbackLocked(rollback); err != nil {
+		return nil, "", err
+	}
 
-	return copyUser(user), token, nil
+	return resolved, token, nil
+}
+
+// refreshCredIndexLocked rebuilds credIndex. Caller holds a.mu.
+func (a *LocalAuthenticator) refreshCredIndexLocked() {
+	idx := make(map[string]string, len(a.accounts)+1)
+	for id, rec := range a.accounts {
+		if u := a.users[id]; u != nil && rec != nil && rec.source() == SourceLocal && rec.PasswordHash != "" {
+			idx[normalizeEmail(u.Email)] = rec.PasswordHash
+		}
+	}
+	if a.adminEmail != "" && a.adminPasswordHash != "" {
+		idx[normalizeEmail(a.adminEmail)] = a.adminPasswordHash
+	}
+	a.credIndex.Store(&idx)
+}
+
+// lookupCredential returns the hash email signs in with, from credIndex,
+// without taking a.mu.
+func (a *LocalAuthenticator) lookupCredential(email string) string {
+	idx := a.credIndex.Load()
+	if idx == nil {
+		return ""
+	}
+	return (*idx)[normalizeEmail(email)]
+}
+
+// capSessionsLocked makes room for one more session of userID: expired
+// sessions go first, then the account's oldest beyond maxSessionsPerUser, then
+// the server's oldest beyond maxSessions. Evicting rather than refusing keeps
+// sign-in available however many sessions accumulate. Caller holds a.mu.
+func (a *LocalAuthenticator) capSessionsLocked(userID string, now time.Time) {
+	mine := 0
+	for t, sess := range a.tokens {
+		if sess == nil || now.After(sess.ExpiresAt) {
+			delete(a.tokens, t)
+		} else if sess.UserID == userID {
+			mine++
+		}
+	}
+	evictOldest := func(match func(*session) bool) {
+		oldest, at := "", time.Time{}
+		for t, sess := range a.tokens {
+			if match(sess) && (oldest == "" || sess.ExpiresAt.Before(at)) {
+				oldest, at = t, sess.ExpiresAt
+			}
+		}
+		delete(a.tokens, oldest)
+	}
+	for ; mine >= maxSessionsPerUser; mine-- {
+		evictOldest(func(s *session) bool { return s.UserID == userID })
+	}
+	for len(a.tokens) >= maxSessions {
+		evictOldest(func(*session) bool { return true })
+	}
+}
+
+// passwordHashForLocked returns the bcrypt hash email signs in with, or ""
+// when it cannot sign in with a password here. The configured admin's is
+// AdminPasswordHash; other local accounts carry their own.
+func (a *LocalAuthenticator) passwordHashForLocked(email string) string {
+	if sameEmail(email, a.adminEmail) {
+		return a.adminPasswordHash
+	}
+	user := a.findByEmailLocked(email)
+	if user == nil {
+		return ""
+	}
+	rec := a.accounts[user.ID]
+	if rec == nil || rec.source() != SourceLocal {
+		return ""
+	}
+	return rec.PasswordHash
 }
 
 // Logout invalidates a token
@@ -530,9 +777,12 @@ func copyUser(u *api.User) *api.User {
 func (a *LocalAuthenticator) Logout(token string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	rollback := a.rollbackStateLocked()
 
 	delete(a.tokens, token)
-	a.saveSessionsLocked()
+	if err := a.persistOrRollbackLocked(rollback); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -546,6 +796,7 @@ func (a *LocalAuthenticator) SwitchWorkspace(token, workspace string) (*api.User
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	rollback := a.rollbackStateLocked()
 
 	sess, ok := a.tokens[token]
 	if !ok {
@@ -553,7 +804,9 @@ func (a *LocalAuthenticator) SwitchWorkspace(token, workspace string) (*api.User
 	}
 	if time.Now().After(sess.ExpiresAt) {
 		delete(a.tokens, token)
-		a.saveSessionsLocked()
+		if err := a.saveSessionsLocked(); err != nil {
+			slog.Warn("failed to persist expired session removal", "error", err)
+		}
 		return nil, errors.New("token expired")
 	}
 
@@ -562,8 +815,15 @@ func (a *LocalAuthenticator) SwitchWorkspace(token, workspace string) (*api.User
 		return nil, errors.New("user not found")
 	}
 	user.Workspace = workspace
-	a.saveSessionsLocked()
-	return copyUser(user), nil
+	resolved, err := a.resolveLocked(user)
+	if err != nil {
+		rollback()
+		return nil, err
+	}
+	if err := a.persistOrRollbackLocked(rollback); err != nil {
+		return nil, err
+	}
+	return resolved, nil
 }
 
 // generateToken returns a 256-bit hex-encoded random token.
@@ -587,10 +847,32 @@ func generateID() (string, error) {
 // Brute force protection functions
 const (
 	defaultBcryptCost  = 12
-	maxLoginAttempts   = 5
+	maxLoginAttempts   = 5 // failures per (account, client IP) before that source is locked
 	lockoutDuration    = 15 * time.Minute
 	attemptResetWindow = 30 * time.Minute
 	minPasswordLength  = 12
+
+	// accountBackoffThreshold is the number of failures for one account,
+	// across all client addresses, within attemptResetWindow after which every
+	// further failure doubles the account's backoff, from accountBackoffBase
+	// up to accountBackoffMax. Addresses the account recently signed in from
+	// are exempt (knownLoginIPTTL).
+	accountBackoffThreshold = 50
+	accountBackoffBase      = time.Second
+	accountBackoffMax       = lockoutDuration
+	knownLoginIPTTL         = 30 * 24 * time.Hour
+	maxKnownLoginIPs        = 64
+	// maxTrackedLoginSources bounds the per-source table (and the session
+	// file it is persisted to) against an attacker cycling addresses.
+	maxTrackedLoginSources = 4096
+
+	// Bounds on the authentication state, which in a cluster is one Raft
+	// entry of at most MaxClusterAuthStateBytes: a signed-in account keeps
+	// its maxSessionsPerUser newest sessions, the server its maxSessions
+	// newest, and at most maxResetTokens reset tokens (one per account).
+	maxSessionsPerUser = 10
+	maxSessions        = 200
+	maxResetTokens     = 20
 )
 
 var bcryptCost = defaultBcryptCost
@@ -632,80 +914,176 @@ func validatePassword(password string) error {
 	return nil
 }
 
-// checkBruteForceProtection checks if the account is locked due to failed attempts
-func (a *LocalAuthenticator) checkBruteForceProtection(email string) error {
+// loginSourceKey names the (account, client IP) pair failed attempts are
+// counted against. An unknown address keys by the account alone, which is
+// what callers without a client address (Login, the CLI) always used.
+func loginSourceKey(email, clientIP string) string {
+	if clientIP == "" {
+		return email
+	}
+	return email + "|" + clientIP
+}
+
+// checkBruteForceProtectionFrom refuses a login attempt when
+//   - the (account, clientIP) source is locked after maxLoginAttempts
+//     failures, or
+//   - the account as a whole is in its exponential backoff after
+//     accountBackoffThreshold failures from any source, unless clientIP has
+//     signed in to the account successfully within knownLoginIPTTL.
+//
+// The first stops guessing from one address; the second bounds distributed
+// guessing without letting anyone lock the owner out of their usual address.
+func (a *LocalAuthenticator) checkBruteForceProtectionFrom(email, clientIP string) error {
 	a.attemptsMu.Lock()
 	defer a.attemptsMu.Unlock()
+	now := time.Now()
 
-	attempt, exists := a.loginAttempts[email]
-	if !exists {
-		return nil
+	if attempt := a.loginAttempts[loginSourceKey(email, clientIP)]; attempt != nil {
+		// Check if this source is locked
+		if !attempt.LockedUntil.IsZero() && now.Before(attempt.LockedUntil) {
+			remaining := attempt.LockedUntil.Sub(now)
+			return errors.New("account temporarily locked due to failed login attempts. Try again in " + remaining.String())
+		}
+		// Reset lock if expired
+		if !attempt.LockedUntil.IsZero() && now.After(attempt.LockedUntil) {
+			attempt.LockedUntil = time.Time{}
+			attempt.Count = 0
+		}
 	}
 
-	// Check if account is locked
-	if !attempt.LockedUntil.IsZero() && time.Now().Before(attempt.LockedUntil) {
-		remaining := time.Until(attempt.LockedUntil)
-		return errors.New("account temporarily locked due to failed login attempts. Try again in " + remaining.String())
+	if acct := a.accountFailures[email]; acct != nil && now.Before(acct.LockedUntil) && !a.knownLoginIPLocked(email, clientIP, now) {
+		remaining := acct.LockedUntil.Sub(now)
+		return errors.New("account temporarily rate limited due to failed login attempts. Try again in " + remaining.String())
 	}
-
-	// Reset lock if expired
-	if !attempt.LockedUntil.IsZero() && time.Now().After(attempt.LockedUntil) {
-		attempt.LockedUntil = time.Time{}
-		attempt.Count = 0
-	}
-
 	return nil
 }
 
-// recordFailedAttempt records a failed login attempt.
+// knownLoginIPLocked reports whether clientIP signed in to email recently.
+// Caller holds attemptsMu.
+func (a *LocalAuthenticator) knownLoginIPLocked(email, clientIP string, now time.Time) bool {
+	if clientIP == "" {
+		return false
+	}
+	at, ok := a.knownLoginIPs[loginSourceKey(email, clientIP)]
+	return ok && now.Sub(at) <= knownLoginIPTTL
+}
+
+// recordFailedAttemptFrom records a failed login attempt.
 // MED-13: persists the updated lockout map so brute-force state survives
 // process restart. Callers must hold a.mu so saveSessionsLocked can read
 // sessions/users safely; attemptsMu is acquired and released here.
-func (a *LocalAuthenticator) recordFailedAttempt(email string) {
+func (a *LocalAuthenticator) recordFailedAttemptFrom(email, clientIP string) {
 	// Only the configured account can authenticate -- Login rejects every other
 	// address before any password check -- so an attempt against another address
 	// can never affect a lockout decision. Recording it would let an
 	// unauthenticated caller grow this store, and the file it is persisted to, by
 	// choosing addresses freely.
-	if email != a.adminEmail {
+	if !a.knownEmailLocked(email) {
 		return
 	}
 
+	now := time.Now()
 	a.attemptsMu.Lock()
-	attempt, exists := a.loginAttempts[email]
-	if !exists {
+	key := loginSourceKey(email, clientIP)
+	attempt, exists := a.loginAttempts[key]
+	if !exists && len(a.loginAttempts) >= maxTrackedLoginSources {
+		a.pruneLoginAttemptsLocked(now)
+	}
+	// With the source table still full (an attacker cycling addresses), the
+	// failure is booked only against the account-wide counter below.
+	if !exists && len(a.loginAttempts) < maxTrackedLoginSources {
 		attempt = &loginAttempt{}
-		a.loginAttempts[email] = attempt
+		a.loginAttempts[key] = attempt
+	}
+	if attempt != nil {
+		// Reset count if too much time has passed
+		if now.Sub(attempt.LastTry) > attemptResetWindow {
+			attempt.Count = 0
+		}
+		attempt.Count++
+		attempt.LastTry = now
+		// Lock this source if max attempts reached
+		if attempt.Count >= maxLoginAttempts {
+			attempt.LockedUntil = now.Add(lockoutDuration)
+		}
 	}
 
-	// Reset count if too much time has passed
-	if time.Since(attempt.LastTry) > attemptResetWindow {
-		attempt.Count = 0
+	acct := a.accountFailures[email]
+	if acct == nil {
+		acct = &loginAttempt{}
+		a.accountFailures[email] = acct
 	}
-
-	attempt.Count++
-	attempt.LastTry = time.Now()
-
-	// Lock account if max attempts reached
-	if attempt.Count >= maxLoginAttempts {
-		attempt.LockedUntil = time.Now().Add(lockoutDuration)
+	if now.Sub(acct.LastTry) > attemptResetWindow {
+		acct.Count = 0
+		acct.LockedUntil = time.Time{}
+	}
+	acct.Count++
+	acct.LastTry = now
+	if over := acct.Count - accountBackoffThreshold; over >= 0 {
+		delay := accountBackoffMax
+		if over < 20 {
+			delay = min(accountBackoffBase<<over, accountBackoffMax)
+		}
+		acct.LockedUntil = now.Add(delay)
 	}
 	a.attemptsMu.Unlock()
 
 	// Persist after releasing attemptsMu so saveSessionsLocked can re-acquire
 	// its RLock without re-entrancy.
-	a.saveSessionsLocked()
+	if err := a.saveSessionsLocked(); err != nil {
+		slog.Warn("failed to persist login lockout state", "error", err)
+	}
 }
 
-// clearFailedAttempts clears failed login attempts on successful login.
+// pruneLoginAttemptsLocked drops per-source entries that no longer affect a
+// decision. Caller holds attemptsMu.
+func (a *LocalAuthenticator) pruneLoginAttemptsLocked(now time.Time) {
+	for key, att := range a.loginAttempts {
+		if att == nil || (now.After(att.LockedUntil) && now.Sub(att.LastTry) > attemptResetWindow) {
+			delete(a.loginAttempts, key)
+		}
+	}
+}
+
+// clearFailedAttemptsFrom clears the failures of the source that just signed
+// in successfully and remembers it as a known address of the account.
 // MED-13: also persists so a successful login removes the lockout entry
-// from the on-disk session file.
-func (a *LocalAuthenticator) clearFailedAttempts(email string) {
+// from the on-disk session file. The account-wide counter is left to decay:
+// one successful login must not hand an ongoing distributed guess a fresh
+// budget.
+func (a *LocalAuthenticator) clearFailedAttemptsFrom(email, clientIP string) {
+	now := time.Now()
 	a.attemptsMu.Lock()
-	delete(a.loginAttempts, email)
+	delete(a.loginAttempts, loginSourceKey(email, clientIP))
+	if clientIP != "" {
+		if len(a.knownLoginIPs) >= maxKnownLoginIPs {
+			a.evictKnownLoginIPLocked(now)
+		}
+		a.knownLoginIPs[loginSourceKey(email, clientIP)] = now
+	}
 	a.attemptsMu.Unlock()
 
-	a.saveSessionsLocked()
+	if err := a.saveSessionsLocked(); err != nil {
+		slog.Warn("failed to persist cleared login lockout", "error", err)
+	}
+}
+
+// evictKnownLoginIPLocked drops expired known addresses and, if none
+// expired, the least recently used one. Caller holds attemptsMu.
+func (a *LocalAuthenticator) evictKnownLoginIPLocked(now time.Time) {
+	oldestKey, oldest := "", now
+	for key, at := range a.knownLoginIPs {
+		if now.Sub(at) > knownLoginIPTTL {
+			delete(a.knownLoginIPs, key)
+			continue
+		}
+		if !at.After(oldest) {
+			oldestKey, oldest = key, at
+		}
+	}
+	if len(a.knownLoginIPs) >= maxKnownLoginIPs && oldestKey != "" {
+		delete(a.knownLoginIPs, oldestKey)
+	}
 }
 
 // HashPassword is a helper function to hash a password for storage
@@ -730,11 +1108,40 @@ func VerifyPassword(hash, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
 }
 
+// setPasswordHashLocked stores hash as user's password: AdminPasswordHash
+// for the configured admin, the account record for anyone else. It also
+// clears a pending forced change.
+func (a *LocalAuthenticator) setPasswordHashLocked(user *api.User, hash string) {
+	rec := a.accounts[user.ID]
+	if a.isConfiguredAdminLocked(user) {
+		a.adminPasswordHash = hash
+	} else if rec != nil {
+		rec.PasswordHash = hash
+	}
+	if rec != nil {
+		rec.MustChangePassword = false
+		rec.UpdatedAt = time.Now().UTC()
+	}
+}
+
+// revokeCredentialsLocked ends user's sessions and outstanding reset
+// tokens: each reset token can set the password without knowing the
+// current one, so none may outlive the password it was issued against.
+func (a *LocalAuthenticator) revokeCredentialsLocked(user *api.User) {
+	a.revokeUserSessionsLocked(user.ID)
+	for token, rt := range a.resetTokens {
+		if rt != nil && sameEmail(rt.Email, user.Email) {
+			delete(a.resetTokens, token)
+		}
+	}
+}
+
 // ChangePassword validates the current password and sets a new one.
-// All existing sessions are invalidated on success.
+// All of the account's sessions are invalidated on success.
 func (a *LocalAuthenticator) ChangePassword(token, currentPassword, newPassword string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	rollback := a.rollbackStateLocked()
 
 	// Validate token
 	sess, ok := a.tokens[token]
@@ -745,9 +1152,17 @@ func (a *LocalAuthenticator) ChangePassword(token, currentPassword, newPassword 
 		delete(a.tokens, token)
 		return errors.New("token expired")
 	}
+	user := a.users[sess.UserID]
+	if user == nil {
+		return errors.New("user not found")
+	}
 
 	// Verify current password
-	if err := bcrypt.CompareHashAndPassword([]byte(a.adminPasswordHash), []byte(currentPassword)); err != nil {
+	currentHash := a.passwordHashForLocked(user.Email)
+	if currentHash == "" {
+		return errors.New("this account has no local password to change")
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(currentHash), []byte(currentPassword)); err != nil {
 		return errors.New("current password is incorrect")
 	}
 
@@ -761,58 +1176,99 @@ func (a *LocalAuthenticator) ChangePassword(token, currentPassword, newPassword 
 	if err != nil {
 		return fmt.Errorf("failed to hash new password: %w", err)
 	}
-	a.adminPasswordHash = string(newHash)
+	a.setPasswordHashLocked(user, string(newHash))
 
-	// Invalidate all existing sessions (force re-login)
-	a.tokens = make(map[string]*session)
-	a.saveSessionsLocked()
+	// Invalidate the account's sessions (force re-login) and reset tokens.
+	a.revokeCredentialsLocked(user)
+	if err := a.persistOrRollbackLocked(rollback); err != nil {
+		return err
+	}
 
 	return nil
 }
 
-// RequestPasswordReset generates a time-limited reset token for the given email.
-// The token is logged to the server log (since no email infrastructure exists).
+// RequestPasswordReset generates a time-limited reset token for the given
+// email when it belongs to an enabled local account; otherwise it returns
+// "" after the same work, so the answer does not reveal which addresses
+// exist.
 func (a *LocalAuthenticator) RequestPasswordReset(email string) (string, error) {
-	// Use constant-time comparison to prevent user enumeration.
-	// The equalisation work below depends on nothing but a constant and adminEmail
-	// is immutable, so it runs before the auth lock is taken: holding that lock
-	// across bcrypt let an unauthenticated caller stall every other request.
-	if subtle.ConstantTimeCompare([]byte(email), []byte(a.adminEmail)) != 1 {
+	token, _, err := a.RequestPasswordResetTo(email)
+	return token, err
+}
+
+// RequestPasswordResetTo is RequestPasswordReset that also returns the
+// account's stored address, which is where the link must be sent: the typed
+// address only matches it in canonical form. An account holds at most one
+// reset token (a new request replaces it) and the server at most
+// maxResetTokens, so unauthenticated requests cannot grow the (replicated)
+// authentication state.
+func (a *LocalAuthenticator) RequestPasswordResetTo(email string) (string, string, error) {
+	// The lookup is lock-free; the equalisation bcrypt for unknown addresses
+	// runs without the lock: holding it across bcrypt let an unauthenticated
+	// caller stall every other request.
+	if a.lookupCredential(email) == "" {
 		// Run dummy bcrypt to prevent timing attacks (same as login)
 		dummyHash, _ := bcrypt.GenerateFromPassword([]byte("dummy-password-for-timing"), bcrypt.DefaultCost)
 		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte("dummy"))
 		// Still return success to prevent email enumeration
-		return "", nil
+		return "", "", nil
 	}
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	user := a.findByEmailLocked(email)
+	if user == nil && a.passwordHashForLocked(email) != "" {
+		// The configured admin before its first sign-in.
+		user = &api.User{Email: a.adminEmail}
+	}
+	if user == nil || a.passwordHashForLocked(email) == "" || (a.accounts[user.ID] != nil && a.accounts[user.ID].Disabled) {
+		return "", "", nil
+	}
+	rollback := a.rollbackStateLocked()
+
+	now := time.Now()
+	for t, rt := range a.resetTokens {
+		if rt == nil || now.After(rt.ExpiresAt) || sameEmail(rt.Email, user.Email) {
+			delete(a.resetTokens, t)
+		}
+	}
+	for len(a.resetTokens) >= maxResetTokens {
+		oldest, at := "", time.Time{}
+		for t, rt := range a.resetTokens {
+			if oldest == "" || rt.ExpiresAt.Before(at) {
+				oldest, at = t, rt.ExpiresAt
+			}
+		}
+		delete(a.resetTokens, oldest)
+	}
 
 	// Generate reset token
 	token, err := generateToken()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	a.resetTokens[token] = &resetToken{
-		Email:     email,
-		ExpiresAt: time.Now().Add(1 * time.Hour),
+		Email:     user.Email,
+		ExpiresAt: now.Add(1 * time.Hour),
 	}
-	a.saveSessionsLocked()
+	if err := a.persistOrRollbackLocked(rollback); err != nil {
+		return "", "", err
+	}
 
-	// Emit to structured audit log instead of stdout.
-	// In production this should be sent via email to the admin.
+	// Emit to structured audit log; the token itself is never logged.
 	slog.Info("password reset requested",
-		slog.String("email", email),
-		slog.Time("expires", time.Now().Add(1*time.Hour)))
+		slog.String("email", user.Email),
+		slog.Time("expires", now.Add(1*time.Hour)))
 
-	return token, nil
+	return token, user.Email, nil
 }
 
 // ConfirmPasswordReset validates a reset token and sets a new password.
-// All existing sessions are invalidated on success.
+// The account's sessions are invalidated on success.
 func (a *LocalAuthenticator) ConfirmPasswordReset(token, newPassword string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	rollback := a.rollbackStateLocked()
 
 	rt, ok := a.resetTokens[token]
 	if !ok {
@@ -833,14 +1289,24 @@ func (a *LocalAuthenticator) ConfirmPasswordReset(token, newPassword string) err
 	if err != nil {
 		return fmt.Errorf("failed to hash new password: %w", err)
 	}
-	a.adminPasswordHash = string(newHash)
+	user := a.findByEmailLocked(rt.Email)
+	switch {
+	case user != nil:
+		a.setPasswordHashLocked(user, string(newHash))
+		a.revokeCredentialsLocked(user)
+	case sameEmail(rt.Email, a.adminEmail):
+		// The configured admin before its first sign-in.
+		a.adminPasswordHash = string(newHash)
+	default:
+		delete(a.resetTokens, token)
+		return errors.New("invalid reset token")
+	}
 
 	// Delete used reset token
 	delete(a.resetTokens, token)
-
-	// Invalidate all existing sessions (force re-login)
-	a.tokens = make(map[string]*session)
-	a.saveSessionsLocked()
+	if err := a.persistOrRollbackLocked(rollback); err != nil {
+		return err
+	}
 
 	return nil
 }
@@ -873,7 +1339,17 @@ func ResetLocalAdminPassword(sessionPath, adminEmail, newPassword string) error 
 	}
 	data.Tokens = nil
 	data.ResetTokens = nil
-	delete(data.Lockouts, adminEmail)
+	key := normalizeEmail(adminEmail)
+	for k := range data.Lockouts {
+		if k == adminEmail || k == key || strings.HasPrefix(k, key+"|") {
+			delete(data.Lockouts, k)
+		}
+	}
+	for k := range data.AccountBackoff {
+		if k == adminEmail || k == key {
+			delete(data.AccountBackoff, k)
+		}
+	}
 	data.AdminEmail = adminEmail
 	data.AdminPasswordHash = string(hash)
 
