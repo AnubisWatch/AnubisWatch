@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Upgrade note:** restoring onto a fresh node needs the original node's
   backup key (`<data>/backup.key` or `ANUBIS_BACKUP_ENCRYPTION_KEY`).
 
+### HA: Raft snapshots are files, not in-memory records
+
+- Raft snapshots were stored as CobaltDB records, so the in-memory tree (and
+  its WAL) held a second full copy of the state machine. They now live in
+  `<data>/raft-snapshots/` as framed files — encrypted per frame with the
+  storage key when encryption is on, with frame order and completeness
+  authenticated — and `meta.json` is replaced atomically once a snapshot is
+  complete. A snapshot written by an older version stays readable and is
+  removed by the first new snapshot.
+
 ### HA: authentication no longer writes to Raft on every request
 
 - Found by the new HA soak (`scripts/hasoak`). In cluster mode every

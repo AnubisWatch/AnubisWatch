@@ -82,7 +82,7 @@ type Manager struct {
 	node          *raft.Node
 	db            *storage.CobaltDB
 	logStore      *storage.CobaltDBLogStore
-	snapshotStore *storage.CobaltDBSnapshotStore
+	snapshotStore raft.SnapshotStore
 	stableStore   *storage.CobaltDBStableStore
 	fsm           *raft.StorageFSM
 	logger        *slog.Logger
@@ -175,7 +175,13 @@ func NewManager(cfg core.NecropolisConfig, db *storage.CobaltDB, logger *slog.Lo
 
 	// Create Raft storage components
 	m.logStore = storage.NewCobaltDBLogStore(db)
-	m.snapshotStore = storage.NewCobaltDBSnapshotStore(db)
+	// Snapshots are files beside the WAL, not CobaltDB records: inside the
+	// in-memory tree they would double the node's memory.
+	snapshots, err := storage.NewFileSnapshotStore(db)
+	if err != nil {
+		return nil, err
+	}
+	m.snapshotStore = snapshots
 	m.stableStore = storage.NewCobaltDBStableStore(db)
 
 	// Create FSM backed by storage
