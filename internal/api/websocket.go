@@ -48,6 +48,7 @@ type WebSocketServer struct {
 	ipLimits         map[string]*connectionLimiter // IP -> limiter state
 	maxConnsPerIP    int                           // maximum concurrent connections per IP
 	maxConnsPerUser  int                           // maximum concurrent connections per user
+	userHandshakes   map[string]int                // user ID -> handshakes holding a slot (guarded by mu)
 	connRateLimit    int                           // max connection attempts per window per IP
 	rateLimitWindow  time.Duration                 // rate limit window duration
 	messageRateLimit int                           // max messages per window per client
@@ -97,8 +98,9 @@ func NewWebSocketServer(logger *slog.Logger, authenticator Authenticator, allowe
 		authenticator:      authenticator,
 		allowedOrigins:     allowedOrigins,
 		ipLimits:           make(map[string]*connectionLimiter),
-		maxConnsPerIP:      10,          // max 10 concurrent connections per IP
-		maxConnsPerUser:    5,           // max 5 concurrent connections per user
+		maxConnsPerIP:      10, // max 10 concurrent connections per IP
+		maxConnsPerUser:    5,  // max 5 concurrent connections per user
+		userHandshakes:     make(map[string]int),
 		connRateLimit:      60,          // max 60 connection attempts per minute per IP
 		rateLimitWindow:    time.Minute, // 1 minute window
 		messageRateLimit:   60,          // max 60 messages per minute per client (VULN-005 fix)
@@ -240,15 +242,22 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 		workspace = "default"
 	}
 
-	// Per-user concurrent connection cap. Refuse before the upgrade so a
-	// rejected attempt costs no goroutines or buffers; registration below
-	// re-checks under the lock to close the race between two handshakes.
-	if s.userAtConnectionLimit(user.ID) {
+	// Per-user concurrent connection cap. The slot is reserved before the
+	// upgrade: the client sees the handshake succeed before the connection is
+	// registered, so a check on registered clients alone lets a quick next
+	// handshake of the same user through.
+	if !s.reserveUserSlot(user.ID) {
 		s.logger.Warn("WebSocket connection rejected: per-user connection limit exceeded",
 			"user_id", user.ID, "remote_addr", r.RemoteAddr)
 		http.Error(w, "Too Many Requests: per-user connection limit exceeded", http.StatusTooManyRequests)
 		return
 	}
+	userSlotHeld := true
+	defer func() {
+		if userSlotHeld {
+			s.releaseUserSlot(user.ID)
+		}
+	}()
 
 	// Upgrade HTTP to WebSocket with origin checking
 	opts := &websocket.AcceptOptions{
@@ -277,19 +286,12 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 		cancel:    cancel,
 	}
 
-	// Register client. The per-user cap is enforced again here, under the same
-	// lock that makes the client visible, so concurrent handshakes of one user
-	// cannot all pass the early check.
+	// Register client. The reserved user slot becomes the registered client
+	// under the same lock, so the count never drops in between.
 	s.mu.Lock()
-	if s.countUserClientsLocked(user.ID) >= s.maxConnsPerUser && s.maxConnsPerUser > 0 {
-		s.mu.Unlock()
-		cancel()
-		_ = conn.Close(websocket.StatusTryAgainLater, "per-user connection limit exceeded")
-		s.logger.Warn("WebSocket connection closed: per-user connection limit exceeded",
-			"user_id", user.ID, "remote_addr", r.RemoteAddr)
-		return
-	}
 	s.clients[client.ID] = client
+	s.releaseUserSlotLocked(user.ID)
+	userSlotHeld = false
 	s.mu.Unlock()
 	registered = true // removeClient now owns the slot
 
@@ -345,15 +347,36 @@ func (s *WebSocketServer) countUserClientsLocked(userID string) int {
 	return n
 }
 
-// userAtConnectionLimit reports whether the user already holds
-// maxConnsPerUser connections. A non-positive limit disables the cap.
-func (s *WebSocketServer) userAtConnectionLimit(userID string) bool {
-	if s.maxConnsPerUser <= 0 {
+// reserveUserSlot claims one of the user's maxConnsPerUser slots for a
+// handshake in progress, counting registered clients and other handshakes.
+// A non-positive limit disables the cap.
+func (s *WebSocketServer) reserveUserSlot(userID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.maxConnsPerUser > 0 && s.countUserClientsLocked(userID)+s.userHandshakes[userID] >= s.maxConnsPerUser {
 		return false
 	}
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.countUserClientsLocked(userID) >= s.maxConnsPerUser
+	if s.userHandshakes == nil {
+		s.userHandshakes = make(map[string]int)
+	}
+	s.userHandshakes[userID]++
+	return true
+}
+
+// releaseUserSlot returns a slot claimed by reserveUserSlot.
+func (s *WebSocketServer) releaseUserSlot(userID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.releaseUserSlotLocked(userID)
+}
+
+// releaseUserSlotLocked is releaseUserSlot for a caller holding s.mu.
+func (s *WebSocketServer) releaseUserSlotLocked(userID string) {
+	if s.userHandshakes[userID] <= 1 {
+		delete(s.userHandshakes, userID)
+		return
+	}
+	s.userHandshakes[userID]--
 }
 
 // reply queues a server-to-client message without blocking and without
