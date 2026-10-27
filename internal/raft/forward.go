@@ -68,7 +68,11 @@ func (n *Node) handleForward(req *core.ForwardRequest) *core.ForwardResponse {
 	case core.ForwardRemovePeer:
 		err = n.RemovePeer(req.PeerID)
 	case core.ForwardReadIndex:
+		deadline := time.Now().Add(timeout)
 		resp.Index, err = n.readIndex(timeout)
+		if err == nil {
+			resp.Index, err = n.tableReadIndex(resp.Index, req.Table, time.Until(deadline))
+		}
 	default:
 		return &core.ForwardResponse{Error: fmt.Sprintf("unknown forward kind %q", req.Kind)}
 	}
@@ -279,6 +283,13 @@ var ErrReadIndexUnsupported = errors.New("leader does not support read_index")
 // leader for its read index (ReadIndex, no log entry) and waits until this
 // node has applied up to it, so the next local read is linearizable.
 func (n *Node) ReadBarrierOrForward(timeout time.Duration) (uint64, error) {
+	return n.TableReadBarrierOrForward("", timeout)
+}
+
+// TableReadBarrierOrForward is ReadBarrierOrForward for a read of only the
+// state that commands of table write: a follower waits until it applied the
+// last such entry, not everything the leader committed (see tableReadIndex).
+func (n *Node) TableReadBarrierOrForward(table string, timeout time.Duration) (uint64, error) {
 	deadline := time.Now().Add(timeout)
 	for {
 		remaining := time.Until(deadline)
@@ -292,7 +303,7 @@ func (n *Node) ReadBarrierOrForward(timeout time.Duration) (uint64, error) {
 			}
 			return index, err
 		}
-		resp, err := n.sendForward(core.ForwardRequest{Kind: core.ForwardReadIndex}, remaining)
+		resp, err := n.sendForward(core.ForwardRequest{Kind: core.ForwardReadIndex, Table: table}, remaining)
 		if isRaftCode(err, core.ErrNotLeader) && n.IsLeader() {
 			continue
 		}

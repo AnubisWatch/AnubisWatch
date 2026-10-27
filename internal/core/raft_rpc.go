@@ -68,6 +68,9 @@ const (
 	ForwardRemovePeer = "remove_peer"
 	// ForwardReadIndex asks the leader for a linearizable read point: it
 	// confirms its leadership and answers its commit index, appending nothing.
+	// With Table set the answer is the last entry at or below that index that
+	// carried a command for the table (a read of that table needs no more);
+	// a leader that ignores Table answers the commit index, which is safe.
 	ForwardReadIndex = "read_index"
 )
 
@@ -81,6 +84,7 @@ type ForwardRequest struct {
 	Command   *FSMCommand `json:"command,omitempty"`
 	Peer      *RaftPeer   `json:"peer,omitempty"`
 	PeerID    string      `json:"peer_id,omitempty"`
+	Table     string      `json:"table,omitempty"`
 	TimeoutMs int64       `json:"timeout_ms"`
 }
 

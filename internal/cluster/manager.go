@@ -935,6 +935,18 @@ func (m *Manager) ReadBarrier(timeout time.Duration) (uint64, error) {
 	return node.ReadBarrierOrForward(timeout)
 }
 
+// TableReadBarrier is ReadBarrier for a read of only the state that commands
+// of table write; on a follower behind on other writes it returns sooner.
+func (m *Manager) TableReadBarrier(table string, timeout time.Duration) (uint64, error) {
+	m.mu.RLock()
+	node := m.node
+	m.mu.RUnlock()
+	if node == nil {
+		return 0, &core.RaftError{Code: core.ErrNotLeader, Message: "standalone node"}
+	}
+	return node.TableReadBarrierOrForward(table, timeout)
+}
+
 // Leader returns the current leader's ID
 func (m *Manager) Leader() string {
 	m.mu.RLock()

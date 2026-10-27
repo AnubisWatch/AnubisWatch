@@ -69,6 +69,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entries past the persisted index are applied again, which is safe: plain
   writes converge, command handlers are idempotent, and the shared
   authentication compare-and-set is guarded by a growing revision.
+- Authentication on a follower waits only until it applied the last write
+  to the shared auth state, not everything the leader committed. A node
+  catching up on judgments after a restart answered every authenticated
+  request in 5–9 s until it had caught up; it now answers at once. A leader
+  running an older version ignores the narrower request and answers as
+  before.
 
 ### HA: Raft snapshots are files, not in-memory records
 

@@ -80,6 +80,10 @@ type Node struct {
 	// appliedDirty is set while lastApplied is ahead of the persisted hard
 	// state because writing it failed (see persistApplied).
 	appliedDirty bool
+	// tableScopeFloor is the applied index whose entries the FSM's per-table
+	// tracking does not cover: those applied before this process started or
+	// replaced by an installed snapshot (see tableReadIndex).
+	tableScopeFloor uint64
 	// restoring marks a snapshot restore in flight. The node must not
 	// campaign while its state is being replaced.
 	restoring bool
@@ -446,6 +450,7 @@ func (n *Node) Start() error {
 	if n.logHasMembershipLocked() {
 		n.refreshMembershipLocked()
 	}
+	n.tableScopeFloor = n.lastApplied
 	n.mu.Unlock()
 	if n.commitIndex > n.lastApplied {
 		n.processCommitted(n.commitIndex)
@@ -1698,6 +1703,9 @@ func (n *Node) handleInstallSnapshot(req *core.InstallSnapshotRequest) *core.Ins
 	}
 	if fsm, ok := n.fsm.(interface{ SetLastApplied(uint64) }); ok {
 		fsm.SetLastApplied(install.index)
+	}
+	if install.index > n.tableScopeFloor {
+		n.tableScopeFloor = install.index
 	}
 	// The restore ran without the node lock, so entries may have arrived
 	// and the commit index may have advanced while it was in flight. The

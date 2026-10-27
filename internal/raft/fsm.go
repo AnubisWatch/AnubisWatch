@@ -18,6 +18,9 @@ type StorageFSM struct {
 	mu    sync.RWMutex
 	store Storage
 	index uint64
+	// tableIndex is, per command table, the last entry that carried a command
+	// for it, as seen by this process (see TableIndex).
+	tableIndex map[string]uint64
 
 	// Application hooks, guarded by hookMu (see SetCommandHandler,
 	// SetApplyObserver, SetRestoreObserver).
@@ -209,6 +212,7 @@ func (f *StorageFSM) applyCommand(log *core.RaftLogEntry) ([]core.FSMCommand, in
 	}
 
 	if cmd.Op != core.FSMBatch {
+		f.noteTable(cmd.Table, log.Index)
 		if err := f.applyOne(cmd); err != nil {
 			return nil, err
 		}
@@ -235,6 +239,7 @@ func (f *StorageFSM) applyCommand(log *core.RaftLogEntry) ([]core.FSMCommand, in
 		if batch[i].Origin == "" {
 			batch[i].Origin = cmd.Origin
 		}
+		f.noteTable(batch[i].Table, log.Index)
 	}
 	applied := make([]core.FSMCommand, 0, len(batch))
 	for i := 0; i < len(batch); {
@@ -511,6 +516,30 @@ func (f *StorageFSM) restore(snapshot []byte) error {
 	}
 
 	return nil
+}
+
+// noteTable records that the entry at index carries a command for table. It
+// is recorded before the apply: a later index only makes a reader wait
+// longer. Caller holds f.mu.
+func (f *StorageFSM) noteTable(table string, index uint64) {
+	if table == "" {
+		return
+	}
+	if f.tableIndex == nil {
+		f.tableIndex = make(map[string]uint64)
+	}
+	if index > f.tableIndex[table] {
+		f.tableIndex[table] = index
+	}
+}
+
+// TableIndex returns the last entry this process applied that carried a
+// command for table, or 0. Entries applied before the process started (or
+// replaced by a snapshot) are not covered; the Raft node accounts for those.
+func (f *StorageFSM) TableIndex(table string) uint64 {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.tableIndex[table]
 }
 
 // SetLastApplied records the snapshot boundary after a successful restore.
