@@ -430,28 +430,6 @@ func TestWriteBackupFile_TempFileCleanup(t *testing.T) {
 }
 
 // ============================================================================
-// copyFile — error paths
-// ============================================================================
-
-func TestCopyFile_SrcNotFound(t *testing.T) {
-	err := copyFile("/nonexistent/src", "/tmp/dst")
-	if err == nil {
-		t.Error("Expected error for non-existent source")
-	}
-}
-
-func TestCopyFile_DstNotWritable(t *testing.T) {
-	srcPath := filepath.Join(t.TempDir(), "src.txt")
-	if err := os.WriteFile(srcPath, []byte("data"), 0644); err != nil {
-		t.Fatalf("WriteFile error = %v", err)
-	}
-	err := copyFile(srcPath, "/nonexistent_dir/dst.txt")
-	if err == nil {
-		t.Error("Expected error for non-writable destination")
-	}
-}
-
-// ============================================================================
 // GetStoredEncryptionKey — default location
 // ============================================================================
 

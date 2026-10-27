@@ -458,6 +458,9 @@ func (db *CobaltDB) ListJudgments(ctx context.Context, soulID string, start, end
 	}
 
 	sort.Slice(judgments, func(i, j int) bool {
+		if judgments[i].Timestamp.Equal(judgments[j].Timestamp) {
+			return judgments[i].ID > judgments[j].ID
+		}
 		return judgments[i].Timestamp.After(judgments[j].Timestamp)
 	})
 
@@ -974,7 +977,13 @@ func (db *CobaltDB) ListAlertEvents(soulID string, limit int) ([]*core.AlertEven
 
 	events := make([]*core.AlertEvent, 0)
 	for _, ws := range workspaces {
-		prefix := fmt.Sprintf("%s/alerts/events/%s/", ws, soulID)
+		prefix := fmt.Sprintf("%s/alerts/events/", ws)
+		if soulID != "" {
+			// With no soul filter (the optional soul_id of the gRPC verdict
+			// RPCs) the soul segment must be left out, or the prefix ends in
+			// "//" and matches no key.
+			prefix = fmt.Sprintf("%s/alerts/events/%s/", ws, soulID)
+		}
 		results, err := db.PrefixScan(prefix)
 		if err != nil {
 			return nil, err
@@ -1221,6 +1230,27 @@ func (db *CobaltDB) GetSubscriptionsByPage(pageID string) ([]*core.StatusPageSub
 		}
 	}
 	return subscriptions, nil
+}
+
+// ConfirmedSubscriberCounts returns the number of confirmed subscriptions per
+// status page ID, in one scan. Pending (unconfirmed) subscriptions are not
+// counted. Pages without a confirmed subscriber are absent from the map.
+func (db *CobaltDB) ConfirmedSubscriberCounts() (map[string]int, error) {
+	results, err := db.PrefixScan("default/statuspages/subscriptions/")
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int)
+	for _, data := range results {
+		var sub core.StatusPageSubscription
+		if err := json.Unmarshal(data, &sub); err != nil {
+			continue
+		}
+		if sub.Confirmed && sub.PageID != "" {
+			counts[sub.PageID]++
+		}
+	}
+	return counts, nil
 }
 
 func (db *CobaltDB) DeleteStatusPageSubscription(subscriptionID string) error {

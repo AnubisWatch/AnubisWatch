@@ -908,8 +908,8 @@ func TestManager_Restore_ContinueOnError_Workspace(t *testing.T) {
 	restoreOpts.ContinueOnError = true
 
 	err = mgr.Restore(ctx, restoreStorage, path, restoreOpts)
-	if err != nil {
-		t.Errorf("Restore() with ContinueOnError should not return error, got %v", err)
+	if err == nil {
+		t.Error("Restore() with failed records must report a partial restore")
 	}
 
 	// Should have 0 workspaces (all failed but continued)
@@ -991,8 +991,8 @@ func TestManager_Restore_ContinueOnError_Souls(t *testing.T) {
 	restoreOpts.ContinueOnError = true
 
 	err = mgr.Restore(ctx, restoreStorage, path, restoreOpts)
-	if err != nil {
-		t.Errorf("Restore() with ContinueOnError should not return error, got %v", err)
+	if err == nil {
+		t.Error("Restore() with failed records must report a partial restore")
 	}
 
 	// Workspace should be saved
@@ -1076,8 +1076,8 @@ func TestManager_Restore_ContinueOnError_AlertChannels(t *testing.T) {
 	restoreOpts.ContinueOnError = true
 
 	err = mgr.Restore(ctx, restoreStorage, path, restoreOpts)
-	if err != nil {
-		t.Errorf("Restore() with ContinueOnError should not return error, got %v", err)
+	if err == nil {
+		t.Error("Restore() with failed records must report a partial restore")
 	}
 
 	// Alert channels should have 0 (failed but continued)
@@ -1126,8 +1126,8 @@ func TestManager_Restore_ContinueOnError_AlertRules(t *testing.T) {
 	restoreOpts.ContinueOnError = true
 
 	err = mgr.Restore(ctx, restoreStorage, path, restoreOpts)
-	if err != nil {
-		t.Errorf("Restore() with ContinueOnError should not return error, got %v", err)
+	if err == nil {
+		t.Error("Restore() with failed records must report a partial restore")
 	}
 
 	// Alert channels should be saved
@@ -1173,8 +1173,8 @@ func TestManager_Restore_ContinueOnError_StatusPages(t *testing.T) {
 	restoreOpts.ContinueOnError = true
 
 	err = mgr.Restore(ctx, restoreStorage, path, restoreOpts)
-	if err != nil {
-		t.Errorf("Restore() with ContinueOnError should not return error, got %v", err)
+	if err == nil {
+		t.Error("Restore() with failed records must report a partial restore")
 	}
 
 	// Status pages should have 0 (failed but continued)
@@ -1215,8 +1215,8 @@ func TestManager_Restore_ContinueOnError_Journeys(t *testing.T) {
 	restoreOpts.ContinueOnError = true
 
 	err = mgr.Restore(ctx, restoreStorage, path, restoreOpts)
-	if err != nil {
-		t.Errorf("Restore() with ContinueOnError should not return error, got %v", err)
+	if err == nil {
+		t.Error("Restore() with failed records must report a partial restore")
 	}
 
 	// Journeys should have 0 (failed but continued)
@@ -1270,8 +1270,8 @@ func TestManager_Restore_PartialFailures_ContinueOnError(t *testing.T) {
 	restoreOpts.ContinueOnError = true
 
 	err = mgr.Restore(ctx, restoreStorage, path, restoreOpts)
-	if err != nil {
-		t.Errorf("Restore() with ContinueOnError should not return error, got %v", err)
+	if err == nil {
+		t.Error("Restore() with failed records must report a partial restore")
 	}
 
 	// Workspaces should succeed
@@ -2137,17 +2137,20 @@ func TestGetEncryptionKey_GenerateAndStore(t *testing.T) {
 		t.Errorf("generated key should be 32 bytes, got %d", len(key))
 	}
 
-	if keyFile == "" {
-		t.Error("keyFile should be returned when key is generated")
+	if keyFile != "" {
+		t.Errorf("keyFile = %q; keys are no longer copied beside archives", keyFile)
 	}
 
-	// Verify key was stored
-	storedKey, err := os.ReadFile(keyFile)
+	// Verify key was stored, hex-encoded, in the data directory
+	storedKey, err := mgr.GetStoredEncryptionKey("")
 	if err != nil {
 		t.Fatalf("failed to read stored key: %v", err)
 	}
 	if !bytes.Equal(storedKey, key) {
 		t.Error("stored key does not match returned key")
+	}
+	if _, err := os.Stat(filepath.Join(tempDir, backupKeyFile)); err != nil {
+		t.Errorf("key not stored in data dir: %v", err)
 	}
 }
 
@@ -2198,91 +2201,6 @@ func TestGetStoredEncryptionKey_FileNotFound(t *testing.T) {
 	_, err := mgr.GetStoredEncryptionKey("/nonexistent/path/key")
 	if err == nil {
 		t.Error("GetStoredEncryptionKey should fail for non-existent file")
-	}
-}
-
-func TestCopyFile(t *testing.T) {
-	tempDir := t.TempDir()
-
-	// Create source file
-	src := filepath.Join(tempDir, "source.txt")
-	srcContent := []byte("Hello, World! This is test content.")
-	if err := os.WriteFile(src, srcContent, 0644); err != nil {
-		t.Fatalf("failed to create source file: %v", err)
-	}
-
-	// Copy file
-	dst := filepath.Join(tempDir, "dest.txt")
-	if err := copyFile(src, dst); err != nil {
-		t.Fatalf("copyFile() error = %v", err)
-	}
-
-	// Verify destination exists
-	if _, err := os.Stat(dst); os.IsNotExist(err) {
-		t.Error("destination file was not created")
-	}
-
-	// Verify content matches
-	dstContent, err := os.ReadFile(dst)
-	if err != nil {
-		t.Fatalf("failed to read destination file: %v", err)
-	}
-
-	if !bytes.Equal(dstContent, srcContent) {
-		t.Error("destination content does not match source")
-	}
-}
-
-func TestCopyFile_LargeFile(t *testing.T) {
-	tempDir := t.TempDir()
-
-	// Create source file with larger content
-	src := filepath.Join(tempDir, "large_source.bin")
-	largeContent := bytes.Repeat([]byte("x"), 1024*1024) // 1MB
-	if err := os.WriteFile(src, largeContent, 0644); err != nil {
-		t.Fatalf("failed to create source file: %v", err)
-	}
-
-	// Copy file
-	dst := filepath.Join(tempDir, "large_dest.bin")
-	if err := copyFile(src, dst); err != nil {
-		t.Fatalf("copyFile() error = %v", err)
-	}
-
-	// Verify content matches
-	dstContent, err := os.ReadFile(dst)
-	if err != nil {
-		t.Fatalf("failed to read destination file: %v", err)
-	}
-
-	if !bytes.Equal(dstContent, largeContent) {
-		t.Error("large file content does not match source")
-	}
-}
-
-func TestCopyFile_SourceNotFound(t *testing.T) {
-	tempDir := t.TempDir()
-
-	err := copyFile(filepath.Join(tempDir, "nonexistent.txt"), filepath.Join(tempDir, "dest.txt"))
-	if err == nil {
-		t.Error("copyFile should fail when source does not exist")
-	}
-}
-
-func TestCopyFile_DestinationDirNotWritable(t *testing.T) {
-	tempDir := t.TempDir()
-
-	// Create source file
-	src := filepath.Join(tempDir, "source.txt")
-	if err := os.WriteFile(src, []byte("test"), 0644); err != nil {
-		t.Fatalf("failed to create source file: %v", err)
-	}
-
-	// Try to copy to a non-existent directory
-	dst := filepath.Join(tempDir, "nonexistent", "subdir", "dest.txt")
-	err := copyFile(src, dst)
-	if err == nil {
-		t.Error("copyFile should fail when destination directory doesn't exist")
 	}
 }
 

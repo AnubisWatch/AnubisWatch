@@ -83,7 +83,9 @@ func TestWALRefusesWritesAfterFailedSync(t *testing.T) {
 }
 
 // One flipped byte in the middle of the WAL used to end replay there; the
-// recovery rewrite then dropped every later entry permanently.
+// recovery rewrite then dropped every later entry permanently. Silently
+// skipping it instead could resurrect deleted keys, so startup now refuses
+// unless the operator opts in to skipping.
 func TestWALRecoverySkipsMidLogCorruption(t *testing.T) {
 	dir := t.TempDir()
 	db := openTestEngine(t, dir)
@@ -109,7 +111,21 @@ func TestWALRecoverySkipsMidLogCorruption(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// By default mid-log damage stops startup and leaves the WAL untouched.
+	if _, err := NewEngine(core.StorageConfig{Path: dir}, quietLogger()); err == nil ||
+		!strings.Contains(err.Error(), WALSkipCorruptEnv) {
+		t.Fatalf("NewEngine on mid-log damage err = %v, want refusal naming %s", err, WALSkipCorruptEnv)
+	}
+	if after, _ := os.ReadFile(walPath); string(after) != string(data) {
+		t.Fatal("refused recovery modified the damaged WAL")
+	}
+
+	// The operator opt-in skips the damaged entry and keeps a copy.
+	t.Setenv(WALSkipCorruptEnv, "1")
 	db = openTestEngine(t, dir)
+	if got := db.WALCorruptEntriesSkipped(); got != 1 {
+		t.Fatalf("WALCorruptEntriesSkipped = %d, want 1", got)
+	}
 	for _, k := range []string{"k0", "k1", "k3", "k4"} {
 		mustGet(t, db, k, "v-"+k)
 	}
@@ -150,5 +166,73 @@ func TestWALTornTailKeepsNoCorruptCopy(t *testing.T) {
 	mustGet(t, db, "a", "1")
 	if kept, _ := filepath.Glob(walPath + ".corrupt-*"); len(kept) != 0 {
 		t.Fatalf("torn tail produced damaged-WAL copies %v", kept)
+	}
+}
+
+// A damaged DELETE in the middle of the log used to be skipped, bringing the
+// deleted key back to life on restart. Recovery must refuse instead.
+func TestWALMidLogCorruptDeleteDoesNotResurrectKey(t *testing.T) {
+	dir := t.TempDir()
+	db := openTestEngine(t, dir)
+	if err := db.Put("secret", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Delete("secret"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put("later", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	walPath := filepath.Join(dir, "wal.log")
+	data, err := os.ReadFile(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := strings.Index(string(data), `"op":"DELETE"`)
+	if at < 0 {
+		t.Fatal("DELETE entry not found")
+	}
+	data[at+len(`"op":"DEL`)] = 'X' // still valid JSON, checksum no longer matches
+	if err := os.WriteFile(walPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = NewEngine(core.StorageConfig{Path: dir}, quietLogger())
+	if err == nil {
+		defer db.Close()
+		if _, gerr := db.Get("secret"); gerr == nil {
+			t.Fatal("deleted key resurrected after a corrupt DELETE was skipped")
+		}
+		t.Fatal("recovery accepted a WAL with a corrupt mid-log entry")
+	}
+}
+
+// A damaged final entry is a torn tail: it is dropped and startup continues.
+func TestWALChecksumMismatchAtTailIsTornTail(t *testing.T) {
+	dir := t.TempDir()
+	db := openTestEngine(t, dir)
+	for _, k := range []string{"a", "b"} {
+		if err := db.Put(k, []byte("v-"+k)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = db.Close()
+	walPath := filepath.Join(dir, "wal.log")
+	data, err := os.ReadFile(walPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := strings.LastIndex(string(data), `"key":"b"`)
+	data[at+len(`"key":"`)] = 'c'
+	if err := os.WriteFile(walPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	db = openTestEngine(t, dir)
+	defer db.Close()
+	mustGet(t, db, "a", "v-a")
+	if _, err := db.Get("b"); err == nil {
+		t.Fatal("corrupt tail entry was applied")
 	}
 }

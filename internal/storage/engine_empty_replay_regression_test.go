@@ -19,7 +19,7 @@ func TestAuditEmptyValueDurability(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := core.StorageConfig{Path: t.TempDir(), Encryption: core.EncryptionConfig{Enabled: tc.encrypt, Key: "local-test-key"}}
+			cfg := core.StorageConfig{Path: t.TempDir(), Encryption: core.EncryptionConfig{Enabled: tc.encrypt, Key: "local-test-key-0123456789"}}
 			db, err := NewEngine(cfg, newTestLogger())
 			if err != nil {
 				t.Fatal(err)

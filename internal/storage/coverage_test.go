@@ -112,7 +112,7 @@ func TestRecoverFromWAL_PreservesData(t *testing.T) {
 // TestEncryptDecryptRoundTrip verifies the encryption module
 // correctly encrypts and decrypts data.
 func TestEncryptDecryptRoundTrip(t *testing.T) {
-	enc, err := newEncryptor("test-secret-key")
+	enc, err := newEncryptor("test-secret-key-0123456789abcdef")
 	if err != nil {
 		t.Fatal(err)
 	}

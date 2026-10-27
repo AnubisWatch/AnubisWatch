@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -88,12 +89,17 @@ type RestoreStorage interface {
 //   - Alert channel credentials that reference external APIs
 //   - OIDC client secrets (stored in config file)
 type Backup struct {
-	Version    string         `json:"version"`
-	CreatedAt  time.Time      `json:"created_at"`
-	BackupType string         `json:"backup_type"` // full, incremental
-	Checksum   string         `json:"checksum"`
-	Metadata   BackupMetadata `json:"metadata"`
-	Data       BackupData     `json:"data"`
+	Version    string    `json:"version"`
+	CreatedAt  time.Time `json:"created_at"`
+	BackupType string    `json:"backup_type"` // full, incremental
+	Checksum   string    `json:"checksum"`
+	// Signature is an HMAC-SHA256 over the archive (checksum and signature
+	// cleared), keyed from the backup key. Unlike Checksum it cannot be
+	// recomputed by someone who edits the archive without the key. Archives
+	// written before it existed have none and restore with a warning.
+	Signature string         `json:"signature,omitempty"`
+	Metadata  BackupMetadata `json:"metadata"`
+	Data      BackupData     `json:"data"`
 }
 
 // BackupMetadata contains backup information
@@ -377,13 +383,16 @@ func (m *Manager) Restore(ctx context.Context, storage RestoreStorage, backupPat
 	m.logger.Info("Starting restore", "file", backupPath)
 
 	// Read backup file
-	backup, err := m.readBackupFile(backupPath)
+	backup, usedKey, err := m.readBackupFileWithKey(backupPath)
 	if err != nil {
 		return fmt.Errorf("failed to read backup file: %w", err)
 	}
 
 	// Verify checksum
 	if err := m.verifyChecksum(backup); err != nil {
+		return fmt.Errorf("backup verification failed: %w", err)
+	}
+	if err := m.verifySignature(backup, usedKey); err != nil {
 		return fmt.Errorf("backup verification failed: %w", err)
 	}
 
@@ -433,7 +442,7 @@ func (m *Manager) Restore(ctx context.Context, storage RestoreStorage, backupPat
 	if failed > 0 {
 		m.logger.Error("Restore finished with errors; the existing user accounts and sessions were kept",
 			"failed_records", failed)
-		return nil
+		return &PartialRestoreError{FailedRecords: failed}
 	}
 	if opts.IncludeUsers && len(backup.Data.Auth) > 0 {
 		if err := m.restoreAuth(backup.Data.Auth); err != nil {
@@ -553,7 +562,17 @@ type RestoreOptions struct {
 	IncludeJourneys     bool
 	IncludeSystemConfig bool
 	IncludeUsers        bool
-	ContinueOnError     bool
+	ContinueOnError     bool // Attempt remaining records; still return PartialRestoreError on failures.
+}
+
+// PartialRestoreError reports a completed attempt with records missing from the
+// restored data. ContinueOnError controls progress, not whether failure is hidden.
+type PartialRestoreError struct {
+	FailedRecords int
+}
+
+func (e *PartialRestoreError) Error() string {
+	return fmt.Sprintf("restore incomplete: %d record(s) failed; existing user accounts and sessions were kept", e.FailedRecords)
 }
 
 // DefaultRestoreOptions returns default restore options (restore everything)
@@ -639,6 +658,12 @@ func (m *Manager) Delete(filename string) error {
 		return fmt.Errorf("failed to delete backup: %w", err)
 	}
 
+	// An encrypted archive's key is stored beside it; leaving it behind keeps
+	// the secret for a removed archive on disk and orphans the file.
+	if err := os.Remove(path + backupKeySuffix); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("backup deleted but failed to delete its key file: %w", err)
+	}
+
 	m.logger.Info("Backup deleted", "file", filename)
 	return nil
 }
@@ -658,9 +683,10 @@ func (m *Manager) Get(filename string) (*Backup, error) {
 // Helper methods
 
 func (m *Manager) calculateChecksum(backup *Backup) (string, error) {
-	// Create a copy without checksum for hashing
+	// Create a copy without checksum (or signature) for hashing
 	data := *backup
 	data.Checksum = ""
+	data.Signature = ""
 
 	jsonData, err := json.Marshal(data)
 	if err != nil {
@@ -688,13 +714,26 @@ func (m *Manager) verifyChecksum(backup *Backup) error {
 func (m *Manager) writeBackupFile(backup *Backup, path string, opts Options) error {
 	// Get encryption key if needed
 	var encryptionKey []byte
-	var keyFile string
 	var err error
 	if opts.Encrypt {
-		encryptionKey, keyFile, err = m.getEncryptionKey(opts)
+		encryptionKey, _, err = m.getEncryptionKey(opts)
 		if err != nil {
 			return fmt.Errorf("failed to get encryption key: %w", err)
 		}
+	}
+
+	// Authenticate the archive. Encrypted archives are signed with the key
+	// that seals them; plain archives with this node's backup key.
+	signingKey := encryptionKey
+	if signingKey == nil {
+		signingKey, err = m.signingKey(opts)
+		if err != nil {
+			return fmt.Errorf("failed to get backup signing key: %w", err)
+		}
+	}
+	backup.Signature, err = signBackup(backup, signingKey)
+	if err != nil {
+		return err
 	}
 
 	// Serialize backup to JSON
@@ -753,24 +792,26 @@ func (m *Manager) writeBackupFile(backup *Backup, path string, opts Options) err
 		return closeErr
 	}
 
-	// Store key file alongside backup if we generated a new key
-	if keyFile != "" {
-		// Copy key to backup-specific location
-		backupKeyFile := path + backupKeySuffix
-		if err := copyFile(keyFile, backupKeyFile); err != nil {
-			os.Remove(tmpPath)
-			return fmt.Errorf("failed to store backup key: %w", err)
-		}
-	}
+	// The key is deliberately NOT copied next to the archive: a key stored
+	// beside the archive protects nothing once the backups directory is
+	// copied off the node. Older releases wrote "<archive>.key"; those
+	// sidecars are still read on restore and removed by Delete.
 
 	// Atomic rename - replaces the file if it already exists
 	return os.Rename(tmpPath, path)
 }
 
 func (m *Manager) readBackupFile(path string) (*Backup, error) {
+	backup, _, err := m.readBackupFileWithKey(path)
+	return backup, err
+}
+
+// readBackupFileWithKey reads an archive and also returns the key that
+// decrypted it (nil for a plain archive).
+func (m *Manager) readBackupFileWithKey(path string) (*Backup, []byte, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer file.Close()
 
@@ -780,12 +821,12 @@ func (m *Manager) readBackupFile(path string) (*Backup, error) {
 	if filepath.Ext(path) == ".gz" || isGzipped(file) {
 		// Reset to start for the gzip reader (isGzipped read 2 bytes)
 		if _, err := file.Seek(0, 0); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		gzipReader, err := gzip.NewReader(file)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		defer gzipReader.Close()
 		reader = gzipReader
@@ -794,43 +835,40 @@ func (m *Manager) readBackupFile(path string) (*Backup, error) {
 	// Read all data
 	data, err := io.ReadAll(reader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read backup data: %w", err)
+		return nil, nil, fmt.Errorf("failed to read backup data: %w", err)
 	}
 
 	// Try to detect if this is an encrypted backup
 	// Encrypted backups start with random salt, which has no fixed prefix.
+	var usedKey []byte
 	if len(data) > 32 && !json.Valid(data) {
-		// Looks encrypted, try to decrypt
-		keyFile := path + backupKeySuffix
-		var key []byte
-		if _, err := os.Stat(keyFile); os.IsNotExist(err) {
-			if envKey := os.Getenv("ANUBIS_BACKUP_ENCRYPTION_KEY"); envKey != "" {
-				key = []byte(envKey)
-			} else {
-				keyFile = m.backupsDir + "/.backup_key"
+		// Looks encrypted: try every key this node knows, most specific
+		// first. AES-GCM rejects a wrong key, so trying several is safe.
+		candidates := m.decryptionKeyCandidates(path)
+		if len(candidates) == 0 {
+			return nil, nil, fmt.Errorf("backup is encrypted but no key found: set %s or restore %s", backupKeyEnv, m.keyFilePath())
+		}
+		var lastErr error
+		for _, key := range candidates {
+			decrypted, derr := decryptData(key, data)
+			if derr == nil {
+				data, usedKey = decrypted, key
+				lastErr = nil
+				break
 			}
+			lastErr = derr
 		}
-
-		if key == nil {
-			key, err = m.GetStoredEncryptionKey(keyFile)
-			if err != nil {
-				return nil, fmt.Errorf("backup is encrypted but no key found: %w", err)
-			}
+		if lastErr != nil {
+			return nil, nil, fmt.Errorf("failed to decrypt backup: %w", lastErr)
 		}
-
-		decrypted, err := decryptData(key, data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt backup: %w", err)
-		}
-		data = decrypted
 	}
 
 	var backup Backup
 	if err := json.Unmarshal(data, &backup); err != nil {
-		return nil, fmt.Errorf("failed to parse backup JSON: %w", err)
+		return nil, nil, fmt.Errorf("failed to parse backup JSON: %w", err)
 	}
 
-	return &backup, nil
+	return &backup, usedKey, nil
 }
 
 func (m *Manager) readBackupMetadata(path string) BackupMetadata {
@@ -1008,37 +1046,201 @@ func deriveKey(keyMaterial []byte) ([]byte, error) {
 	return hash[:], nil
 }
 
+// backupKeyEnv names the operator-supplied backup key. A 64-character hex
+// value is decoded to 32 bytes; anything else is used as raw bytes (the only
+// form older releases understood). Archives sealed with the raw form of a hex
+// value still decrypt because restore tries both.
+const backupKeyEnv = "ANUBIS_BACKUP_ENCRYPTION_KEY"
+
+// backupKeyFile is the auto-generated backup key, kept in the data directory
+// (outside the backups directory) so copying the backups off the node does
+// not copy the key with them. legacyBackupKeyFile is where releases before
+// this one wrote it; it is migrated on first use.
+const (
+	backupKeyFile       = "backup.key"
+	legacyBackupKeyFile = ".backup_key"
+)
+
+func (m *Manager) keyFilePath() string       { return filepath.Join(m.dataDir, backupKeyFile) }
+func (m *Manager) legacyKeyFilePath() string { return filepath.Join(m.backupsDir, legacyBackupKeyFile) }
+
+// keyCandidates returns the keys a piece of key material may stand for: the
+// decoded bytes of a 64-character hex string first, then the raw bytes.
+func keyCandidates(material []byte) [][]byte {
+	trimmed := strings.TrimSpace(string(material))
+	if len(trimmed) == 64 {
+		if decoded, err := hex.DecodeString(trimmed); err == nil {
+			return [][]byte{decoded, material}
+		}
+	}
+	return [][]byte{material}
+}
+
 // getEncryptionKey returns the encryption key for backups.
 // If opts.EncryptionKey is set, use it.
 // Otherwise check ANUBIS_BACKUP_ENCRYPTION_KEY env var.
-// If neither is set, generate a new key and store it.
+// If neither is set, use (or generate) the node's stored backup key.
+// The second result is always empty: keys are no longer copied beside
+// archives; it is kept for callers of the old signature.
 func (m *Manager) getEncryptionKey(opts Options) ([]byte, string, error) {
 	if len(opts.EncryptionKey) > 0 {
 		return opts.EncryptionKey, "", nil
 	}
 
 	// Check environment variable
-	if envKey := os.Getenv("ANUBIS_BACKUP_ENCRYPTION_KEY"); envKey != "" {
-		return []byte(envKey), "", nil
+	if envKey := os.Getenv(backupKeyEnv); envKey != "" {
+		return keyCandidates([]byte(envKey))[0], "", nil
 	}
 
-	// Generate new key
+	key, err := m.loadOrCreateStoredKey()
+	if err != nil {
+		return nil, "", err
+	}
+	return key, "", nil
+}
+
+// signingKey returns the key a plain (unencrypted) archive is signed with.
+func (m *Manager) signingKey(opts Options) ([]byte, error) {
+	key, _, err := m.getEncryptionKey(opts)
+	return key, err
+}
+
+// loadOrCreateStoredKey returns the node's stored backup key, migrating it
+// from the legacy location inside the backups directory, or generates one.
+func (m *Manager) loadOrCreateStoredKey() ([]byte, error) {
+	path := m.keyFilePath()
+	if data, err := os.ReadFile(path); err == nil {
+		return keyCandidates(data)[0], nil
+	} else if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to read backup key: %w", err)
+	}
+
+	legacy := m.legacyKeyFilePath()
+	if data, err := os.ReadFile(legacy); err == nil {
+		if err := writePrivateFile(path, data); err != nil {
+			return nil, fmt.Errorf("failed to migrate backup key from %s: %w", legacy, err)
+		}
+		if err := os.Remove(legacy); err != nil {
+			m.logger.Warn("backup key migrated but the old copy could not be removed", "path", legacy, "error", err)
+		}
+		m.logger.Info("backup key moved out of the backups directory", "from", legacy, "to", path)
+		return keyCandidates(data)[0], nil
+	}
+
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
-		return nil, "", fmt.Errorf("failed to generate encryption key: %w", err)
+		return nil, fmt.Errorf("failed to generate encryption key: %w", err)
 	}
-
-	// Store key to file (path derived from backup path later)
-	keyFile := m.backupsDir + "/.backup_key"
-	if err := os.WriteFile(keyFile, key, 0600); err != nil {
-		return nil, "", fmt.Errorf("failed to store encryption key: %w", err)
+	if err := os.MkdirAll(m.dataDir, 0750); err != nil {
+		return nil, fmt.Errorf("failed to store encryption key: %w", err)
 	}
+	if err := writePrivateFile(path, []byte(hex.EncodeToString(key)+"\n")); err != nil {
+		return nil, fmt.Errorf("failed to store encryption key: %w", err)
+	}
+	m.logger.Warn("backup key generated; keep a copy somewhere other than this node",
+		"key_file", path,
+		"action", "set "+backupKeyEnv+" to the file's contents to restore on another node")
+	return key, nil
+}
 
-	m.logger.Warn("backup encryption key generated and stored",
-		"action", "set ANUBIS_BACKUP_ENCRYPTION_KEY env var to persist across restarts",
-		"key_file", keyFile)
+// storedKeyCandidates returns every key this node can read without
+// generating one: environment, data-dir key file, legacy key file.
+func (m *Manager) storedKeyCandidates() [][]byte {
+	var out [][]byte
+	if envKey := os.Getenv(backupKeyEnv); envKey != "" {
+		out = append(out, keyCandidates([]byte(envKey))...)
+	}
+	for _, p := range []string{m.keyFilePath(), m.legacyKeyFilePath()} {
+		if data, err := os.ReadFile(p); err == nil && len(data) > 0 {
+			out = append(out, keyCandidates(data)...)
+		}
+	}
+	return out
+}
 
-	return key, keyFile, nil
+// decryptionKeyCandidates lists the keys to try for an encrypted archive:
+// a legacy "<archive>.key" sidecar first, then the node's keys.
+func (m *Manager) decryptionKeyCandidates(path string) [][]byte {
+	var out [][]byte
+	if data, err := os.ReadFile(path + backupKeySuffix); err == nil && len(data) > 0 {
+		out = append(out, data)
+	}
+	return append(out, m.storedKeyCandidates()...)
+}
+
+const signaturePrefix = "hmac-sha256:"
+
+// signBackup returns the archive's HMAC-SHA256 signature under key.
+func signBackup(backup *Backup, key []byte) (string, error) {
+	data := *backup
+	data.Checksum = ""
+	data.Signature = ""
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return "", fmt.Errorf("failed to serialize backup for signature: %w", err)
+	}
+	macKey := sha256.Sum256(append([]byte("anubiswatch-backup-signature-v1\x00"), key...))
+	mac := hmac.New(sha256.New, macKey[:])
+	mac.Write(jsonData)
+	return signaturePrefix + hex.EncodeToString(mac.Sum(nil)), nil
+}
+
+// verifySignature authenticates an archive. decryptKey is the key that opened
+// an encrypted archive (AES-GCM already authenticated it). A plain archive is
+// checked against every key this node holds; when none is available, or the
+// archive predates signatures, the restore proceeds with a warning because
+// its integrity rests on an unkeyed checksum anyone can recompute.
+func (m *Manager) verifySignature(backup *Backup, decryptKey []byte) error {
+	if backup.Signature == "" {
+		if decryptKey == nil {
+			m.logger.Warn("backup is unsigned and unencrypted: its integrity is NOT authenticated; only restore archives you trust")
+		}
+		return nil
+	}
+	keys := [][]byte{decryptKey}
+	if decryptKey == nil {
+		keys = m.storedKeyCandidates()
+	}
+	if len(keys) == 0 {
+		m.logger.Warn("backup signature cannot be verified on this node (no backup key); its integrity is NOT authenticated",
+			"action", "set "+backupKeyEnv+" to the key of the node that wrote it")
+		return nil
+	}
+	for _, key := range keys {
+		sig, err := signBackup(backup, key)
+		if err != nil {
+			return err
+		}
+		if hmac.Equal([]byte(sig), []byte(backup.Signature)) {
+			return nil
+		}
+	}
+	return fmt.Errorf("backup signature does not match: the archive was modified or signed with a different backup key")
+}
+
+// writePrivateFile atomically writes data to path with mode 0600.
+func writePrivateFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // encryptData encrypts data using AES-256-GCM.
@@ -1127,55 +1329,22 @@ func decryptData(key []byte, data []byte) ([]byte, error) {
 }
 
 // GetStoredEncryptionKey returns the encryption key stored in the key file.
+// With an empty keyFile it reads the data-directory key, falling back to the
+// legacy location inside the backups directory. A 64-character hex file is
+// decoded.
 func (m *Manager) GetStoredEncryptionKey(keyFile string) ([]byte, error) {
+	paths := []string{keyFile}
 	if keyFile == "" {
-		// Try default location
-		keyFile = m.backupsDir + "/.backup_key"
+		paths = []string{m.keyFilePath(), m.legacyKeyFilePath()}
 	}
-
-	data, err := os.ReadFile(keyFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read encryption key: %w", err)
+	var lastErr error
+	for _, p := range paths {
+		data, err := os.ReadFile(p)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return keyCandidates(data)[0], nil
 	}
-
-	key := make([]byte, len(data))
-	copy(key, data)
-	return key, nil
-}
-
-// copyFile copies a file from src to dst.
-func copyFile(src, dst string) error {
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer srcFile.Close()
-
-	// The destination holds a secret (the backup encryption key), so it is
-	// written through a private temporary file and renamed into place. That
-	// keeps it unreadable for others even for a moment and never writes
-	// through a symlink planted at the destination path.
-	tmp, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
-
-	if _, err := io.Copy(tmp, srcFile); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpPath, 0600); err != nil {
-		return err
-	}
-
-	return os.Rename(tmpPath, dst)
+	return nil, fmt.Errorf("failed to read encryption key: %w", lastErr)
 }

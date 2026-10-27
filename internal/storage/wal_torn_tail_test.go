@@ -135,8 +135,12 @@ func TestWALChecksum(t *testing.T) {
 		t.Fatalf("write corrupted WAL: %v", err)
 	}
 
-	// Reopen: recovery must detect the corrupted entry, warn, and skip it.
-	// Entries "a" and "c" should survive; "b" should be lost.
+	// Reopen: by default recovery refuses mid-log damage. With the operator
+	// opt-in it skips the corrupted entry: "a" and "c" survive, "b" is lost.
+	if _, err := NewEngine(cfg, newTestLogger()); err == nil {
+		t.Fatal("recovery accepted a mid-log checksum mismatch without opt-in")
+	}
+	t.Setenv(WALSkipCorruptEnv, "1")
 	db2, err := NewEngine(cfg, newTestLogger())
 	if err != nil {
 		t.Fatalf("reopen after corrupted WAL: %v", err)

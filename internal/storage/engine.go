@@ -37,6 +37,9 @@ type CobaltDB struct {
 	// and lets checkpointing snapshot a consistent live state with no write in
 	// flight.
 	writeMu sync.Mutex
+	// Shared by snapshot-store wrappers over this engine so readers cannot
+	// race publication and cleanup of immutable snapshot chunks.
+	snapshotMu sync.Mutex
 
 	// Background checkpoint (WAL compaction) lifecycle. checkpointBaseline is
 	// the WAL size just after the last checkpoint; the next checkpoint fires
@@ -65,6 +68,10 @@ type CobaltDB struct {
 	// Order of first appearance is preserved for deterministic listing.
 	workspaceIndex map[string]struct{}
 	workspaceOrder []string
+
+	// walCorruptSkipped counts damaged WAL regions that recovery skipped
+	// (only possible with ANUBIS_WAL_SKIP_CORRUPT=1 or at the torn tail).
+	walCorruptSkipped int
 }
 
 // btreeIndex is an in-memory B+Tree index (simplified for Phase 1)
@@ -231,6 +238,10 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 			_ = wal.Close()
 			return nil, fmt.Errorf("failed to initialize encryption: %w", err)
 		}
+		if len(config.Encryption.Key) < core.RecommendedEncryptionKeyBytes {
+			logger.Warn("Storage encryption key is shorter than recommended",
+				"bytes", len(config.Encryption.Key), "recommended", core.RecommendedEncryptionKeyBytes)
+		}
 		logger.Info("Encryption enabled (AES-256-GCM)")
 	}
 
@@ -264,6 +275,14 @@ func NewEngine(config core.StorageConfig, logger *slog.Logger) (*CobaltDB, error
 	if err := recoverFromWALSeam(db); err != nil {
 		_ = wal.Close()
 		return nil, fmt.Errorf("failed to recover WAL: %w", err)
+	}
+
+	// Refuse to run with a key that does not match the data (or with no key
+	// for an encrypted store): every read would fail and new writes would be
+	// sealed under a second key, leaving a mixed database.
+	if err := db.verifyEncryptionKey(); err != nil {
+		_ = wal.Close()
+		return nil, err
 	}
 
 	// Rebuild secondary indexes from existing data
@@ -330,6 +349,13 @@ func (db *CobaltDB) Ping() error {
 	db.closedMu.Unlock()
 	if closed {
 		return fmt.Errorf("database is closed")
+	}
+
+	// A WAL that refused writes after a failed fsync stays unusable until the
+	// process restarts; readiness must say so instead of staying green while
+	// every write fails.
+	if err := db.wal.health(); err != nil {
+		return err
 	}
 
 	db.data.mu.RLock()
@@ -433,6 +459,49 @@ func (db *CobaltDB) Put(key string, value []byte) error {
 		return err
 	}
 
+	db.data.nextSeq++
+	return nil
+}
+
+// putMany publishes a compound write only after its complete checksummed WAL
+// frame has been synced. The tree lock keeps readers from observing a subset.
+func (db *CobaltDB) putMany(values map[string][]byte) error {
+	db.closedMu.Lock()
+	closed := db.closed
+	db.closedMu.Unlock()
+	if closed {
+		return fmt.Errorf("database is closed")
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	stored := make(map[string][]byte, len(values))
+	keys := make([]string, 0, len(values))
+	for key, value := range values {
+		var err error
+		if db.encryptor != nil {
+			stored[key], err = db.encryptor.encrypt(value)
+			if err != nil {
+				return fmt.Errorf("encryption failed: %w", err)
+			}
+		} else {
+			stored[key] = bytes.Clone(value)
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	if err := db.wal.AppendBatch(stored); err != nil {
+		return fmt.Errorf("WAL batch append failed: %w", err)
+	}
+	db.data.mu.Lock()
+	defer db.data.mu.Unlock()
+	for _, key := range keys {
+		if err := db.data.insert(key, stored[key]); err != nil {
+			return err
+		}
+	}
 	db.data.nextSeq++
 	return nil
 }
@@ -1178,6 +1247,26 @@ func (w *writeAheadLog) AppendDelete(key string) error {
 	})
 }
 
+func (w *writeAheadLog) AppendBatch(values map[string][]byte) error {
+	payload, err := json.Marshal(values)
+	if err != nil {
+		return err
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.appendLocked(walEntry{Op: "BATCH", Value: payload, Time: time.Now().UnixNano()})
+}
+
+// health reports the error that made the WAL refuse writes, if any.
+func (w *writeAheadLog) health() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.broken != nil {
+		return fmt.Errorf("WAL is unusable after an earlier write failure, restart required: %w", w.broken)
+	}
+	return nil
+}
+
 // currentSize returns the number of bytes in the current WAL generation.
 func (w *writeAheadLog) currentSize() int64 {
 	w.mu.Lock()
@@ -1279,6 +1368,8 @@ func (w *writeAheadLog) Truncate() error {
 }
 
 type walEntry struct {
+	// BATCH stores a JSON key/value map in Value, committed as one frame.
+	// PUT and DELETE retain their legacy encodings and checksum behavior.
 	Op    string `json:"op"`
 	Key   string `json:"key"`
 	Value []byte `json:"value,omitzero"`
@@ -1380,6 +1471,18 @@ func findNextWALEntry(f *os.File, start, fileSize int64) (int64, bool) {
 	return 0, false
 }
 
+// WALSkipCorruptEnv, when set to "1", lets recovery skip damaged WAL entries
+// that valid entries follow instead of refusing to start. Skipped entries are
+// lost for good (a copy of the damaged WAL is kept as wal.log.corrupt-*).
+const WALSkipCorruptEnv = "ANUBIS_WAL_SKIP_CORRUPT"
+
+// WALCorruptEntriesSkipped reports how many damaged WAL regions the last
+// recovery skipped. Non-zero means data was lost and the operator should
+// inspect the wal.log.corrupt-* copy.
+func (db *CobaltDB) WALCorruptEntriesSkipped() int {
+	return db.walCorruptSkipped
+}
+
 func (db *CobaltDB) recoverFromWAL() error {
 	// Lock ordering: acquire wal.mu first, then data.mu to avoid deadlock
 	// This matches the order in Put() which does wal.Append() first, then data.mu
@@ -1406,6 +1509,22 @@ func (db *CobaltDB) recoverFromWAL() error {
 	// then discarded every later entry for good. Instead, look for the next
 	// entry that decodes and passes its checksum and resume from it; only when
 	// none follows is the damage a torn tail.
+	//
+	// Skipping a damaged entry that valid entries follow is not harmless,
+	// though: a lost DELETE resurrects the key and a lost raft/* record leaves
+	// a silent hole in the replicated log. So mid-log damage stops startup
+	// unless the operator explicitly opts in with ANUBIS_WAL_SKIP_CORRUPT=1.
+	// Damage with nothing valid after it is a torn tail and is always cut off.
+	allowSkip := os.Getenv(WALSkipCorruptEnv) == "1"
+	midLogDamage := func(offset int64, reason string) error {
+		if allowSkip {
+			return nil
+		}
+		return fmt.Errorf("WAL %s is damaged at offset %d (%s) and valid entries follow it; "+
+			"refusing to start because skipping it could resurrect deleted keys or drop replicated log entries. "+
+			"Keep a copy of the file, then restore from a backup or set %s=1 to skip damaged entries",
+			db.wal.path, offset, reason, WALSkipCorruptEnv)
+	}
 	var offset int64
 	skipped := false
 	for offset < fileSize {
@@ -1416,12 +1535,18 @@ func (db *CobaltDB) recoverFromWAL() error {
 				db.logWALTornTail(reason, fmt.Errorf("offset=%d", offset))
 				break
 			}
+			if err := midLogDamage(offset, reason); err != nil {
+				return err
+			}
+			db.walCorruptSkipped++
 			db.logger.Error("WAL corruption detected, skipping damaged bytes",
-				"reason", reason, "offset", offset, "skipped_bytes", next-offset)
+				"reason", reason, "offset", offset, "skipped_bytes", next-offset,
+				"skipped_regions", db.walCorruptSkipped)
 			skipped = true
 			offset = next
 			continue
 		}
+		entryOffset := offset
 		offset += size
 
 		// Entries without a checksum (zero value, written before the field
@@ -1432,12 +1557,21 @@ func (db *CobaltDB) recoverFromWAL() error {
 				db.logger.Warn("WAL entry checksum computation failed, skipping verification",
 					"err", err, "key", entry.Key)
 			} else if expected != entry.Crc32 {
-				db.logger.Error("WAL entry checksum mismatch — skipping corrupted entry",
-					"key", entry.Key, "op", entry.Op,
-					"expected", expected, "got", entry.Crc32)
 				// The length prefix was read successfully, so we know exactly
 				// where the next entry starts.
 				skipped = true
+				if _, more := findNextWALEntry(db.wal.file, offset, fileSize); !more {
+					db.logWALTornTail("checksum mismatch", fmt.Errorf("offset=%d key=%q", entryOffset, entry.Key))
+					break
+				}
+				if err := midLogDamage(entryOffset, "checksum mismatch"); err != nil {
+					return err
+				}
+				db.walCorruptSkipped++
+				db.logger.Error("WAL entry checksum mismatch — skipping corrupted entry",
+					"key", entry.Key, "op", entry.Op, "offset", entryOffset,
+					"expected", expected, "got", entry.Crc32,
+					"skipped_regions", db.walCorruptSkipped)
 				continue
 			}
 		}
@@ -1453,6 +1587,24 @@ func (db *CobaltDB) recoverFromWAL() error {
 		case "DELETE":
 			if err := db.data.insert(entry.Key, nil); err != nil {
 				db.logger.Error("WAL replay: failed to apply tombstone", "key", entry.Key, "err", err)
+			}
+		case "BATCH":
+			var values map[string][]byte
+			if err := json.Unmarshal(entry.Value, &values); err != nil {
+				return fmt.Errorf("invalid WAL batch: %w", err)
+			}
+			if values == nil {
+				return fmt.Errorf("invalid WAL batch: null mutation map")
+			}
+			keys := make([]string, 0, len(values))
+			for key := range values {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				if err := db.data.insert(key, values[key]); err != nil {
+					return fmt.Errorf("WAL batch replay: %w", err)
+				}
 			}
 		}
 	}
@@ -1578,6 +1730,12 @@ func (db *CobaltDB) ListSouls(ctx context.Context, workspaceID string, offset, l
 		}
 		allSouls = append(allSouls, &soul)
 	}
+
+	// PrefixScan returns a map, so pagination needs a stable ordering or the
+	// same offset can select different Souls on consecutive requests.
+	sort.Slice(allSouls, func(i, j int) bool {
+		return allSouls[i].ID < allSouls[j].ID
+	})
 
 	// Apply pagination
 	if offset < 0 {

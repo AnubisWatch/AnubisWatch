@@ -175,9 +175,10 @@ func writeArchiveFixtureExpectingFailure(t *testing.T, m *Manager, path string) 
 	}
 }
 
-// The archive is written next to the key that decrypts it, and the key is a
-// secret of the same strength as the password hashes inside the archive.
-func TestBackupEncryptionKeySidecarIsReadableByOwnerOnly(t *testing.T) {
+// The generated backup key is a secret of the same strength as the password
+// hashes inside the archive. It is kept owner-only in the data directory and
+// never copied next to the archive, where it would travel with the backups.
+func TestBackupEncryptionKeyIsOwnerOnlyAndNotBesideArchive(t *testing.T) {
 	t.Setenv("ANUBIS_BACKUP_ENCRYPTION_KEY", "")
 	dir := t.TempDir()
 	m := NewManager(&mockStorage{}, dir, newTestLogger())
@@ -191,12 +192,15 @@ func TestBackupEncryptionKeySidecarIsReadableByOwnerOnly(t *testing.T) {
 		t.Fatalf("calculateChecksum: %v", err)
 	}
 	backup.Checksum = checksum
-	// No key is supplied, so the manager generates one and stores a copy
-	// next to the archive.
 	if err := m.writeBackupFile(backup, path, Options{Encrypt: true}); err != nil {
 		t.Fatalf("writeBackupFile: %v", err)
 	}
-	if got := archivePerm(t, path+backupKeySuffix); got != 0600 {
-		t.Errorf("key sidecar mode = %04o, want 0600", got)
+	if got := archivePerm(t, filepath.Join(dir, backupKeyFile)); got != 0600 {
+		t.Errorf("key file mode = %04o, want 0600", got)
+	}
+	for _, p := range []string{path + backupKeySuffix, filepath.Join(m.backupsDir, legacyBackupKeyFile)} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("key stored inside the backups directory at %s", p)
+		}
 	}
 }

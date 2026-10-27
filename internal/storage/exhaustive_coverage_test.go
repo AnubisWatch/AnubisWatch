@@ -54,7 +54,7 @@ func TestEncryptionDefensivePaths(t *testing.T) {
 	if _, err := newEncryptor(""); err == nil {
 		t.Fatal("empty key accepted")
 	}
-	e, err := newEncryptor("key")
+	e, err := newEncryptor("key-0123456789abcdef")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -586,7 +586,7 @@ func TestWriteEntryAndDecryptCorruption(t *testing.T) {
 	if _, err := writeEntryLocked(f, walEntry{Key: "x"}); err == nil {
 		t.Fatal("closed file write succeeded")
 	}
-	db, err := NewEngine(core.StorageConfig{Path: t.TempDir(), Encryption: core.EncryptionConfig{Enabled: true, Key: "key"}}, newTestLogger())
+	db, err := NewEngine(core.StorageConfig{Path: t.TempDir(), Encryption: core.EncryptionConfig{Enabled: true, Key: "key-0123456789abcdef"}}, newTestLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

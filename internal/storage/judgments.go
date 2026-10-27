@@ -3,7 +3,9 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
@@ -11,9 +13,24 @@ import (
 
 // SaveJudgment saves a judgment to time-series storage
 func (db *CobaltDB) SaveJudgment(ctx context.Context, j *core.Judgment) error {
+	values, idxKey, err := db.prepareJudgment(ctx, j)
+	if err != nil {
+		return err
+	}
+	if err := db.putMany(values); err != nil {
+		return err
+	}
+	db.recordJudgmentIndex(j, idxKey)
+	return nil
+}
+
+func (db *CobaltDB) prepareJudgment(ctx context.Context, j *core.Judgment) (map[string][]byte, string, error) {
 	// Generate ULID if not set
 	if j.ID == "" {
 		j.ID = core.GenerateID()
+	}
+	if err := validateResourceID(j.ID, "judgment"); err != nil {
+		return nil, "", err
 	}
 
 	workspaceID := j.WorkspaceID
@@ -25,33 +42,42 @@ func (db *CobaltDB) SaveJudgment(ctx context.Context, j *core.Judgment) error {
 		j.WorkspaceID = workspaceID
 	}
 
-	// Primary key: {workspace}/judgments/{soul}/{timestamp}
+	// Identity, rather than clock resolution, distinguishes concurrent results.
+	// Legacy timestamp-only records remain readable and are updated in place
+	// when the same ID is saved again, avoiding duplicate history on upgrade.
 	ts := j.Timestamp.UnixNano()
-	key := fmt.Sprintf("%s/judgments/%s/%d", workspaceID, j.SoulID, ts)
+	legacyKey := fmt.Sprintf("%s/judgments/%s/%d", workspaceID, j.SoulID, ts)
+	key := legacyKey + "/" + j.ID
+	if raw, err := db.Get(legacyKey); err == nil {
+		var previous core.Judgment
+		if json.Unmarshal(raw, &previous) == nil && previous.ID == j.ID {
+			key = legacyKey
+		}
+	} else {
+		var missing *core.NotFoundError
+		if !errors.As(err, &missing) {
+			return nil, "", err
+		}
+	}
 
 	data, err := json.Marshal(j)
 	if err != nil {
-		return fmt.Errorf("failed to marshal judgment: %w", err)
-	}
-
-	if err := db.Put(key, data); err != nil {
-		return err
+		return nil, "", fmt.Errorf("failed to marshal judgment: %w", err)
 	}
 
 	// Update secondary index for O(1) GetJudgmentNoCtx lookup
 	// Index key: {workspace}/judgment-idx/{judgmentID} -> primary key
 	idxKey := fmt.Sprintf("%s/judgment-idx/%s", workspaceID, j.ID)
-	if err := db.Put(idxKey, []byte(key)); err != nil {
-		return err
-	}
+	return map[string][]byte{key: data, idxKey: []byte(key)}, idxKey, nil
+}
 
+func (db *CobaltDB) recordJudgmentIndex(j *core.Judgment, idxKey string) {
 	// Update in-memory index map and workspace index under db.mu so
 	// concurrent readers/writers see a consistent view.
 	db.mu.Lock()
 	db.judgmentIndex[j.ID] = idxKey
-	db.recordWorkspaceLocked(workspaceID)
+	db.recordWorkspaceLocked(j.WorkspaceID)
 	db.mu.Unlock()
-	return nil
 }
 
 // GetJudgment retrieves a judgment by soul ID and timestamp
@@ -65,7 +91,25 @@ func (db *CobaltDB) GetJudgment(ctx context.Context, workspaceID, soulID string,
 
 	data, err := db.Get(key)
 	if err != nil {
-		return nil, err
+		var missing *core.NotFoundError
+		if !errors.As(err, &missing) {
+			return nil, err
+		}
+		// Timestamp lookup is retained for old callers. When several IDs share
+		// that instant, return the lexicographically greatest ID deterministically.
+		matches, scanErr := db.PrefixScan(key + "/")
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		var selected string
+		for candidate, value := range matches {
+			if value != nil && candidate > selected {
+				selected, data = candidate, value
+			}
+		}
+		if selected == "" {
+			return nil, err
+		}
 	}
 
 	var j core.Judgment
@@ -73,6 +117,28 @@ func (db *CobaltDB) GetJudgment(ctx context.Context, workspaceID, soulID string,
 		return nil, fmt.Errorf("failed to unmarshal judgment: %w", err)
 	}
 
+	return &j, nil
+}
+
+// GetJudgmentByID reads the workspace-scoped durable ID index. Replication
+// deduplicates by identity, including when distinct results share a timestamp.
+func (db *CobaltDB) GetJudgmentByID(ctx context.Context, workspaceID, id string) (*core.Judgment, error) {
+	workspaceID = defaultWorkspace(workspaceID)
+	primary, err := db.Get(fmt.Sprintf("%s/judgment-idx/%s", workspaceID, id))
+	if err != nil {
+		return nil, err
+	}
+	data, err := db.Get(string(primary))
+	if err != nil {
+		return nil, err
+	}
+	var j core.Judgment
+	if err := json.Unmarshal(data, &j); err != nil {
+		return nil, err
+	}
+	if j.ID != id || defaultWorkspace(j.WorkspaceID) != workspaceID {
+		return nil, &core.NotFoundError{Entity: "judgment", ID: id}
+	}
 	return &j, nil
 }
 
@@ -112,10 +178,19 @@ func (db *CobaltDB) QueryJudgments(ctx context.Context, workspaceID, soulID stri
 			continue
 		}
 		judgments = append(judgments, &j)
+	}
 
-		if limit > 0 && len(judgments) >= limit {
-			break
+	// The scan results are a map, so collection order says nothing about time.
+	// Sort newest-first and only then apply the limit (as ListJudgments does),
+	// otherwise a limited query returns an arbitrary subset of the window.
+	sort.Slice(judgments, func(i, k int) bool {
+		if judgments[i].Timestamp.Equal(judgments[k].Timestamp) {
+			return judgments[i].ID > judgments[k].ID
 		}
+		return judgments[i].Timestamp.After(judgments[k].Timestamp)
+	})
+	if limit > 0 && len(judgments) > limit {
+		judgments = judgments[:limit]
 	}
 
 	return judgments, nil
@@ -148,7 +223,7 @@ func (db *CobaltDB) GetLatestJudgment(ctx context.Context, workspaceID, soulID s
 		if err := json.Unmarshal(data, &j); err != nil {
 			continue
 		}
-		if latest == nil || j.Timestamp.After(latest.Timestamp) {
+		if latest == nil || j.Timestamp.After(latest.Timestamp) || (j.Timestamp.Equal(latest.Timestamp) && j.ID > latest.ID) {
 			latest = &j
 		}
 	}

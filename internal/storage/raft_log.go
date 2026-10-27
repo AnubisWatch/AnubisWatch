@@ -2,12 +2,14 @@ package storage
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 	"github.com/AnubisWatch/anubiswatch/internal/raft"
@@ -164,6 +166,17 @@ type CobaltDBSnapshotStore struct {
 	db *CobaltDB
 }
 
+// Each immutable chunk stays well below the encoded WAL record limit, including
+// JSON/base64 and encryption overhead. Publishing one small manifest commits the
+// image atomically; an interrupted writer cannot replace the previous snapshot.
+const snapshotChunkSize = 256 * 1024
+
+type snapshotManifest struct {
+	raft.SnapshotMeta
+	ChunkPrefix string `json:"chunk_prefix,omitempty"`
+	Chunks      int    `json:"chunks,omitempty"`
+}
+
 // NewCobaltDBSnapshotStore creates a new SnapshotStore backed by CobaltDB
 func NewCobaltDBSnapshotStore(db *CobaltDB) *CobaltDBSnapshotStore {
 	return &CobaltDBSnapshotStore{db: db}
@@ -199,17 +212,46 @@ func (s *CobaltDBSnapshotStore) List() ([]raft.SnapshotMeta, error) {
 
 // Open opens a snapshot for reading
 func (s *CobaltDBSnapshotStore) Open(id string) (raft.SnapshotSource, error) {
-	metas, err := s.List()
+	s.db.snapshotMu.Lock()
+	defer s.db.snapshotMu.Unlock()
+	metadata, err := s.db.Get("raft/snapshot-meta")
 	if err != nil {
 		return nil, err
 	}
-	if len(metas) != 1 || metas[0].ID != id {
+	var manifests []snapshotManifest
+	if err := json.Unmarshal(metadata, &manifests); err != nil {
+		return nil, err
+	}
+	if len(manifests) != 1 || manifests[0].ID != id {
 		return nil, fmt.Errorf("snapshot not found: %s", id)
 	}
-
-	data, err := s.db.Get("raft/snapshot")
-	if err != nil {
-		return nil, err
+	manifest := manifests[0]
+	var data []byte
+	if manifest.ChunkPrefix == "" {
+		// Compatibility with snapshots produced before chunked storage.
+		data, err = s.db.Get("raft/snapshot")
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		if manifest.Chunks < 0 || manifest.Size < 0 ||
+			int64(manifest.Chunks) != (manifest.Size+snapshotChunkSize-1)/snapshotChunkSize {
+			return nil, fmt.Errorf("invalid snapshot manifest: %s", id)
+		}
+		for i := 0; i < manifest.Chunks; i++ {
+			chunk, err := s.db.Get(fmt.Sprintf("%s%d", manifest.ChunkPrefix, i))
+			if err != nil {
+				return nil, fmt.Errorf("read snapshot chunk %d: %w", i, err)
+			}
+			expected := snapshotChunkSize
+			if i == manifest.Chunks-1 {
+				expected = int(manifest.Size - int64(i)*snapshotChunkSize)
+			}
+			if len(chunk) != expected {
+				return nil, fmt.Errorf("invalid snapshot chunk %d size", i)
+			}
+			data = append(data, chunk...)
+		}
 	}
 
 	source := &cobaltDBSnapshotSource{
@@ -221,14 +263,15 @@ func (s *CobaltDBSnapshotStore) Open(id string) (raft.SnapshotSource, error) {
 
 // cobaltDBSnapshotSink implements raft.SnapshotSink
 type cobaltDBSnapshotSink struct {
-	store   *CobaltDBSnapshotStore
-	id      string
-	index   uint64
-	term    uint64
-	version uint64
-	config  []byte
-	buf     *bytes.Buffer
-	closed  bool
+	store    *CobaltDBSnapshotStore
+	id       string
+	index    uint64
+	term     uint64
+	version  uint64
+	config   []byte
+	buf      *bytes.Buffer
+	closed   bool
+	closeErr error
 }
 
 // Write writes data to the snapshot
@@ -242,26 +285,52 @@ func (s *cobaltDBSnapshotSink) Write(p []byte) (n int, err error) {
 // Close finalizes the snapshot
 func (s *cobaltDBSnapshotSink) Close() error {
 	if s.closed {
-		return nil
+		return s.closeErr
 	}
 	s.closed = true
-
-	// Save snapshot data
-	if err := s.store.db.Put("raft/snapshot", s.buf.Bytes()); err != nil {
+	s.store.db.snapshotMu.Lock()
+	defer s.store.db.snapshotMu.Unlock()
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		s.closeErr = err
 		return err
 	}
-
-	// Save metadata
-	meta := raft.SnapshotMeta{
+	prefix := fmt.Sprintf("raft/snapshot-data/%x/", nonce)
+	manifest := snapshotManifest{SnapshotMeta: raft.SnapshotMeta{
 		ID:      s.id,
 		Index:   s.index,
 		Term:    s.term,
 		Size:    int64(s.buf.Len()),
 		Version: s.version,
+	}, ChunkPrefix: prefix}
+	data := s.buf.Bytes()
+	for start := 0; start < len(data); start += snapshotChunkSize {
+		end := min(start+snapshotChunkSize, len(data))
+		if err := s.store.db.Put(fmt.Sprintf("%s%d", prefix, manifest.Chunks), data[start:end]); err != nil {
+			s.closeErr = err
+			_ = s.store.db.DeletePrefix(prefix)
+			return err
+		}
+		manifest.Chunks++
 	}
-	// Keep only latest snapshot
-	metaData, _ := json.Marshal([]raft.SnapshotMeta{meta})
-	return s.store.db.Put("raft/snapshot-meta", metaData)
+	metadata, _ := json.Marshal([]snapshotManifest{manifest})
+	if err := s.store.db.Put("raft/snapshot-meta", metadata); err != nil {
+		s.closeErr = err
+		_ = s.store.db.DeletePrefix(prefix)
+		return err
+	}
+	// The new image is visible. Failed cleanup can only leave unreachable
+	// chunks, never invalidate the committed manifest or the previous image.
+	// Include abandoned generations left by a crash before manifest commit.
+	if keys, err := s.store.db.List("raft/snapshot-data/"); err == nil {
+		for _, key := range keys {
+			if !strings.HasPrefix(key, prefix) {
+				_ = s.store.db.Delete(key)
+			}
+		}
+	}
+	_ = s.store.db.Delete("raft/snapshot")
+	return nil
 }
 
 // ID returns the snapshot ID

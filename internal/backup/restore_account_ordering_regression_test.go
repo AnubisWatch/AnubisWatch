@@ -215,8 +215,8 @@ func TestRestoreKeepsAccountsOnPartialRestore(t *testing.T) {
 	opts := DefaultRestoreOptions()
 	opts.ContinueOnError = true
 	store := &authOrderStore{putErr: errors.New("disk full")}
-	if err := m.Restore(context.Background(), store, backupPath, opts); err != nil {
-		t.Fatalf("Restore with ContinueOnError should not fail: %v", err)
+	if err := m.Restore(context.Background(), store, backupPath, opts); err == nil {
+		t.Fatal("Restore with missing records must report a partial restore")
 	}
 	assertSessionsUnchanged(t, sessions)
 }

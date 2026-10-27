@@ -21,7 +21,7 @@ func TestAuditStartupWALClose(t *testing.T) {
 	}{
 		{"control-disabled", false, "", false, 1},
 		{"missing-key", true, "", true, 1},
-		{"valid-key", true, "audit-test-key", false, 1}, {"repeated-missing-key", true, "", true, 5},
+		{"valid-key", true, "audit-test-key-0123456789", false, 1}, {"repeated-missing-key", true, "", true, 5},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

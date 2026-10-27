@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/AnubisWatch/anubiswatch/internal/core"
 	"golang.org/x/crypto/hkdf"
 )
 
@@ -25,9 +26,14 @@ type encryptor struct {
 // newEncryptor creates an AES-256-GCM encryptor from a key string.
 // The key is derived via HKDF-SHA256 with a random salt for each encryption
 // operation, providing resistance against rainbow table attacks.
+//
+// The key string is the HKDF input exactly as given: a hex string is not
+// decoded, so keys accepted before core.ValidateEncryptionKey existed keep
+// deriving the same AES keys. Keys shorter than core.MinEncryptionKeyBytes
+// are rejected.
 func newEncryptor(key string) (*encryptor, error) {
-	if key == "" {
-		return nil, fmt.Errorf("encryption key is empty")
+	if err := core.ValidateEncryptionKey(key); err != nil {
+		return nil, err
 	}
 	return &encryptor{masterKey: []byte(key)}, nil
 }

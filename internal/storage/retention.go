@@ -122,7 +122,9 @@ func (rm *RetentionManager) runCleanup() {
 	// Clean 1-day summaries (unless unlimited)
 	if rm.config.Day != "unlimited" {
 		duration, err := time.ParseDuration(rm.config.Day)
-		if err == nil {
+		// A non-positive period means "do not purge", as for every other
+		// tier: its cutoff would be now or later and delete all daily data.
+		if err == nil && duration > 0 {
 			cutoff := time.Now().Add(-duration)
 			if err := rm.purgeSummaries("1day", cutoff); err != nil {
 				rm.logger.Error("failed to purge 1day summaries", "err", err)
