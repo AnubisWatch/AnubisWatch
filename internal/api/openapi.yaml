@@ -3182,7 +3182,7 @@ components:
         theme:
           type: string
           enum: [auto, dark, light]
-          description: Default theme for viewers who have not chosen one
+          description: Default theme for viewers who have not chosen one (auto keeps the dashboard default)
     User:
       type: object
       required: [id, email, name, role, workspace, created_at]

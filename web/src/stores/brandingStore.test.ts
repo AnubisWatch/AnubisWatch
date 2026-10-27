@@ -37,10 +37,11 @@ describe('brandingStore', () => {
     expect(useThemeStore.getState().theme).toBe('light')
   })
 
-  it('maps auto to the system theme', async () => {
+  it('keeps the built-in default theme for auto', async () => {
     get.mockResolvedValue({ title: 'AnubisWatch', logo: '', theme: 'auto' })
     await useBrandingStore.getState().load()
-    expect(useThemeStore.getState().theme).toBe('system')
+    expect(useThemeStore.getState().theme).toBe('dark')
+    expect(window.localStorage.getItem('anubis-theme')).toBeNull()
   })
 
   it('keeps a theme the viewer chose', async () => {

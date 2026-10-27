@@ -5696,7 +5696,7 @@ export interface components {
             /** @description Logo as an https URL or a same-origin path; empty for the default logo */
             logo: string;
             /**
-             * @description Default theme for viewers who have not chosen one
+             * @description Default theme for viewers who have not chosen one (auto keeps the dashboard default)
              * @enum {string}
              */
             theme: "auto" | "dark" | "light";

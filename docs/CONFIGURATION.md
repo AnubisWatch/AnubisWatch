@@ -545,7 +545,7 @@ auth:
 |-------|------|---------|----------|-------------|
 | `title` | string | `"AnubisWatch"` | No | Dashboard, login page and browser title (at most 64 characters) |
 | `logo` | string | - | No | Logo image: an `https://` URL or a same-origin path starting with `/` |
-| `theme` | string | `"auto"` | No | Default theme (`auto`, `dark` or `light`) for viewers who have not picked one |
+| `theme` | string | `"auto"` | No | `dark` or `light` sets the theme for viewers who have not picked one; `auto` keeps the dashboard's default |
 
 Branding is public — the login page shows it — and is served by
 `GET /api/v1/branding`. Changes apply after a restart.

@@ -40,8 +40,12 @@ export const useBrandingStore = create<BrandingStore>()((set) => ({
   },
 }))
 
-/** Applies the operator's default theme for a viewer who never chose one. */
+/**
+ * Applies the operator's default theme for a viewer who never chose one.
+ * "auto" (the config default) keeps the dashboard's own default.
+ */
 function applyDefaultTheme(theme: DashboardBranding['theme']) {
+  if (theme !== 'dark' && theme !== 'light') return
   let chosen: boolean
   try {
     chosen = window.localStorage.getItem(THEME_STORAGE_KEY) !== null
@@ -49,7 +53,7 @@ function applyDefaultTheme(theme: DashboardBranding['theme']) {
     chosen = true // storage unavailable: leave the built-in default
   }
   if (chosen) return
-  useThemeStore.getState().setTheme(theme === 'auto' ? 'system' : theme)
+  useThemeStore.getState().setTheme(theme)
 }
 
 /** Test hook: forget the cached request. */

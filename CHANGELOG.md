@@ -87,8 +87,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `dashboard.branding` parsed but did nothing (a startup warning said so).
   The title and logo now appear in the sidebar, on the login page and in the
-  browser title, and `theme` is the default for viewers who have not chosen
-  one. It is served publicly by `GET /api/v1/branding`. Config validation
+  browser title, and `theme: dark|light` is the default for viewers who
+  have not chosen one (`auto`, the default, keeps the dashboard's own). It is served publicly by `GET /api/v1/branding`. Config validation
   rejects a logo that is not an `https://` URL or a `/` path, an unknown
   theme, and titles over 64 characters.
 
