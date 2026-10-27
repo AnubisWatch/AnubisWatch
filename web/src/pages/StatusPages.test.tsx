@@ -30,7 +30,7 @@ let mockPages = [
 		enabled: true,
 		theme: "light" as const,
 		souls: ["soul-1"],
-		subscribers: 7,
+		subscriber_count: 7,
 	},
 ];
 
@@ -66,7 +66,7 @@ describe("StatusPages", () => {
 				enabled: true,
 				theme: "light" as const,
 				souls: ["soul-1"],
-				subscribers: 7,
+				subscriber_count: 7,
 			},
 		];
 		mockCreatePage.mockResolvedValue(undefined);
@@ -120,11 +120,28 @@ describe("StatusPages", () => {
 					slug: "production",
 					enabled: true,
 					souls: ["soul-1"],
-					subscribers: 7,
 				}),
 			);
 		});
+		// The count is computed by the server; the client never sends it.
+		const payload = mockUpdatePage.mock.calls[0][1];
+		expect(payload).not.toHaveProperty("subscriber_count");
+		expect(payload).not.toHaveProperty("subscribers");
 		expect(mockCreatePage).not.toHaveBeenCalled();
+	});
+
+	it("shows each page's confirmed subscriber count and their total", () => {
+		mockPages = [
+			{ ...mockPages[0], id: "page-1", subscriber_count: 7 },
+			{ ...mockPages[0], id: "page-2", name: "Internal", slug: "internal", subscriber_count: 5 },
+			// An older server without the field reads as 0.
+			{ ...mockPages[0], id: "page-3", name: "Legacy", slug: "legacy", subscriber_count: undefined as unknown as number },
+		];
+		render(<StatusPages />);
+		const total = screen.getAllByText("Subscribers")[0].nextElementSibling;
+		expect(total).toHaveTextContent("12");
+		const perPage = screen.getAllByText("Subscribers").slice(1).map((label) => label.nextElementSibling?.textContent);
+		expect(perPage).toEqual(["7", "5", "0"]);
 	});
 
 	it("creates, filters, refreshes, and deletes status pages", async () => {
@@ -272,10 +289,10 @@ describe("StatusPages", () => {
 	it("covers theme variants, domain precedence, copy feedback, and description search", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		mockPages = [
-			{ id: "none", name: "No Theme", slug: "none", description: "Needle text", enabled: false, souls: [], subscribers: 0 },
-			{ id: "string", name: "String Theme", slug: "string", description: "", enabled: true, theme: "auto" as const, souls: [], subscribers: 0 },
-			{ id: "light", name: "Light Object", slug: "light", enabled: true, theme: { background_color: "#ffffff" }, domain: "primary.example.com", custom_domain: "ignored.example.com", souls: [], subscribers: 0 },
-			{ id: "custom", name: "Custom Object", slug: "custom", enabled: true, theme: { background_color: "#123456" }, souls: ["missing"], subscribers: 0 },
+			{ id: "none", name: "No Theme", slug: "none", description: "Needle text", enabled: false, souls: [], subscriber_count: 0 },
+			{ id: "string", name: "String Theme", slug: "string", description: "", enabled: true, theme: "auto" as const, souls: [], subscriber_count: 0 },
+			{ id: "light", name: "Light Object", slug: "light", enabled: true, theme: { background_color: "#ffffff" }, domain: "primary.example.com", custom_domain: "ignored.example.com", souls: [], subscriber_count: 0 },
+			{ id: "custom", name: "Custom Object", slug: "custom", enabled: true, theme: { background_color: "#123456" }, souls: ["missing"], subscriber_count: 0 },
 		];
 		render(<StatusPages />);
 		for (const label of ["Dark", "Auto", "Light", "Custom"]) expect(screen.getByText(label)).toBeInTheDocument();
@@ -313,7 +330,7 @@ describe("StatusPages", () => {
 				theme: "dark" as const,
 				custom_domain: "status.example.com",
 				souls: [],
-				subscribers: 0,
+				subscriber_count: 0,
 			},
 		];
 

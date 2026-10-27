@@ -1,24 +1,8 @@
 import { useState, useEffect } from 'react'
 import { AlertTriangle, CheckCircle, Clock, User, Search, Filter } from 'lucide-react'
-import { api } from '../api/client'
+import { api, type Incident } from '../api/client'
 import { useCan } from '../utils/permissions'
 import { formatDateTime, useDisplayTimeZone } from '../utils/date'
-
-interface Incident {
-  id: string
-  rule_id: string
-  soul_id: string
-  soul_name?: string
-  workspace_id: string
-  status: 'open' | 'acknowledged' | 'resolved'
-  severity: 'critical' | 'warning' | 'info'
-  started_at: string
-  acked_at?: string
-  resolved_at?: string
-  acked_by?: string
-  resolved_by?: string
-  escalation_level: number
-}
 
 export function Incidents() {
   // Dates follow Settings → Timezone; re-render when it changes.

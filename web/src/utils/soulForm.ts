@@ -1,4 +1,4 @@
-import type { Soul } from '../api/client'
+import type { DnsRecordType, HttpMethod, Soul } from '../api/client'
 
 export type SoulType = Soul['type']
 
@@ -33,7 +33,24 @@ export type SoulFormData = {
   websocketExpectContains: string
   tlsExpiryWarnDays: number
   tlsExpiryCriticalDays: number
+  /** Heartbeat grace in seconds; 0 = server default (half the interval). */
+  heartbeatGrace: number
+  /** Confirmation retries before a failure is recorded (0-5). */
+  retries: number
+  /** Seconds between retries. */
+  retryInterval: number
+  /** Flap detection: inherit the server default, or force it on/off. */
+  flapMode: FlapMode
+  /** Status changes that start flapping; 0 = default. */
+  flapThreshold: number
+  /** Flap window in minutes; 0 = default. */
+  flapWindowMinutes: number
 }
+
+export type FlapMode = 'inherit' | 'enabled' | 'disabled'
+
+export const MAX_SOUL_RETRIES = 5
+export const DEFAULT_RETRY_INTERVAL_SECONDS = 5
 
 export const defaultSoulFormData: SoulFormData = {
   name: '',
@@ -66,6 +83,12 @@ export const defaultSoulFormData: SoulFormData = {
   websocketExpectContains: '',
   tlsExpiryWarnDays: 30,
   tlsExpiryCriticalDays: 7,
+  heartbeatGrace: 0,
+  retries: 0,
+  retryInterval: DEFAULT_RETRY_INTERVAL_SECONDS,
+  flapMode: 'inherit',
+  flapThreshold: 0,
+  flapWindowMinutes: 0,
 }
 
 export const soulTypeOptions: Array<{ value: SoulType; label: string }> = [
@@ -79,7 +102,11 @@ export const soulTypeOptions: Array<{ value: SoulType; label: string }> = [
   { value: 'grpc', label: 'gRPC' },
   { value: 'websocket', label: 'WebSocket' },
   { value: 'tls', label: 'TLS' },
+  { value: 'heartbeat', label: 'Heartbeat (push / cron)' },
 ]
+
+/** Push monitors have no target: the monitored job calls AnubisWatch. */
+export const soulTypeHasTarget = (type: SoulType) => type !== 'heartbeat'
 
 export const soulTargetHints: Record<SoulType, { label: string; placeholder: string; help: string }> = {
   http: {
@@ -132,6 +159,11 @@ export const soulTargetHints: Record<SoulType, { label: string; placeholder: str
     placeholder: 'api.example.com:443',
     help: 'Host:port pair whose certificate should be checked.',
   },
+  heartbeat: {
+    label: 'No target',
+    placeholder: '',
+    help: 'The job pings a secret URL shown after the soul is created.',
+  },
 }
 
 const parseNumber = (value: number, fallback: number) => Number.isFinite(value) ? value : fallback
@@ -172,6 +204,11 @@ export const nextSoulFormDataForType = (current: SoulFormData, type: SoulType): 
   weight: current.weight,
   timeout: current.timeout,
   tags: current.tags,
+  retries: current.retries,
+  retryInterval: current.retryInterval,
+  flapMode: current.flapMode,
+  flapThreshold: current.flapThreshold,
+  flapWindowMinutes: current.flapWindowMinutes,
 })
 
 export function soulFormDataFromSoul(soul: Soul): SoulFormData {
@@ -211,6 +248,12 @@ export function soulFormDataFromSoul(soul: Soul): SoulFormData {
     websocketExpectContains: soul.websocket?.expect_contains || '',
     tlsExpiryWarnDays: soul.tls?.expiry_warn_days ?? 30,
     tlsExpiryCriticalDays: soul.tls?.expiry_critical_days ?? 7,
+    heartbeatGrace: soul.heartbeat?.grace ? parseIntervalSeconds(soul.heartbeat.grace) : 0,
+    retries: soul.retries ?? 0,
+    retryInterval: soul.retry_interval ? parseIntervalSeconds(soul.retry_interval) : DEFAULT_RETRY_INTERVAL_SECONDS,
+    flapMode: soul.flap_detection ? (soul.flap_detection.enabled ? 'enabled' : 'disabled') : 'inherit',
+    flapThreshold: soul.flap_detection?.threshold ?? 0,
+    flapWindowMinutes: soul.flap_detection?.window ? parseIntervalSeconds(soul.flap_detection.window) / 60 : 0,
   }
 }
 
@@ -227,12 +270,13 @@ export function buildSoulPayload(
     timeout: parseNumber(formData.timeout, 10),
     tags: formData.tags,
     workspace_id: workspaceID,
+    ...buildReliabilityFields(formData),
   }
 
   switch (formData.type) {
     case 'http':
       payload.http = {
-        method: formData.httpMethod,
+        method: formData.httpMethod as HttpMethod,
         valid_status: parseNumberList(formData.httpValidStatus, [200]),
         headers: {},
       }
@@ -251,7 +295,7 @@ export function buildSoulPayload(
       break
     case 'dns':
       payload.dns = {
-        record_type: formData.dnsRecordType,
+        record_type: formData.dnsRecordType as DnsRecordType,
         expected: parseStringList(formData.dnsExpected),
       }
       break
@@ -295,15 +339,45 @@ export function buildSoulPayload(
         expiry_critical_days: parseNumber(formData.tlsExpiryCriticalDays, 7),
       }
       break
+    case 'heartbeat': {
+      // No target; the ping token is generated and kept by the server.
+      payload.target = ''
+      const grace = parseNumber(formData.heartbeatGrace, 0)
+      payload.heartbeat = grace > 0 ? { grace: `${grace}s` } : {}
+      break
+    }
   }
 
   return payload
 }
 
-const protocolKeys = ['http', 'tcp', 'udp', 'dns', 'icmp', 'smtp', 'imap', 'grpc', 'websocket', 'tls'] as const
+/**
+ * Retry and flap-detection fields. Every key is always present so an edit
+ * that clears a setting overrides the stored value (undefined is dropped
+ * from the JSON body, which restores the server default).
+ */
+function buildReliabilityFields(formData: SoulFormData): Pick<Soul, 'retries' | 'retry_interval' | 'flap_detection'> {
+  const retries = Math.min(Math.max(Math.trunc(parseNumber(formData.retries, 0)), 0), MAX_SOUL_RETRIES)
+  const retryInterval = parseNumber(formData.retryInterval, DEFAULT_RETRY_INTERVAL_SECONDS)
+  let flap: Soul['flap_detection']
+  if (formData.flapMode !== 'inherit') {
+    flap = { enabled: formData.flapMode === 'enabled' }
+    const threshold = Math.trunc(parseNumber(formData.flapThreshold, 0))
+    if (threshold > 0) flap.threshold = threshold
+    const windowMinutes = parseNumber(formData.flapWindowMinutes, 0)
+    if (windowMinutes > 0) flap.window = `${windowMinutes}m`
+  }
+  return {
+    retries: retries > 0 ? retries : undefined,
+    retry_interval: retries > 0 && retryInterval > 0 ? `${retryInterval}s` : undefined,
+    flap_detection: flap,
+  }
+}
+
+const protocolKeys = ['http', 'tcp', 'udp', 'dns', 'icmp', 'smtp', 'imap', 'grpc', 'websocket', 'tls', 'heartbeat'] as const
 const legacyProtocolKeys = ['http_config', 'tcp_config', 'dns_config'] as const
 // Fields the server computes or owns; sending them back is pointless.
-const serverManagedSoulKeys = ['id', 'created_at', 'updated_at', 'status', 'last_check', 'latency'] as const
+const serverManagedSoulKeys = ['id', 'created_at', 'updated_at', 'status', 'last_check', 'latency', 'flapping'] as const
 // Maps the edit form never shows; an empty map from the form means
 // "unchanged", not "delete every header".
 const preservedMapKeys = ['headers', 'metadata'] as const

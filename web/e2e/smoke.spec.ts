@@ -32,11 +32,13 @@ type SoulCreatePayload = {
   tls?: { expiry_warn_days?: number; expiry_critical_days?: number }
 }
 
-test.beforeAll(async () => {
+// Each independent case gets its own server, data, and IP rate-limit budget.
+// Production quotas stay enabled; earlier cases must not spend later cases' quotas.
+test.beforeEach(async () => {
   server = await startServer()
 })
 
-test.afterAll(async () => {
+test.afterEach(async () => {
   await server?.stop()
 })
 
@@ -419,7 +421,7 @@ async function expectRouteHeading(page: Page, path: string, headingName: string 
 }
 
 test.describe('AnubisWatch E2E Smoke', () => {
-  test.describe.configure({ mode: 'serial' })
+  test.describe.configure({ mode: 'default' })
   test.setTimeout(120000)
 
   test('toggles light mode and preserves it after reload', async ({ page }) => {
@@ -458,74 +460,102 @@ test.describe('AnubisWatch E2E Smoke', () => {
     }
   })
 
-  test('renders every dashboard route and critical controls without runtime errors', async ({ browser }) => {
-    const setupContext = await browser.newContext({ serviceWorkers: 'block' })
-    const setupPage = await setupContext.newPage()
-    const token = await authenticate(setupPage)
+  async function prepareRouteCoverage(page: Page) {
+    const token = await authenticate(page)
     const runID = Date.now()
-    const createdSoul = await createSoulViaAPI(setupPage, token, runID)
-    const createdDashboard = await createDashboardViaAPI(setupPage, token, runID)
-    await setupContext.close()
+    const createdSoul = await createSoulViaAPI(page, token, runID)
+    const createdDashboard = await createDashboardViaAPI(page, token, runID)
+    return { token, runID, createdSoul, createdDashboard }
+  }
 
-    const routes = [
-      ...lightModePages,
-      { path: `/souls/${createdSoul.id}`, heading: createdSoul.name },
-      { path: `/souls/${createdSoul.id}/edit`, heading: 'Edit Soul' },
-      { path: '/dashboards/new', heading: 'New Dashboard' },
-      { path: `/dashboards/${createdDashboard.id}`, heading: createdDashboard.name },
-    ]
+  // Each route/control is an independent user journey with the normal production
+  // quota. A single test opening dozens of fresh contexts shares one client IP
+  // and tests rate limiting instead of the route or control named by the case.
+  const routeCases: Array<{
+    name: string
+    resolve: (soul: CreatedSoul, dashboard: CreatedDashboard) => { path: string; heading: string }
+  }> = [
+    ...lightModePages.map((route) => ({ name: route.path, resolve: () => route })),
+    { name: 'soul details', resolve: (soul) => ({ path: `/souls/${soul.id}`, heading: soul.name }) },
+    { name: 'soul edit', resolve: (soul) => ({ path: `/souls/${soul.id}/edit`, heading: 'Edit Soul' }) },
+    { name: 'new dashboard', resolve: () => ({ path: '/dashboards/new', heading: 'New Dashboard' }) },
+    { name: 'dashboard details', resolve: (_, dashboard) => ({ path: `/dashboards/${dashboard.id}`, heading: dashboard.name }) },
+  ]
 
-    for (const { path, heading } of routes) {
+  for (const route of routeCases) {
+    test(`renders dashboard route ${route.name} without runtime errors`, async ({ browser, page }) => {
+      const { token, createdSoul, createdDashboard } = await prepareRouteCoverage(page)
+      const { path, heading } = route.resolve(createdSoul, createdDashboard)
       await withAuthenticatedPage(browser, token, async (appPage) => {
         await expectRouteHeading(appPage, path, heading)
       })
-    }
-
-    await withAuthenticatedPage(browser, token, async (appPage) => {
-      await appPage.goto(`${server.baseURL}/souls/${createdSoul.id}`)
-      for (const tab of ['overview', 'performance', 'history', 'settings']) {
-        await appPage.getByRole('tab', { name: tab }).click()
-        await expect(appPage.getByRole('tab', { name: tab })).toHaveAttribute('aria-selected', 'true')
-      }
     })
+  }
 
-    await withAuthenticatedPage(browser, token, async (appPage) => {
-      await appPage.goto(`${server.baseURL}/alerts`)
-      for (const tab of ['Alert Rules', 'Channels', 'History']) {
-        await appPage.getByRole('tab', { name: new RegExp(tab) }).click()
-        await expect(appPage.getByRole('tab', { name: new RegExp(tab) })).toHaveAttribute('aria-selected', 'true')
-      }
-    })
+  const tabSets: Array<{
+    name: string
+    path: (soul: CreatedSoul) => string
+    tabs: string[]
+    matcher: (tab: string) => string | RegExp
+  }> = [
+    {
+      name: 'soul', path: (soul) => `/souls/${soul.id}`,
+      tabs: ['overview', 'performance', 'history', 'settings'], matcher: (tab) => tab,
+    },
+    {
+      name: 'alerts', path: () => '/alerts',
+      tabs: ['Alert Rules', 'Channels', 'History'], matcher: (tab) => new RegExp(tab),
+    },
+    {
+      name: 'settings', path: () => '/settings',
+      tabs: ['General', 'Security', 'Notifications', 'Storage', 'Integrations'], matcher: (tab) => new RegExp(tab),
+    },
+  ]
 
-    await withAuthenticatedPage(browser, token, async (appPage) => {
-      await appPage.goto(`${server.baseURL}/settings`)
-      for (const tab of ['General', 'Security', 'Notifications', 'Storage', 'Integrations']) {
-        await appPage.getByRole('tab', { name: new RegExp(tab) }).click()
-        await expect(appPage.getByRole('tab', { name: new RegExp(tab) })).toHaveAttribute('aria-selected', 'true')
-      }
-    })
-
-    const refreshControls = [
-      { path: '/', label: 'Refresh dashboard' },
-      { path: '/souls', label: 'Refresh souls' },
-      { path: '/judgments', label: 'Refresh judgments' },
-      { path: '/alerts', label: 'Refresh' },
-      { path: '/maintenance', label: 'Refresh maintenance windows' },
-      { path: '/journeys', label: 'Refresh journeys' },
-      { path: '/cluster', label: 'Refresh cluster status' },
-      { path: '/status-pages', label: 'Refresh status pages' },
-      { path: `/dashboards/${createdDashboard.id}`, label: 'Refresh dashboard' },
-      { path: '/settings', label: 'Refresh configuration' },
-    ]
-
-    for (const { path, label } of refreshControls) {
+  for (const tabSet of tabSets) {
+    test(`switches ${tabSet.name} tabs without runtime errors`, async ({ browser, page }) => {
+      const { token, createdSoul } = await prepareRouteCoverage(page)
       await withAuthenticatedPage(browser, token, async (appPage) => {
-        await appPage.goto(`${server.baseURL}${path}`)
-        await appPage.getByRole('button', { name: label }).click()
+        await appPage.goto(`${server.baseURL}${tabSet.path(createdSoul)}`)
+        for (const tab of tabSet.tabs) {
+          const tabControl = appPage.getByRole('tab', { name: tabSet.matcher(tab) })
+          await tabControl.click()
+          await expect(tabControl).toHaveAttribute('aria-selected', 'true')
+        }
+      })
+    })
+  }
+
+  const refreshControls: Array<{
+    name: string
+    path: (dashboard: CreatedDashboard) => string
+    label: string
+  }> = [
+    { name: 'dashboard overview', path: () => '/', label: 'Refresh dashboard' },
+    { name: 'souls', path: () => '/souls', label: 'Refresh souls' },
+    { name: 'judgments', path: () => '/judgments', label: 'Refresh judgments' },
+    { name: 'alerts', path: () => '/alerts', label: 'Refresh' },
+    { name: 'maintenance', path: () => '/maintenance', label: 'Refresh maintenance windows' },
+    { name: 'journeys', path: () => '/journeys', label: 'Refresh journeys' },
+    { name: 'cluster', path: () => '/cluster', label: 'Refresh cluster status' },
+    { name: 'status pages', path: () => '/status-pages', label: 'Refresh status pages' },
+    { name: 'custom dashboard', path: (dashboard) => `/dashboards/${dashboard.id}`, label: 'Refresh dashboard' },
+    { name: 'settings', path: () => '/settings', label: 'Refresh configuration' },
+  ]
+
+  for (const control of refreshControls) {
+    test(`refreshes ${control.name} without runtime errors`, async ({ browser, page }) => {
+      const { token, createdDashboard } = await prepareRouteCoverage(page)
+      await withAuthenticatedPage(browser, token, async (appPage) => {
+        await appPage.goto(`${server.baseURL}${control.path(createdDashboard)}`)
+        await appPage.getByRole('button', { name: control.label }).click()
         await expect(appPage.locator('#main-content')).toBeVisible()
       })
-    }
+    })
+  }
 
+  test('creates a dashboard without runtime errors', async ({ browser, page }) => {
+    const { token, runID } = await prepareRouteCoverage(page)
     await withAuthenticatedPage(browser, token, async (appPage) => {
       await appPage.goto(`${server.baseURL}/dashboards/new`)
       const dashboardName = `E2E Created Dashboard ${runID}`
@@ -539,7 +569,10 @@ test.describe('AnubisWatch E2E Smoke', () => {
       expect(createDashboardRes.status()).toBe(201)
       await expect(appPage.getByRole('heading', { name: dashboardName })).toBeVisible({ timeout: 10000 })
     })
+  })
 
+  test('opens and cancels dashboard widget creation without runtime errors', async ({ browser, page }) => {
+    const { token, createdDashboard } = await prepareRouteCoverage(page)
     await withAuthenticatedPage(browser, token, async (appPage) => {
       await appPage.goto(`${server.baseURL}/dashboards/${createdDashboard.id}`)
       await appPage.getByRole('button', { name: 'Edit' }).click()

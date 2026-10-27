@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { api } from '../api/client'
+import { dispatchAuthSessionChanged } from '../api/authEvents'
 
 const inputClass =
   'w-full bg-gray-950 border border-gray-700/50 rounded-xl px-4 py-3 text-white placeholder:text-gray-500 focus:outline-none focus:border-amber-500/50'
 
 /** Changes the signed-in local account's password (PUT /auth/change-password). */
-export function ChangePasswordForm() {
+export function ChangePasswordForm({ onChanged, title = 'Change Password' }: { onChanged?: () => void; title?: string } = {}) {
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -26,6 +27,7 @@ export function ChangePasswordForm() {
       setNext('')
       setConfirm('')
       setMessage({ ok: true, text: 'Password changed.' })
+      onChanged?.()
     } catch (err) {
       setMessage({ ok: false, text: err instanceof Error ? err.message : 'Failed to change password' })
     } finally {
@@ -36,7 +38,7 @@ export function ChangePasswordForm() {
   return (
     <form onSubmit={submit} className="bg-gradient-to-br from-gray-900 to-gray-800/50 border border-gray-700/50 rounded-2xl p-6 space-y-4">
       <div>
-        <h2 className="text-lg font-semibold text-white mb-1">Change Password</h2>
+        <h2 className="text-lg font-semibold text-white mb-1">{title}</h2>
         <p className="text-gray-400 text-sm">Local accounts only. At least 12 characters, using three of: lowercase, uppercase, digits, symbols.</p>
       </div>
       <div>
@@ -58,5 +60,28 @@ export function ChangePasswordForm() {
         {busy ? 'Saving...' : 'Change Password'}
       </button>
     </form>
+  )
+}
+
+/**
+ * Shown instead of the dashboard to an account created with an initial
+ * password. Changing it ends the session, so the user signs in again.
+ */
+export function ForcedPasswordChange() {
+  return (
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center px-4 py-10">
+      <div className="w-full max-w-2xl space-y-4">
+        <p role="status" className="text-sm text-amber-400">
+          Your account was created with an initial password. Choose your own password to continue.
+        </p>
+        <ChangePasswordForm
+          title="Set your password"
+          onChanged={() => {
+            dispatchAuthSessionChanged({ state: 'anonymous' })
+            window.location.href = '/login'
+          }}
+        />
+      </div>
+    </div>
   )
 }

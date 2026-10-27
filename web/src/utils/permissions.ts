@@ -5,8 +5,8 @@ import { AUTH_SESSION_CHANGED_EVENT, getLastKnownUser } from '../api/authEvents'
 // these; the dashboard only uses them to hide controls that would 403.
 const rolePermissions: Record<string, string[] | '*'> = {
   owner: '*',
-  admin: ['souls:*', 'channels:*', 'rules:*', 'members:*', 'settings:read', 'settings:write'],
-  editor: ['souls:*', 'channels:read', 'rules:read'],
+  admin: ['souls:*', 'judgments:read', 'channels:*', 'rules:*', 'members:*', 'settings:read', 'settings:write', 'apikeys:*'],
+  editor: ['souls:*', 'judgments:read', 'channels:read', 'rules:read'],
   viewer: ['souls:read', 'judgments:read', 'channels:read', 'rules:read'],
   api: ['souls:*', 'judgments:read', 'api:*'],
 }
@@ -17,6 +17,7 @@ export type Permission =
   | 'rules:write'
   | 'members:write'
   | 'settings:write'
+  | 'apikeys:write'
 
 export function roleCan(role: string | undefined, permission: string): boolean {
   const perms = rolePermissions[role ?? '']

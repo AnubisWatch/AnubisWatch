@@ -68,7 +68,7 @@ const judgments = [
 		latency: 120,
 		timestamp: "2026-07-06T10:00:00Z",
 		region: "eu-west",
-		purity: 98,
+		status_code: 200,
 	},
 	{
 		id: "j-2",
@@ -76,7 +76,7 @@ const judgments = [
 		latency: 1600,
 		timestamp: "2026-07-06T09:00:00Z",
 		region: "eu-west",
-		purity: 30,
+		status_code: 500,
 		error: "Timeout",
 	},
 ];
@@ -249,7 +249,7 @@ describe("SoulDetail", () => {
 	it("renders performance data, changes range, and navigates from secondary controls", () => {
 		const today = new Date().toISOString();
 		mockUseSoulJudgments.mockReturnValue({
-			data: [...judgments, { id: "j-today", status: "pending", latency: 50, timestamp: today, purity: 50 }],
+			data: [...judgments, { id: "j-today", status: "pending", latency: 50, timestamp: today }],
 			loading: false, error: null, refetch: mockRefetchJudgments,
 		});
 		renderDetail();
@@ -266,7 +266,7 @@ describe("SoulDetail", () => {
 
 	it("covers disabled metadata, configuration fallbacks, and settings actions", async () => {
 		mockUseSoul.mockReturnValue({
-			soul: { ...soul, enabled: false, tags: [], created_at: undefined, updated_at: undefined, interval: 30, weight: 60, timeout: 5, region: "us-east", http_config: { method: "POST" } },
+			soul: { ...soul, enabled: false, tags: [], created_at: undefined, updated_at: undefined, weight: 60, timeout: 5, region: "us-east", http_config: { method: "POST" } },
 			loading: false, error: null, refetch: mockRefetchSoul, updateSoul: mockUpdateSoul, deleteSoul: mockDeleteSoul, forceCheck: mockForceCheck,
 		});
 		renderDetail();
@@ -278,6 +278,24 @@ describe("SoulDetail", () => {
 		expect(screen.getByText("POST")).toBeInTheDocument();
 		fireEvent.click(screen.getAllByRole("button", { name: "Edit" }).at(-1)!);
 		expect(mockNavigate).toHaveBeenCalledWith("/souls/soul-1/edit");
+	});
+
+	it.each([
+		[60, 10, "1m", "10s"],
+		[300, 5, "5m", "5s"],
+		[30, 0.5, "30s", "500ms"],
+		[90, 30, "1m 30s", "30s"],
+		[3600, 60, "1h", "1m"],
+	])("renders interval %ss and timeout %ss as human durations", (weight, timeout, interval, timeoutText) => {
+		mockUseSoul.mockReturnValue({
+			soul: { ...soul, weight, timeout },
+			loading: false, error: null, refetch: mockRefetchSoul, updateSoul: mockUpdateSoul, deleteSoul: mockDeleteSoul, forceCheck: mockForceCheck,
+		});
+		renderDetail();
+		fireEvent.click(screen.getByRole("tab", { name: /settings/i }));
+		const row = (label: string) => screen.getByText(label, { selector: "span, p, div" }).closest("div")!.parentElement!;
+		expect(row("Interval").textContent).toBe(`Interval${interval}`);
+		expect(row("Timeout").textContent).toBe(`Timeout${timeoutText}`);
 	});
 
 	it.each([
@@ -313,7 +331,7 @@ describe("SoulDetail", () => {
 
 	it("renders unknown judgment defaults and the no-data performance state", () => {
 		mockUseSoulJudgments.mockReturnValue({
-			data: [{ id: "j-unknown", status: "mystery", latency: 0, timestamp: new Date().toISOString(), purity: 0 }],
+			data: [{ id: "j-unknown", status: "mystery", latency: 0, timestamp: new Date().toISOString() }],
 			loading: false, error: null, refetch: mockRefetchJudgments,
 		});
 		mockUseSoulUptime.mockReturnValue(uptimeFixture(noChecks, noChecks, noChecks, noChecks));

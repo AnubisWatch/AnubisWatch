@@ -2,18 +2,15 @@ import {
   dispatchAuthSessionChanged,
   dispatchAuthTokenChanged,
 } from './authEvents'
+import type { components, paths } from './schema.generated'
+
+type Schemas = components['schemas']
 
 const API_BASE_URL = '/api/v1'
 
 export interface ApiResponse<T> {
   data: T
-  pagination?: {
-    total: number
-    offset: number
-    limit: number
-    has_more: boolean
-    next_offset?: number
-  }
+  pagination?: Schemas['Pagination']
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -72,40 +69,59 @@ function parseDurationMs(value: unknown): number {
   return Math.round(parseDurationSeconds(value) * 1000)
 }
 
-function normalizeJudgmentStatus(status: unknown): Judgment['status'] {
-  switch (status) {
-    case 'alive':
-      return 'passed'
-    case 'dead':
-      return 'failed'
-    case 'degraded':
-      return 'degraded'
-    case 'embalmed':
-      return 'maintenance'
-    case 'unknown':
-      return 'pending'
-    default:
-      return status === 'failed' || status === 'pending' || status === 'maintenance' ? status : 'passed'
-  }
+function hasKey<K extends string>(table: Record<K, unknown>, key: unknown): key is K {
+  return typeof key === 'string' && Object.prototype.hasOwnProperty.call(table, key)
 }
 
-function normalizeSoulStatus(status: unknown): Soul['status'] {
-  switch (status) {
-    case 'alive':
-    case 'healthy':
-      return 'healthy'
-    case 'dead':
-    case 'unhealthy':
-      return 'unhealthy'
-    // Used to collapse into unknown, hiding slow services and maintenance.
-    case 'degraded':
-      return 'degraded'
-    case 'embalmed':
-    case 'maintenance':
-      return 'maintenance'
-    default:
-      return 'unknown'
+// Presentation mapping of the API's judgment status (core.SoulStatus) to the
+// UI vocabulary. `satisfies` makes a status added to the spec a compile error
+// until it is mapped here.
+const judgmentStatusLabels = {
+  alive: 'passed',
+  dead: 'failed',
+  degraded: 'degraded',
+  embalmed: 'maintenance',
+  unknown: 'pending',
+} as const satisfies Record<ApiJudgment['status'], JudgmentDisplayStatus>
+
+// status is an ApiJudgment['status'], or a value normalised earlier.
+function normalizeJudgmentStatus(status: unknown): JudgmentDisplayStatus {
+  if (hasKey(judgmentStatusLabels, status)) {
+    return judgmentStatusLabels[status]
   }
+  // Already normalised (a cached value fed back through the client).
+  return status === 'failed' || status === 'pending' || status === 'maintenance' ? status : 'passed'
+}
+
+// Presentation mapping of the soul status the API reports (alive/dead are
+// already renamed healthy/unhealthy server-side) to the UI vocabulary.
+// Degraded and embalmed used to collapse into unknown, hiding slow services
+// and maintenance.
+const soulStatusLabels = {
+  healthy: 'healthy',
+  unhealthy: 'unhealthy',
+  degraded: 'degraded',
+  embalmed: 'maintenance',
+  unknown: 'unknown',
+} as const satisfies Record<NonNullable<ApiSoul['status']>, SoulDisplayStatus>
+
+// Raw judgment statuses (live events) and already-normalised values.
+const soulStatusAliases = {
+  alive: 'healthy',
+  dead: 'unhealthy',
+  maintenance: 'maintenance',
+} as const satisfies Partial<Record<ApiJudgment['status'] | SoulDisplayStatus, SoulDisplayStatus>>
+
+// status is an ApiSoul['status'], a raw ApiJudgment['status'] or a value
+// normalised earlier.
+function normalizeSoulStatus(status: unknown): SoulDisplayStatus {
+  if (hasKey(soulStatusLabels, status)) {
+    return soulStatusLabels[status]
+  }
+  if (hasKey(soulStatusAliases, status)) {
+    return soulStatusAliases[status]
+  }
+  return 'unknown'
 }
 
 function normalizeApiValue(value: unknown): unknown {
@@ -172,6 +188,12 @@ function normalizeApiValue(value: unknown): unknown {
     normalizeStatusPage(normalized)
   }
 
+  // A custom dashboard: servers before the widgets fix sent widgets: null for
+  // a dashboard saved without widgets; the pages iterate the array.
+  if ('id' in normalized && 'widgets' in normalized && 'refresh_sec' in normalized && !Array.isArray(normalized.widgets)) {
+    normalized.widgets = []
+  }
+
   return normalized
 }
 
@@ -186,7 +208,7 @@ function normalizeStatusPage(page: Record<string, unknown>) {
   }
 }
 
-function statusPageThemeName(theme: Record<string, unknown>): 'dark' | 'light' | 'custom' {
+function statusPageThemeName(theme: Partial<StatusPageTheme>): 'dark' | 'light' | 'custom' {
   const background = theme.background_color
   if (background === '#ffffff' || background === '#f8fafc') return 'light'
   if (!background || background === '#0f172a') return 'dark'
@@ -215,7 +237,7 @@ function normalizeAlertRule(rule: Record<string, unknown>) {
   }
 }
 
-function alertConditionToUICondition(condition: Record<string, unknown>): string {
+function alertConditionToUICondition(condition: Partial<Schemas['AlertCondition']>): string {
   if (condition.type === 'failure_rate') {
     return 'error_rate'
   }
@@ -298,7 +320,7 @@ function serializeApiBody(body: unknown): unknown {
   return serialized
 }
 
-function statusPageThemeFromName(theme: string): Record<string, string> {
+function statusPageThemeFromName(theme: string): StatusPageTheme {
   if (theme === 'light') {
     return {
       primary_color: '#d97706',
@@ -318,7 +340,7 @@ function statusPageThemeFromName(theme: string): Record<string, string> {
   }
 }
 
-function uiRuleToAlertCondition(rule: Record<string, unknown>): Record<string, unknown> {
+function uiRuleToAlertCondition(rule: Record<string, unknown>): Schemas['AlertCondition'] {
   const threshold = typeof rule.threshold === 'number' ? rule.threshold : Number(rule.threshold || 0)
   const duration = typeof rule.duration === 'number' ? rule.duration : Number(rule.duration || 60)
   const consecutive = typeof rule.consecutive === 'number' ? rule.consecutive : Number(rule.consecutive || 1)
@@ -336,56 +358,63 @@ function uiRuleToAlertCondition(rule: Record<string, unknown>): Record<string, u
   }
 }
 
+// Protocol defaults for a soul or journey step; each literal is checked
+// against the spec's config schema.
 function addDefaultCheckConfig(soul: Record<string, unknown>) {
-  switch (soul.type) {
+  switch (soul.type as Schemas['SoulType']) {
     case 'http':
       if (!soul.http) {
-        soul.http = { method: 'GET', valid_status: [200], headers: {} }
+        soul.http = { method: 'GET', valid_status: [200], headers: {} } satisfies Schemas['HTTPConfig']
       }
       break
     case 'tcp':
       if (!soul.tcp) {
-        soul.tcp = {}
+        soul.tcp = {} satisfies Schemas['TCPConfig']
       }
       break
     case 'dns':
       if (!soul.dns) {
-        soul.dns = { record_type: 'A' }
+        soul.dns = { record_type: 'A' } satisfies Schemas['DNSConfig']
       }
       break
     case 'udp':
       if (!soul.udp) {
-        soul.udp = {}
+        soul.udp = {} satisfies Schemas['UDPConfig']
       }
       break
     case 'smtp':
       if (!soul.smtp) {
-        soul.smtp = {}
+        soul.smtp = {} satisfies Schemas['SMTPConfig']
       }
       break
     case 'imap':
       if (!soul.imap) {
-        soul.imap = { tls: true }
+        soul.imap = { tls: true } satisfies Schemas['IMAPConfig']
       }
       break
     case 'icmp':
       if (!soul.icmp) {
-        soul.icmp = { count: 4, interval: '1s', max_loss_percent: 100 }
+        soul.icmp = { count: 4, interval: '1s', max_loss_percent: 100 } satisfies Schemas['ICMPConfig']
       }
       break
     case 'grpc':
       if (!soul.grpc) {
-        soul.grpc = { metadata: {} }
+        soul.grpc = { metadata: {} } satisfies Schemas['GRPCConfig']
       }
       break
     case 'websocket':
       if (!soul.websocket) {
-        soul.websocket = { headers: {}, ping_check: true }
+        soul.websocket = { headers: {}, ping_check: true } satisfies Schemas['WebSocketConfig']
       }
       break
     case 'tls':
       if (!soul.tls) {
-        soul.tls = { expiry_warn_days: 30, expiry_critical_days: 7 }
+        soul.tls = { expiry_warn_days: 30, expiry_critical_days: 7 } satisfies Schemas['TLSConfig']
+      }
+      break
+    case 'heartbeat':
+      if (!soul.heartbeat) {
+        soul.heartbeat = {} satisfies Schemas['HeartbeatConfig']
       }
       break
   }
@@ -457,7 +486,7 @@ class ApiClient {
         }
       }
       const error = await response.json().catch(() => ({ error: 'Unknown error' }))
-      throw new Error(error.error || `HTTP ${response.status}`)
+      throw new ApiError(response.status, error)
     }
 
     if (response.status === 204) {
@@ -480,6 +509,10 @@ class ApiClient {
     return this.request<T>('PUT', endpoint, body)
   }
 
+  patch<T>(endpoint: string, body?: unknown): Promise<T> {
+    return this.request<T>('PATCH', endpoint, body)
+  }
+
   delete(endpoint: string): Promise<void> {
     return this.request<void>('DELETE', endpoint)
   }
@@ -487,277 +520,198 @@ class ApiClient {
 
 export const api = new ApiClient()
 
-// Types
-export interface Soul {
-  id: string
-  name: string
-  type: 'http' | 'tcp' | 'udp' | 'dns' | 'icmp' | 'smtp' | 'imap' | 'grpc' | 'websocket' | 'tls'
-  target: string
-  enabled: boolean
-  weight: number
-  timeout: number
-  interval?: number
-  tags?: string[]
-  region?: string
-  workspace_id?: string
-  created_at?: string
-  updated_at?: string
-  status?: 'healthy' | 'unhealthy' | 'degraded' | 'maintenance' | 'unknown'
-  last_check?: string
-  latency?: number
-  http_config?: {
-    method: string
-    valid_status: number[]
-    headers: Record<string, string>
-    body?: string
-  }
-  tcp_config?: {
-    banner_match?: string
-    send?: string
-    expect_regex?: string
-  }
-  dns_config?: {
-    record_type: string
-    expected?: string[]
-  }
-  http?: {
-    method: string
-    valid_status: number[]
-    headers: Record<string, string>
-    body?: string
-  }
-  tcp?: {
-    banner_match?: string
-    send?: string
-    expect_regex?: string
-  }
-  dns?: {
-    record_type: string
-    expected?: string[]
-  }
-  udp?: {
-    send_hex?: string
-    expect_contains?: string
-  }
-  smtp?: {
-    starttls?: boolean
-    banner_contains?: string
-  }
-  imap?: {
-    tls?: boolean
-    check_mailbox?: string
-    auth?: { username: string; password: string }
-  }
-  icmp?: {
-    count: number
-    interval: string
-    max_loss_percent: number
-  }
-  grpc?: {
-    service?: string
-    method?: string
-    metadata: Record<string, string>
-  }
-  websocket?: {
-    headers: Record<string, string>
-    ping_check: boolean
-    send?: string
-    expect_contains?: string
-  }
-  tls?: {
-    expiry_warn_days: number
-    expiry_critical_days: number
+/**
+ * A failed API request. It is still an Error whose message is the server's
+ * `error` text; status and the structured fields of the body (for example a
+ * workspace quota refusal: code "quota_exceeded", quota, limit) ride along.
+ */
+export class ApiError extends Error {
+  readonly status: number
+  readonly code?: string
+  readonly quota?: string
+  readonly limit?: number | string
+  readonly current?: number
+
+  constructor(status: number, body: { error?: string; code?: unknown; quota?: unknown; limit?: unknown; current?: unknown } = {}) {
+    super(body.error || `HTTP ${status}`)
+    this.name = 'ApiError'
+    this.status = status
+    if (typeof body.code === 'string') this.code = body.code
+    if (typeof body.quota === 'string') this.quota = body.quota
+    if (typeof body.limit === 'number' || typeof body.limit === 'string') this.limit = body.limit
+    if (typeof body.current === 'number') this.current = body.current
   }
 }
 
-export interface Judgment {
-  id: string
-  soul_id: string
-  soul_name?: string
-  status: 'passed' | 'failed' | 'degraded' | 'maintenance' | 'pending'
+// Types
+//
+// Wire types come from the OpenAPI spec (internal/api/openapi.yaml) through
+// the generated ./schema.generated.ts, so a backend change that renames or
+// retypes a field fails `tsc` here instead of drifting silently. Where the
+// dashboard reshapes a response for presentation (normalizeApiValue above:
+// durations to seconds, alive/dead to the UI status vocabulary), the exported
+// type is the generated one with exactly those fields replaced.
+
+/** Wire format of a soul (GET /souls, /souls/:id). */
+export type ApiSoul = Schemas['Soul']
+/** Wire format of a judgment. */
+export type ApiJudgment = Schemas['Judgment']
+/** Wire format of an alert rule. */
+export type ApiAlertRule = Schemas['AlertRule']
+/** Wire format of a status page. */
+export type ApiStatusPage = Schemas['StatusPage']
+
+export type QuotaCounter = Schemas['QuotaCounter']
+/** GET /api/v1/quota: the current workspace's usage against its quotas. */
+export type QuotaUsage = Schemas['QuotaUsage']
+/** GET /api/v1/api-keys item. The secret and its hash are never returned. */
+export type ApiKey = Schemas['APIKey']
+/** POST /api/v1/api-keys response: `key` is the plaintext, shown once. */
+export type CreatedApiKey = Schemas['APIKeyCreated']
+/** GET /api/v1/members item: an account's role in the current workspace. */
+export type Member = Schemas['Member']
+/** GET /api/v1/invitations item. The token is never returned. */
+export type Invitation = Schemas['Invitation']
+/**
+ * POST /api/v1/invitations response. When the link could not be emailed,
+ * invite_url carries it this one time.
+ */
+export type CreatedInvitation = Schemas['InvitationCreated']
+
+/** UI status vocabulary for souls (normalizeSoulStatus). */
+export type SoulDisplayStatus = 'healthy' | 'unhealthy' | 'degraded' | 'maintenance' | 'unknown'
+
+/**
+ * A soul as the dashboard holds it: the wire soul with weight and timeout in
+ * seconds, status in the UI vocabulary, and the http/tcp/dns blocks mirrored
+ * under the form's *_config names.
+ */
+export type Soul = Omit<ApiSoul, 'weight' | 'timeout' | 'status' | 'workspace_id'> & {
+  /** Check interval in seconds (the API sends a duration string). */
+  weight: number
+  /** Per-check timeout in seconds (the API sends a duration string). */
+  timeout: number
+  status?: SoulDisplayStatus
+  workspace_id?: string
+  http_config?: ApiSoul['http']
+  tcp_config?: ApiSoul['tcp']
+  dns_config?: ApiSoul['dns']
+}
+
+export type SoulFlapDetection = Schemas['FlapDetection']
+
+/** Ping record of a heartbeat soul (GET /souls/:id/heartbeat `state`). */
+export type HeartbeatState = NonNullable<Schemas['HeartbeatState']>
+/** GET /souls/:id/heartbeat and POST /souls/:id/heartbeat/rotate. */
+export type HeartbeatInfo = Schemas['HeartbeatInfo']
+
+/** UI status vocabulary for judgments (normalizeJudgmentStatus). */
+export type JudgmentDisplayStatus = 'passed' | 'failed' | 'degraded' | 'maintenance' | 'pending'
+
+/**
+ * A judgment as the dashboard holds it: status in the UI vocabulary, latency
+ * in milliseconds (from duration) and error (from message).
+ */
+export type Judgment = Omit<ApiJudgment, 'status'> & {
+  status: JudgmentDisplayStatus
+  /** Milliseconds, derived from duration (nanoseconds). */
   latency: number
-  timestamp: string
-  region: string
+  /** The failure reason, copied from message. */
   error?: string
-  purity?: number
 }
 
 /** One period of GET /souls/:id/uptime. uptime_percent is null when there were no checks. */
-export interface UptimeWindow {
-  checks: number
-  up: number
-  failures: number
-  uptime_percent: number | null
-  avg_latency_ms: number
-}
+export type UptimeWindow = Schemas['UptimeWindow']
+/**
+ * GET /souls/:id/uptime. Series buckets are equal over the requested range,
+ * oldest first: 5 minutes for 1h, hours for 24h, calendar days (in the
+ * caller's time zone) for 7d, 30d, 90d and 1y.
+ */
+export type SoulUptime = Schemas['SoulUptime']
+export type UptimeRange = SoulUptime['series']['range']
 
-export type UptimeRange = '1h' | '24h' | '7d' | '30d'
+export type AlertChannel = Schemas['AlertChannel']
 
-export interface SoulUptime {
-  soul_id: string
-  windows: Record<'24h' | '7d' | '30d', UptimeWindow>
-  /**
-   * Equal buckets over the requested range, oldest first: 5 minutes for 1h,
-   * hours for 24h, calendar days (in the caller's time zone) for 7d and 30d.
-   */
-  series: {
-    range: UptimeRange
-    step_seconds: number
-    points: Array<UptimeWindow & { start: string }>
-  }
-}
-
-export interface AlertChannel {
-  id: string
-  name: string
-  type: 'email' | 'slack' | 'discord' | 'webhook' | 'pagerduty' | 'telegram' | 'opsgenie' | 'ntfy' | 'sms'
-  enabled: boolean
-  config: Record<string, unknown>
-  // Delivery settings the form does not edit; kept on save.
-  filters?: unknown
-  rate_limit?: unknown
-  retry_policy?: unknown
-  created_at?: string
-  updated_at?: string
-}
-
-export interface AlertRule {
-  id: string
-  name: string
-  enabled: boolean
+/**
+ * An alert rule as the dashboard holds it: the wire rule plus the primary
+ * condition flattened into the form's condition/threshold/duration fields
+ * (normalizeAlertRule; serializeApiBody folds them back into conditions).
+ */
+export type AlertRule = ApiAlertRule & {
   condition: string
   threshold: number
+  /** Seconds. */
   duration?: number
   consecutive?: number
-  channels: string[]
-  severity: 'critical' | 'warning' | 'info'
-  // Resolve the incident automatically when the soul recovers.
-  auto_resolve?: boolean
-  // Server-side rule fields the form does not edit; kept on save.
-  conditions?: unknown[]
-  scope?: unknown
-  cooldown?: string
-  escalation?: unknown
-  created_at?: string
 }
 
-export interface Incident {
-  id: string
-  rule_id: string
-  soul_id: string
-  soul_name?: string
-  workspace_id?: string
-  status: 'open' | 'acknowledged' | 'resolved'
-  severity: 'critical' | 'warning' | 'info'
-  started_at: string
-  acked_at?: string
-  resolved_at?: string
-  acked_by?: string
-  resolved_by?: string
-  escalation_level?: number
-}
+export type Incident = Schemas['Incident']
 
-export interface Stats {
-  souls?: {
-    total: number
-    healthy: number
-    degraded: number
-    dead: number
-    unknown?: number
-    embalmed?: number
-  }
-  judgments?: {
-    today: number
-    failures: number
-    avg_latency_ms: number
-  }
-  // Alert manager counters (core.AlertManagerStats).
-  alerts?: {
-    total_alerts?: number
-    sent_alerts?: number
-    failed_alerts?: number
-    active_incidents?: number
-  }
-}
+/** GET /api/v1/stats/overview. */
+export type Stats = paths['/api/v1/stats/overview']['get']['responses'][200]['content']['application/json']
 
-export interface ClusterStatus {
-  is_clustered: boolean
-  node_id: string
-  state: string
-  leader?: string
-  term?: number
-  peer_count?: number
-}
+export type ClusterStatus = Schemas['ClusterStatus']
 
-export type StatusPageVisibility = 'public' | 'private' | 'protected'
+export type StatusPageVisibility = NonNullable<ApiStatusPage['visibility']>
+export type StatusPageTheme = Schemas['StatusPageTheme']
 
-export interface StatusPage {
-  id: string
-  name: string
-  slug: string
-  enabled: boolean
-  /** Who can see the page. 'private' needs a session, 'protected' a password. */
-  visibility?: StatusPageVisibility
+/**
+ * A status page as the dashboard holds it: theme reduced to a preset name with
+ * the stored colours kept in theme_config, and custom_domain mirrored as domain.
+ */
+export type StatusPage = Omit<ApiStatusPage, 'theme'> & {
+  theme?: 'dark' | 'light' | 'custom' | StatusPageTheme
+  /** The stored theme colours, kept alongside the derived theme name. */
+  theme_config?: StatusPageTheme
+  domain?: string
   /**
    * Write-only: the API hashes this and never returns it. Send it only when the
    * password is being set or changed; a present-but-empty value clears it.
    */
   password?: string
-  /** Read-only: whether the page currently has a password configured. */
-  password_set?: boolean
-  description?: string
-  workspace_id?: string
-  domain?: string
-  custom_domain?: string
-  theme?: 'dark' | 'light' | 'custom' | Record<string, string>
-  /** The stored theme colours, kept alongside the derived theme name. */
-  theme_config?: Record<string, string>
-  logo_url?: string
-  favicon_url?: string
-  groups?: unknown[]
-  incidents?: unknown[]
-  souls?: string[]
-  subscribers?: number
-  uptime_days?: number
-  created_at?: string
-  updated_at?: string
 }
 
-export interface User {
-  id: string
-  email: string
-  name: string
-  role: string
-  workspace: string
-  created_at?: string
+/**
+ * A journey step as the dashboard holds it: timeout in seconds (the API sends
+ * a duration string; normalizeApiValue converts it, defaulting to 10).
+ */
+export type JourneyStep = Omit<Schemas['JourneyStep'], 'timeout'> & { timeout: number }
+/**
+ * A journey as GET /journeys lists it (with run statistics), weight and
+ * timeout in seconds.
+ */
+export type Journey = Omit<Schemas['JourneyListItem'], 'weight' | 'timeout' | 'steps'> & {
+  weight: number
+  timeout: number
+  steps: JourneyStep[]
 }
+export type JourneyRun = Schemas['JourneyRun']
+export type JourneyStepResult = Schemas['JourneyStepResult']
 
-export interface Workspace {
-  id: string
-  name: string
-  slug?: string
-  description?: string
-  owner_id?: string
-  status?: 'active' | 'suspended' | 'trial' | 'deleted'
-  created_at?: string
-  updated_at?: string
-}
+export type StatusPageIncident = Schemas['StatusIncident']
+export type StatusPageIncidentUpdate = NonNullable<StatusPageIncident['updates']>[number]
+export type StatusPageAnnouncement = Schemas['StatusAnnouncement']
+export type IncidentImpact = NonNullable<StatusPageIncident['impact']>
+export type IncidentStatus = StatusPageIncident['status']
+export type MaintenanceWindow = Schemas['MaintenanceWindow']
+export type MaintenanceWindowCreate = Schemas['MaintenanceWindowCreate']
+export type MaintenanceWindowUpdate = Schemas['MaintenanceWindowUpdate']
+/** GET/PUT /api/v1/config: the Settings page's view of the configuration. */
+export type UIConfig = Schemas['UIConfig']
+/** GET /api/v1/auth/methods (public). */
+export type AuthMethods = paths['/api/v1/auth/methods']['get']['responses'][200]['content']['application/json']
 
-export interface CustomDashboard {
-  id: string
-  name: string
-  description?: string
-  widgets: WidgetConfig[]
-  refresh_sec: number
-  created_at?: string
-  updated_at?: string
-}
+export type User = Schemas['User']
+export type Workspace = Schemas['Workspace']
+/** A widget query as stored: the server always encodes metric and time_range. */
+export type WidgetQuery = Schemas['WidgetQuery'] & Required<Pick<Schemas['WidgetQuery'], 'metric' | 'time_range'>>
+export type WidgetConfig = Omit<Schemas['WidgetConfig'], 'query'> & { query: WidgetQuery }
+/**
+ * A custom dashboard. widgets is always an array: the API sends [] for a
+ * dashboard without widgets, and normalizeApiValue replaces a null from an
+ * older server.
+ */
+export type CustomDashboard = Omit<Schemas['CustomDashboard'], 'widgets'> & { widgets: WidgetConfig[] }
 
-export interface WidgetConfig {
-  id: string
-  title: string
-  type: 'line_chart' | 'bar_chart' | 'gauge' | 'stat' | 'table'
-  grid: { x: number; y: number; width: number; height: number }
-  query: { source: string; metric: string; filters?: Record<string, string>; time_range: string; aggregation?: string }
-  thresholds?: { value: number; color: string; op: string }[]
-}
+export type HttpMethod = NonNullable<Schemas['HTTPConfig']['method']>
+export type DnsRecordType = NonNullable<Schemas['DNSConfig']['record_type']>

@@ -105,3 +105,22 @@ export function listTimeZones(): string[] {
   const zones = typeof supported === 'function' ? supported('timeZone') : fallbackTimeZones
   return ['UTC', ...zones.filter((zone) => zone !== 'UTC')]
 }
+
+/**
+ * Compact interval for a number of seconds, dropping zero parts: 30s, 1m,
+ * 1m 30s, 5m, 1h, 1h 30m, 1d; under a second as milliseconds (500ms).
+ * Non-finite or negative input renders as "—".
+ */
+export function formatInterval(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds) || seconds < 0) return '—'
+  if (seconds > 0 && seconds < 1) return `${Math.round(seconds * 1000)}ms`
+  let rest = Math.round(seconds)
+  if (rest === 0) return '0s'
+  const parts: string[] = []
+  for (const [unit, size] of [['d', 86400], ['h', 3600], ['m', 60], ['s', 1]] as const) {
+    const n = Math.floor(rest / size)
+    rest -= n * size
+    if (n > 0) parts.push(`${n}${unit}`)
+  }
+  return parts.join(' ')
+}

@@ -119,7 +119,7 @@ export function Dashboards() {
                     </span>
                   )
                 })}
-                {d.widgets?.length > 4 && (
+                {(d.widgets?.length ?? 0) > 4 && (
                   <span className="px-2 py-1 bg-gray-800/50 rounded-md text-xs text-gray-500">
                     +{d.widgets.length - 4} more
                   </span>

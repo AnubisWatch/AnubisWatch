@@ -49,3 +49,27 @@ describe('ChangePasswordForm', () => {
     expect(await screen.findByText('current password is incorrect')).toBeInTheDocument()
   })
 })
+
+describe('ChangePasswordForm onChanged', () => {
+  beforeEach(() => {
+    put.mockReset()
+    serverError = ''
+  })
+
+  it('reports a successful change so a forced change can sign out', async () => {
+    const onChanged = vi.fn()
+    render(<ChangePasswordForm onChanged={onChanged} title="Set your password" />)
+    expect(screen.getByRole('heading', { name: 'Set your password' })).toBeInTheDocument()
+    fill('Initial1234!x', 'Mine5678!xyz', 'Mine5678!xyz')
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+  })
+
+  it('does not report a refused change', async () => {
+    serverError = 'current password is incorrect'
+    const onChanged = vi.fn()
+    render(<ChangePasswordForm onChanged={onChanged} />)
+    fill('wrong', 'Mine5678!xyz', 'Mine5678!xyz')
+    expect(await screen.findByText('current password is incorrect')).toBeInTheDocument()
+    expect(onChanged).not.toHaveBeenCalled()
+  })
+})

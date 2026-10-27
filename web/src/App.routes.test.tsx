@@ -152,6 +152,7 @@ describe('App route smoke coverage', () => {
     { path: '/alerts', heading: 'Divine Warnings' },
     { path: '/incidents', heading: 'Cries of Chaos' },
     { path: '/maintenance', heading: 'Sacred Rest' },
+    { path: '/reports', heading: "Scrolls of Ma'at" },
     { path: '/journeys', heading: 'Voyages' },
     { path: '/cluster', heading: 'Necropolis' },
     { path: '/status-pages', heading: 'Temple Squares' },
@@ -167,5 +168,34 @@ describe('App route smoke coverage', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: heading, exact: true })).toBeInTheDocument()
     }, { timeout: 5000 })
+  })
+})
+
+describe('App account gates', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    localStorage.clear()
+  })
+
+  it('shows only the password form to an account that must change its initial password', async () => {
+    localStorage.setItem('auth_token', 'test-token')
+    vi.stubGlobal('WebSocket', MockWebSocket)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(String(input), 'http://localhost')
+        if (url.pathname === '/api/v1/auth/me') return jsonResponse({ ...user, must_change_password: true })
+        return jsonResponse(apiBody(url.pathname, init?.method || 'GET'))
+      }),
+    )
+    await renderRoute('/')
+    expect(await screen.findByRole('heading', { name: 'Set your password' }, { timeout: 5000 })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Hall of Judgment' })).toBeNull()
+  })
+
+  it('serves the public accept-invite page', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ error: 'unauthorized' }, 401)))
+    await renderRoute('/accept-invite')
+    expect(await screen.findByRole('heading', { name: 'Accept invitation' }, { timeout: 5000 })).toBeInTheDocument()
   })
 })

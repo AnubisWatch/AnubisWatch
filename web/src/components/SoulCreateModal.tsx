@@ -1,10 +1,12 @@
 import { X, CheckCircle2 } from 'lucide-react'
 import { SoulProtocolFields } from './SoulProtocolFields'
+import { SoulReliabilityFields } from './SoulReliabilityFields'
 import { 
   type SoulFormData, 
   type SoulType, 
   nextSoulFormDataForType, 
   soulTargetHints, 
+  soulTypeHasTarget,
   soulTypeOptions 
 } from '../utils/soulForm'
 
@@ -88,6 +90,7 @@ export function SoulCreateModal({
           </div>
 
           {/* Target */}
+          {soulTypeHasTarget(formData.type) && (
           <div>
             <label htmlFor="soul-target" className="block text-sm font-medium text-gray-300 mb-2">
               {soulTargetHints[formData.type].label}
@@ -113,13 +116,14 @@ export function SoulCreateModal({
               <p className="mt-2 text-xs text-gray-500">{soulTargetHints[formData.type].help}</p>
             )}
           </div>
+          )}
 
           <SoulProtocolFields formData={formData} setFormData={setFormData} />
 
           {/* Interval & Timeout */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-2">Interval (seconds)</label>
+              <label className="block text-sm font-medium text-gray-300 mb-2">{formData.type === 'heartbeat' ? 'Expected Every (seconds)' : 'Interval (seconds)'}</label>
               <input
                 type="number"
                 min="10"
@@ -140,6 +144,8 @@ export function SoulCreateModal({
             </div>
           </div>
 
+          <SoulReliabilityFields formData={formData} setFormData={setFormData} />
+
           {/* Enabled Toggle */}
           <div className="flex items-center gap-3 p-4 bg-gray-800/50 rounded-xl">
             <input
@@ -153,6 +159,12 @@ export function SoulCreateModal({
               Enable monitoring immediately
             </label>
           </div>
+
+          {formErrors.submit && (
+            <div role="alert" className="p-4 bg-rose-500/10 border border-rose-500/30 rounded-xl text-sm text-rose-300">
+              {formErrors.submit}
+            </div>
+          )}
 
           {/* Buttons */}
           <div className="flex gap-3 pt-4">

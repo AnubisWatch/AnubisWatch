@@ -1,14 +1,9 @@
 import { ArrowRight, Eye, EyeOff, Lock, Mail } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { api } from "../api/client";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { api, type AuthMethods } from "../api/client";
 import { dispatchAuthSessionChanged } from "../api/authEvents";
 
-interface AuthMethods {
-	local: boolean;
-	oidc: boolean;
-	ldap: boolean;
-}
 
 const AnkhIcon = () => (
 	<svg
@@ -23,11 +18,18 @@ const AnkhIcon = () => (
 
 export function Login() {
 	const navigate = useNavigate();
+	const [searchParams] = useSearchParams();
 	const [email, setEmail] = useState("");
 	const [password, setPassword] = useState("");
 	const [showPassword, setShowPassword] = useState(false);
 	const [loading, setLoading] = useState(false);
-	const [error, setError] = useState("");
+	// The OIDC callback sends the browser back here with sso_error set when
+	// single sign-on fails; the reason is logged server-side, not reflected.
+	const [error, setError] = useState(() =>
+		searchParams.has("sso_error")
+			? "Single sign-on failed. Try again or contact your administrator."
+			: "",
+	);
 	// Servers without /auth/methods only offer local login.
 	const [methods, setMethods] = useState<AuthMethods>({ local: true, oidc: false, ldap: false });
 
@@ -173,6 +175,17 @@ export function Login() {
 								</button>
 							</div>
 						</div>
+
+						{methods.password_reset && !methods.ldap && (
+							<div className="-mt-2 text-right">
+								<Link
+									to="/forgot-password"
+									className="text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+								>
+									Forgot password?
+								</Link>
+							</div>
+						)}
 
 						<button
 							type="submit"

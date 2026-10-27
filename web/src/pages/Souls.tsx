@@ -29,6 +29,8 @@ import { ConfirmDialog } from '../components/ConfirmDialog'
 import { SoulStatsCards } from '../components/SoulStatsCards'
 import { SoulFilterBar } from '../components/SoulFilterBar'
 import { SoulCreateModal } from '../components/SoulCreateModal'
+import { FlappingBadge } from '../components/SoulReliabilityFields'
+import { quotaErrorMessage } from '../utils/quota'
 import { useCan } from '../utils/permissions'
 import { useSafeTimeout } from '../hooks/useSafeTimeout'
 
@@ -52,6 +54,7 @@ const typeConfig: Record<SoulType, { label: string; color: string; bg: string; i
   grpc: { label: 'gRPC', color: 'text-indigo-400', bg: 'bg-indigo-500/10', icon: Server },
   websocket: { label: 'WS', color: 'text-teal-400', bg: 'bg-teal-500/10', icon: Wifi },
   tls: { label: 'TLS', color: 'text-emerald-400', bg: 'bg-emerald-500/10', icon: Server },
+  heartbeat: { label: 'PUSH', color: 'text-rose-300', bg: 'bg-rose-500/10', icon: Activity },
 }
 
 export function Souls() {
@@ -106,7 +109,9 @@ export function Souls() {
       errors.name = 'Name must be at least 2 characters'
     }
 
-    if (!formData.target.trim()) {
+    if (formData.type === 'heartbeat') {
+      // Push monitors have no target.
+    } else if (!formData.target.trim()) {
       errors.target = 'Target is required'
     } else if (formData.type === 'http' && !formData.target.match(/^https?:\/\/.+/)) {
       errors.target = 'HTTP target must start with http:// or https://'
@@ -129,7 +134,13 @@ export function Souls() {
       setFormData(defaultSoulFormData)
     } catch (err) {
       if (generation !== createGeneration.current) return
-      alert('Failed to create soul: ' + (err instanceof Error ? err.message : 'Unknown error'))
+      // A quota refusal is shown in the modal, which stays open with the form.
+      const quotaMessage = quotaErrorMessage(err)
+      if (quotaMessage) {
+        setFormErrors({ submit: quotaMessage })
+      } else {
+        alert('Failed to create soul: ' + (err instanceof Error ? err.message : 'Unknown error'))
+      }
     } finally {
       if (generation === createGeneration.current) setLoading(false)
     }
@@ -276,6 +287,7 @@ export function Souls() {
                         <span className={`text-sm font-medium ${getStatusText(displayStatus)}`}>
                           {getStatusLabel(displayStatus)}
                         </span>
+                        <FlappingBadge flapping={soul.flapping} />
                       </div>
                     </td>
                     <td className="px-6 py-4">

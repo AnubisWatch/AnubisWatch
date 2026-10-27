@@ -55,18 +55,35 @@ const Maintenance = lazy(() =>
 		default: module.Maintenance,
 	})),
 );
+const Reports = lazy(() =>
+	import("./pages/Reports").then((module) => ({ default: module.Reports })),
+);
 const Settings = lazy(() =>
 	import("./pages/Settings").then((module) => ({ default: module.Settings })),
 );
 const Login = lazy(() =>
 	import("./pages/Login").then((module) => ({ default: module.Login })),
 );
+const ForgotPassword = lazy(() =>
+	import("./pages/PasswordReset").then((module) => ({ default: module.ForgotPassword })),
+);
+const ResetPassword = lazy(() =>
+	import("./pages/PasswordReset").then((module) => ({ default: module.ResetPassword })),
+);
+const AcceptInvite = lazy(() =>
+	import("./pages/PasswordReset").then((module) => ({ default: module.AcceptInvite })),
+);
+const ForcedPasswordChange = lazy(() =>
+	import("./components/ChangePasswordForm").then((module) => ({
+		default: module.ForcedPasswordChange,
+	})),
+);
 const NotFound = lazy(() =>
 	import("./pages/NotFound").then((module) => ({ default: module.NotFound })),
 );
 
 function ProtectedRoute() {
-	const { isAuthenticated, loading } = useAuth();
+	const { isAuthenticated, loading, user } = useAuth();
 
 	if (loading) {
 		return (
@@ -83,6 +100,12 @@ function ProtectedRoute() {
 
 	if (!isAuthenticated) {
 		return <Navigate to="/login" replace />;
+	}
+
+	// An account created with an initial password may do nothing else until
+	// it sets its own (the server enforces this too).
+	if (user?.must_change_password) {
+		return <ForcedPasswordChange />;
 	}
 
 	return <Outlet />;
@@ -134,6 +157,9 @@ function App() {
 				>
 					<Routes>
 						<Route path="/login" element={<Login />} />
+						<Route path="/forgot-password" element={<ForgotPassword />} />
+						<Route path="/reset-password" element={<ResetPassword />} />
+						<Route path="/accept-invite" element={<AcceptInvite />} />
 						<Route element={<ProtectedRoute />}>
 							<Route element={<Layout />}>
 								<Route path="/" element={<Dashboard />} />
@@ -144,6 +170,7 @@ function App() {
 								<Route path="/alerts" element={<Alerts />} />
 								<Route path="/incidents" element={<Incidents />} />
 								<Route path="/maintenance" element={<Maintenance />} />
+								<Route path="/reports" element={<Reports />} />
 								<Route path="/journeys" element={<Journeys />} />
 								<Route path="/cluster" element={<Cluster />} />
 								<Route path="/status-pages" element={<StatusPages />} />

@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react'
 import { ArrowLeft, Save, X } from 'lucide-react'
 import { useSoul } from '../api/hooks'
 import { SoulProtocolFields } from '../components/SoulProtocolFields'
+import { SoulReliabilityFields } from '../components/SoulReliabilityFields'
 import {
   buildSoulPayload,
   defaultSoulFormData,
@@ -10,6 +11,7 @@ import {
   soulFormDataFromSoul,
   mergeSoulEdit,
   soulTargetHints,
+  soulTypeHasTarget,
   soulTypeOptions,
   type SoulFormData,
   type SoulType,
@@ -120,6 +122,7 @@ export function SoulEdit() {
           </select>
         </div>
 
+        {soulTypeHasTarget(formData.type) && (
         <div>
           <label htmlFor="edit-soul-target" className="block text-sm font-medium text-gray-300 mb-2">
             {soulTargetHints[formData.type].label}
@@ -135,12 +138,13 @@ export function SoulEdit() {
           />
           <p className="mt-2 text-xs text-gray-500">{soulTargetHints[formData.type].help}</p>
         </div>
+        )}
 
         <SoulProtocolFields formData={formData} setFormData={setFormData} />
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">Interval (seconds)</label>
+            <label className="block text-sm font-medium text-gray-300 mb-2">{formData.type === 'heartbeat' ? 'Expected Every (seconds)' : 'Interval (seconds)'}</label>
             <input
               type="number"
               min="10"
@@ -160,6 +164,8 @@ export function SoulEdit() {
             />
           </div>
         </div>
+
+        <SoulReliabilityFields formData={formData} setFormData={setFormData} />
 
         <div className="flex items-center gap-3 p-4 bg-gray-800/50 rounded-xl">
           <input

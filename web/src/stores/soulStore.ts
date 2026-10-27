@@ -78,7 +78,8 @@ export const useSoulStore = create<SoulStore>((set, get) => ({
       if (result) {
         set((state) => ({ souls: [...state.souls, result], loading: false }))
 
-        if (result.enabled) {
+        // A heartbeat soul is judged by its pings; there is nothing to check.
+        if (result.enabled && result.type !== 'heartbeat') {
           void get().retryInitialCheck(result.id)
         }
       } else {

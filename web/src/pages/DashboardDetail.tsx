@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Plus, Trash2, RefreshCw } from 'lucide-react'
 import { api } from '../api/client'
-import type { CustomDashboard, WidgetConfig } from '../api/client'
+import type { CustomDashboard, WidgetConfig, WidgetQuery } from '../api/client'
 import { StatWidget } from '../components/widgets/StatWidget'
 import { LineChartWidget } from '../components/widgets/LineChartWidget'
 import { BarChartWidget } from '../components/widgets/BarChartWidget'
@@ -43,7 +43,8 @@ export function DashboardDetail() {
     setLoading(true)
     try {
       const result = await api.get<CustomDashboard>(`/dashboards/${id}`)
-      if (sequence === requestSequence.current) setDashboard(result)
+      // Tolerate a widgets: null record from an older server.
+      if (sequence === requestSequence.current) setDashboard({ ...result, widgets: Array.isArray(result.widgets) ? result.widgets : [] })
     } catch {
       if (sequence === requestSequence.current) setDashboard(null)
     } finally {
@@ -313,7 +314,7 @@ export function DashboardDetail() {
 function AddWidgetForm({ onAdd, onCancel }: { onAdd: (w: Omit<WidgetConfig, 'id'>) => void; onCancel: () => void }) {
   const [title, setTitle] = useState('')
   const [type, setType] = useState<WidgetConfig['type']>('stat')
-  const [source, setSource] = useState('souls')
+  const [source, setSource] = useState<WidgetQuery['source']>('souls')
   const [metric, setMetric] = useState('count')
   const [timeRange] = useState('24h')
   const [width, setWidth] = useState(4)
@@ -349,7 +350,7 @@ function AddWidgetForm({ onAdd, onCancel }: { onAdd: (w: Omit<WidgetConfig, 'id'
         </div>
         <div>
           <label className="text-xs text-gray-400 block mb-1">Source</label>
-          <select value={source} onChange={e => setSource(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm">
+          <select value={source} onChange={e => setSource(e.target.value as WidgetQuery['source'])} className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm">
             <option value="souls">Souls</option>
             <option value="judgments">Judgments</option>
             <option value="stats">Stats</option>

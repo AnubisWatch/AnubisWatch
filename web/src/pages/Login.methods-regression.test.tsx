@@ -23,6 +23,20 @@ describe('Login auth methods', () => {
     expect(screen.getByLabelText('Email')).toBeInTheDocument()
   })
 
+  // A failed OIDC callback redirects the browser to /login?sso_error=1.
+  it('reports a failed single sign-on', async () => {
+    mocks.get.mockResolvedValue({ local: true, oidc: true, ldap: false })
+    render(<MemoryRouter initialEntries={['/login?sso_error=1']}><Login /></MemoryRouter>)
+    expect(await screen.findByText(/Single sign-on failed/)).toBeInTheDocument()
+  })
+
+  it('shows no SSO error on a plain visit', async () => {
+    mocks.get.mockResolvedValue({ local: true, oidc: true, ldap: false })
+    renderLogin()
+    await screen.findByRole('link', { name: 'Sign in with SSO' })
+    expect(screen.queryByText(/Single sign-on failed/)).toBeNull()
+  })
+
   it('falls back to local login when the server lacks /auth/methods', async () => {
     mocks.get.mockRejectedValue(new Error('not found'))
     renderLogin()
