@@ -131,6 +131,102 @@ func (ts *TimeSeriesStore) SaveJudgment(ctx context.Context, j *core.Judgment) e
 	return nil
 }
 
+// judgmentBatchBytes bounds the raw bytes of one batched WAL frame; encoding
+// and encryption overhead keep the frame under maxWALEntryBytes.
+const judgmentBatchBytes = 512 * 1024
+
+// SaveJudgments saves judgments as SaveJudgment would one after another, in
+// as few WAL frames (and fsyncs) as fit. A judgment that is already stored
+// (or repeated in the batch) is skipped, so replaying a batch is safe. Frames
+// split only between judgments, so each judgment lands with its summaries.
+func (ts *TimeSeriesStore) SaveJudgments(ctx context.Context, judgments []*core.Judgment) error {
+	ts.summaryMu.Lock()
+	defer ts.summaryMu.Unlock()
+	values := make(map[string][]byte)
+	size := 0
+	type indexed struct {
+		j   *core.Judgment
+		key string
+	}
+	var pending []indexed
+	var markers []string
+	seen := make(map[string]bool)
+	get := func(key string) ([]byte, error) {
+		if v, ok := values[key]; ok {
+			return v, nil
+		}
+		return ts.db.Get(key)
+	}
+	flush := func() error {
+		if len(values) == 0 {
+			return nil
+		}
+		if err := ts.db.putMany(values); err != nil {
+			return err
+		}
+		for _, p := range pending {
+			ts.db.recordJudgmentIndex(p.j, p.key)
+		}
+		for _, m := range markers {
+			ts.liveMarked.Store(m, struct{}{})
+		}
+		values, size, pending, markers = make(map[string][]byte), 0, nil, nil
+		return nil
+	}
+	for _, j := range judgments {
+		if j.ID != "" {
+			ws := j.WorkspaceID
+			if ws == "" {
+				ws = "default"
+			}
+			if seen[ws+"/"+j.ID] {
+				continue
+			}
+			seen[ws+"/"+j.ID] = true
+			if _, err := ts.db.GetJudgmentByID(ctx, ws, j.ID); err == nil {
+				continue
+			}
+		}
+		group, idxKey, err := ts.db.prepareJudgment(ctx, j)
+		if err != nil {
+			return err
+		}
+		for _, resolution := range []TimeResolution{Resolution1Min, Resolution1Hour, Resolution1Day} {
+			key, data, err := ts.prepareSummaryFrom(ctx, j, resolution, get)
+			if err != nil {
+				return err
+			}
+			group[key] = data
+		}
+		marker := liveSinceKey(j.WorkspaceID, j.SoulID)
+		if _, cached := ts.liveMarked.Load(marker); !cached {
+			if _, err := get(marker); err != nil {
+				var missing *core.NotFoundError
+				if !errors.As(err, &missing) {
+					return err
+				}
+				group[marker] = []byte(time.Now().UTC().Format(time.RFC3339Nano))
+			}
+			markers = append(markers, marker)
+		}
+		groupSize := 0
+		for _, v := range group {
+			groupSize += len(v)
+		}
+		if size > 0 && size+groupSize > judgmentBatchBytes {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		for k, v := range group {
+			values[k] = v
+		}
+		size += groupSize
+		pending = append(pending, indexed{j, idxKey})
+	}
+	return flush()
+}
+
 // liveSinceKey records when a soul's results started being counted into its
 // hour and day summaries as they arrive. Every UTC hour or day starting at or
 // after that time has a complete summary; earlier ones must be read from raw
@@ -143,6 +239,12 @@ func liveSinceKey(workspaceID, soulID string) string {
 
 // prepareSummary builds an update without publishing it; caller holds summaryMu.
 func (ts *TimeSeriesStore) prepareSummary(ctx context.Context, j *core.Judgment, resolution TimeResolution) (string, []byte, error) {
+	return ts.prepareSummaryFrom(ctx, j, resolution, ts.db.Get)
+}
+
+// prepareSummaryFrom is prepareSummary reading the current summary through
+// get, so a batch can fold several judgments into one bucket before writing.
+func (ts *TimeSeriesStore) prepareSummaryFrom(ctx context.Context, j *core.Judgment, resolution TimeResolution, get func(string) ([]byte, error)) (string, []byte, error) {
 	workspaceID := j.WorkspaceID
 	if workspaceID == "" {
 		workspaceID = core.WorkspaceIDFromContext(ctx)
@@ -155,7 +257,7 @@ func (ts *TimeSeriesStore) prepareSummary(ctx context.Context, j *core.Judgment,
 
 	// Get existing summary
 	var summary JudgmentSummary
-	data, err := ts.db.Get(key)
+	data, err := get(key)
 	if err == nil {
 		// Update existing
 		if err := json.Unmarshal(data, &summary); err != nil {

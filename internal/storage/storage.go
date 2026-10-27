@@ -1570,6 +1570,42 @@ func (db *CobaltDB) ApplyFSMCommand(cmd *core.FSMCommand) error {
 	return nil
 }
 
+// fsmSetBatchBytes bounds the raw value bytes of one batched WAL frame;
+// encoding and encryption overhead keep the frame under maxWALEntryBytes.
+const fsmSetBatchBytes = 512 * 1024
+
+// ApplyFSMSets applies consecutive FSMSet commands like ApplyFSMCommand would,
+// in as few WAL frames (and fsyncs) as fit. A later set of the same key wins,
+// as it would applied in order.
+func (db *CobaltDB) ApplyFSMSets(cmds []core.FSMCommand) error {
+	values := make(map[string][]byte)
+	size := 0
+	flush := func() error {
+		if len(values) == 0 {
+			return nil
+		}
+		err := db.putMany(values)
+		values, size = make(map[string][]byte), 0
+		return err
+	}
+	for i := range cmds {
+		if size > 0 && size+len(cmds[i].Value) > fsmSetBatchBytes {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		values[cmds[i].Key] = cmds[i].Value
+		size += len(cmds[i].Value)
+	}
+	if err := flush(); err != nil {
+		return err
+	}
+	for i := range cmds {
+		db.updateIndexForSet(cmds[i].Key)
+	}
+	return nil
+}
+
 // indexedResource maps a key's type and remainder onto the secondary index
 // they belong to, using the same layout rebuildIndexes parses: alert channels,
 // rules, incidents and events are nested under "alerts", and an event's

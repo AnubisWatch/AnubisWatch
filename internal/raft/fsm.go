@@ -23,6 +23,7 @@ type StorageFSM struct {
 	// SetApplyObserver, SetRestoreObserver).
 	hookMu          sync.RWMutex
 	handlers        map[string]CommandHandler
+	batchHandlers   map[string]BatchCommandHandler
 	observer        func(cmd core.FSMCommand)
 	restoreObserver func()
 	logger          *slog.Logger
@@ -33,6 +34,29 @@ type StorageFSM struct {
 // runs under the FSM lock on every node, in log order, and must be
 // deterministic and idempotent: a forwarded command can be applied twice.
 type CommandHandler func(cmd *core.FSMCommand) error
+
+// BatchCommandHandler applies consecutive commands of one table from a
+// replicated batch together. It skips (and logs) a command that can never be
+// applied, returns the commands it applied, and returns an error only for a
+// failure a later attempt may overcome; the run is then retried whole, so it
+// must be idempotent like CommandHandler.
+type BatchCommandHandler func(cmds []core.FSMCommand) ([]core.FSMCommand, error)
+
+// SetBatchCommandHandler adds a batch route for table, used for runs of two
+// or more commands inside a batch; single commands still go to the table's
+// CommandHandler. A nil h removes the route.
+func (f *StorageFSM) SetBatchCommandHandler(table string, h BatchCommandHandler) {
+	f.hookMu.Lock()
+	defer f.hookMu.Unlock()
+	if f.batchHandlers == nil {
+		f.batchHandlers = make(map[string]BatchCommandHandler)
+	}
+	if h == nil {
+		delete(f.batchHandlers, table)
+		return
+	}
+	f.batchHandlers[table] = h
+}
 
 // SetCommandHandler routes commands whose Table equals table to h instead of
 // the store. A nil h removes the route.
@@ -141,6 +165,14 @@ type fsmCommandApplier interface {
 	ApplyFSMCommand(cmd *core.FSMCommand) error
 }
 
+// fsmSetBatcher is implemented by stores that can apply several FSMSet
+// commands as one durable write. CobaltDB writes them as one WAL frame, so a
+// replicated batch of judgments costs one fsync instead of one per command.
+// The result must equal applying the commands in order with ApplyFSMCommand.
+type fsmSetBatcher interface {
+	ApplyFSMSets(cmds []core.FSMCommand) error
+}
+
 // indexRebuilder is the optional interface a Storage implementation can
 // implement when it keeps in-memory secondary indexes. Restore replaces the
 // keyspace with raw Set calls, which bypass those indexes, so it must be
@@ -176,12 +208,29 @@ func (f *StorageFSM) applyCommand(log *core.RaftLogEntry) ([]core.FSMCommand, in
 	// A deterministic failure is different: no attempt can ever apply it, so
 	// the element is skipped and the entry is consumed, exactly as before the
 	// retry path existed. Retrying it would wedge the node at this index.
-	applied := make([]core.FSMCommand, 0, len(batch))
+	//
+	// Runs of consecutive commands are applied together where possible: plain
+	// sets through the store's fsmSetBatcher, commands of one table through
+	// its batch handler. A replicated batch of judgments then costs one
+	// durable write instead of one per judgment.
 	for i := range batch {
-		sub := &batch[i]
-		if sub.Origin == "" {
-			sub.Origin = cmd.Origin
+		if batch[i].Origin == "" {
+			batch[i].Origin = cmd.Origin
 		}
+	}
+	applied := make([]core.FSMCommand, 0, len(batch))
+	for i := 0; i < len(batch); {
+		end, run := f.batchRun(batch, i)
+		if end-i > 1 {
+			done, err := run(batch[i:end])
+			applied = append(applied, done...)
+			if err != nil {
+				return applied, fmt.Errorf("apply batch elements %d-%d at index %d: %w", i, end-1, log.Index, err)
+			}
+			i = end
+			continue
+		}
+		sub := &batch[i]
 		var subErr error
 		if sub.Op == core.FSMBatch {
 			subErr = fmt.Errorf("nested command batch")
@@ -194,12 +243,67 @@ func (f *StorageFSM) applyCommand(log *core.RaftLogEntry) ([]core.FSMCommand, in
 			}
 			f.batchLogger().Error("Skipping batch element that failed to apply",
 				"index", log.Index, "element", i, "table", sub.Table, "key", sub.Key, "error", subErr)
-			continue
+		} else {
+			applied = append(applied, *sub)
 		}
-		applied = append(applied, *sub)
+		i++
 	}
 	f.index = log.Index
 	return applied, nil
+}
+
+// batchRun finds the run starting at batch[i] that can be applied together
+// and how. A run of one is applied element by element.
+func (f *StorageFSM) batchRun(batch []core.FSMCommand, i int) (int, func([]core.FSMCommand) ([]core.FSMCommand, error)) {
+	if batch[i].Op == core.FSMBatch {
+		return i + 1, nil
+	}
+	if batch[i].Table != "" {
+		f.hookMu.RLock()
+		h := f.batchHandlers[batch[i].Table]
+		f.hookMu.RUnlock()
+		if h == nil {
+			return i + 1, nil
+		}
+		end := i + 1
+		for end < len(batch) && batch[end].Table == batch[i].Table && batch[end].Op != core.FSMBatch {
+			end++
+		}
+		return end, func(cmds []core.FSMCommand) ([]core.FSMCommand, error) {
+			done, err := h(cmds)
+			if err != nil {
+				return done, retryable(err)
+			}
+			return done, nil
+		}
+	}
+	batcher, ok := f.store.(fsmSetBatcher)
+	if !ok || !f.plainSet(&batch[i]) {
+		return i + 1, nil
+	}
+	end := i + 1
+	for end < len(batch) && f.plainSet(&batch[end]) {
+		end++
+	}
+	return end, func(cmds []core.FSMCommand) ([]core.FSMCommand, error) {
+		if err := batcher.ApplyFSMSets(cmds); err != nil {
+			return nil, retryable(err)
+		}
+		return cmds, nil
+	}
+}
+
+// plainSet reports whether cmd is an FSMSet that no table handler owns.
+func (f *StorageFSM) plainSet(cmd *core.FSMCommand) bool {
+	if cmd.Op != core.FSMSet {
+		return false
+	}
+	if cmd.Table == "" {
+		return true
+	}
+	f.hookMu.RLock()
+	defer f.hookMu.RUnlock()
+	return f.handlers[cmd.Table] == nil
 }
 
 func (f *StorageFSM) batchLogger() *slog.Logger {

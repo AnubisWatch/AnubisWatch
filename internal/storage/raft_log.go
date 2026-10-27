@@ -118,30 +118,59 @@ func (s *CobaltDBLogStore) GetLog(index uint64, log *core.RaftLogEntry) error {
 
 // StoreLog stores a single log entry
 func (s *CobaltDBLogStore) StoreLog(log *core.RaftLogEntry) error {
+	key, value, err := encodeLogEntry(log)
+	if err != nil {
+		return err
+	}
+	return s.db.Put(key, value)
+}
+
+func encodeLogEntry(log *core.RaftLogEntry) (string, []byte, error) {
 	entry := map[string]any{
 		"index": log.Index,
 		"term":  log.Term,
 		"type":  log.Type,
 		"data":  log.Data,
 	}
-
 	jsonData, err := json.Marshal(entry)
 	if err != nil {
-		return fmt.Errorf("failed to marshal log entry: %w", err)
+		return "", nil, fmt.Errorf("failed to marshal log entry: %w", err)
 	}
-
-	key := fmt.Sprintf("raft/log/%d", log.Index)
-	return s.db.Put(key, jsonData)
+	return fmt.Sprintf("raft/log/%d", log.Index), jsonData, nil
 }
 
-// StoreLogs stores multiple log entries in batch
+// logBatchBytes bounds the raw size of one batched WAL frame; base64, JSON
+// and encryption overhead keep the encoded frame under maxWALEntryBytes.
+const logBatchBytes = 512 * 1024
+
+// StoreLogs stores entries in as few WAL frames as fit, each written and
+// fsynced once, instead of one fsync per entry: a follower catching up
+// receives up to MaxAppendEntries entries per AppendEntries.
 func (s *CobaltDBLogStore) StoreLogs(logs []core.RaftLogEntry) error {
-	for _, log := range logs {
-		if err := s.StoreLog(&log); err != nil {
+	batch := make(map[string][]byte)
+	size := 0
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		err := s.db.putMany(batch)
+		batch, size = make(map[string][]byte), 0
+		return err
+	}
+	for i := range logs {
+		key, value, err := encodeLogEntry(&logs[i])
+		if err != nil {
 			return err
 		}
+		if size > 0 && size+len(value) > logBatchBytes {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		batch[key] = value
+		size += len(value)
 	}
-	return nil
+	return flush()
 }
 
 // DeleteRange deletes all log entries in the given range (inclusive)

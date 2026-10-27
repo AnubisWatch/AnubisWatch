@@ -20,6 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Upgrade note:** restoring onto a fresh node needs the original node's
   backup key (`<data>/backup.key` or `ANUBIS_BACKUP_ENCRYPTION_KEY`).
 
+### HA: followers catch up 3–4× faster
+
+- Found by the HA soak: a node restarted or paused under load drained its
+  backlog at 12–22 log entries per second, because every log entry, every
+  command of a replicated batch and every replicated judgment was its own
+  fsynced WAL write. Linearizable reads on that node waited for it, so its
+  API stayed slow for a minute or more.
+- Appended log entries, runs of plain writes in a batch, and runs of
+  replicated judgments (with their summaries) are now written as single WAL
+  frames. Judgments and summaries end up exactly as when saved one by one;
+  a replayed batch still counts nothing twice. Measured catch-up: 37–61
+  entries per second on the same disk.
+
 ### HA: Raft snapshots are files, not in-memory records
 
 - Raft snapshots were stored as CobaltDB records, so the in-memory tree (and

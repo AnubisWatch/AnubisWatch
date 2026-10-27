@@ -206,6 +206,13 @@ func (m *Manager) SetCommandHandler(table string, h raft.CommandHandler) {
 	m.fsm.SetCommandHandler(table, h)
 }
 
+// SetBatchCommandHandler routes runs of replicated commands for table inside
+// one batch to h (see raft.StorageFSM.SetBatchCommandHandler). Set it before
+// Start.
+func (m *Manager) SetBatchCommandHandler(table string, h raft.BatchCommandHandler) {
+	m.fsm.SetBatchCommandHandler(table, h)
+}
+
 // SetApplyObserver registers fn to see every replicated command after it is
 // applied on this node, whichever node proposed it. It runs on the Raft apply
 // path and must not block.
