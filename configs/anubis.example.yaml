@@ -85,7 +85,7 @@ dashboard:
   enabled: true
   branding:
     title: "AnubisWatch"
-    logo: ""  # Custom logo URL
+    logo: ""  # https:// URL or a /path; empty keeps the default logo
     theme: "auto"  # auto | dark | light
 
 # Souls (monitored targets)

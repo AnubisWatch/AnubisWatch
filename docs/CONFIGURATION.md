@@ -543,9 +543,12 @@ auth:
 
 | Field | Type | Default | Required | Description |
 |-------|------|---------|----------|-------------|
-| `title` | string | `"AnubisWatch"` | No | Browser title |
-| `logo` | string | - | No | Custom logo URL |
-| `theme` | string | `"auto"` | No | `auto`, `dark`, or `light` |
+| `title` | string | `"AnubisWatch"` | No | Dashboard, login page and browser title (at most 64 characters) |
+| `logo` | string | - | No | Logo image: an `https://` URL or a same-origin path starting with `/` |
+| `theme` | string | `"auto"` | No | Default theme (`auto`, `dark` or `light`) for viewers who have not picked one |
+
+Branding is public — the login page shows it — and is served by
+`GET /api/v1/branding`. Changes apply after a restart.
 
 ### Example
 
@@ -554,7 +557,7 @@ dashboard:
   enabled: true
   branding:
     title: "My Company Monitoring"
-    logo: "/assets/logo.png"
+    logo: "https://cdn.example.com/logo.svg"
     theme: "dark"
 ```
 

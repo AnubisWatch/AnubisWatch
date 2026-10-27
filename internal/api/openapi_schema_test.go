@@ -69,6 +69,7 @@ var specResponseTypes = map[string]reflect.Type{
 	"TLSConfig":          reflect.TypeOf(core.TLSConfig{}),
 	"AuthCreds":          reflect.TypeOf(core.AuthCreds{}),
 	"FlapDetection":      reflect.TypeOf(core.FlapDetectionConfig{}),
+	"DashboardBranding":  reflect.TypeOf(core.DashboardBranding{}),
 	"Judgment":           reflect.TypeOf(judgmentDTO{}),
 	"HeartbeatInfo":      reflect.TypeOf(heartbeatInfo{}),
 	"HeartbeatState":     reflect.TypeOf(core.HeartbeatState{}),

@@ -1843,3 +1843,29 @@ func TestValidate_ProductionRequiresTLS(t *testing.T) {
 		})
 	}
 }
+
+func TestDashboardBrandingValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		b    DashboardBranding
+		ok   bool
+	}{
+		{"defaults", DashboardBranding{}, true},
+		{"https logo", DashboardBranding{Title: "Acme Status", Logo: "https://cdn.example.com/logo.svg", Theme: "dark"}, true},
+		{"path logo", DashboardBranding{Logo: "/jackal-logo.svg", Theme: "auto"}, true},
+		{"http logo", DashboardBranding{Logo: "http://cdn.example.com/logo.svg"}, false},
+		{"javascript logo", DashboardBranding{Logo: "javascript:alert(1)"}, false},
+		{"protocol-relative logo", DashboardBranding{Logo: "//evil.example/logo.svg"}, false},
+		{"data logo", DashboardBranding{Logo: "data:image/svg+xml;base64,PHN2Zz4="}, false},
+		{"credentials in logo URL", DashboardBranding{Logo: "https://u:p@cdn.example.com/l.png"}, false},
+		{"unknown theme", DashboardBranding{Theme: "neon"}, false},
+		{"long title", DashboardBranding{Title: strings.Repeat("a", MaxBrandingTitleRunes+1)}, false},
+		{"control character in title", DashboardBranding{Title: "Acme\nStatus"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.b.validate(); (err == nil) != tc.ok {
+				t.Fatalf("validate() = %v, want ok=%v", err, tc.ok)
+			}
+		})
+	}
+}

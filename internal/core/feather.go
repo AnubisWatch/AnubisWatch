@@ -3,9 +3,12 @@ package core
 import (
 	"crypto/tls"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // VerdictsConfig holds alert rules configuration
@@ -270,11 +273,47 @@ type DashboardConfig struct {
 	Branding DashboardBranding `json:"branding" yaml:"branding"`
 }
 
-// DashboardBranding defines dashboard customization
+// DashboardBranding defines dashboard customization. It is public (the login
+// page shows it), so it holds nothing secret.
 type DashboardBranding struct {
 	Title string `json:"title" yaml:"title"`
+	// Logo is an https:// URL or a same-origin path ("/..."); the dashboard's
+	// CSP allows both as images.
 	Logo  string `json:"logo" yaml:"logo"`
 	Theme string `json:"theme" yaml:"theme"` // auto, dark, light
+}
+
+// MaxBrandingTitleRunes bounds dashboard.branding.title.
+const MaxBrandingTitleRunes = 64
+
+func (b DashboardBranding) validate() error {
+	if n := utf8.RuneCountInString(b.Title); n > MaxBrandingTitleRunes {
+		return fmt.Errorf("dashboard.branding.title is %d characters; at most %d", n, MaxBrandingTitleRunes)
+	}
+	for _, r := range b.Title {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("dashboard.branding.title must not contain control characters")
+		}
+	}
+	switch b.Theme {
+	case "", "auto", "dark", "light":
+	default:
+		return fmt.Errorf("dashboard.branding.theme must be auto, dark or light, not %q", b.Theme)
+	}
+	if b.Logo == "" {
+		return nil
+	}
+	if len(b.Logo) > 2048 {
+		return fmt.Errorf("dashboard.branding.logo is longer than 2048 bytes")
+	}
+	if strings.HasPrefix(b.Logo, "/") && !strings.HasPrefix(b.Logo, "//") {
+		return nil
+	}
+	u, err := url.Parse(b.Logo)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+		return fmt.Errorf("dashboard.branding.logo must be an https:// URL or a path starting with /")
+	}
+	return nil
 }
 
 // AuthConfig defines authentication settings

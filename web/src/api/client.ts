@@ -560,6 +560,8 @@ export type ApiJudgment = Schemas['Judgment']
 export type ApiAlertRule = Schemas['AlertRule']
 /** Wire format of a status page. */
 export type ApiStatusPage = Schemas['StatusPage']
+/** GET /api/v1/branding (public): dashboard.branding with defaults filled in. */
+export type DashboardBranding = Schemas['DashboardBranding']
 
 export type QuotaCounter = Schemas['QuotaCounter']
 /** GET /api/v1/quota: the current workspace's usage against its quotas. */
