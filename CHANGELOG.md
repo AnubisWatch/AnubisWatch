@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Upgrade note:** restoring onto a fresh node needs the original node's
   backup key (`<data>/backup.key` or `ANUBIS_BACKUP_ENCRYPTION_KEY`).
 
+### WAL checkpoints no longer stall writes
+
+- A checkpoint held the write lock while it serialized and fsynced the whole
+  live dataset, so every write — judgments included — waited for the full
+  rewrite. The snapshot is now written without the lock; the lock is retaken
+  only to carry over the writes made meanwhile (copied verbatim from the old
+  log's tail) and to rename the new log into place. A checkpoint that races a
+  rewrite or truncation is abandoned and retried later.
+
 ### Flap state after a longer outage
 
 - A new runner looked for the soul's last judgment only two intervals plus a
