@@ -418,6 +418,19 @@ export function useDashboards() {
   }
 }
 
+// App, Header and Sidebar each mount useAuth; concurrent session checks
+// share one /auth/me request instead of spending three per page load.
+let currentUserRequest: Promise<User> | null = null
+
+function fetchCurrentUser(): Promise<User> {
+  if (!currentUserRequest) {
+    currentUserRequest = api.get<User>('/auth/me').finally(() => {
+      currentUserRequest = null
+    })
+  }
+  return currentUserRequest
+}
+
 // Auth API hooks
 export function useAuth() {
   const [user, setUser] = useState<User | null>(null)
@@ -428,7 +441,7 @@ export function useAuth() {
     const sequence = ++syncSequence.current
     setLoading(true)
     try {
-      const currentUser = await api.get<User>('/auth/me')
+      const currentUser = await fetchCurrentUser()
       if (sequence === syncSequence.current) {
         setUser(currentUser)
         dispatchAuthSessionChanged({ state: 'authenticated', user: currentUser })

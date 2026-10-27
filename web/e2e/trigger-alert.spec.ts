@@ -93,7 +93,7 @@ test.describe("Trigger Alert journey", () => {
 		// --- Poll the API until the incident exists, then load the UI ---
 		// The Incidents page fetches only on mount (no auto-refresh), so we
 		// must wait for the incident to exist before navigating.
-		await waitForIncident(page, server, token);
+		await waitForIncident(page, server, token, soul.id);
 
 		await page.goto(`${server.baseURL}/incidents`);
 		await page.getByText("Leave the Temple").waitFor({ timeout: 10_000 });
