@@ -17,7 +17,7 @@ import (
 // not restrict which authenticated origins may replicate to it, because the
 // leader that adds it is not yet in its configuration. joinLoop asks the join
 // addresses to add it under its real node ID. The member that answers adds it
-// through the leader's joint-consensus change (forwarding from a follower)
+// through the leader's single-server membership change (forwarding from a follower)
 // and replies with every member's real ID and address, which the joiner
 // installs as its peers -- from then on it is an ordinary voter.
 //
@@ -116,7 +116,6 @@ func (n *Node) joinLoop() {
 // installJoinedMembers makes the members a Join answer listed this node's
 // peers and ends the wait. via is the address the answer came from.
 func (n *Node) installJoinedMembers(members []core.RaftPeer, via string) {
-	tt, _ := n.transport.(*TCPTransport)
 	usable := make([]core.RaftPeer, 0, len(members))
 	for i, member := range members {
 		if member.ID == "" || member.ID == n.nodeID || member.Address == "" {
@@ -130,40 +129,28 @@ func (n *Node) installJoinedMembers(members []core.RaftPeer, via string) {
 			if i == 0 && dialableAddr(via) {
 				member.Address = via
 			} else {
-				n.logger.Warn("Ignoring cluster member with an undialable address; set necropolis advertise_addr on it",
+				// It is still a voter and must count in quorums; it is just
+				// not dialed until a usable address is learned.
+				n.logger.Warn("Cluster member has an undialable address; set necropolis advertise_addr on it",
 					"member", member.ID, "address", member.Address)
-				continue
 			}
 		}
 		usable = append(usable, member)
 	}
-	n.peerMu.Lock()
+	// The answer lists the committed configuration; it becomes this node's
+	// base until the leader's log (or snapshot) replaces it.
+	n.mu.Lock()
+	base := n.membershipBase()
 	for _, member := range usable {
-		if _, exists := n.peers[member.ID]; !exists {
-			n.peers[member.ID] = &Peer{ID: member.ID, Address: member.Address, Region: member.Region, Role: member.Role}
+		if memberPosition(base, member.ID) < 0 {
+			base = append(base, member)
 		}
 	}
-	n.peerMu.Unlock()
-	for _, member := range usable {
-		if tt != nil {
-			tt.RegisterPeer(member.ID, member.Address)
-		}
-	}
+	base, _ = normalizeMembers(base)
+	n.setMembershipBaseLocked(base)
+	n.mu.Unlock()
 
-	n.membership.mu.Lock()
-	inConfig := make(map[string]bool, len(n.membership.config))
-	for _, id := range n.membership.config {
-		inConfig[id] = true
-	}
-	for _, member := range members {
-		if member.ID != "" && !inConfig[member.ID] {
-			n.membership.config = append(n.membership.config, member.ID)
-			inConfig[member.ID] = true
-		}
-	}
-	n.membership.mu.Unlock()
-
-	n.persistPeers()
+	n.persistMembers(base)
 	n.awaitingJoin.Store(false)
 }
 
@@ -275,11 +262,15 @@ func (n *Node) memberAt(addr string) string {
 
 // membersExcept lists this node and its peers, leaving out id.
 func (n *Node) membersExcept(id string) []core.RaftPeer {
+	role := core.RoleVoter
+	if n.selfNonVoter.Load() {
+		role = core.RoleNonVoter
+	}
 	members := []core.RaftPeer{{
 		ID:      n.nodeID,
 		Address: firstNonEmptyString(n.advertiseAddr, n.bindAddr),
 		Region:  n.config.Region,
-		Role:    core.RoleVoter,
+		Role:    role,
 	}}
 	for _, peer := range n.GetPeers() {
 		if peer.ID != id && peer.ID != n.nodeID {

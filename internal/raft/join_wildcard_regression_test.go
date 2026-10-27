@@ -24,7 +24,12 @@ func TestInstallJoinedMembersReplacesWildcardResponderAddress(t *testing.T) {
 	if p := n.peers["other"]; p == nil || p.Address != "10.0.0.3:7946" {
 		t.Fatalf("other member = %+v", p)
 	}
-	if _, ok := n.peers["unreachable"]; ok {
-		t.Fatal("member with an undialable address was installed")
+	// A member with an undialable address is still a voter of the cluster and
+	// must count in this node's quorums (leaving it out would let the joiner
+	// win an election with fewer votes than a real majority); it is only
+	// never dialed at that address (syncPeersLocked registers dialable
+	// addresses only).
+	if _, ok := n.peers["unreachable"]; !ok {
+		t.Fatal("member with an undialable address left out of the configuration")
 	}
 }

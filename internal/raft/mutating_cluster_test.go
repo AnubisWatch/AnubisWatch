@@ -157,8 +157,37 @@ func TestNodeProcessCommittedPropagatesFSMError(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("apply future was not notified")
 	}
+	// A failure that can never be applied is skipped, so the node keeps
+	// applying the rest of the log instead of wedging at this index. The
+	// error still reaches the caller, which can retry the operation.
+	if node.lastApplied != 1 {
+		t.Fatalf("the skipped entry left the node index at %d, want 1", node.lastApplied)
+	}
+}
+
+func TestNodeProcessCommittedRetriesRetryableFSMError(t *testing.T) {
+	applyErr := errors.New("apply failed")
+	node := createTestNode(t)
+	node.fsm = &failingFSM{err: Retryable(applyErr)}
+	node.log = append(node.log, core.RaftLogEntry{Index: 1, Term: 3, Type: core.LogCommand})
+	future := &applyFuture{done: make(chan struct{})}
+	node.applyWaiters.Store(uint64(1), future)
+	t.Cleanup(func() { node.applyWaiters.Delete(uint64(1)) })
+
+	node.processCommitted(1)
+
+	select {
+	case <-future.done:
+		if !errors.Is(future.err, applyErr) {
+			t.Fatalf("expected apply error on future, got %v", future.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("apply future was not notified")
+	}
+	// A transient failure may still succeed on a later attempt, so the
+	// entry stays unapplied and the node retries it.
 	if node.lastApplied != 0 {
-		t.Fatalf("failed apply advanced node index to %d", node.lastApplied)
+		t.Fatalf("a retryable failure advanced the node index to %d", node.lastApplied)
 	}
 }
 

@@ -108,6 +108,9 @@ type Manager struct {
 	liveMu    sync.RWMutex
 	live      []NodeLoad
 	wasLeader bool
+	// hadQuorum is the quorum-contact state the heartbeat goroutine last
+	// observed (see checkQuorumTransition); written only by that goroutine.
+	hadQuorum bool
 
 	// Application hooks (see SetApplyObserver, SetRestoreObserver,
 	// SetMembershipObserver), guarded by hookMu.
@@ -344,7 +347,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to build TLS config: %w", err)
 	}
 	if tlsCfg != nil {
-		m.logger.Info("Raft peer TLS enabled", "min_version", "TLS 1.2", "verify_peers", m.config.TLS.VerifyPeers)
+		m.logger.Info("Raft peer TLS enabled", "min_version", "TLS 1.2", "verify_peers", m.config.TLS.VerifyPeers, "client_auth", tlsCfg.ClientAuth.String())
 	} else if m.necroConfig.ClusterSecret != "" {
 		m.logger.Warn("Raft inter-node auth uses only pre-shared key (no TLS); specify tls.cert_file to enable mTLS")
 	}
@@ -493,17 +496,54 @@ func (m *Manager) startHeartbeats() {
 		defer m.heartbeatWg.Done()
 		timer := time.NewTimer(m.heartbeatInterval())
 		defer timer.Stop()
+		// Quorum contact is watched more often than heartbeats are refreshed:
+		// a node cut off from the majority must stop owning souls well before
+		// the majority's failover timeout hands them to another member.
+		quorumTicker := time.NewTicker(m.quorumCheckInterval())
+		defer quorumTicker.Stop()
 		for {
 			select {
 			case <-m.heartbeatStop:
 				return
+			case <-quorumTicker.C:
+				m.checkQuorumTransition()
 			case <-timer.C:
 				m.refreshNodeHeartbeats()
 				m.publishLiveMembers()
+				m.checkQuorumTransition()
 				timer.Reset(m.heartbeatInterval())
 			}
 		}
 	}()
+}
+
+// quorumCheckInterval is how often quorum contact is re-evaluated: half an
+// election timeout, bounded to [10ms, 1s].
+func (m *Manager) quorumCheckInterval() time.Duration {
+	interval := m.config.ElectionTimeout.Duration / 2
+	if interval <= 0 || interval > time.Second {
+		interval = time.Second
+	}
+	if interval < 10*time.Millisecond {
+		interval = 10 * time.Millisecond
+	}
+	return interval
+}
+
+// checkQuorumTransition re-plans ownership when this node gains or loses
+// contact with a working majority. Called only from the heartbeat goroutine.
+func (m *Manager) checkQuorumTransition() {
+	has := m.HasQuorum()
+	if has == m.hadQuorum {
+		return
+	}
+	m.hadQuorum = has
+	if has {
+		m.logger.Info("in contact with a cluster majority again; resuming soul ownership")
+	} else {
+		m.logger.Warn("lost contact with a cluster majority; releasing soul ownership until it is restored")
+	}
+	m.notifyMembership()
 }
 
 func (m *Manager) stopHeartbeats() {
@@ -562,7 +602,7 @@ func (m *Manager) publishLiveMembers() {
 	m.mu.RLock()
 	distributor, node, stopped := m.distributor, m.node, m.stopped
 	m.mu.RUnlock()
-	if distributor == nil || node == nil || stopped || !node.IsLeader() {
+	if distributor == nil || node == nil || stopped || !node.IsLeader() || !node.HasQuorumContact() {
 		m.wasLeader = false
 		return
 	}
@@ -630,6 +670,13 @@ func (m *Manager) LiveMembers() []NodeLoad {
 	if node == nil {
 		return []NodeLoad{{NodeID: m.localID(), Region: firstNonEmpty(m.config.Region, m.necroConfig.Region)}}
 	}
+	if !node.HasQuorumContact() {
+		// Cut off from the majority (or not a member): own nothing. The
+		// majority side hands this node's souls to a live member after its
+		// failover timeout, and running them here too would duplicate checks
+		// and alerts. Ownership comes back when contact does.
+		return nil
+	}
 	m.liveMu.RLock()
 	live := append([]NodeLoad(nil), m.live...)
 	m.liveMu.RUnlock()
@@ -690,7 +737,7 @@ func (m *Manager) Running() bool {
 	return m.node != nil && !m.stopped
 }
 
-// AddNode adds a voting member through a replicated joint-consensus
+// AddNode adds a voting member through a replicated single-server
 // configuration change. It may be called on any node: a follower forwards the
 // change to the leader. Only one change can be in flight at a time.
 func (m *Manager) AddNode(peer core.RaftPeer) error {
@@ -736,7 +783,7 @@ func (m *Manager) AddNodeByAddress(addr, region string) (core.RaftPeer, error) {
 	return peer, m.AddNode(peer)
 }
 
-// RemoveNode removes a member through a replicated joint-consensus
+// RemoveNode removes a member through a replicated single-server
 // configuration change, forwarding to the leader from a follower.
 func (m *Manager) RemoveNode(nodeID string) error {
 	m.mu.RLock()
@@ -818,7 +865,10 @@ func (m *Manager) ApplyMutation(cmd core.FSMCommand, timeout time.Duration) (uin
 	return node.ApplyOrForward(cmd, timeout)
 }
 
-// IsLeader returns true if this node is the Raft leader
+// IsLeader returns true if this node is the Raft leader and a voter majority
+// has acknowledged it within the last election timeout. A leader cut off from
+// the majority reports false even before check-quorum steps it down, so
+// leader-only decisions fail closed.
 func (m *Manager) IsLeader() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -827,7 +877,47 @@ func (m *Manager) IsLeader() bool {
 		return false
 	}
 
-	return m.node.State() == core.StateLeader
+	return m.node.State() == core.StateLeader && m.node.HasQuorumContact()
+}
+
+// HasQuorum reports whether this node is in contact with a working cluster
+// majority (raft.Node.HasQuorumContact). Without a Raft node (standalone) it
+// is always true. Work that must run on exactly one node should stop while it
+// is false.
+func (m *Manager) HasQuorum() bool {
+	m.mu.RLock()
+	node := m.node
+	m.mu.RUnlock()
+	if node == nil {
+		return true
+	}
+	return node.HasQuorumContact()
+}
+
+// VerifyLeader confirms with a fresh round of acknowledgements that this node
+// is still the leader of a voter majority (raft.Node.VerifyLeader). Use it
+// before acting on leadership where a stale leader would do harm.
+func (m *Manager) VerifyLeader(timeout time.Duration) error {
+	m.mu.RLock()
+	node := m.node
+	m.mu.RUnlock()
+	if node == nil {
+		return &core.RaftError{Code: core.ErrNotLeader, Message: "standalone node"}
+	}
+	return node.VerifyLeader(timeout)
+}
+
+// ReadBarrier makes the next local read linearizable: it returns once this
+// node has applied every write committed before the call. Only the leader can
+// serve it (raft.Node.ReadBarrier).
+func (m *Manager) ReadBarrier(timeout time.Duration) (uint64, error) {
+	m.mu.RLock()
+	node := m.node
+	m.mu.RUnlock()
+	if node == nil {
+		return 0, &core.RaftError{Code: core.ErrNotLeader, Message: "standalone node"}
+	}
+	return node.ReadBarrier(timeout)
 }
 
 // Leader returns the current leader's ID

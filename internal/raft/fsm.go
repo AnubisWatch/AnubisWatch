@@ -93,7 +93,14 @@ func NewStorageFSM(store Storage) *StorageFSM {
 // Apply applies a Raft log entry to the FSM
 func (f *StorageFSM) Apply(log *core.RaftLogEntry) interface{} {
 	applied, result := f.apply(log)
-	if len(applied) > 0 {
+	// Only commands that were durably applied may reach the observer. A batch
+	// that fails part-way on a transient error leaves the applied index
+	// unadvanced, so its successful prefix is replayed by the next attempt;
+	// notifying for that prefix now would deliver the same command twice and
+	// describe a state the FSM never committed to. An entry that was consumed
+	// -- applied, or carried past a command that can never be applied -- is
+	// reported exactly once.
+	if result == nil && len(applied) > 0 {
 		f.hookMu.RLock()
 		observer := f.observer
 		f.hookMu.RUnlock()
@@ -163,9 +170,12 @@ func (f *StorageFSM) applyCommand(log *core.RaftLogEntry) ([]core.FSMCommand, in
 	if err := json.Unmarshal(cmd.Value, &batch); err != nil {
 		return nil, fmt.Errorf("failed to decode command batch: %w", err)
 	}
-	// A batch element that fails is skipped rather than failing the entry: the
-	// entry is committed, and an error here would stop this node applying the
-	// log at all, wedging it over one bad judgment.
+	// A committed batch must remain retryable after a storage failure. Commands
+	// are idempotent, so replaying its successful prefix is safe; advancing the
+	// applied index past a failed element would permanently lose that write.
+	// A deterministic failure is different: no attempt can ever apply it, so
+	// the element is skipped and the entry is consumed, exactly as before the
+	// retry path existed. Retrying it would wedge the node at this index.
 	applied := make([]core.FSMCommand, 0, len(batch))
 	for i := range batch {
 		sub := &batch[i]
@@ -179,6 +189,9 @@ func (f *StorageFSM) applyCommand(log *core.RaftLogEntry) ([]core.FSMCommand, in
 			subErr = f.applyOne(sub)
 		}
 		if subErr != nil {
+			if isRetryableApplyError(subErr) {
+				return applied, fmt.Errorf("apply batch element %d at index %d: %w", i, log.Index, subErr)
+			}
 			f.batchLogger().Error("Skipping batch element that failed to apply",
 				"index", log.Index, "element", i, "table", sub.Table, "key", sub.Key, "error", subErr)
 			continue
@@ -199,6 +212,12 @@ func (f *StorageFSM) batchLogger() *slog.Logger {
 }
 
 // applyOne applies a single (non-batch) command to the store.
+//
+// The error it returns says whether a later attempt may still succeed. A
+// storage failure is transient, so it is marked retryable and the node
+// retries the committed entry. A handler owns the meaning of its command and
+// therefore the classification of its own failure: it returns a plain error
+// for a deterministic rejection and wraps transient failures with Retryable.
 func (f *StorageFSM) applyOne(cmd *core.FSMCommand) error {
 	if cmd.Table != "" {
 		f.hookMu.RLock()
@@ -212,21 +231,31 @@ func (f *StorageFSM) applyOne(cmd *core.FSMCommand) error {
 	// Prefer the typed ApplyFSMCommand path when the store supports it.
 	// This keeps secondary indexes consistent with the consensus log.
 	if applier, ok := f.store.(fsmCommandApplier); ok {
-		return applier.ApplyFSMCommand(cmd)
+		if err := applier.ApplyFSMCommand(cmd); err != nil {
+			return retryable(err)
+		}
+		return nil
 	}
 
 	// Fallback: raw Set/Delete (does not update secondary indexes; used by
 	// in-memory test stores where indexes are not needed).
 	switch cmd.Op {
 	case core.FSMSet:
-		return f.store.Set(cmd.Key, cmd.Value)
+		if err := f.store.Set(cmd.Key, cmd.Value); err != nil {
+			return retryable(err)
+		}
 	case core.FSMDelete:
-		return f.store.Delete(cmd.Key)
+		if err := f.store.Delete(cmd.Key); err != nil {
+			return retryable(err)
+		}
 	case core.FSMDeletePrefix:
-		return f.store.DeletePrefix(cmd.Key)
+		if err := f.store.DeletePrefix(cmd.Key); err != nil {
+			return retryable(err)
+		}
 	default:
 		return fmt.Errorf("unknown command op: %d", cmd.Op)
 	}
+	return nil
 }
 
 // applyConfiguration applies a configuration change
@@ -235,7 +264,7 @@ func (f *StorageFSM) applyConfiguration(log *core.RaftLogEntry) interface{} {
 	// We just persist them here
 	key := fmt.Sprintf("raft/config/%d", log.Index)
 	if err := f.store.Set(key, log.Data); err != nil {
-		return err
+		return retryable(err)
 	}
 	f.index = log.Index
 	return nil
@@ -292,13 +321,17 @@ func (f *StorageFSM) Restore(snapshot []byte) error {
 	if err := f.restore(snapshot); err != nil {
 		return err
 	}
+	f.notifyRestored()
+	return nil
+}
+
+func (f *StorageFSM) notifyRestored() {
 	f.hookMu.RLock()
 	observer := f.restoreObserver
 	f.hookMu.RUnlock()
 	if observer != nil {
 		observer()
 	}
-	return nil
 }
 
 func (f *StorageFSM) restore(snapshot []byte) error {

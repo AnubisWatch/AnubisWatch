@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
@@ -40,6 +41,10 @@ type Batcher struct {
 	pending []core.FSMCommand
 	dropped int
 	failing bool
+	// droppedTotal counts every command discarded because the backlog
+	// overflowed, since the batcher was created. It only ever grows, so it can
+	// back a monotonic counter metric; dropped above is reset by each log line.
+	droppedTotal atomic.Uint64
 
 	kick      chan struct{}
 	stopCh    chan struct{}
@@ -82,6 +87,7 @@ func (b *Batcher) Enqueue(cmd core.FSMCommand) {
 	if over := len(b.pending) - b.maxPending; over > 0 {
 		b.pending = append([]core.FSMCommand(nil), b.pending[over:]...)
 		b.dropped += over
+		b.droppedTotal.Add(uint64(over))
 	}
 	full := len(b.pending) >= b.maxCommands
 	b.mu.Unlock()
@@ -98,6 +104,14 @@ func (b *Batcher) Pending() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.pending)
+}
+
+// DroppedTotal returns how many queued commands have been discarded because
+// the backlog exceeded its limit, since the batcher was created. The value is
+// monotonically non-decreasing and safe to read concurrently, so it can feed a
+// counter metric directly.
+func (b *Batcher) DroppedTotal() uint64 {
+	return b.droppedTotal.Load()
 }
 
 // Stop stops the loop and makes a final attempt to flush what is queued,
@@ -181,6 +195,7 @@ func (b *Batcher) flushOnce() error {
 		if over := len(b.pending) - b.maxPending; over > 0 {
 			b.pending = b.pending[over:]
 			b.dropped += over
+			b.droppedTotal.Add(uint64(over))
 		}
 		if !b.failing {
 			b.logger.Warn("replication batch failed; will retry", "commands", len(batch), "err", err)

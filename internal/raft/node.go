@@ -24,6 +24,13 @@ const (
 	// not bring it back campaigning against the cluster it left.
 	stableRemoved     = "membership_removed"
 	snapshotChunkSize = 1 << 20
+	// applyRetryInitialBackoff is the delay before the first retry of a
+	// committed apply that failed. It doubles while the failure persists, up
+	// to applyRetryMaxBackoff.
+	applyRetryInitialBackoff = 100 * time.Millisecond
+	// applyRetryMaxBackoff caps the retry delay, so a node keeps re-trying a
+	// recovered store without spinning on a permanently broken one.
+	applyRetryMaxBackoff = 5 * time.Second
 )
 
 type hardState struct {
@@ -70,6 +77,9 @@ type Node struct {
 	logBaseTerm uint64
 	commitIndex uint64
 	lastApplied uint64
+	// restoring marks a snapshot restore in flight. The node must not
+	// campaign while its state is being replaced.
+	restoring bool
 
 	// Volatile state for leaders (reset on election)
 	nextIndex  map[string]uint64
@@ -79,22 +89,38 @@ type Node struct {
 	peers  map[string]*Peer
 	peerMu sync.RWMutex
 
-	// Membership configuration (for joint consensus)
+	// Membership configuration (single-server changes; see membership.go).
+	// base is the latest committed configuration; latest folds every
+	// membership entry in the log over it and is the one in effect.
 	membership struct {
-		mu           sync.RWMutex
-		config       []string        // Current configuration (node IDs)
-		oldConfig    []string        // Old configuration during joint consensus
-		newConfig    []string        // New configuration during joint consensus
-		jointState   bool            // True if in joint consensus
-		pendingIndex uint64          // Log index of pending membership change
-		changes      map[uint64]bool // Track applied membership change log indices
+		mu          sync.RWMutex
+		base        []core.RaftPeer // committed configuration, this node included
+		latest      []core.RaftPeer // effective configuration, this node included
+		latestIndex uint64          // index of the entry defining latest (0 = base)
 	}
+	// selfNonVoter is set when this node is not a voter of the effective
+	// configuration (a non-voter, removed, or not added yet).
+	selfNonVoter atomic.Bool
+	// leaderNoopIndex is the index of the no-op this node appended when it
+	// became leader, and leaderSince when that happened. Guarded by mu.
+	leaderNoopIndex uint64
+	leaderSince     time.Time
+	// catchUpTarget is the leader commit index reported when contact with the
+	// current leader was (re)established. Until lastApplied reaches it this
+	// follower's state is stale and HasQuorumContact stays false. Guarded by mu.
+	catchUpTarget uint64
+	// selfAbsent is set while this node is not in its effective
+	// configuration (removed, or not added yet).
+	selfAbsent atomic.Bool
 
 	// Storage
 	storage  LogStore
 	stable   StableStore
 	snapshot SnapshotStore
 	fsm      FSM
+	// applyMu serializes committed-entry application with snapshot replacement
+	// and capture. Do not hold mu while waiting for it: observers may read Node.
+	applyMu sync.Mutex
 
 	// Snapshot state
 	snapshotThreshold  int
@@ -105,6 +131,9 @@ type Node struct {
 
 	// Networking
 	transport Transport
+	// Coalesce replication triggers while a peer's RPC is in flight. Key by
+	// peer identity so an old member cannot reserve its replacement's slot.
+	replicationInFlight sync.Map // *Peer -> struct{}
 
 	// Channels for internal communication
 	applyCh    chan *applyFuture
@@ -112,6 +141,11 @@ type Node struct {
 	rpcCh      chan *rpcWrapper
 	shutdownCh chan struct{}
 	doneCh     chan struct{}
+	loops      sync.WaitGroup // protocol and application loops own doneCh together
+	// applyRetryCh requests a re-attempt of a committed apply that failed.
+	// Buffered (cap 1) so the apply path never blocks and repeated failures
+	// coalesce into one pending retry. See applyRetryLoop.
+	applyRetryCh chan struct{}
 	// electionResetCh signals `run()` to reset the follower election
 	// timer when a valid AppendEntries arrives. Buffered so the sender
 	// never blocks — multiple resets before `run()` drains coalesce.
@@ -121,10 +155,21 @@ type Node struct {
 	electionTimeout  time.Duration
 	heartbeatTimeout time.Duration
 	commitTimeout    time.Duration
+	// applyRetryBackoff is the delay before the next retry of a failed
+	// committed apply. It grows while the failure persists and is reset once
+	// a pass applies every committed entry. Guarded by applyRetryMu.
+	applyRetryMu      sync.Mutex
+	applyRetryBackoff time.Duration
 
 	// Leader tracking
 	leaderID    string
 	lastContact time.Time
+
+	// bg tracks replication goroutines so Stop can wait for them; bgClosed
+	// (under bgMu) refuses new ones once Stop has begun.
+	bgMu     sync.Mutex
+	bgClosed bool
+	bg       sync.WaitGroup
 
 	// Control
 	stopMu   sync.Mutex
@@ -156,6 +201,14 @@ type Peer struct {
 	matchIndex   uint64
 	lastContact  time.Time
 	heartbeatRTT time.Duration
+	// leaving marks a member of the committed configuration whose removal is
+	// appended but not committed: it still receives the log but no longer
+	// counts in any quorum.
+	leaving bool
+	// ackTerm/ackSentAt record the newest request of ackTerm that this peer
+	// accepted (see markPeerAck). Guarded by peerMu.
+	ackTerm   uint64
+	ackSentAt time.Time
 }
 
 // applyFuture represents a future result of applying a command
@@ -285,10 +338,12 @@ func NewNodeWithStableStore(config core.RaftConfig, storage LogStore, stable Sta
 		rpcCh:             make(chan *rpcWrapper, 256),
 		shutdownCh:        make(chan struct{}),
 		doneCh:            make(chan struct{}),
+		applyRetryCh:      make(chan struct{}, 1),
 		electionResetCh:   make(chan struct{}, 1),
 		electionTimeout:   config.ElectionTimeout.Duration,
 		heartbeatTimeout:  config.HeartbeatTimeout.Duration,
 		commitTimeout:     config.CommitTimeout.Duration,
+		applyRetryBackoff: applyRetryInitialBackoff,
 		leaderID:          "",
 		lastContact:       time.Now(),
 		logger:            logger.With("component", "raft", "node_id", config.NodeID),
@@ -296,24 +351,10 @@ func NewNodeWithStableStore(config core.RaftConfig, storage LogStore, stable Sta
 		lastSnapshotIndex: 0,
 	}
 
-	// Initialize peers from config
-	for _, p := range config.Peers {
-		if p.ID != config.NodeID {
-			n.peers[p.ID] = &Peer{
-				ID:      p.ID,
-				Address: p.Address,
-				Region:  p.Region,
-				Role:    p.Role,
-			}
-		}
-	}
-
-	// Initialize membership configuration
-	n.membership.config = []string{config.NodeID}
-	for _, p := range config.Peers {
-		n.membership.config = append(n.membership.config, p.ID)
-	}
-	n.membership.changes = make(map[uint64]bool)
+	// Initialize the configuration from the static peers. This node and
+	// duplicate entries are collapsed, so neither counts twice in a quorum.
+	n.membership.base = initialMembers(config, n.logger)
+	n.refreshMembershipLocked()
 
 	return n, nil
 }
@@ -365,23 +406,16 @@ func (n *Node) SetTransport(transport Transport) {
 }
 
 // transportMember decides which authenticated origins may send RPCs to this
-// node: current members only, so a removed node holding the secret cannot keep
-// voting or replicating. A node that knows no members yet (it is waiting to be
-// added to a cluster) accepts any origin holding the secret, since the leader
-// that adds it is not in its configuration until the first entries arrive.
+// node. It accepts every origin that passed authentication (cluster secret /
+// mTLS): Raft requires a server to accept RPCs from servers outside its own
+// configuration, because its configuration may lag -- a node that has not yet
+// received the entry adding D must still accept AppendEntries from D once D
+// is the elected leader, or it can never catch up. Disruption by a removed
+// node is prevented elsewhere: it stops campaigning (removed), and pre-vote
+// with leader stickiness denies votes while a live leader exists. Forward
+// requests are still restricted to members (verifyForward).
 func (n *Node) transportMember(origin, method string) bool {
-	// A joiner is by definition not a member yet, and a node being summoned
-	// is asked who it is before it is one.
-	if method == methodJoin || method == methodIdentify || n.awaitingJoin.Load() {
-		return true
-	}
-	n.peerMu.RLock()
-	defer n.peerMu.RUnlock()
-	if len(n.peers) == 0 {
-		return true
-	}
-	_, ok := n.peers[origin]
-	return ok
+	return origin != ""
 }
 
 // Start starts the Raft node
@@ -403,6 +437,13 @@ func (n *Node) Start() error {
 	if err := n.restoreLog(); err != nil {
 		return fmt.Errorf("failed to restore log: %w", err)
 	}
+	// Membership entries in the log are in effect whether or not they have
+	// committed: a pending change survives the restart.
+	n.mu.Lock()
+	if n.logHasMembershipLocked() {
+		n.refreshMembershipLocked()
+	}
+	n.mu.Unlock()
 	if n.commitIndex > n.lastApplied {
 		n.processCommitted(n.commitIndex)
 		if n.lastApplied < n.commitIndex {
@@ -429,8 +470,11 @@ func (n *Node) Start() error {
 	n.running.Store(true)
 
 	// Start goroutines
-	go n.run()
-	go n.applyLoop()
+	n.loops.Add(3)
+	go func() { defer n.loops.Done(); n.run() }()
+	go func() { defer n.loops.Done(); n.applyLoop() }()
+	go func() { defer n.loops.Done(); n.applyRetryLoop() }()
+	go func() { n.loops.Wait(); close(n.doneCh) }()
 
 	n.peerMu.RLock()
 	peerCount := len(n.peers)
@@ -462,11 +506,23 @@ func (n *Node) Stop() error {
 		}
 	}
 
-	// Wait for goroutines to finish
+	// Wait for goroutines to finish: the protocol loops, then the
+	// replication RPCs still in flight (the stopped transport fails them).
+	n.bgMu.Lock()
+	n.bgClosed = true
+	n.bgMu.Unlock()
+	bgDone := make(chan struct{})
+	go func() { n.bg.Wait(); close(bgDone) }()
+	deadline := time.Now().Add(5 * time.Second)
 	select {
 	case <-n.doneCh:
-	case <-time.After(5 * time.Second):
+	case <-time.After(time.Until(deadline)):
 		n.logger.Warn("Timeout waiting for node to stop")
+	}
+	select {
+	case <-bgDone:
+	case <-time.After(time.Until(deadline)):
+		n.logger.Warn("Timeout waiting for replication RPCs to stop")
 	}
 
 	n.running.Store(false)
@@ -574,321 +630,14 @@ func (n *Node) Apply(cmd core.FSMCommand, timeout time.Duration) (uint64, uint64
 	}
 }
 
-// AddPeer adds a peer to the cluster using joint consensus
-// This is safe for production use and prevents split-brain scenarios
-func (n *Node) AddPeer(peer core.RaftPeer) error {
-	n.mu.RLock()
-	if n.state.Load().(core.RaftState) != core.StateLeader {
-		n.mu.RUnlock()
-		return &core.RaftError{Code: core.ErrNotLeader, Message: "only leader can add peers"}
-	}
-	n.mu.RUnlock()
-
-	if peer.ID == n.nodeID {
-		return fmt.Errorf("cannot add self as peer")
-	}
-
-	n.peerMu.RLock()
-	if _, exists := n.peers[peer.ID]; exists {
-		n.peerMu.RUnlock()
-		return fmt.Errorf("peer %s already exists", peer.ID)
-	}
-	n.peerMu.RUnlock()
-
-	// Get current configuration
-	n.membership.mu.Lock()
-	oldConfig := make([]string, len(n.membership.config))
-	copy(oldConfig, n.membership.config)
-	newConfig := append([]string(nil), n.membership.config...)
-	newConfig = append(newConfig, peer.ID)
-	n.membership.mu.Unlock()
-
-	// Create membership change entry for joint consensus
-	change := core.MembershipChange{
-		Type:      core.MembershipAddPeer,
-		Peer:      peer,
-		OldConfig: oldConfig,
-		NewConfig: newConfig,
-		Phase:     "joint",
-	}
-
-	// Propose the membership change
-	if err := n.proposeMembershipChange(change); err != nil {
-		return fmt.Errorf("failed to propose membership change: %w", err)
-	}
-
-	// Register peer address with transport
-	if tt, ok := n.transport.(*TCPTransport); ok {
-		tt.RegisterPeer(peer.ID, peer.Address)
-	}
-
-	n.logger.Info("Peer added via joint consensus", "peer_id", peer.ID, "address", peer.Address)
-	return nil
-}
-
-// RemovePeer removes a peer from the cluster using joint consensus
-// This is safe for production use and prevents quorum loss
-func (n *Node) RemovePeer(peerID string) error {
-	n.mu.RLock()
-	if n.state.Load().(core.RaftState) != core.StateLeader {
-		n.mu.RUnlock()
-		return &core.RaftError{Code: core.ErrNotLeader, Message: "only leader can remove peers"}
-	}
-	n.mu.RUnlock()
-
-	if peerID == n.nodeID {
-		return fmt.Errorf("cannot remove self")
-	}
-
-	n.peerMu.RLock()
-	peer, exists := n.peers[peerID]
-	if !exists {
-		n.peerMu.RUnlock()
-		return fmt.Errorf("peer %s not found", peerID)
-	}
-	n.peerMu.RUnlock()
-
-	// Get current configuration
-	n.membership.mu.Lock()
-	oldConfig := make([]string, len(n.membership.config))
-	copy(oldConfig, n.membership.config)
-	newConfig := make([]string, 0, len(n.membership.config)-1)
-	for _, id := range n.membership.config {
-		if id != peerID {
-			newConfig = append(newConfig, id)
-		}
-	}
-	n.membership.mu.Unlock()
-
-	// Create membership change entry for joint consensus
-	change := core.MembershipChange{
-		Type:      core.MembershipRemovePeer,
-		Peer:      core.RaftPeer{ID: peer.ID, Address: peer.Address, Region: peer.Region, Role: peer.Role},
-		OldConfig: oldConfig,
-		NewConfig: newConfig,
-		Phase:     "joint",
-	}
-
-	// Propose the membership change
-	if err := n.proposeMembershipChange(change); err != nil {
-		return fmt.Errorf("failed to propose membership change: %w", err)
-	}
-
-	// Unregister peer from transport
-	if tt, ok := n.transport.(*TCPTransport); ok {
-		tt.UnregisterPeer(peerID)
-	}
-
-	n.logger.Info("Peer removed via joint consensus", "peer_id", peerID)
-	return nil
-}
-
-// proposeMembershipChange proposes a membership change to the cluster
-func (n *Node) proposeMembershipChange(change core.MembershipChange) error {
-	data, _ := json.Marshal(change)
-
-	entry := core.RaftLogEntry{Term: n.currentTerm, Type: core.LogMembershipChange, Data: data}
-	n.mu.Lock()
-	entry.Term = n.currentTerm
-	if err := n.appendEntry(entry); err != nil {
-		n.mu.Unlock()
-		return fmt.Errorf("persist membership change: %w", err)
-	}
-	entry = n.log[len(n.log)-1]
-	n.mu.Unlock()
-
-	// Replicate to followers
-	n.replicateLog()
-
-	// Wait for the entry to be committed
-	timeout := time.After(30 * time.Second)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-timeout:
-			return fmt.Errorf("timeout waiting for membership change to commit")
-		case <-ticker.C:
-			n.mu.RLock()
-			applied := n.lastApplied >= entry.Index
-			n.mu.RUnlock()
-			if applied {
-				return nil
-			}
-		}
-	}
-}
-
-// applyMembershipChange applies a committed membership change
-func (n *Node) applyMembershipChange(change core.MembershipChange, index uint64) {
-	n.membership.mu.Lock()
-	defer n.membership.mu.Unlock()
-
-	switch change.Phase {
-	case "joint":
-		// Enter joint consensus
-		n.membership.oldConfig = change.OldConfig
-		n.membership.newConfig = change.NewConfig
-		n.membership.jointState = true
-		n.membership.pendingIndex = index
-
-		// Add the peer to our local map (for AddPeer). Every node, not only the
-		// leader, registers its address: a follower must be able to reach it to
-		// campaign, and the added node itself never lists itself as a peer.
-		// Being added back after a removal makes this node a member again.
-		if change.Type == core.MembershipAddPeer && change.Peer.ID == n.nodeID && n.removed.Load() {
-			n.setRemoved(false)
-			n.logger.Info("This node was added back to the cluster")
-		}
-		if change.Type == core.MembershipAddPeer && change.Peer.ID != n.nodeID {
-			n.peerMu.Lock()
-			if _, exists := n.peers[change.Peer.ID]; !exists {
-				n.peers[change.Peer.ID] = &Peer{
-					ID:      change.Peer.ID,
-					Address: change.Peer.Address,
-					Region:  change.Peer.Region,
-					Role:    change.Peer.Role,
-				}
-			}
-			n.peerMu.Unlock()
-			if tt, ok := n.transport.(*TCPTransport); ok {
-				tt.RegisterPeer(change.Peer.ID, change.Peer.Address)
-			}
-			n.persistPeers()
-		}
-
-		n.logger.Info("Entered joint consensus for membership change",
-			"type", change.Type,
-			"peer", change.Peer.ID,
-			"old_config", change.OldConfig,
-			"new_config", change.NewConfig)
-
-		// Schedule transition to final configuration
-		go n.transitionToFinalConfig(change, index)
-
-	case "final":
-		// Exit joint consensus, use new configuration
-		n.membership.config = change.NewConfig
-		n.membership.oldConfig = nil
-		n.membership.newConfig = nil
-		n.membership.jointState = false
-		n.membership.pendingIndex = 0
-		n.membership.changes[index] = true
-
-		// Remove the peer from our local map (for RemovePeer)
-		if change.Type == core.MembershipRemovePeer {
-			if change.Peer.ID == n.nodeID {
-				n.setRemoved(true)
-				n.logger.Warn("This node was removed from the cluster; it will no longer campaign")
-			} else {
-				n.peerMu.Lock()
-				delete(n.peers, change.Peer.ID)
-				n.peerMu.Unlock()
-				if tt, ok := n.transport.(*TCPTransport); ok {
-					tt.UnregisterPeer(change.Peer.ID)
-				}
-			}
-			n.persistPeers()
-		}
-
-		n.logger.Info("Membership change completed",
-			"type", change.Type,
-			"peer", change.Peer.ID,
-			"config", change.NewConfig)
-	}
-}
-
-// transitionToFinalConfig transitions from joint consensus to final configuration
-func (n *Node) transitionToFinalConfig(change core.MembershipChange, jointIndex uint64) {
-	// Wait a bit to ensure joint consensus entry is committed
-	// Use select with shutdownCh to allow graceful cancellation
-	select {
-	case <-time.After(2 * time.Second):
-	case <-n.shutdownCh:
-		n.logger.Info("transitionToFinalConfig cancelled - node shutting down")
-		return
-	}
-
-	n.mu.RLock()
-	if n.state.Load().(core.RaftState) != core.StateLeader {
-		n.mu.RUnlock()
-		return
-	}
-	term := n.currentTerm
-	n.mu.RUnlock()
-
-	// Create final phase entry
-	finalChange := change
-	finalChange.Phase = "final"
-	finalChange.OldConfig = nil
-
-	data, _ := json.Marshal(finalChange)
-
-	entry := core.RaftLogEntry{Term: term, Type: core.LogMembershipChange, Data: data}
-	n.mu.Lock()
-	entry.Term = n.currentTerm
-	if err := n.appendEntry(entry); err != nil {
-		n.logger.Error("Failed to persist final membership configuration", "error", err)
-		n.mu.Unlock()
-		return
-	}
-	entry = n.log[len(n.log)-1]
-	n.mu.Unlock()
-
-	n.replicateLog()
-
-	n.logger.Info("Proposed final configuration", "peer", change.Peer.ID, "index", entry.Index)
-}
-
-// replicateLog triggers log replication to all peers
+// replicateLog triggers log replication to all peers. It is the heartbeat
+// path: one code path builds every AppendEntries, including the switch to
+// InstallSnapshot for a peer whose next entry is already compacted away.
 func (n *Node) replicateLog() {
-	// Guard against nil transport in test scenarios
-	if n.transport == nil {
-		return
-	}
-
-	n.peerMu.RLock()
-	peers := make([]*Peer, 0, len(n.peers))
-	for _, p := range n.peers {
-		peers = append(peers, p)
-	}
-	n.peerMu.RUnlock()
-
-	// Build the requests under the read lock, as the heartbeat path does:
-	// nextIndex, currentTerm, commitIndex and the log are written by
-	// handleAppendEntriesResponse/checkCommit under n.mu, and reading them
-	// from the sender goroutines raced with those writes.
-	reqs := make([]*core.AppendEntriesRequest, len(peers))
 	n.mu.RLock()
-	for i, p := range peers {
-		prevLogIndex := uint64(0)
-		if p.nextIndex > 0 {
-			prevLogIndex = p.nextIndex - 1
-		}
-		reqs[i] = &core.AppendEntriesRequest{
-			Term:         n.currentTerm,
-			LeaderID:     n.nodeID,
-			PrevLogIndex: prevLogIndex,
-			PrevLogTerm:  n.getLogTerm(prevLogIndex),
-			Entries:      n.getEntriesAfter(p.nextIndex, n.config.MaxAppendEntries),
-			LeaderCommit: n.commitIndex,
-			LeaderAddr:   n.advertiseAddr,
-		}
-	}
+	commitIndex := n.commitIndex
 	n.mu.RUnlock()
-
-	for i, peer := range peers {
-		go func(p *Peer, req *core.AppendEntriesRequest) {
-			resp, err := n.transport.SendAppendEntries(p.ID, req)
-			if err != nil {
-				return
-			}
-			n.markPeerContacted(p.ID)
-
-			n.handleAppendEntriesResponse(p, req, resp)
-		}(peer, reqs[i])
-	}
+	n.sendHeartbeats(commitIndex)
 }
 
 // GetPeers returns the current peers
@@ -954,8 +703,6 @@ func (n *Node) GetState() core.ClusterState {
 
 // run is the main event loop
 func (n *Node) run() {
-	defer close(n.doneCh)
-
 	electionTimer := n.newElectionTimer()
 	commitTimer := time.NewTimer(n.commitTimeout)
 	defer commitTimer.Stop()
@@ -979,7 +726,10 @@ func (n *Node) run() {
 			return
 
 		case <-electionTimer.C:
-			if n.state.Load().(core.RaftState) != core.StateLeader {
+			// A node that is replacing its state from a snapshot must not
+			// campaign: the restore keeps it from answering the leader, and
+			// a campaign here would disrupt a healthy cluster.
+			if n.state.Load().(core.RaftState) != core.StateLeader && !n.isRestoring() {
 				n.startElection()
 			}
 			electionTimer = n.newElectionTimer()
@@ -993,6 +743,9 @@ func (n *Node) run() {
 			commitTimer.Reset(n.commitTimeout)
 
 		case <-heartbeatTicker.C:
+			if n.state.Load().(core.RaftState) == core.StateLeader {
+				n.checkQuorum()
+			}
 			if n.state.Load().(core.RaftState) == core.StateLeader {
 				n.mu.RLock()
 				commitIndex := n.commitIndex
@@ -1010,9 +763,6 @@ func (n *Node) run() {
 		case rpc := <-n.rpcCh:
 			n.handleRPC(rpc)
 
-		case idx := <-n.commitCh:
-			n.processCommitted(idx)
-			n.maybeTakeSnapshot() // Check if snapshot needed after commit
 		}
 
 		// Send heartbeats if leader
@@ -1025,7 +775,8 @@ func (n *Node) run() {
 	}
 }
 
-// applyLoop applies committed entries to the FSM
+// applyLoop serializes proposal admission and committed application. Slow FSM
+// work must not prevent the protocol loop from answering heartbeats or votes.
 func (n *Node) applyLoop() {
 	for {
 		select {
@@ -1033,8 +784,19 @@ func (n *Node) applyLoop() {
 			return
 		case future := <-n.applyCh:
 			n.handleApply(future)
+		case idx := <-n.commitCh:
+			n.processCommitted(idx)
+			n.maybeTakeSnapshot()
 		}
 	}
+}
+
+// isRestoring reports whether a snapshot restore is in flight. The node must
+// not campaign while its state is being replaced.
+func (n *Node) isRestoring() bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.restoring
 }
 
 // startElection initiates a leader election with pre-vote
@@ -1044,15 +806,21 @@ func (n *Node) startElection() {
 	}
 	n.mu.Lock()
 
-	// Check if single-node mode (no peers)
-	n.peerMu.RLock()
-	peers := make([]*Peer, 0, len(n.peers))
-	for _, p := range n.peers {
-		if p.Role != core.RoleNonVoter {
-			peers = append(peers, p)
-		}
+	// A node that is replacing its state from a snapshot must not campaign:
+	// the restore keeps it from answering the leader, and a campaign here
+	// would disrupt a healthy cluster.
+	if n.restoring {
+		n.mu.Unlock()
+		return
 	}
-	n.peerMu.RUnlock()
+
+	// Only voters of the effective configuration campaign, and only their
+	// votes count.
+	if n.selfNonVoter.Load() {
+		n.mu.Unlock()
+		return
+	}
+	peers := n.votingPeers()
 
 	// Single-node mode: if no voting peers, immediately become leader
 	// This allows a standalone node to function without requiring network consensus
@@ -1069,9 +837,10 @@ func (n *Node) startElection() {
 		}
 		n.leaderID = ""
 		n.lastContact = time.Now()
-		// Note: becomeLeader acquires its own lock, so we must unlock first
+		// Promotion rechecks the election epoch under its own lock.
+		term := n.currentTerm
 		n.mu.Unlock()
-		n.becomeLeader()
+		n.becomeLeader(term)
 		return
 	}
 
@@ -1099,8 +868,13 @@ func (n *Node) startElection() {
 	// Request pre-votes from all peers
 	preVotes := n.requestPreVotes(preVoteTerm, lastLogIndex, lastLogTerm, peers)
 
-	// Check if we should proceed with real election
+	// Check if we should proceed with real election. Pre-votes for the old
+	// epoch cannot start a campaign after a response has advanced our term.
 	n.mu.Lock()
+	if n.currentTerm != preVoteTerm-1 || n.state.Load().(core.RaftState) != core.StateCandidate {
+		n.mu.Unlock()
+		return
+	}
 
 	if !preVotes {
 		n.logger.Info("Pre-vote failed, not starting election")
@@ -1141,13 +915,17 @@ func (n *Node) startElection() {
 	// Check if we won
 	votesNeeded := int32((len(peers)+1)/2 + 1)
 	if votesGranted >= votesNeeded {
-		n.becomeLeader()
+		n.becomeLeader(term)
 	} else {
-		n.logger.Info("Election failed",
-			"term", term,
-			"votes", votesGranted,
-			"needed", votesNeeded)
-		n.state.Store(core.StateFollower)
+		n.mu.Lock()
+		if n.currentTerm == term && n.state.Load().(core.RaftState) == core.StateCandidate {
+			n.logger.Info("Election failed",
+				"term", term,
+				"votes", votesGranted,
+				"needed", votesNeeded)
+			n.state.Store(core.StateFollower)
+		}
+		n.mu.Unlock()
 	}
 }
 
@@ -1196,12 +974,10 @@ func (n *Node) requestPreVotes(term, lastLogIndex, lastLogTerm uint64, peers []*
 			if resp.Term > term {
 				n.mu.Lock()
 				if resp.Term > n.currentTerm {
-					oldTerm, oldVote := n.currentTerm, n.votedFor
-					n.currentTerm, n.votedFor = resp.Term, ""
-					if err := n.persistHardStateLocked(); err != nil {
-						n.currentTerm, n.votedFor = oldTerm, oldVote
-					} else {
-						n.state.Store(core.StateFollower)
+					// The normal step-down path: persist the term, clear the
+					// leader, and fail any proposals if this node led.
+					if err := n.becomeFollower(resp.Term); err != nil {
+						n.logger.Error("Failed to persist higher term from a vote response", "error", err)
 					}
 				}
 				n.mu.Unlock()
@@ -1274,12 +1050,10 @@ func (n *Node) requestVotes(term, lastLogIndex, lastLogTerm uint64, peers []*Pee
 			if resp.Term > term {
 				n.mu.Lock()
 				if resp.Term > n.currentTerm {
-					oldTerm, oldVote := n.currentTerm, n.votedFor
-					n.currentTerm, n.votedFor = resp.Term, ""
-					if err := n.persistHardStateLocked(); err != nil {
-						n.currentTerm, n.votedFor = oldTerm, oldVote
-					} else {
-						n.state.Store(core.StateFollower)
+					// The normal step-down path: persist the term, clear the
+					// leader, and fail any proposals if this node led.
+					if err := n.becomeFollower(resp.Term); err != nil {
+						n.logger.Error("Failed to persist higher term from a vote response", "error", err)
 					}
 				}
 				n.mu.Unlock()
@@ -1307,8 +1081,15 @@ func (n *Node) requestVotes(term, lastLogIndex, lastLogTerm uint64, peers []*Pee
 
 // becomeLeader transitions to leader state
 // Caller must NOT hold n.mu - this function acquires it internally
-func (n *Node) becomeLeader() {
+func (n *Node) becomeLeader(expectedTerm uint64) {
 	n.mu.Lock()
+	// Votes belong to one campaign. A higher-term response may have stepped us
+	// down while other granted votes were in flight; those votes cannot elect
+	// this node in the newly observed term.
+	if n.currentTerm != expectedTerm || n.state.Load().(core.RaftState) != core.StateCandidate {
+		n.mu.Unlock()
+		return
+	}
 
 	n.logger.Info("Became leader", "term", n.currentTerm)
 
@@ -1336,6 +1117,10 @@ func (n *Node) becomeLeader() {
 		n.mu.Unlock()
 		return
 	}
+	// A membership change may be proposed only once this entry commits, and
+	// check-quorum gives the new leader one election timeout to be heard.
+	n.leaderNoopIndex = n.lastLogIndexLocked()
+	n.leaderSince = time.Now()
 
 	commitIndex := n.commitIndex
 	// Release before sending: sendHeartbeats takes n.mu.RLock itself.
@@ -1356,9 +1141,17 @@ func (n *Node) becomeFollower(term uint64) error {
 	}
 	n.state.Store(core.StateFollower)
 	n.lastContact = time.Now()
+	if term > oldTerm {
+		// The leader of the new term is not known yet; callers that learn it
+		// (AppendEntries, InstallSnapshot, Heartbeat) set it afterwards.
+		n.leaderID = ""
+	}
 	if wasLeader {
 		n.logger.Info("Stepped down as leader", "term", term)
 		n.stats.ElectionsLost++
+		// Proposals of the old term may still commit under the next leader, or
+		// be overwritten: their outcome is unknown here, so none may succeed.
+		n.failPendingFutures(0, "leadership lost before the entry committed")
 	}
 	return nil
 }
@@ -1382,8 +1175,20 @@ func (n *Node) sendHeartbeats(commitIndex uint64) {
 	reqs := make([]*core.AppendEntriesRequest, len(peers))
 	needsSnapshot := make([]bool, len(peers))
 	n.mu.RLock()
+	// A caller's earlier leader check can race a higher-term stepdown. Capture
+	// the term and suffix only while this node still owns leadership; otherwise
+	// an old leader could send its stale log stamped with the new leader's term.
+	if n.state.Load().(core.RaftState) != core.StateLeader {
+		n.mu.RUnlock()
+		return
+	}
 	for i, p := range peers {
-		needsSnapshot[i] = p.nextIndex <= n.logBase
+		if _, busy := n.replicationInFlight.LoadOrStore(p, struct{}{}); busy {
+			continue
+		}
+		// Only entries actually compacted away need a snapshot; with no
+		// compaction (logBase 0) everything from index 1 is in the log.
+		needsSnapshot[i] = n.logBase > 0 && p.nextIndex <= n.logBase
 		// PrevLogIndex must be the entry immediately before the first entry
 		// sent (nextIndex-1), NOT matchIndex: after a leader change
 		// nextIndex != matchIndex+1, and anchoring on matchIndex makes
@@ -1405,20 +1210,48 @@ func (n *Node) sendHeartbeats(commitIndex uint64) {
 	n.mu.RUnlock()
 
 	for i, peer := range peers {
-		go func(p *Peer, req *core.AppendEntriesRequest, snapshot bool) {
+		if reqs[i] == nil {
+			continue
+		}
+		p, req, snapshot := peer, reqs[i], needsSnapshot[i]
+		started := n.goBackground(func() {
+			defer n.replicationInFlight.Delete(p)
 			if snapshot {
 				n.sendSnapshot(p)
 				return
 			}
+			sentAt := time.Now()
 			resp, err := n.transport.SendAppendEntries(p.ID, req)
 			if err != nil {
 				return
 			}
 			n.markPeerContacted(p.ID)
+			if resp != nil && resp.Term == req.Term {
+				n.markPeerAck(p.ID, req.Term, sentAt)
+			}
 
 			n.handleAppendEntriesResponse(p, req, resp)
-		}(peer, reqs[i], needsSnapshot[i])
+		})
+		if !started {
+			n.replicationInFlight.Delete(p)
+		}
 	}
+}
+
+// goBackground runs fn on a goroutine that Stop waits for. It refuses (and
+// reports false) once Stop has begun.
+func (n *Node) goBackground(fn func()) bool {
+	n.bgMu.Lock()
+	defer n.bgMu.Unlock()
+	if n.bgClosed {
+		return false
+	}
+	n.bg.Add(1)
+	go func() {
+		defer n.bg.Done()
+		fn()
+	}()
+	return true
 }
 
 // handleRPC processes an incoming RPC
@@ -1456,7 +1289,12 @@ func (n *Node) handleAppendEntries(req *core.AppendEntriesRequest) *core.AppendE
 		return resp
 	}
 
-	// Valid heartbeat from leader
+	// Valid heartbeat from leader. Contact that is new (another leader, or
+	// after a silence) starts a catch-up: this node's applied state is stale
+	// until it reaches the commit index the leader reports now.
+	if n.leaderID != req.LeaderID || time.Since(n.lastContact) >= n.electionTimeout {
+		n.catchUpTarget = req.LeaderCommit
+	}
 	n.lastContact = time.Now()
 	n.leaderID = req.LeaderID
 	// Learn where the leader lives when it is not a configured peer (a node
@@ -1522,7 +1360,14 @@ func (n *Node) checkLogConsistency(req *core.AppendEntriesRequest) *core.AppendE
 	}
 	entry, ok := n.logEntry(req.PrevLogIndex)
 	if !ok {
-		return &core.AppendEntriesResponse{Term: n.currentTerm, Success: false, MatchIndex: n.lastLogIndexLocked(), ConflictIndex: n.logBase + 1}
+		// Too short: the leader should resume right after our last entry.
+		// Below our base (already in our snapshot): right after the base.
+		last := n.lastLogIndexLocked()
+		conflict := n.logBase + 1
+		if req.PrevLogIndex > last {
+			conflict = last + 1
+		}
+		return &core.AppendEntriesResponse{Term: n.currentTerm, Success: false, MatchIndex: last, ConflictIndex: conflict}
 	}
 	if entry.Term != req.PrevLogTerm {
 		conflictTerm, conflictIndex := entry.Term, req.PrevLogIndex
@@ -1553,22 +1398,37 @@ func (n *Node) reconcileLogEntries(req *core.AppendEntriesRequest) error {
 		}
 		pos, _ := n.logPosition(truncateAt)
 		n.log = n.log[:pos]
+		// Proposals at the truncated indexes were overwritten by another
+		// leader's entries: they can never commit.
+		n.failPendingFutures(truncateAt, "entry overwritten by a newer leader")
 	}
 	last := n.lastLogIndexLocked()
 	appended := make([]core.RaftLogEntry, 0)
+	membershipChanged := truncateAt > 0
 	for i, incoming := range req.Entries {
 		idx := req.PrevLogIndex + uint64(i) + 1
 		if idx > last {
 			incoming.Index = idx
 			appended = append(appended, incoming)
+			if incoming.Type == core.LogMembershipChange {
+				membershipChanged = true
+			}
 		}
 	}
 	if len(appended) > 0 && n.storage != nil {
 		if err := n.storage.StoreLogs(appended); err != nil {
+			if truncateAt > 0 {
+				n.refreshMembershipLocked()
+			}
 			return fmt.Errorf("persist appended entries: %w", err)
 		}
 	}
 	n.log = append(n.log, appended...)
+	if membershipChanged {
+		// A configuration is in effect as soon as it is in the log, and a
+		// truncated one is no longer.
+		n.refreshMembershipLocked()
+	}
 	return nil
 }
 
@@ -1723,6 +1583,8 @@ func (n *Node) handlePreVote(req *core.PreVoteRequest) *core.PreVoteResponse {
 
 // handleInstallSnapshot processes InstallSnapshot RPC
 func (n *Node) handleInstallSnapshot(req *core.InstallSnapshotRequest) *core.InstallSnapshotResponse {
+	n.applyMu.Lock()
+	defer n.applyMu.Unlock()
 	n.mu.Lock()
 	if req.Term < n.currentTerm {
 		term := n.currentTerm
@@ -1738,6 +1600,18 @@ func (n *Node) handleInstallSnapshot(req *core.InstallSnapshotRequest) *core.Ins
 	}
 	n.lastContact, n.leaderID = time.Now(), req.LeaderID
 	term := n.currentTerm
+	// A delayed/repeated snapshot must never replace newer committed state.
+	// Acknowledge it without restoring; the leader can continue replication.
+	if req.LastIncludedIndex <= n.commitIndex || req.LastIncludedIndex <= n.lastApplied {
+		boundary := max(n.commitIndex, n.lastApplied)
+		n.mu.Unlock()
+		n.snapshotMu.Lock()
+		if n.incomingSnapshot != nil && n.incomingSnapshot.index <= boundary {
+			n.incomingSnapshot = nil
+		}
+		n.snapshotMu.Unlock()
+		return &core.InstallSnapshotResponse{Term: term, Success: true}
+	}
 	n.mu.Unlock()
 
 	n.snapshotMu.Lock()
@@ -1756,10 +1630,16 @@ func (n *Node) handleInstallSnapshot(req *core.InstallSnapshotRequest) *core.Ins
 		return &core.InstallSnapshotResponse{Term: term, Success: true}
 	}
 	payload := append([]byte(nil), install.data.Bytes()...)
-	if err := n.fsm.Restore(payload); err != nil {
-		n.incomingSnapshot = nil
-		return &core.InstallSnapshotResponse{Term: term, Success: false}
+	if _, ok := n.fsm.(*StorageFSM); ok {
+		// Validate the image without replacing live state before publishing it.
+		var image map[string][]byte
+		if err := json.Unmarshal(payload, &image); err != nil {
+			n.incomingSnapshot = nil
+			return &core.InstallSnapshotResponse{Term: term, Success: false}
+		}
 	}
+	// Persist the replacement before changing application state. If writing
+	// its chunks/manifest fails, the current state must remain usable.
 	if n.snapshot != nil {
 		sink, err := n.snapshot.Create(1, install.index, install.term, nil)
 		if err != nil {
@@ -1776,25 +1656,106 @@ func (n *Node) handleInstallSnapshot(req *core.InstallSnapshotRequest) *core.Ins
 			return &core.InstallSnapshotResponse{Term: term, Success: false}
 		}
 	}
+	// Publication can block on storage while another RPC advances the term.
+	// Recheck at the destructive transition before touching the FSM.
 	n.mu.Lock()
-	old := hardState{CurrentTerm: n.currentTerm, VotedFor: n.votedFor, CommitIndex: n.commitIndex, LastApplied: n.lastApplied, LogBase: n.logBase, LogBaseTerm: n.logBaseTerm}
-	n.logBase, n.logBaseTerm = install.index, install.term
-	n.commitIndex, n.lastApplied, n.lastSnapshotIndex = install.index, install.index, install.index
-	n.log = []core.RaftLogEntry{{Index: install.index, Term: install.term}}
-	if err := n.persistHardStateLocked(); err != nil {
-		n.currentTerm, n.votedFor, n.commitIndex, n.lastApplied, n.logBase, n.logBaseTerm = old.CurrentTerm, old.VotedFor, old.CommitIndex, old.LastApplied, old.LogBase, old.LogBaseTerm
+	if req.Term != n.currentTerm || install.index <= n.commitIndex || install.index <= n.lastApplied {
+		response := &core.InstallSnapshotResponse{Term: n.currentTerm, Success: req.Term == n.currentTerm}
 		n.mu.Unlock()
 		n.incomingSnapshot = nil
-		return &core.InstallSnapshotResponse{Term: term, Success: false}
+		return response
 	}
+	// The restore replaces the whole keyspace and can take a long time. It
+	// must not run under n.mu: the same lock guards the heartbeat path,
+	// AppendEntries and the election timer, so holding it across a large
+	// restore would make a healthy leader look dead and could start a
+	// competing election over a snapshot that is still being installed.
+	// Publish the transition, drop the lock for the I/O, and take it again
+	// to move the boundary.
+	n.restoring = true
 	n.mu.Unlock()
+
+	var restoreErr error
+	if fsm, ok := n.fsm.(*StorageFSM); ok {
+		// Observers may read the node. Delay notification until mu is released.
+		restoreErr = fsm.restore(payload)
+		if restoreErr == nil {
+			defer fsm.notifyRestored()
+		}
+	} else {
+		restoreErr = n.fsm.Restore(payload)
+	}
+
+	n.mu.Lock()
+	n.restoring = false
+	if restoreErr != nil {
+		n.mu.Unlock()
+		n.incomingSnapshot = nil
+		return &core.InstallSnapshotResponse{Term: n.currentTerm, Success: false}
+	}
+	if fsm, ok := n.fsm.(interface{ SetLastApplied(uint64) }); ok {
+		fsm.SetLastApplied(install.index)
+	}
+	// The restore ran without the node lock, so entries may have arrived
+	// and the commit index may have advanced while it was in flight. The
+	// snapshot supersedes only the entries at or below its boundary: keep
+	// everything above it, and never move an index backwards.
+	kept := make([]core.RaftLogEntry, 0, len(n.log))
+	for _, e := range n.log {
+		if e.Index > install.index {
+			kept = append(kept, e)
+		}
+	}
+	n.log = append([]core.RaftLogEntry{{Index: install.index, Term: install.term}}, kept...)
+	n.logBase, n.logBaseTerm = install.index, install.term
+	var installedConfig []core.RaftPeer
+	if len(req.Configuration) > 0 {
+		installedConfig, _ = normalizeMembers(req.Configuration)
+		n.setMembershipBaseLocked(installedConfig)
+	} else {
+		n.refreshMembershipLocked()
+	}
+	if n.commitIndex < install.index {
+		n.commitIndex = install.index
+	}
+	if n.lastApplied < install.index {
+		n.lastApplied = install.index
+	}
+	n.lastSnapshotIndex = install.index
+	// The snapshot came from the leader, so the leader is alive: a restore
+	// that took longer than the election timeout must not look like a dead
+	// leader and trigger a competing election.
+	n.lastContact = time.Now()
+	if err := n.persistHardStateLocked(); err != nil {
+		// The durable snapshot is already authoritative and the FSM was
+		// replaced. Rolling only indexes back would mismatch the live state.
+		// Recovery can rebuild this same boundary from the snapshot metadata.
+		n.mu.Unlock()
+		n.incomingSnapshot = nil
+		return &core.InstallSnapshotResponse{Term: n.currentTerm, Success: false}
+	}
+	// The request may belong to a term this node has already left. The state
+	// was replaced either way, so the boundary is published and the stale
+	// term is reported back to the sender.
+	accepted := req.Term == n.currentTerm
+	term = n.currentTerm
+	n.mu.Unlock()
+	if installedConfig != nil {
+		n.persistMembers(installedConfig)
+	}
+	// Give the follower a fresh election window: the restore kept it from
+	// answering the leader for as long as it ran.
+	select {
+	case n.electionResetCh <- struct{}{}:
+	default:
+	}
 	if n.storage != nil {
 		if first, _ := n.storage.FirstIndex(); first > 0 && first <= install.index {
 			_ = n.storage.DeleteRange(first, install.index)
 		}
 	}
 	n.incomingSnapshot = nil
-	return &core.InstallSnapshotResponse{Term: term, Success: true}
+	return &core.InstallSnapshotResponse{Term: term, Success: accepted}
 }
 
 // markPeerContacted records that a peer has just answered us. Peer.lastContact is
@@ -1829,6 +1790,10 @@ func (n *Node) handleHeartbeat(req *core.HeartbeatRequest) *core.HeartbeatRespon
 		}
 		n.lastContact = time.Now()
 		n.leaderID = req.LeaderID
+		if n.state.Load().(core.RaftState) == core.StateLeader {
+			n.stepDownLocked()
+			n.leaderID = req.LeaderID
+		}
 		if n.state.Load().(core.RaftState) != core.StateFollower {
 			n.state.Store(core.StateFollower)
 		}
@@ -1862,14 +1827,28 @@ func (n *Node) sendSnapshot(peer *Peer) {
 	n.mu.RLock()
 	term, leaderID := n.currentTerm, n.nodeID
 	n.mu.RUnlock()
+	// The membership entries the snapshot covers are not in the log any more:
+	// send the committed configuration along with it.
+	configuration := n.membershipBase()
 	for offset := 0; offset <= len(data); offset += snapshotChunkSize {
 		end := offset + snapshotChunkSize
 		if end > len(data) {
 			end = len(data)
 		}
 		done := end == len(data)
-		resp, err := n.transport.SendInstallSnapshot(peer.ID, &core.InstallSnapshotRequest{Term: term, LeaderID: leaderID, LastIncludedIndex: meta.Index, LastIncludedTerm: meta.Term, Offset: uint64(offset), Data: data[offset:end], Done: done})
-		if err != nil || !resp.Success {
+		req := &core.InstallSnapshotRequest{Term: term, LeaderID: leaderID, LastIncludedIndex: meta.Index, LastIncludedTerm: meta.Term, Offset: uint64(offset), Data: data[offset:end], Done: done}
+		if done {
+			req.Configuration = configuration
+		}
+		sentAt := time.Now()
+		resp, err := n.transport.SendInstallSnapshot(peer.ID, req)
+		if err != nil || resp == nil {
+			return
+		}
+		if resp.Term == term {
+			n.markPeerAck(peer.ID, term, sentAt)
+		}
+		if !resp.Success {
 			return
 		}
 		if done {
@@ -1939,15 +1918,31 @@ func (n *Node) handleAppendEntriesResponse(peer *Peer, req *core.AppendEntriesRe
 		return
 	}
 
-	// Decrement nextIndex and retry.
+	// Fast backup (Raft §5.3): use the follower's hint instead of probing
+	// back one index per round. With a conflicting term, resume after this
+	// leader's last entry of that term, or at the first index the follower
+	// holds of it; with a log that is too short, at the follower's end.
 	next := req.PrevLogIndex
-	if resp.ConflictTerm > 0 {
-		// Optimization: skip to after conflict term.
+	switch {
+	case resp.ConflictTerm > 0:
+		next = resp.ConflictIndex
+		for i := len(n.log) - 1; i > 0; i-- {
+			if n.log[i].Term == resp.ConflictTerm {
+				next = n.log[i].Index + 1
+				break
+			}
+			if n.log[i].Term < resp.ConflictTerm {
+				break
+			}
+		}
+	case resp.ConflictIndex > 0:
 		next = resp.ConflictIndex
 	}
-	if next > 1 {
-		next--
+	if next < 1 {
+		next = 1
 	}
+	// A next index at or below the compaction base is served by a snapshot
+	// on the next round (sendHeartbeats).
 
 	// Rejections may only back off progress, and matchIndex is a floor: a
 	// follower cannot reject an index it already confirmed in this term.
@@ -1974,11 +1969,7 @@ func (n *Node) checkCommit() {
 		if !ok || entry.Term != n.currentTerm {
 			continue
 		}
-		committed := n.checkStandardCommit(index)
-		if entry.Type == core.LogMembershipChange {
-			committed = n.checkJointConsensusCommit(index)
-		}
-		if !committed {
+		if !n.checkStandardCommit(index) {
 			continue
 		}
 		old := n.commitIndex
@@ -1993,95 +1984,26 @@ func (n *Node) checkCommit() {
 	}
 }
 
-// checkStandardCommit checks if an entry is committed under standard rules
+// checkStandardCommit reports whether index is stored on a majority of the
+// voters of the effective configuration. Non-voters and members whose removal
+// is pending never count. Caller holds n.mu.
 func (n *Node) checkStandardCommit(index uint64) bool {
-	count := 1 // Leader has it
-
-	n.membership.mu.RLock()
-	config := n.membership.config
-	n.membership.mu.RUnlock()
-
-	n.peerMu.RLock()
-	for _, nodeID := range config {
-		if nodeID == n.nodeID {
-			continue
-		}
-		if p, ok := n.peers[nodeID]; ok && n.matchIndex[p.ID] >= index {
-			count++
-		}
-	}
-	n.peerMu.RUnlock()
-
-	return count > len(config)/2
-}
-
-// checkJointConsensusCommit checks if an entry is committed under joint consensus
-// During joint consensus, an entry needs majority in BOTH old and new configs
-func (n *Node) checkJointConsensusCommit(index uint64) bool {
-	n.membership.mu.RLock()
-	oldConfig := n.membership.oldConfig
-	newConfig := n.membership.newConfig
-	jointState := n.membership.jointState
-	n.membership.mu.RUnlock()
-
-	// If not in joint consensus, use standard commit rules
-	if !jointState {
-		return n.checkStandardCommit(index)
-	}
-
-	// Check old configuration
-	oldCount := 0
-	if containsString(oldConfig, n.nodeID) {
-		oldCount = 1 // Leader is in old config
-	}
-
-	n.peerMu.RLock()
-	for _, nodeID := range oldConfig {
-		if nodeID == n.nodeID {
-			continue
-		}
-		if p, ok := n.peers[nodeID]; ok && n.matchIndex[p.ID] >= index {
-			oldCount++
-		}
-	}
-
-	// Check new configuration
-	newCount := 0
-	if containsString(newConfig, n.nodeID) {
-		newCount = 1 // Leader is in new config
-	}
-
-	for _, nodeID := range newConfig {
-		if nodeID == n.nodeID {
-			continue
-		}
-		if p, ok := n.peers[nodeID]; ok && n.matchIndex[p.ID] >= index {
-			newCount++
-		}
-	}
-	n.peerMu.RUnlock()
-
-	// Both configurations must have majority
-	return oldCount > len(oldConfig)/2 && newCount > len(newConfig)/2
-}
-
-// containsString checks if a string is in a slice
-func containsString(slice []string, s string) bool {
-	for _, item := range slice {
-		if item == s {
-			return true
-		}
-	}
-	return false
+	votes, voters := n.countVoters(true, func(p *Peer) bool { return n.matchIndex[p.ID] >= index })
+	return voters > 0 && votes > voters/2
 }
 
 // processCommitted applies committed entries to FSM.
 // lastApplied is advanced only after the entry has been applied successfully.
 func (n *Node) processCommitted(commitIndex uint64) {
+	n.applyMu.Lock()
+	defer n.applyMu.Unlock()
 	for {
 		n.mu.RLock()
 		if n.lastApplied >= commitIndex {
 			n.mu.RUnlock()
+			// Nothing left to apply: the pass succeeded, so the next
+			// failure starts from the initial backoff again.
+			n.resetApplyRetryBackoff()
 			return
 		}
 		nextIndex := n.lastApplied + 1
@@ -2093,11 +2015,10 @@ func (n *Node) processCommitted(commitIndex uint64) {
 		}
 		var applyErr error
 		if entry.Type == core.LogMembershipChange {
-			var change core.MembershipChange
-			if err := json.Unmarshal(entry.Data, &change); err != nil {
+			if change, err := decodeMembershipEntry(entry.Data); err != nil {
 				applyErr = fmt.Errorf("decode membership change at index %d: %w", entry.Index, err)
 			} else {
-				n.applyMembershipChange(change, entry.Index)
+				n.applyMembershipEntry(change, entry.Index)
 			}
 		} else if result := n.fsm.Apply(&entry); result != nil {
 			if err, ok := result.(error); ok {
@@ -2107,8 +2028,30 @@ func (n *Node) processCommitted(commitIndex uint64) {
 			}
 		}
 		if applyErr != nil {
+			if !isRetryableApplyError(applyErr) {
+				// A deterministic failure can never succeed on a later
+				// attempt: an undecodable payload, a rejected command, an
+				// unknown op. Retrying it would wedge this node at this
+				// index forever and stall snapshotting and compaction with
+				// it, so the entry is skipped and the node keeps applying
+				// the rest of the log.
+				n.logger.Error("Skipping committed entry that cannot be applied",
+					"index", entry.Index, "term", entry.Term, "error", applyErr)
+				if !n.skipCommittedEntry(nextIndex) {
+					return
+				}
+				n.notifyApply(entry.Index, entry.Term, applyErr)
+				continue
+			}
 			n.logger.Error("Failed to apply committed entry", "index", entry.Index, "term", entry.Term, "error", applyErr)
 			n.notifyApply(entry.Index, entry.Term, applyErr)
+			// lastApplied stays behind the failed entry, so the commit
+			// index does not advance either and notifyCommit will not fire
+			// again: the leader keeps heartbeating the same LeaderCommit
+			// value. Without an explicit retry this node would stay wedged
+			// at this index (and snapshotting, which describes only the
+			// applied state, would stall with it).
+			n.scheduleApplyRetry()
 			return
 		}
 		n.mu.Lock()
@@ -2118,10 +2061,113 @@ func (n *Node) processCommitted(commitIndex uint64) {
 			n.lastApplied = old
 			n.mu.Unlock()
 			n.notifyApply(entry.Index, entry.Term, err)
+			// The entry reached the FSM but the applied index could not be
+			// persisted, so the pass must be repeated once storage recovers.
+			n.scheduleApplyRetry()
 			return
 		}
 		n.mu.Unlock()
 		n.notifyApply(entry.Index, entry.Term, nil)
+	}
+}
+
+// skipCommittedEntry consumes a committed entry that can never be applied.
+//
+// The applied index moves past the entry so the node keeps applying the log
+// instead of wedging at an index it can never pass. The FSM index is moved
+// with it, so both agree on which entries are consumed.
+//
+// It reports false when the applied index could not be persisted: the caller
+// must stop the pass, because the entry is still unapplied.
+func (n *Node) skipCommittedEntry(nextIndex uint64) bool {
+	n.mu.Lock()
+	old := n.lastApplied
+	n.lastApplied = nextIndex
+	if err := n.persistHardStateLocked(); err != nil {
+		n.lastApplied = old
+		n.mu.Unlock()
+		// The applied index could not be persisted: the pass must be
+		// repeated once storage recovers.
+		n.scheduleApplyRetry()
+		return false
+	}
+	n.mu.Unlock()
+	if fsm, ok := n.fsm.(interface{ SetLastApplied(uint64) }); ok {
+		fsm.SetLastApplied(nextIndex)
+	}
+	return true
+}
+
+// scheduleApplyRetry asks the retry loop to re-attempt the apply of the
+// committed entries that failed. It never blocks: the apply path runs on the
+// run loop, and the request channel is buffered, so repeated failures
+// coalesce into a single pending retry.
+func (n *Node) scheduleApplyRetry() {
+	select {
+	case n.applyRetryCh <- struct{}{}:
+	default:
+	}
+}
+
+// resetApplyRetryBackoff restores the initial retry delay after a pass that
+// applied every committed entry.
+func (n *Node) resetApplyRetryBackoff() {
+	n.applyRetryMu.Lock()
+	n.applyRetryBackoff = applyRetryInitialBackoff
+	n.applyRetryMu.Unlock()
+}
+
+// nextApplyRetryDelay returns the delay before the next retry and grows it,
+// so a persistent storage failure backs off instead of spinning.
+func (n *Node) nextApplyRetryDelay() time.Duration {
+	n.applyRetryMu.Lock()
+	defer n.applyRetryMu.Unlock()
+	delay := n.applyRetryBackoff
+	if delay <= 0 {
+		delay = applyRetryInitialBackoff
+	}
+	next := delay * 2
+	if next > applyRetryMaxBackoff {
+		next = applyRetryMaxBackoff
+	}
+	n.applyRetryBackoff = next
+	return delay
+}
+
+// applyRetryLoop re-signals the commit path after a failed apply.
+//
+// processCommitted returns without advancing lastApplied when the FSM or the
+// hard-state write fails. The commit index does not move either, so the
+// leader's next heartbeat carries the same LeaderCommit value and
+// updateCommitIndex returns early without notifying the run loop. This loop
+// re-signals the commit channel instead, which lets lastApplied advance as
+// soon as storage recovers.
+func (n *Node) applyRetryLoop() {
+	for {
+		select {
+		case <-n.shutdownCh:
+			return
+		case <-n.applyRetryCh:
+		}
+
+		delay := n.nextApplyRetryDelay()
+		timer := time.NewTimer(delay)
+		select {
+		case <-n.shutdownCh:
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+
+		n.mu.RLock()
+		index := n.commitIndex
+		n.mu.RUnlock()
+		if index == 0 {
+			continue
+		}
+		// processCommitted applies every entry up to the index it gets, so
+		// the newest committed index is enough to resume the failed apply.
+		n.notifyCommit(index)
 	}
 }
 
@@ -2249,24 +2295,6 @@ func dialableAddr(addr string) bool {
 	return true
 }
 
-// persistPeers records the current peer set so membership changes applied at
-// runtime survive a restart: on Start the persisted set replaces the peers from
-// the static configuration. Without a stable store it is a no-op.
-func (n *Node) persistPeers() {
-	if n.stable == nil {
-		return
-	}
-	peers := n.GetPeers()
-	sort.Slice(peers, func(i, j int) bool { return peers[i].ID < peers[j].ID })
-	data, err := json.Marshal(peers)
-	if err != nil {
-		return
-	}
-	if err := n.stable.Set(stablePeers, data); err != nil {
-		n.logger.Error("Failed to persist membership", "error", err)
-	}
-}
-
 // setRemoved records whether this node is out of the cluster, durably when a
 // stable store is configured.
 func (n *Node) setRemoved(removed bool) {
@@ -2292,41 +2320,6 @@ func (n *Node) restoreRemoved() {
 		n.removed.Store(true)
 		n.logger.Warn("This node was removed from the cluster; it will not campaign until it is added back")
 	}
-}
-
-// restorePeers replaces the configured peers with the membership persisted by
-// the last applied membership change, if there is one.
-func (n *Node) restorePeers() error {
-	if n.stable == nil {
-		return nil
-	}
-	data, err := n.stable.Get(stablePeers)
-	if err != nil {
-		var notFound *core.NotFoundError
-		if errors.As(err, &notFound) {
-			return nil
-		}
-		return err
-	}
-	var peers []core.RaftPeer
-	if err := json.Unmarshal(data, &peers); err != nil {
-		return err
-	}
-	n.peerMu.Lock()
-	n.peers = make(map[string]*Peer, len(peers))
-	config := []string{n.nodeID}
-	for _, p := range peers {
-		if p.ID == "" || p.ID == n.nodeID {
-			continue
-		}
-		n.peers[p.ID] = &Peer{ID: p.ID, Address: p.Address, Region: p.Region, Role: p.Role}
-		config = append(config, p.ID)
-	}
-	n.peerMu.Unlock()
-	n.membership.mu.Lock()
-	n.membership.config = config
-	n.membership.mu.Unlock()
-	return nil
 }
 
 func (n *Node) restoreHardState() error {
@@ -2443,26 +2436,44 @@ func (n *Node) restoreLog() error {
 	return nil
 }
 
+// notifyApply resolves the proposal waiting at index. A proposal succeeds
+// only if the entry applied there is the one it appended: same index and the
+// term it was proposed in. Another term at that index means a newer leader
+// overwrote the proposal, which therefore never took effect.
 func (n *Node) notifyApply(index, term uint64, err error) {
-	if future, ok := n.applyWaiters.Load(index); ok {
-		f := future.(*applyFuture)
-		f.term, f.err = term, err
-		close(f.done)
-		n.applyWaiters.Delete(index)
+	v, ok := n.applyWaiters.LoadAndDelete(index)
+	if !ok {
+		return
 	}
+	f := v.(*applyFuture)
+	if f.term != 0 && f.term != term {
+		err = &core.RaftError{Code: core.ErrLeadershipLost,
+			Message: fmt.Sprintf("entry %d proposed in term %d was replaced by a term %d entry", index, f.term, term)}
+	} else {
+		f.term = term
+	}
+	f.err = err
+	close(f.done)
 }
 
 // maybeTakeSnapshot checks if a snapshot should be taken and creates one
 func (n *Node) maybeTakeSnapshot() {
+	n.applyMu.Lock()
+	defer n.applyMu.Unlock()
 	if n.snapshot == nil || n.snapshotThreshold <= 0 || n.snapshotInProgress.Load() {
 		return
 	}
 	n.mu.RLock()
-	logSize := int(n.lastLogIndexLocked() - n.logBase)
-	snapIndex := n.commitIndex
+	// Entries kept as trailing logs are already covered by the last snapshot:
+	// measure the log from whichever boundary is newer.
+	covered := max(n.logBase, n.lastSnapshotIndex)
+	logSize := int(n.lastLogIndexLocked() - covered)
+	// Committed entries may still be awaiting an application retry after I/O
+	// failure. A snapshot may describe only the state actually applied.
+	snapIndex := n.lastApplied
 	snapTerm := n.getLogTerm(snapIndex)
 	n.mu.RUnlock()
-	if logSize < n.snapshotThreshold || snapIndex <= n.logBase {
+	if logSize < n.snapshotThreshold || snapIndex <= covered {
 		return
 	}
 	if !n.snapshotInProgress.CompareAndSwap(false, true) {
@@ -2501,28 +2512,37 @@ func (n *Node) compactLog(snapshotIndex uint64) {
 	if snapshotIndex <= n.logBase || snapshotIndex > n.lastLogIndexLocked() {
 		return
 	}
-	snapshotTerm := n.getLogTerm(snapshotIndex)
-	trailing := uint64(n.config.TrailingLogs)
-	retainFrom := snapshotIndex + 1
-	if trailing > 0 && snapshotIndex > trailing {
-		retainFrom = snapshotIndex - trailing + 1
-	} else if trailing > 0 {
-		retainFrom = n.logBase + 1
-	}
-	retained := []core.RaftLogEntry{{Index: snapshotIndex, Term: snapshotTerm}}
-	for index := retainFrom; index <= n.lastLogIndexLocked(); index++ {
-		if entry, ok := n.logEntry(index); ok && index > snapshotIndex {
-			retained = append(retained, entry)
+	// Keep the TrailingLogs entries up to and including the snapshot index,
+	// so a follower slightly behind can still catch up from the log instead
+	// of needing the whole snapshot. The new base is the entry just before
+	// the oldest retained one.
+	newBase := snapshotIndex
+	if trailing := uint64(n.config.TrailingLogs); trailing > 0 {
+		if snapshotIndex > trailing {
+			newBase = snapshotIndex - trailing
+		} else {
+			newBase = 0
 		}
 	}
+	if newBase <= n.logBase {
+		return
+	}
+	newBaseTerm := n.getLogTerm(newBase)
+	pos, ok := n.logPosition(newBase)
+	if !ok {
+		return
+	}
+	retained := make([]core.RaftLogEntry, 0, len(n.log)-pos)
+	retained = append(retained, core.RaftLogEntry{Index: newBase, Term: newBaseTerm})
+	retained = append(retained, n.log[pos+1:]...)
 	oldBase := n.logBase
-	n.logBase, n.logBaseTerm, n.log = snapshotIndex, snapshotTerm, retained
+	n.logBase, n.logBaseTerm, n.log = newBase, newBaseTerm, retained
 	if err := n.persistHardStateLocked(); err != nil {
 		n.logger.Error("Failed to persist compacted log base", "error", err)
 		return
 	}
-	if n.storage != nil && oldBase+1 <= snapshotIndex {
-		if err := n.storage.DeleteRange(oldBase+1, snapshotIndex); err != nil {
+	if n.storage != nil && oldBase+1 <= newBase {
+		if err := n.storage.DeleteRange(oldBase+1, newBase); err != nil {
 			n.logger.Error("Failed to compact persistent log", "error", err)
 		}
 	}
