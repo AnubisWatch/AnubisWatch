@@ -22,20 +22,105 @@ func (s *RESTServer) handleMetrics(ctx *Context) error {
 		s.metricsMu.Unlock()
 	}
 
+	var workspace []string
+	if s.config.MetricsAuth {
+		workspace = []string{contextWorkspace(ctx)}
+	}
 	var output string
 
 	output += s.buildSystemMetrics()
-	output += s.buildSoulMetrics()
-	output += s.buildJudgmentMetrics()
+	output += s.buildSoulMetrics(workspace...)
+	output += s.buildJudgmentMetrics(workspace...)
 	output += s.buildClusterMetrics()
 	output += s.buildAlertMetrics()
-	output += s.buildLatencyMetrics()
+	output += s.buildLatencyMetrics(workspace...)
 
 	ctx.Response.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	if _, err := ctx.Response.Write([]byte(output)); err != nil {
 		s.logger.Warn("failed to write metrics response", "err", err)
 	}
 	return nil
+}
+
+// RuntimeStats is what the server reports about its own scheduling health:
+// the probe engine's liveness and, in cluster mode, replication backlog loss.
+type RuntimeStats struct {
+	LastJudgmentAt  time.Time // zero until the first judgment completes
+	ScheduledSouls  int
+	ChecksRunning   int64
+	LongestInterval time.Duration
+	StartedAt       time.Time // when the probe engine was created
+	// ReplicationDropped counts judgments/commands discarded by the cluster
+	// batcher because its backlog overflowed; -1 when not clustered.
+	ReplicationDropped int64
+}
+
+// SetRuntimeStats wires the source /ready and /metrics use to detect a
+// stalled scheduler. Without it both report only storage and cluster.
+func (s *RESTServer) SetRuntimeStats(fn func() RuntimeStats) {
+	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
+	s.runtimeStats = fn
+}
+
+func (s *RESTServer) currentRuntimeStats() (RuntimeStats, bool) {
+	s.metricsMu.RLock()
+	fn := s.runtimeStats
+	s.metricsMu.RUnlock()
+	if fn == nil {
+		return RuntimeStats{}, false
+	}
+	return fn(), true
+}
+
+// schedulerStaleAfter is how long the engine may go without completing a
+// judgment, while souls are scheduled, before readiness fails: two of the
+// longest intervals plus a minute for start jitter and slow timeouts.
+func schedulerStaleAfter(rs RuntimeStats) time.Duration {
+	return 2*rs.LongestInterval + time.Minute
+}
+
+// schedulerProblem returns a readiness failure message, or "" when the probe
+// scheduler is producing judgments as expected.
+func schedulerProblem(rs RuntimeStats, now time.Time) string {
+	if rs.ScheduledSouls == 0 {
+		return ""
+	}
+	since := rs.LastJudgmentAt
+	if since.IsZero() {
+		since = rs.StartedAt
+	}
+	if since.IsZero() {
+		return ""
+	}
+	if idle := now.Sub(since); idle > schedulerStaleAfter(rs) {
+		return fmt.Sprintf("unhealthy: no judgment for %s with %d souls scheduled", idle.Round(time.Second), rs.ScheduledSouls)
+	}
+	return ""
+}
+
+func (s *RESTServer) buildRuntimeMetrics() string {
+	rs, ok := s.currentRuntimeStats()
+	if !ok {
+		return ""
+	}
+	out := "# HELP anubis_scheduled_souls Souls with an active probe runner on this node\n"
+	out += "# TYPE anubis_scheduled_souls gauge\n"
+	out += fmt.Sprintf("anubis_scheduled_souls %d\n", rs.ScheduledSouls)
+	out += "# HELP anubis_checks_in_flight Checks currently running on this node\n"
+	out += "# TYPE anubis_checks_in_flight gauge\n"
+	out += fmt.Sprintf("anubis_checks_in_flight %d\n", rs.ChecksRunning)
+	if !rs.LastJudgmentAt.IsZero() {
+		out += "# HELP anubis_last_judgment_timestamp_seconds Unix time of the last completed judgment on this node\n"
+		out += "# TYPE anubis_last_judgment_timestamp_seconds gauge\n"
+		out += fmt.Sprintf("anubis_last_judgment_timestamp_seconds %d\n", rs.LastJudgmentAt.Unix())
+	}
+	if rs.ReplicationDropped >= 0 {
+		out += "# HELP anubis_replication_dropped_total Commands dropped because the cluster replication backlog overflowed\n"
+		out += "# TYPE anubis_replication_dropped_total counter\n"
+		out += fmt.Sprintf("anubis_replication_dropped_total %d\n", rs.ReplicationDropped)
+	}
+	return out
 }
 
 // buildSystemMetrics returns system-level metrics
@@ -45,7 +130,20 @@ func (s *RESTServer) buildSystemMetrics() string {
 
 	out := "# HELP anubis_build_info Build information\n"
 	out += "# TYPE anubis_build_info gauge\n"
-	out += "anubis_build_info{version=\"dev\"} 1\n"
+	s.metricsMu.RLock()
+	version, commit, date := s.buildVersion, s.buildCommit, s.buildDate
+	s.metricsMu.RUnlock()
+	if version == "" {
+		version = "dev"
+	}
+	labels := fmt.Sprintf("version=\"%s\"", prometheusLabelValue(version))
+	if commit != "" {
+		labels += fmt.Sprintf(",commit=\"%s\"", prometheusLabelValue(commit))
+	}
+	if date != "" {
+		labels += fmt.Sprintf(",build_date=\"%s\"", prometheusLabelValue(date))
+	}
+	out += "anubis_build_info{" + labels + "} 1\n"
 
 	out += "# HELP anubis_memory_alloc_bytes Allocated memory in bytes\n"
 	out += "# TYPE anubis_memory_alloc_bytes gauge\n"
@@ -97,12 +195,14 @@ func (s *RESTServer) buildSystemMetrics() string {
 		}
 	}
 
+	out += s.buildRuntimeMetrics()
+
 	return out
 }
 
 // buildSoulMetrics returns soul-related metrics
-func (s *RESTServer) buildSoulMetrics() string {
-	souls, err := s.metricsSouls()
+func (s *RESTServer) buildSoulMetrics(workspace ...string) string {
+	souls, err := s.metricsSouls(workspace...)
 	if err != nil {
 		return "# anubis_souls_total 0\n"
 	}
@@ -131,14 +231,21 @@ func (s *RESTServer) buildSoulMetrics() string {
 	out += "# TYPE anubis_soul_uptime_ratio gauge\n"
 
 	for _, soul := range souls {
-		label := prometheusLabelValue(soul.Name)
+		workspace := soul.WorkspaceID
+		if workspace == "" {
+			workspace = "default"
+		}
+		labels := fmt.Sprintf("soul=\"%s\",soul_id=\"%s\",workspace=\"%s\"",
+			prometheusLabelValue(soul.Name),
+			prometheusLabelValue(soul.ID),
+			prometheusLabelValue(workspace))
 		// Get recent judgments for latency, uptime, and status
 		judgments, err := s.store.ListJudgmentsNoCtx(soul.ID, time.Now().Add(-24*time.Hour), time.Now(), 1000)
 		if err != nil || len(judgments) == 0 {
 			statusCounts["unknown"]++
 			statusValue := 3 // unknown
-			out += fmt.Sprintf("anubis_soul_status{soul=\"%s\"} %d\n", label, statusValue)
-			out += fmt.Sprintf("anubis_soul_uptime_ratio{soul=\"%s\"} -1\n", label)
+			out += fmt.Sprintf("anubis_soul_status{%s} %d\n", labels, statusValue)
+			out += fmt.Sprintf("anubis_soul_uptime_ratio{%s} -1\n", labels)
 			continue
 		}
 
@@ -147,15 +254,15 @@ func (s *RESTServer) buildSoulMetrics() string {
 		// Status metric
 		statusValue := statusNumeric(latest.Status)
 		statusCounts[string(latest.Status)]++
-		out += fmt.Sprintf("anubis_soul_status{soul=\"%s\"} %d\n", label, statusValue)
+		out += fmt.Sprintf("anubis_soul_status{%s} %d\n", labels, statusValue)
 
 		// Latency metric
 		latencySeconds := float64(latest.Duration) / float64(time.Second)
-		out += fmt.Sprintf("anubis_soul_latency_seconds{soul=\"%s\"} %f\n", label, latencySeconds)
+		out += fmt.Sprintf("anubis_soul_latency_seconds{%s} %f\n", labels, latencySeconds)
 
 		// Uptime ratio: percentage of alive/degraded judgments in recent history
 		uptimeRatio := computeUptimeRatio(judgments)
-		out += fmt.Sprintf("anubis_soul_uptime_ratio{soul=\"%s\"} %.4f\n", label, uptimeRatio)
+		out += fmt.Sprintf("anubis_soul_uptime_ratio{%s} %.4f\n", labels, uptimeRatio)
 	}
 
 	for status, count := range statusCounts {
@@ -166,8 +273,8 @@ func (s *RESTServer) buildSoulMetrics() string {
 }
 
 // buildJudgmentMetrics returns judgment/health check metrics
-func (s *RESTServer) buildJudgmentMetrics() string {
-	souls, _ := s.metricsSouls()
+func (s *RESTServer) buildJudgmentMetrics(workspace ...string) string {
+	souls, _ := s.metricsSouls(workspace...)
 
 	totalChecks := 0
 	failedChecks := 0
@@ -284,8 +391,8 @@ func (s *RESTServer) buildAlertMetrics() string {
 }
 
 // buildLatencyMetrics returns latency percentile metrics
-func (s *RESTServer) buildLatencyMetrics() string {
-	souls, err := s.metricsSouls()
+func (s *RESTServer) buildLatencyMetrics(workspace ...string) string {
+	souls, err := s.metricsSouls(workspace...)
 	if err != nil || len(souls) == 0 {
 		return ""
 	}
@@ -344,9 +451,12 @@ func prometheusLabelValue(value string) string {
 	return strings.ReplaceAll(value, `"`, `\"`)
 }
 
-func (s *RESTServer) metricsSouls() ([]*core.Soul, error) {
+func (s *RESTServer) metricsSouls(workspace ...string) ([]*core.Soul, error) {
 	workspaceIDs := []string{"default"}
-	if workspaces, err := s.store.ListWorkspacesNoCtx(); err == nil {
+	if len(workspace) > 0 {
+		workspaceIDs = workspace
+	}
+	if workspaces, err := s.store.ListWorkspacesNoCtx(); err == nil && len(workspace) == 0 {
 		for _, workspace := range workspaces {
 			if workspace == nil || workspace.ID == "" || workspace.ID == "default" {
 				continue
@@ -359,7 +469,7 @@ func (s *RESTServer) metricsSouls() ([]*core.Soul, error) {
 	souls := make([]*core.Soul, 0)
 	var firstErr error
 	for _, workspaceID := range workspaceIDs {
-		batch, err := s.store.ListSoulsNoCtx(workspaceID, 0, 10000)
+		batch, err := s.store.ListSoulsNoCtx(workspaceID, 0, 0)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -370,17 +480,19 @@ func (s *RESTServer) metricsSouls() ([]*core.Soul, error) {
 			if soul == nil {
 				continue
 			}
-			seenKey := soul.ID
-			if seenKey == "" {
-				seenKey = workspaceID + "/" + soul.Name + "/" + soul.Target
+			soulWorkspace := soul.WorkspaceID
+			if soulWorkspace == "" {
+				soulWorkspace = workspaceID
+			}
+			seenKey := soulWorkspace + "/" + soul.ID
+			if soul.ID == "" {
+				seenKey = soulWorkspace + "/" + soul.Name + "/" + soul.Target
 			}
 			if _, ok := seen[seenKey]; ok {
 				continue
 			}
 			seen[seenKey] = struct{}{}
-			if soul.WorkspaceID == "" {
-				soul.WorkspaceID = workspaceID
-			}
+			soul.WorkspaceID = soulWorkspace
 			souls = append(souls, soul)
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -122,13 +123,21 @@ func TestStatusPagePasswordEndToEnd(t *testing.T) {
 		t.Errorf("a protected page served its data for a wrong password: status %d: %.200s", status, string(raw))
 	}
 
-	// 3. Unlock it with the password the editor set.
-	status, raw = passwordE2EJSON(t, "GET", publicURL+"?password="+password, client, nil)
-	if status != http.StatusOK {
-		t.Fatalf("unlocking the page: status %d: %.200s", status, string(raw))
+	// 3. Unlock it with a POST; the cookie jar follows the clean redirect.
+	response, err := client.PostForm(publicURL, url.Values{"password": {password}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), passwordE2ESoulName) {
-		t.Errorf("the unlocked page did not serve its component: %.300s", string(raw))
+	raw, err = io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(raw), passwordE2ESoulName) {
+		t.Fatalf("password POST did not unlock page: status %d: %.300s", response.StatusCode, string(raw))
+	}
+	if strings.Contains(response.Request.URL.String(), password) {
+		t.Fatal("password remained in redirect URL")
 	}
 
 	// 4. Clearing the password makes the page public again.

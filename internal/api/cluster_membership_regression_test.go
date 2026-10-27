@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -135,6 +136,16 @@ func TestSoulWriteWithoutLeaderIs503(t *testing.T) {
 			}
 			if got := rec.Header().Get("Retry-After") != ""; got != tt.retry {
 				t.Fatalf("Retry-After present = %v, want %v", got, tt.retry)
+			}
+			// Exactly one JSON document: the 503 used to be followed by a
+			// second "internal server error" body.
+			dec := json.NewDecoder(rec.Body)
+			var first map[string]any
+			if err := dec.Decode(&first); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if dec.More() {
+				t.Fatalf("response has more than one JSON body after %v", first)
 			}
 		})
 	}

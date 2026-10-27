@@ -1175,7 +1175,7 @@ func TestSecurityHeadersMiddleware(t *testing.T) {
 		{"X-Frame-Options", "DENY"},
 		{"X-XSS-Protection", "1; mode=block"},
 		{"Referrer-Policy", "strict-origin-when-cross-origin"},
-		{"Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws: wss:; font-src 'self'; base-uri 'self'; form-action 'self'"},
+		{"Content-Security-Policy", defaultContentSecurityPolicy},
 	}
 
 	for _, tt := range tests {
@@ -1670,13 +1670,16 @@ func TestRateLimitMiddleware_IPRateExceeded(t *testing.T) {
 func TestRateLimitMiddleware_UserRateExceeded(t *testing.T) {
 	storage := newMockStorage()
 	server := newTestServerWithStorage(storage)
+	defer server.Stop(context.Background())
 
 	testHandler := func(ctx *Context) error {
 		return ctx.JSON(http.StatusOK, map[string]string{"status": "ok"})
 	}
-	wrapped := server.rateLimitMiddleware(testHandler)
-
-	user := &User{ID: "rate-user", Name: "Rate Limited User"}
+	// The real route order: the IP limiter runs before authentication, and
+	// the per-user quota is charged by requireAuth once the user is known.
+	// (This test used to pre-populate ctx.User, a state the real chain never
+	// produced, which is why the per-user quota never applied in production.)
+	wrapped := server.rateLimitMiddleware(server.requireAuth(testHandler))
 
 	// Default limit is 100, user limit is 200 (2x)
 	// Use different IPs to bypass IP rate limiting but hit user limit
@@ -1685,8 +1688,8 @@ func TestRateLimitMiddleware_UserRateExceeded(t *testing.T) {
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest("GET", "/api/v1/souls", nil)
 		req.RemoteAddr = ip
-		ctx := &Context{Request: req, Response: rec, User: user}
-		wrapped(ctx)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		wrapped(&Context{Request: req, Response: rec})
 		if rec.Code != http.StatusOK {
 			t.Fatalf("request %d: expected 200, got %d", i+1, rec.Code)
 		}
@@ -1696,10 +1699,20 @@ func TestRateLimitMiddleware_UserRateExceeded(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/api/v1/souls", nil)
 	req.RemoteAddr = "172.16.10.0:5678"
-	ctx := &Context{Request: req, Response: rec, User: user}
-	wrapped(ctx)
+	req.Header.Set("Authorization", "Bearer valid-token")
+	wrapped(&Context{Request: req, Response: rec})
 	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("expected 429, got %d", rec.Code)
+	}
+
+	// Another user from yet another address is unaffected.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/api/v1/souls", nil)
+	req.RemoteAddr = "172.16.11.0:5678"
+	req.Header.Set("Authorization", "Bearer viewer-token")
+	wrapped(&Context{Request: req, Response: rec})
+	if rec.Code != http.StatusOK {
+		t.Errorf("other user: expected 200, got %d", rec.Code)
 	}
 }
 

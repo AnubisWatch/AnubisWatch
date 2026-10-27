@@ -11,7 +11,7 @@ import (
 // handleStatusPage returns public status page data (no auth required)
 func (s *RESTServer) handleStatusPage(ctx *Context) error {
 	// Get all souls
-	souls, err := s.store.ListSoulsNoCtx("default", 0, 10000)
+	souls, err := s.store.ListSoulsNoCtx(contextWorkspace(ctx), 0, 10000)
 	if err != nil {
 		return ctx.Error(http.StatusInternalServerError, "failed to fetch status")
 	}
@@ -109,7 +109,7 @@ type StatusComponent struct {
 // handlePublicStatus returns simple status for public access (no auth)
 func (s *RESTServer) handlePublicStatus(ctx *Context) error {
 	// Count souls by status
-	souls, err := s.store.ListSoulsNoCtx("default", 0, 10000)
+	souls, err := s.store.ListSoulsNoCtx(contextWorkspace(ctx), 0, 10000)
 	if err != nil {
 		return ctx.JSON(http.StatusOK, map[string]interface{}{
 			"status":  "unknown",
@@ -165,7 +165,7 @@ func (s *RESTServer) handlePublicStatus(ctx *Context) error {
 // handleStatusPageHTML returns HTML status page
 func (s *RESTServer) handleStatusPageHTML(ctx *Context) error {
 	// Get status data
-	souls, _ := s.store.ListSoulsNoCtx("default", 0, 10000)
+	souls, _ := s.store.ListSoulsNoCtx(contextWorkspace(ctx), 0, 10000)
 
 	htmlOut := `<!DOCTYPE html>
 <html>

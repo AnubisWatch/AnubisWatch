@@ -3,6 +3,7 @@ package core
 import (
 	"crypto/tls"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -32,6 +33,10 @@ type LoggingConfig struct {
 	Format string `json:"format" yaml:"format"` // json, text
 	Output string `json:"output" yaml:"output"` // stdout, file
 	File   string `json:"file" yaml:"file"`     // log file path (if output=file)
+	// MaxSizeMB rotates the log file once it reaches this size (default 100).
+	MaxSizeMB int `json:"max_size_mb" yaml:"max_size_mb"`
+	// MaxBackups is how many rotated files (anubis.log.1 …) are kept (default 5).
+	MaxBackups int `json:"max_backups" yaml:"max_backups"`
 }
 
 // TelemetryConfig defines OpenTelemetry tracing settings
@@ -51,6 +56,9 @@ type ServerConfig struct {
 	GRPCReflection bool            `json:"grpc_reflection" yaml:"grpc_reflection"` // Enable gRPC reflection (default: false for security)
 	TrustedProxies []string        `json:"trusted_proxies" yaml:"trusted_proxies"` // IPs that can set X-Forwarded-For (empty = trust none)
 	MetricsAuth    bool            `json:"metrics_auth" yaml:"metrics_auth"`       // Require auth on /metrics (default: false for Prometheus scraping; enable in multi-tenant/exposed setups)
+	// PublicURL is the externally reachable base URL (e.g. https://status.example.com)
+	// used to build absolute links in emails. Required when mail is configured.
+	PublicURL string `json:"public_url,omitempty" yaml:"public_url,omitempty"`
 }
 
 // TLSServerConfig defines TLS settings
@@ -237,13 +245,22 @@ type TenantsConfig struct {
 	DefaultQuotas QuotaConfig `json:"default_quotas" yaml:"default_quotas"`
 }
 
-// QuotaConfig defines resource limits
+// QuotaConfig defines per-workspace resource limits. They are enforced only
+// when tenants.enabled is set; 0 means unlimited.
 type QuotaConfig struct {
-	MaxSouls         int      `json:"max_souls" yaml:"max_souls"`
-	MaxJourneys      int      `json:"max_journeys" yaml:"max_journeys"`
-	MaxAlertChannels int      `json:"max_alert_channels" yaml:"max_alert_channels"`
-	MaxTeamMembers   int      `json:"max_team_members" yaml:"max_team_members"`
-	RetentionDays    int      `json:"retention_days" yaml:"retention_days"`
+	// MaxSouls, MaxJourneys and MaxAlertChannels cap how many of each a
+	// workspace may hold. Only creates are refused; existing resources stay
+	// readable and editable after a limit is lowered.
+	MaxSouls         int `json:"max_souls" yaml:"max_souls"`
+	MaxJourneys      int `json:"max_journeys" yaml:"max_journeys"`
+	MaxAlertChannels int `json:"max_alert_channels" yaml:"max_alert_channels"`
+	// MaxTeamMembers caps a workspace's members plus pending invitations.
+	// Inviting or adding a member past it is refused; existing members stay.
+	MaxTeamMembers int `json:"max_team_members,omitempty" yaml:"max_team_members,omitempty"`
+	// RetentionDays caps every time-series retention tier.
+	RetentionDays int `json:"retention_days" yaml:"retention_days"`
+	// CheckIntervalMin is the shortest check interval a soul or journey may
+	// be created with, or changed to.
 	CheckIntervalMin Duration `json:"check_interval_min" yaml:"check_interval_min"`
 }
 
@@ -287,6 +304,10 @@ type OIDCAuth struct {
 	ClientID     string `json:"client_id" yaml:"client_id"`
 	ClientSecret string `json:"client_secret" yaml:"client_secret"`
 	RedirectURL  string `json:"redirect_url" yaml:"redirect_url"`
+	// AllowUnverifiedEmail accepts identities whose provider omits the
+	// email_verified claim. Accounts are matched by email, so by default
+	// only an explicitly verified address may sign in.
+	AllowUnverifiedEmail bool `json:"allow_unverified_email,omitempty" yaml:"allow_unverified_email,omitempty"`
 }
 
 // LDAPAuth defines LDAP settings
@@ -379,6 +400,35 @@ func (c ServerConfig) validate() error {
 	return nil
 }
 
+// MinEncryptionKeyBytes is the shortest storage encryption key accepted.
+// `anubis init` has always generated 16-character random keys, so 16 is the
+// floor that keeps those deployments starting; RecommendedEncryptionKeyBytes
+// (a 64-character hex string such as `openssl rand -hex 32`) is advised.
+const (
+	MinEncryptionKeyBytes         = 16
+	RecommendedEncryptionKeyBytes = 32
+)
+
+// AllowWeakEncryptionKeyEnv lets an operator start once with a key shorter
+// than MinEncryptionKeyBytes so the data can be backed up and restored into a
+// store with a strong key. It is a migration escape hatch, not a setting.
+const AllowWeakEncryptionKeyEnv = "ANUBIS_ALLOW_WEAK_ENCRYPTION_KEY"
+
+// ValidateEncryptionKey enforces the storage encryption key rule shared by
+// config validation and the storage engine. The key string is used verbatim
+// as HKDF input (a hex string is NOT decoded), so every key accepted before
+// this check existed derives exactly the same AES keys as before.
+func ValidateEncryptionKey(key string) error {
+	if key == "" {
+		return fmt.Errorf("encryption key is empty")
+	}
+	if len(key) < MinEncryptionKeyBytes && os.Getenv(AllowWeakEncryptionKeyEnv) != "1" {
+		return fmt.Errorf("encryption key is %d bytes; at least %d are required (%d+ recommended, e.g. a 64-character hex string from `openssl rand -hex 32`); to open an existing store once for migration set %s=1",
+			len(key), MinEncryptionKeyBytes, RecommendedEncryptionKeyBytes, AllowWeakEncryptionKeyEnv)
+	}
+	return nil
+}
+
 // validate validates the storage configuration
 func (c StorageConfig) validate() error {
 	if c.Path == "" {
@@ -394,6 +444,9 @@ func (c StorageConfig) validate() error {
 			if strings.Contains(lowerKey, marker) {
 				return &ConfigError{Field: "storage.encryption.key", Message: "placeholder encryption keys are not allowed"}
 			}
+		}
+		if err := ValidateEncryptionKey(c.Encryption.Key); err != nil {
+			return &ConfigError{Field: "storage.encryption.key", Message: err.Error()}
 		}
 	}
 	if c.BTreeOrder < 3 && c.BTreeOrder != 0 {

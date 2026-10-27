@@ -28,9 +28,11 @@ type StatusPage struct {
 	Souls       []string         `json:"souls" yaml:"souls"` // Soul IDs to display
 	Groups      []StatusGroup    `json:"groups" yaml:"groups"`
 	Incidents   []StatusIncident `json:"incidents" yaml:"incidents"`
-	UptimeDays  int              `json:"uptime_days" yaml:"uptime_days"` // Days to show
-	CreatedAt   time.Time        `json:"created_at" yaml:"-"`
-	UpdatedAt   time.Time        `json:"updated_at" yaml:"-"`
+	// Announcements are scheduled maintenance notices (statuspage_incident.go).
+	Announcements []StatusAnnouncement `json:"announcements,omitempty" yaml:"announcements,omitempty"`
+	UptimeDays    int                  `json:"uptime_days" yaml:"uptime_days"` // Days to show
+	CreatedAt     time.Time            `json:"created_at" yaml:"-"`
+	UpdatedAt     time.Time            `json:"updated_at" yaml:"-"`
 }
 
 // StatusPageTheme contains theme configuration
@@ -78,13 +80,17 @@ const (
 
 // StatusIncident is an incident displayed on the status page
 type StatusIncident struct {
-	ID            string           `json:"id"`
-	Title         string           `json:"title"`
-	Description   string           `json:"description"`
-	Status        IncidentStatus   `json:"status"`
-	Severity      Severity         `json:"severity"`
+	ID          string         `json:"id"`
+	Title       string         `json:"title"`
+	Description string         `json:"description"`
+	Status      IncidentStatus `json:"status"`
+	Severity    Severity       `json:"severity"`
+	// Impact is none, minor, major or critical (see statuspage_incident.go);
+	// empty on incidents written before it existed.
+	Impact        IncidentImpact   `json:"impact,omitempty"`
 	AffectedSouls []string         `json:"affected_souls"`
 	StartedAt     time.Time        `json:"started_at"`
+	UpdatedAt     time.Time        `json:"updated_at,omitempty"`
 	ResolvedAt    *time.Time       `json:"resolved_at,omitempty"`
 	Updates       []IncidentUpdate `json:"updates"`
 }
@@ -104,7 +110,15 @@ type StatusPageData struct {
 	Souls     []SoulStatusInfo  `json:"souls"`
 	Groups    []GroupStatusInfo `json:"groups"`
 	Incidents []StatusIncident  `json:"incidents"`
-	Uptime    UptimeData        `json:"uptime"`
+	// IncidentHistory lists incidents of the last 90 days, newest first.
+	IncidentHistory []StatusIncident `json:"incident_history"`
+	// Maintenance lists upcoming, in-progress and recently completed
+	// scheduled maintenance announcements.
+	Maintenance []StatusAnnouncement `json:"maintenance"`
+	Uptime      UptimeData           `json:"uptime"`
+	// SubscriptionsAvailable tells clients whether POST /status/subscribe
+	// accepts email subscriptions (outgoing mail is configured).
+	SubscriptionsAvailable bool `json:"subscriptions_available"`
 }
 
 // StatusPageInfo basic page info
@@ -132,6 +146,9 @@ type SoulStatusInfo struct {
 	UptimePercent float64   `json:"uptime_percent"`
 	LastCheckedAt time.Time `json:"last_checked_at"`
 	ResponseTime  float64   `json:"response_time_ms"`
+	// IncidentImpact is the worst impact of an active incident naming this
+	// soul, when one does.
+	IncidentImpact string `json:"incident_impact,omitempty"`
 }
 
 // GroupStatusInfo is group info for status page
@@ -218,4 +235,16 @@ type StatusPageSubscription struct {
 	Type         string    `json:"type"` // email, webhook, rss
 	Confirmed    bool      `json:"confirmed"`
 	SubscribedAt time.Time `json:"subscribed_at"`
+
+	// Double opt-in. ConfirmTokenHash is the SHA-256 of the single-use token
+	// mailed to the address; it is cleared once confirmed and expires at
+	// ConfirmExpiresAt. The raw token is never stored.
+	ConfirmTokenHash string     `json:"confirm_token_hash,omitempty"`
+	ConfirmExpiresAt time.Time  `json:"confirm_expires_at,omitempty"`
+	ConfirmedAt      *time.Time `json:"confirmed_at,omitempty"`
+	// UnsubscribeToken authorises only removing this subscription; it is put
+	// in every email's unsubscribe link, so it is kept as issued.
+	UnsubscribeToken string `json:"unsubscribe_token,omitempty"`
+	// ConfirmSentAt is when the latest confirmation email was requested.
+	ConfirmSentAt time.Time `json:"confirm_sent_at,omitempty"`
 }

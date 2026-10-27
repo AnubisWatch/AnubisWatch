@@ -47,9 +47,6 @@ func statusPageSiblingFieldsCreate(t *testing.T, server *RESTServer) core.Status
 		"groups": []map[string]any{{
 			"id": "group-1", "name": "Group One", "soul_ids": []string{"soul-1"},
 		}},
-		"incidents": []map[string]any{{
-			"id": "incident-1", "title": "Checkout degraded", "status": "open",
-		}},
 	})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, want 201: %s", rec.Code, rec.Body.String())
@@ -58,6 +55,9 @@ func statusPageSiblingFieldsCreate(t *testing.T, server *RESTServer) core.Status
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode create response: %v", err)
 	}
+	// Incidents are written through their own endpoints, never through the
+	// page create/PUT, so seed one directly.
+	server.store.(*mockStorage).statusPages[created.ID].Incidents = []core.StatusIncident{{ID: "incident-1", Title: "Checkout degraded", Status: "open"}}
 	return created
 }
 

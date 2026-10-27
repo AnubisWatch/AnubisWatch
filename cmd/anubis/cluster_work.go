@@ -14,6 +14,7 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 	"github.com/AnubisWatch/anubiswatch/internal/journey"
 	"github.com/AnubisWatch/anubiswatch/internal/probe"
+	"github.com/AnubisWatch/anubiswatch/internal/raft"
 	"github.com/AnubisWatch/anubiswatch/internal/storage"
 )
 
@@ -255,6 +256,10 @@ func (w *clusterWork) reconcileJourneys(self string) {
 // replicateJourneyRun is the journey executor's run saver in cluster mode: the
 // run is replicated in the next batch, so every node can list it.
 func (w *clusterWork) replicateJourneyRun(_ context.Context, run *core.JourneyRun) error {
+	return w.replicateAsync(journeyRunKey(run), run)
+}
+
+func journeyRunKey(run *core.JourneyRun) string {
 	if run.ID == "" {
 		run.ID = core.GenerateID()
 	}
@@ -262,8 +267,38 @@ func (w *clusterWork) replicateJourneyRun(_ context.Context, run *core.JourneyRu
 	if workspaceID == "" {
 		workspaceID = "default"
 	}
-	key := fmt.Sprintf("%s/journey-runs/%s/%d/%s", workspaceID, run.JourneyID, run.StartedAt, run.ID)
-	return w.replicateAsync(key, run)
+	return fmt.Sprintf("%s/journey-runs/%s/%d/%s", workspaceID, run.JourneyID, run.StartedAt, run.ID)
+}
+
+// Manual calls acknowledge a committed, locally applied record. Scheduled
+// runs keep the asynchronous batch path above.
+func (w *clusterWork) replicateJourneyRunSync(ctx context.Context, run *core.JourneyRun) error {
+	return saveJourneyRunSync(ctx, run, w.mgr.NodeID(), w.mgr)
+}
+
+func saveJourneyRunSync(ctx context.Context, run *core.JourneyRun, origin string, applier mutationApplier) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	timeout := 30 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return context.DeadlineExceeded
+		}
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+	key := journeyRunKey(run)
+	data, err := json.Marshal(run)
+	if err != nil {
+		return err
+	}
+	if _, _, err := applier.ApplyMutation(core.FSMCommand{Op: core.FSMSet, Key: key, Value: data, Origin: origin}, timeout); err != nil {
+		return fmt.Errorf("commit journey run: %w", err)
+	}
+	return nil
 }
 
 // seedAlertWindow bounds the judgment history read when a soul is taken over:
@@ -293,7 +328,7 @@ func (w *clusterWork) seedAlertState(souls []*core.Soul) {
 			w.logger.Debug("failed to read judgments to seed alert state", "soul", soul.ID, "err", err)
 			continue
 		}
-		w.alerts.SeedFromJudgments(soul.ID, judgments)
+		w.alerts.SeedOwnedSoul(soul.ID, judgments)
 	}
 }
 
@@ -304,10 +339,52 @@ func (w *clusterWork) Owns(soulID string) bool {
 	return w.owned[soulID]
 }
 
+// judgmentStore is the storage surface the replicated-judgment handler uses:
+// it reads a judgment to skip a duplicate and writes the replicated judgment.
+// It is an interface so the handler's failure classification -- a storage
+// failure is transient, a payload that cannot be decoded is not -- can be
+// exercised without a real disk.
+type judgmentStore interface {
+	GetJudgmentByID(ctx context.Context, workspaceID, id string) (*core.Judgment, error)
+	SaveJudgment(ctx context.Context, j *core.Judgment) error
+}
+
+// nodeJudgmentStore binds the replicated-judgment handler to the node's real
+// storage. The judgment is always read from the main store, and written
+// through the time-series store when one is configured, because that store
+// also folds the judgment into the summaries.
+type nodeJudgmentStore struct {
+	store *storage.CobaltDB
+	ts    *storage.TimeSeriesStore
+}
+
+func (s nodeJudgmentStore) GetJudgmentByID(ctx context.Context, workspaceID, id string) (*core.Judgment, error) {
+	return s.store.GetJudgmentByID(ctx, workspaceID, id)
+}
+
+func (s nodeJudgmentStore) SaveJudgment(ctx context.Context, j *core.Judgment) error {
+	if s.ts != nil {
+		return s.ts.SaveJudgment(ctx, j)
+	}
+	return s.store.SaveJudgment(ctx, j)
+}
+
 // applyJudgment is the FSM handler for replicated judgments. It skips a
 // judgment that is already stored, which keeps the summaries right when a
 // forwarded batch is applied twice.
 func (w *clusterWork) applyJudgment(cmd *core.FSMCommand) error {
+	return applyReplicatedJudgment(cmd, nodeJudgmentStore{store: w.store, ts: w.ts})
+}
+
+// applyReplicatedJudgment applies one replicated judgment command.
+//
+// The failure it returns says whether a later attempt may still succeed. A
+// storage failure is transient -- the disk may recover -- so it is marked
+// retryable and the node retries the committed entry. A payload that cannot
+// be decoded, or an op the handler does not support, can never be applied, so
+// it stays a plain error: the element is skipped and the node keeps applying
+// the rest of the log.
+func applyReplicatedJudgment(cmd *core.FSMCommand, store judgmentStore) error {
 	if cmd.Op != core.FSMSet {
 		return fmt.Errorf("unsupported judgment op %d", cmd.Op)
 	}
@@ -316,13 +393,13 @@ func (w *clusterWork) applyJudgment(cmd *core.FSMCommand) error {
 		return fmt.Errorf("decode replicated judgment: %w", err)
 	}
 	ctx := context.Background()
-	if _, err := w.store.GetJudgment(ctx, j.WorkspaceID, j.SoulID, j.Timestamp); err == nil {
+	if _, err := store.GetJudgmentByID(ctx, j.WorkspaceID, j.ID); err == nil {
 		return nil
 	}
-	if w.ts != nil {
-		return w.ts.SaveJudgment(ctx, &j)
+	if err := store.SaveJudgment(ctx, &j); err != nil {
+		return raft.Retryable(err)
 	}
-	return w.store.SaveJudgment(ctx, &j)
+	return nil
 }
 
 // replicateJudgment queues a judgment this node produced for replication.
@@ -340,7 +417,7 @@ func (w *clusterWork) replicateJudgment(j *core.Judgment) error {
 	w.batcher.Enqueue(core.FSMCommand{
 		Op:     core.FSMSet,
 		Table:  judgmentTable,
-		Key:    fmt.Sprintf("%s/judgments/%s/%d", j.WorkspaceID, j.SoulID, j.Timestamp.UnixNano()),
+		Key:    fmt.Sprintf("%s/judgments/%s/%d/%s", j.WorkspaceID, j.SoulID, j.Timestamp.UnixNano(), j.ID),
 		Value:  data,
 		Origin: w.mgr.NodeID(),
 	})
@@ -425,6 +502,10 @@ func (w *clusterWork) handleEvent(ev clusterEvent) {
 		w.Trigger()
 	case parts[1] == "alerts" && len(parts) == 4 && w.alerts != nil && !local:
 		w.applyAlertRecord(parts[2], parts[3], cmd)
+	case parts[1] == "heartbeats" && cmd.Op == core.FSMSet && w.engine != nil:
+		// A ping landed on some node; only the owner runs the soul, so only
+		// it judges the ping (EvaluateSoul is a no-op elsewhere).
+		w.engine.EvaluateSoul(parts[2])
 	}
 }
 
@@ -486,7 +567,7 @@ func collectSouls(ctx context.Context, cfg *core.Config, store *storage.CobaltDB
 
 	workspaceIDs := allWorkspaceIDs(ctx, store, logger, "probe assignment")
 	for _, workspaceID := range workspaceIDs {
-		stored, err := store.ListSouls(ctx, workspaceID, 0, 10000)
+		stored, err := store.ListSouls(ctx, workspaceID, 0, 0)
 		if err != nil {
 			logger.Warn("failed to load stored souls for probe assignment", "workspace", workspaceID, "err", err)
 			continue

@@ -87,7 +87,7 @@ func (s *RESTServer) handleCreateJourney(ctx *Context) error {
 		return s.internalError(ctx, err, "failed to save journey")
 	}
 
-	return ctx.JSON(http.StatusCreated, journey)
+	return ctx.JSON(http.StatusCreated, RedactJourney(&journey))
 }
 
 // handleGetJourney gets a journey by ID
@@ -106,7 +106,7 @@ func (s *RESTServer) handleGetJourney(ctx *Context) error {
 		return ctx.Error(http.StatusForbidden, "access denied")
 	}
 
-	return ctx.JSON(http.StatusOK, journey)
+	return ctx.JSON(http.StatusOK, RedactJourney(journey))
 }
 
 // handleUpdateJourney updates a journey
@@ -133,6 +133,9 @@ func (s *RESTServer) handleUpdateJourney(ctx *Context) error {
 		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 
+	if err := MergeJourneySecrets(existing, &journey); err != nil {
+		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
 	journey.ID = id
 	journey.WorkspaceID = contextWorkspace(ctx)
 	journey.CreatedAt = existing.CreatedAt
@@ -142,7 +145,7 @@ func (s *RESTServer) handleUpdateJourney(ctx *Context) error {
 		return s.internalError(ctx, err, "failed to save journey")
 	}
 
-	return ctx.JSON(http.StatusOK, journey)
+	return ctx.JSON(http.StatusOK, RedactJourney(&journey))
 }
 
 // handleDeleteJourney deletes a journey
@@ -235,7 +238,7 @@ func validateJourneyForAPI(journey *core.JourneyConfig) error {
 
 func (s *RESTServer) buildJourneyListItem(ctx context.Context, workspace string, journey *core.JourneyConfig) journeyListItem {
 	item := journeyListItem{
-		JourneyConfig: journey,
+		JourneyConfig: RedactJourney(journey),
 		StepCount:     len(journey.Steps),
 		LastStatus:    "unknown",
 		SuccessRate:   0,
@@ -304,6 +307,9 @@ func (s *RESTServer) handleListJourneyRuns(ctx *Context) error {
 	if err != nil {
 		return s.internalError(ctx, err, "failed to list journey runs")
 	}
+	for i := range runs {
+		runs[i] = RedactJourneyRun(runs[i])
+	}
 	return ctx.JSON(http.StatusOK, runs)
 }
 
@@ -320,7 +326,7 @@ func (s *RESTServer) handleGetJourneyRun(ctx *Context) error {
 	if err != nil {
 		return ctx.Error(http.StatusNotFound, "journey run not found")
 	}
-	return ctx.JSON(http.StatusOK, run)
+	return ctx.JSON(http.StatusOK, RedactJourneyRun(run))
 }
 
 // handleMCPTools returns available MCP tools
@@ -396,6 +402,20 @@ func (s *RESTServer) handleSoulLogs(ctx *Context) error {
 
 // Dashboard handlers
 
+// dashboardWithWidgets returns dashboard with a nil widget list replaced by an
+// empty one. The spec declares widgets a non-null array, and the dashboard pages
+// iterate it: a dashboard created without a widgets array -- or stored that way
+// before this normalisation existed -- was served as "widgets": null and
+// crashed them. The stored record is not modified.
+func dashboardWithWidgets(dashboard *core.CustomDashboard) *core.CustomDashboard {
+	if dashboard == nil || dashboard.Widgets != nil {
+		return dashboard
+	}
+	copied := *dashboard
+	copied.Widgets = []core.WidgetConfig{}
+	return &copied
+}
+
 func (s *RESTServer) handleListDashboards(ctx *Context) error {
 	dashboards, err := s.store.ListDashboardsNoCtx()
 	if err != nil {
@@ -408,7 +428,7 @@ func (s *RESTServer) handleListDashboards(ctx *Context) error {
 			continue
 		}
 		if sameWorkspace(dashboard.WorkspaceID, workspace) {
-			filtered = append(filtered, dashboard)
+			filtered = append(filtered, dashboardWithWidgets(dashboard))
 		}
 	}
 	return ctx.JSON(http.StatusOK, filtered)
@@ -424,6 +444,9 @@ func (s *RESTServer) handleCreateDashboard(ctx *Context) error {
 	dashboard.WorkspaceID = contextWorkspace(ctx)
 	dashboard.CreatedAt = time.Now()
 	dashboard.UpdatedAt = time.Now()
+	if dashboard.Widgets == nil {
+		dashboard.Widgets = []core.WidgetConfig{}
+	}
 
 	if err := s.store.SaveDashboardNoCtx(&dashboard); err != nil {
 		return s.internalError(ctx, err, "failed to save dashboard")
@@ -447,7 +470,7 @@ func (s *RESTServer) handleGetDashboard(ctx *Context) error {
 		return ctx.Error(http.StatusForbidden, "access denied")
 	}
 
-	return ctx.JSON(http.StatusOK, dashboard)
+	return ctx.JSON(http.StatusOK, dashboardWithWidgets(dashboard))
 }
 
 func (s *RESTServer) handleUpdateDashboard(ctx *Context) error {
@@ -474,6 +497,9 @@ func (s *RESTServer) handleUpdateDashboard(ctx *Context) error {
 	dashboard.WorkspaceID = contextWorkspace(ctx)
 	dashboard.CreatedAt = existing.CreatedAt
 	dashboard.UpdatedAt = time.Now()
+	if dashboard.Widgets == nil {
+		dashboard.Widgets = []core.WidgetConfig{}
+	}
 
 	if err := s.store.SaveDashboardNoCtx(&dashboard); err != nil {
 		return s.internalError(ctx, err, "failed to save dashboard")

@@ -8,7 +8,10 @@ import (
 // initSimpleWithPath creates simple config at specific path
 func initSimpleWithPath(configPath string) {
 	// Generate secure random admin password
-	securePassword := generateSecurePassword()
+	securePassword := os.Getenv("ANUBIS_ADMIN_PASSWORD")
+	if securePassword == "" {
+		securePassword = generateSecurePassword()
+	}
 
 	opts := ConfigOptions{
 		Host:            "0.0.0.0",
@@ -26,7 +29,7 @@ func initSimpleWithPath(configPath string) {
 
 	config := generateConfig(opts)
 
-	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(config), 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to write config: %v\n", err)
 		os.Exit(1)
 	}

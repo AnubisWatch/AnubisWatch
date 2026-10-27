@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -91,15 +92,35 @@ func findConfig() string {
 }
 
 func configPathFromArgs(args []string) string {
-	for i, arg := range args {
-		if (arg == "--config" || arg == "-c") && i+1 < len(args) {
-			return args[i+1]
+	path, _ := parseConfigPathFromArgs(args)
+	return path
+}
+
+func parseConfigPathFromArgs(args []string) (string, error) {
+	path := ""
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		value := ""
+		switch {
+		case arg == "--config" || arg == "-c":
+			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
+				return "", fmt.Errorf("%s requires a config file path", arg)
+			}
+			i++
+			value = args[i]
+		case strings.HasPrefix(arg, "--config="):
+			value = strings.TrimPrefix(arg, "--config=")
+			if value == "" {
+				return "", fmt.Errorf("--config requires a config file path")
+			}
+		default:
+			continue
 		}
-		if strings.HasPrefix(arg, "--config=") {
-			return strings.TrimPrefix(arg, "--config=")
+		if path == "" {
+			path = value
 		}
 	}
-	return ""
+	return path, nil
 }
 
 func findConfigFromArgs(args []string) string {

@@ -144,10 +144,24 @@ func backupCreate() {
 	fmt.Printf("  Journeys:       %d\n", backup.Metadata.Journeys)
 }
 
+// openLocalBackupManager validates the selected configuration even for
+// commands that operate on backup files without opening the database.
+func openLocalBackupManager() (*backup.Manager, error) {
+	cfg, err := loadLocalCLIConfig()
+	if err != nil {
+		return nil, err
+	}
+	mgr := backup.NewManager(nil, dataDirForConfig(cfg), errorLogger())
+	if err := mgr.Init(); err != nil {
+		return nil, err
+	}
+	return mgr, nil
+}
+
 // backupList lists available backups
 func backupList() {
-	mgr := backup.NewManager(nil, getDataDir(), errorLogger())
-	if err := mgr.Init(); err != nil {
+	mgr, err := openLocalBackupManager()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing backup manager: %v\n", err)
 		os.Exit(1)
 	}
@@ -193,8 +207,8 @@ func backupDelete() {
 
 	fmt.Printf("⚖️  Deleting backup: %s\n", filename)
 
-	mgr := backup.NewManager(nil, getDataDir(), errorLogger())
-	if err := mgr.Init(); err != nil {
+	mgr, err := openLocalBackupManager()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing backup manager: %v\n", err)
 		os.Exit(1)
 	}
@@ -216,8 +230,8 @@ func backupInfo() {
 
 	filename := os.Args[3]
 
-	mgr := backup.NewManager(nil, getDataDir(), errorLogger())
-	if err := mgr.Init(); err != nil {
+	mgr, err := openLocalBackupManager()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing backup manager: %v\n", err)
 		os.Exit(1)
 	}

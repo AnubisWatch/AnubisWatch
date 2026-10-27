@@ -144,7 +144,7 @@ func (s *Server) Start(ctx context.Context) error {
 		workspaceIDs := allWorkspaceIDs(ctx, s.deps.Store, logger, "probe assignment")
 
 		for _, workspaceID := range workspaceIDs {
-			storedSouls, err := s.deps.Store.ListSouls(ctx, workspaceID, 0, 10000)
+			storedSouls, err := s.deps.Store.ListSouls(ctx, workspaceID, 0, 0)
 			if err != nil {
 				logger.Warn("failed to load stored souls for probe assignment", "workspace", workspaceID, "err", err)
 				continue
@@ -497,6 +497,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 
 	// Initialize telemetry
 	telemetryConfig := telemetry.DefaultConfig()
+	telemetryConfig.ServiceVersion = Version
 	telemetryConfig.Enabled = cfg.Telemetry.Enabled
 	telemetryConfig.Endpoint = cfg.Telemetry.Endpoint
 	telemetryConfig.Environment = cfg.Environment
@@ -518,7 +519,17 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize storage: %w", err)
 	}
+	// Every later failure must release the store: it holds the data-directory
+	// lock, and a caller that retries in-process (tests, a supervisor loop)
+	// would otherwise see "data directory is in use" until the process exits.
+	built := false
+	defer func() {
+		if !built {
+			_ = store.Close()
+		}
+	}()
 	timeSeries := storage.NewTimeSeriesStore(store, cfg.Storage.TimeSeries, logger)
+	applyQuotaRetention(cfg, logger)
 	retention := storage.NewRetentionManager(store, cfg.Storage.TimeSeries.Retention, cfg.Storage.Path, logger)
 
 	// Initialize auth
@@ -587,6 +598,13 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		logger.Warn("SSRF protection relaxed: probes and alert channels may reach private and loopback addresses",
 			"event", "ssrf_allow_private")
 	}
+	if err := alert.ConfigureHTTPProxy(cfg.Alerting.Proxy); err != nil {
+		return nil, err
+	}
+	if cfg.Alerting.Proxy != "" {
+		logger.Warn("HTTP alert channels send through alerting.proxy; the proxy resolves alert targets itself, so DNS-rebinding protection depends on it",
+			"event", "alert_proxy_enabled")
+	}
 
 	// Initialize cluster manager. When clustering was explicitly enabled, an
 	// initialization failure is fatal; falling back to a standalone manager
@@ -600,15 +618,39 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		clusterMgr = nil
 	}
 
+	// Cluster auth is one replicated authority. Pod-local sessions or credential
+	// mutations cannot safely back a load-balanced management Service.
+	if clusterMgr != nil && clusterMgr.IsClustered() {
+		local, ok := authenticator.(*auth.LocalAuthenticator)
+		if !ok {
+			authenticator.Shutdown()
+			return nil, fmt.Errorf("cluster authentication currently requires auth.type=local; OIDC/LDAP sessions are not shared")
+		}
+		shared, err := newClusterAuthenticator(local, clusterMgr, store)
+		if err != nil {
+			local.Shutdown()
+			return nil, fmt.Errorf("initialize shared cluster authentication: %w", err)
+		}
+		authenticator = shared
+	}
+
 	// In cluster mode monitoring work is shared: each soul is probed by its
 	// owner only, and judgments and alert records replicate through Raft.
 	var work *clusterWork
+	assignConfigHeartbeatIDs(cfg)
 	if clusterMgr != nil && clusterMgr.IsClustered() {
 		work = newClusterWork(clusterMgr, cfg, store, timeSeries, logger)
 	}
 
 	// Initialize alert manager
-	alertStorage := &alertStorageAdapter{store: store, work: work}
+	quota := newQuotaGuard(store, cfg.Tenants)
+	// max_team_members is checked by the auth directory, which owns members.
+	if mq, ok := authenticator.(interface {
+		SetMemberQuota(func(workspace string, current int) error)
+	}); ok {
+		mq.SetMemberQuota(quota.admitMember)
+	}
+	alertStorage := &alertStorageAdapter{store: store, work: work, quota: quota}
 	alertMgr := alert.NewManager(alertStorage, logger)
 
 	// Initialize probe engine
@@ -617,6 +659,8 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		probeStore.replicate = work.replicateJudgment
 	}
 	registry := newProbeRegistry()
+	// Heartbeat souls are judged from replicated ping state, not probed.
+	registry.Register(probe.NewHeartbeatChecker(heartbeatSource{store: store}))
 	probeEngine := probe.NewEngine(probe.EngineOptions{
 		Registry: registry,
 		Store:    probeStore,
@@ -625,12 +669,20 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		Region:   cfg.Necropolis.Region,
 		Logger:   logger,
 		Config: probe.EngineConfig{
+			// probe.max_concurrent_checks (0 = default 100); validated by
+			// core.Config.validate at load time.
+			MaxConcurrentChecks: cfg.Probe.EffectiveMaxConcurrentChecks(),
+			// Spread first checks after a restart instead of firing every
+			// soul at once; API-created souls still run immediately.
+			StartJitter: probe.DefaultStartJitter,
 			// K7: honour the master TLS-verification switch. The CLI
 			// flag and env var have already been parsed into
 			// ServerOptions; the config file's
 			// security.allow_insecure_skip_verify is OR-ed in here so
 			// any of the three sources can enable it.
 			AllowInsecureSkipVerify: opts.InsecureSkipVerify || cfg.Security.AllowInsecureSkipVerify,
+			// probe.flap_detection: default policy, overridable per soul.
+			FlapDetection: cfg.Probe.FlapDetection,
 		},
 	})
 
@@ -654,8 +706,11 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		// node lists them; runs carry this node's ID like judgments do.
 		journeyExec = journey.NewExecutorWithNodeID(store, logger, clusterMgr.NodeID(), cfg.Necropolis.Region)
 		journeyExec.SetRunSaver(work.replicateJourneyRun)
+		journeyExec.SetRunOnceSaver(work.replicateJourneyRunSync)
 		work.journeys = journeyExec
 	}
+
+	journeyExec.SetAllowInsecureSkipVerify(probeEngine.Config().AllowInsecureSkipVerify)
 
 	// The API surfaces schedule souls through probeAPI: the engine itself
 	// standalone, an ownership-aware front in cluster mode.
@@ -668,7 +723,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 
 	// Initialize REST server dependencies
 	clusterAdapt := &clusterAdapter{mgr: clusterMgr}
-	restStore := &restStorageAdapter{store: store}
+	restStore := &restStorageAdapter{store: store, quota: quota}
 	if clusterMgr != nil && clusterMgr.IsClustered() {
 		restStore.replicator = clusterAdapt
 	}
@@ -694,24 +749,89 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	// configured authenticator is adapted onto the handler's session check; without
 	// this a private page is refused for everyone, including its owner.
 	statusPageRepo := &statusPageRepository{store: store}
+	if clusterMgr != nil && clusterMgr.IsClustered() {
+		// Subscriptions replicate so every node can confirm, unsubscribe and
+		// (on the leader) notify them.
+		statusPageRepo.replicator = clusterAdapt
+	}
 	statusPageHandler := statuspage.NewHandler(statusPageRepo).
 		SetSessionValidator(statusPageSessionValidator{auth: authenticator})
+
+	// Outgoing mail (mail:) delivers status page subscription emails and
+	// password reset links, asynchronously and with retries. Without it the
+	// subscribe endpoint answers 503 and password recovery stays on the CLI.
+	mailQueue, err := newMailQueue(cfg, logger)
+	if err != nil {
+		return nil, err
+	}
+	if mailQueue != nil {
+		shouldNotify := func() bool { return true }
+		if clusterMgr != nil && clusterMgr.IsClustered() {
+			// Incident hooks fire on every node; only the Pharaoh mails.
+			shouldNotify = clusterMgr.IsLeader
+		}
+		statusPageHandler.EnableSubscriptions(statuspage.SubscriptionOptions{
+			Mailer:       mailQueue,
+			PublicURL:    cfg.Server.PublicBaseURL(),
+			ClientIP:     api.ClientIPResolver(cfg.Server.TrustedProxies),
+			ShouldNotify: shouldNotify,
+			Logger:       logger,
+		})
+		restStore.onStatusPageSave = statusPageHandler.NotifyStatusPageChange
+	}
 
 	// Initialize MCP server
 	mcpServer := api.NewMCPServer(restStore, probeAPI, alertMgr, logger)
 
 	restServer := api.NewRESTServer(cfg.Server, cfg.Auth, restStore, probeAPI, alertMgr, authenticator, clusterAdapt, journeyExec, dashboardHandler, statusPageHandler, mcpServer, logger)
+	restServer.SetBuildInfo(Version, Commit, BuildDate)
+	// API keys ("anb_..." bearer tokens for automation) are stored hash-only
+	// under each workspace through restStore, so they replicate in cluster mode.
+	apiKeys := auth.NewAPIKeyService(restStore, logger)
+	// A key works only while its owner still holds the key's role.
+	if oc, ok := authenticator.(interface {
+		CheckKeyOwner(ownerID, workspace string, role core.MemberRole) error
+	}); ok {
+		apiKeys.SetOwnerCheck(oc.CheckKeyOwner)
+	}
+	restServer.SetAPIKeys(apiKeys)
+	restServer.SetRuntimeStats(func() api.RuntimeStats {
+		l := probeEngine.Liveness()
+		rs := api.RuntimeStats{
+			LastJudgmentAt:     l.LastJudgmentAt,
+			ScheduledSouls:     l.ScheduledSouls,
+			ChecksRunning:      l.ChecksRunning,
+			LongestInterval:    l.LongestInterval,
+			StartedAt:          l.StartedAt,
+			ReplicationDropped: -1,
+		}
+		if work != nil && work.batcher != nil {
+			rs.ReplicationDropped = int64(work.batcher.DroppedTotal())
+		}
+		return rs
+	})
 	// The Settings page reports the running storage path and raw-judgment
 	// retention, and persists its presentation preferences in system config.
 	restServer.SetRuntimeConfig(cfg.Storage.Path, cfg.Storage.TimeSeries.Retention.Raw.Duration)
+	restServer.SetRetentionPolicy(cfg.Storage.TimeSeries.Retention)
 	// Through restStore so a settings change replicates in cluster mode.
 	restServer.SetSettingsStore(restStore)
+	if mailQueue != nil {
+		restServer.SetPasswordResetMailer(mailQueue, cfg.Server.PublicBaseURL())
+	}
 
 	// Wire up WebSocket broadcasts for real-time updates: judgments from the
 	// probe engine, incidents and dispatched alerts from Ma'at, and soul
 	// writes from every API surface (they all share restStore).
 	probeEngine.SetOnJudgment(restServer.OnJudgmentCallback())
-	alertMgr.SetIncidentHook(restServer.OnIncidentCallback())
+	// Heartbeat pings: any node records them (replicated in a cluster); the
+	// owner judges them. See heartbeat.go.
+	hbRecorder := &heartbeatRecorder{store: store, rest: restStore, nodeID: cfg.Necropolis.NodeName}
+	if work == nil {
+		hbRecorder.wake = func(soulID string) { probeEngine.EvaluateSoul(soulID) }
+	}
+	restServer.SetHeartbeat(hbRecorder, heartbeatSoulLister(cfg, store, logger))
+	alertMgr.SetIncidentHook(incidentHook(restServer.OnIncidentCallback(), statusPageHandler))
 	alertMgr.SetAlertHook(restServer.OnAlertCallback())
 	restStore.onSoulChange = restServer.OnSoulChangeCallback()
 	if work != nil {
@@ -741,13 +861,14 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 			grpcListenAddress(cfg.Server),
 			grpcStore,
 			&grpcProbeAdapter{engine: probeAPI},
-			authenticator,
+			&api.KeyAwareAuthenticator{Authenticator: authenticator, Keys: apiKeys},
 			logger,
 			grpcTLSConfig,
 			cfg.Server.GRPCReflection,
 		).SetAlertRegistrar(alertMgr)
 	}
 
+	built = true
 	return &ServerDependencies{
 		Config:            cfg,
 		Logger:            logger,
@@ -803,8 +924,10 @@ func applyEnvOverrides(cfg *core.Config, opts ServerOptions) {
 	// Handle single-node mode
 	if opts.SingleNode {
 		cfg.Necropolis.Enabled = false
+		cfg.Necropolis.SingleNode = false
 		cfg.Necropolis.Raft.Bootstrap = false
 		cfg.Necropolis.Raft.Peers = nil
+		cfg.Necropolis.Raft.Join = nil
 	}
 
 	// Handle cluster mode
@@ -909,6 +1032,17 @@ func (a *probeStorageAdapter) ListSouls(ctx context.Context, workspaceID string)
 	return a.store.ListSouls(ctx, workspaceID, 0, 1000)
 }
 
+// LatestJudgment returns the soul's newest judgment since the given time (nil
+// when there is none); the probe engine restores flap state from it when a
+// runner starts. Judgments are replicated, so this works after an owner change.
+func (a *probeStorageAdapter) LatestJudgment(ctx context.Context, workspaceID, soulID string, since time.Time) (*core.Judgment, error) {
+	judgments, err := a.store.QueryJudgments(ctx, workspaceID, soulID, since, time.Now().Add(time.Minute), 1)
+	if err != nil || len(judgments) == 0 {
+		return nil, err
+	}
+	return judgments[0], nil
+}
+
 // mutationApplier is the local interface for submitting commands through Raft
 // consensus. When non-nil the restStorageAdapter routes writes through it.
 type mutationApplier interface {
@@ -926,6 +1060,21 @@ type restStorageAdapter struct {
 	// onJourneyChange, when set, runs after a local journey write so the
 	// standalone executor picks it up.
 	onJourneyChange func()
+	// quota enforces tenants.default_quotas on soul, journey and channel
+	// creates from every API surface (nil: unlimited).
+	quota *quotaGuard
+	// onStatusPageSave, when set, gets the page before and after every
+	// successful save so subscribers hear about posted incidents.
+	onStatusPageSave func(previous, current *core.StatusPage)
+}
+
+// QuotaUsage reports the workspace's resource counts against its quotas for
+// GET /api/v1/quota.
+func (a *restStorageAdapter) QuotaUsage(workspace string) (*core.WorkspaceQuotaUsage, error) {
+	if a.quota == nil {
+		return (&quotaGuard{store: a.store}).usage(workspace)
+	}
+	return a.quota.usage(workspace)
 }
 
 // applyMutation routes an FSM command through Raft consensus when clustering
@@ -963,13 +1112,17 @@ func (a *restStorageAdapter) ListSoulsNoCtx(workspace string, offset, limit int)
 }
 
 func (a *restStorageAdapter) SaveSoul(ctx context.Context, soul *core.Soul) error {
+	release, err := a.quota.admitSoul(soul)
+	if err != nil {
+		return err
+	}
+	defer release()
 	action := "updated"
 	if a.onSoulChange != nil {
 		if existing, err := a.store.GetSoulNoCtx(soul.ID); err != nil || existing == nil {
 			action = "created"
 		}
 	}
-	var err error
 	if a.replicator != nil {
 		key := fmt.Sprintf("%s/souls/%s", soul.WorkspaceID, soul.ID)
 		data, marshalErr := json.Marshal(soul)
@@ -1030,6 +1183,11 @@ func (a *restStorageAdapter) ListChannelsNoCtx(workspace string) ([]*core.AlertC
 }
 
 func (a *restStorageAdapter) SaveChannelNoCtx(ch *core.AlertChannel) error {
+	release, err := a.quota.admitChannel(ch)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if a.replicator != nil {
 		// Alert channels are stored by the engine under "{ws}/alerts/channels/{id}"
 		// (internal/storage/storage.go SaveAlertChannel/GetAlertChannel/
@@ -1167,7 +1325,24 @@ func (a *restStorageAdapter) ListStatusPagesNoCtx() ([]*core.StatusPage, error) 
 	return a.store.ListStatusPagesNoCtx()
 }
 
+// ConfirmedSubscriberCounts feeds the subscriber_count of status page responses.
+func (a *restStorageAdapter) ConfirmedSubscriberCounts() (map[string]int, error) {
+	return a.store.ConfirmedSubscriberCounts()
+}
+
 func (a *restStorageAdapter) SaveStatusPageNoCtx(page *core.StatusPage) error {
+	if a.onStatusPageSave == nil {
+		return a.saveStatusPage(page)
+	}
+	previous, _ := a.store.GetStatusPageNoCtx(page.ID)
+	if err := a.saveStatusPage(page); err != nil {
+		return err
+	}
+	a.onStatusPageSave(previous, page)
+	return nil
+}
+
+func (a *restStorageAdapter) saveStatusPage(page *core.StatusPage) error {
 	if a.replicator != nil {
 		key := fmt.Sprintf("%s/statuspages/%s", page.WorkspaceID, page.ID)
 		data, err := json.Marshal(page)
@@ -1200,6 +1375,11 @@ func (a *restStorageAdapter) ListJourneysNoCtx(workspace string, offset, limit i
 }
 
 func (a *restStorageAdapter) SaveJourneyNoCtx(journey *core.JourneyConfig) error {
+	release, err := a.quota.admitJourney(journey)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if a.replicator != nil {
 		key := fmt.Sprintf("%s/journeys/%s", journey.WorkspaceID, journey.ID)
 		data, err := json.Marshal(journey)
@@ -1443,6 +1623,26 @@ type alertStorageAdapter struct {
 	// incidents and events through the batcher (they are written on the probe
 	// path, which must not wait on consensus).
 	work *clusterWork
+	// quota enforces max_alert_channels on every channel create, from any API
+	// surface or the config file (nil: unlimited).
+	quota *quotaGuard
+}
+
+// ListAlertJudgments returns the complete inclusive alert window for one workspace.
+// Storage's ListJudgments bounds are exclusive, so widen by one nanosecond.
+func (a *alertStorageAdapter) ListAlertJudgments(workspaceID, soulID string, start, end time.Time) ([]*core.Judgment, error) {
+	ctx := core.ContextWithWorkspaceID(context.Background(), workspaceOrDefault(workspaceID))
+	judgments, err := a.store.ListJudgments(ctx, soulID, start.Add(-time.Nanosecond), end.Add(time.Nanosecond), 0)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]*core.Judgment, 0, len(judgments))
+	for _, judgment := range judgments {
+		if judgment != nil && workspaceOrDefault(judgment.WorkspaceID) == workspaceOrDefault(workspaceID) && judgment.SoulID == soulID && !judgment.Timestamp.Before(start) && !judgment.Timestamp.After(end) {
+			result = append(result, judgment)
+		}
+	}
+	return result, nil
 }
 
 // replicated reports whether writes must go through Raft. Before the cluster
@@ -1460,6 +1660,11 @@ func (a *alertStorageAdapter) applySync(cmd core.FSMCommand) error {
 }
 
 func (a *alertStorageAdapter) SaveChannel(ch *core.AlertChannel) error {
+	release, err := a.quota.admitChannel(ch)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if a.replicated() {
 		data, err := json.Marshal(ch)
 		if err != nil {
@@ -1616,6 +1821,30 @@ func (a *alertStorageAdapter) ListMaintenanceWindows() ([]*core.MaintenanceWindo
 // statusPageRepository implements statuspage.Repository
 type statusPageRepository struct {
 	store *storage.CobaltDB
+	// replicator routes subscription writes through Raft in cluster mode.
+	replicator mutationApplier
+}
+
+// GetStatusPageByID returns a published page (statuspage.PageByIDSource).
+func (r *statusPageRepository) GetStatusPageByID(id string) (*core.StatusPage, error) {
+	page, err := r.store.GetStatusPageNoCtx(id)
+	if err != nil {
+		return nil, err
+	}
+	if page == nil || !page.Enabled {
+		return nil, fmt.Errorf("status page not found")
+	}
+	return page, nil
+}
+
+// ListStatusPages lists every page for incident fan-out (statuspage.PageLister).
+func (r *statusPageRepository) ListStatusPages() ([]*core.StatusPage, error) {
+	return r.store.ListStatusPagesNoCtx()
+}
+
+func (r *statusPageRepository) applySubscription(cmd core.FSMCommand) error {
+	_, _, err := r.replicator.ApplyMutation(cmd, 30*time.Second)
+	return err
 }
 
 func (r *statusPageRepository) GetStatusPageByDomain(domain string) (*core.StatusPage, error) {
@@ -1678,6 +1907,13 @@ func (r *statusPageRepository) GetUptimeHistory(soulID string, days int) ([]core
 }
 
 func (r *statusPageRepository) SaveSubscription(sub *core.StatusPageSubscription) error {
+	if r.replicator != nil {
+		data, err := json.Marshal(sub)
+		if err != nil {
+			return err
+		}
+		return r.applySubscription(core.FSMCommand{Op: core.FSMSet, Key: "default/statuspages/subscriptions/" + sub.ID, Value: data})
+	}
 	return r.store.SaveStatusPageSubscription(sub)
 }
 
@@ -1686,6 +1922,9 @@ func (r *statusPageRepository) GetSubscriptionsByPage(pageID string) ([]*core.St
 }
 
 func (r *statusPageRepository) DeleteSubscription(subscriptionID string) error {
+	if r.replicator != nil {
+		return r.applySubscription(core.FSMCommand{Op: core.FSMDelete, Key: "default/statuspages/subscriptions/" + subscriptionID})
+	}
 	return r.store.DeleteStatusPageSubscription(subscriptionID)
 }
 
@@ -1762,8 +2001,11 @@ func compactionRetentionConflicts(tsCfg core.TimeSeriesConfig) []string {
 // warnUnimplementedConfig flags config sections that parse but have no
 // effect yet, so operators do not rely on them.
 func warnUnimplementedConfig(cfg *core.Config, logger *slog.Logger) {
-	if cfg.Tenants.Enabled {
-		logger.Warn("tenants.* is not enforced yet: workspace quotas and isolation settings are ignored")
+	// tenants.default_quotas max_souls, max_journeys, max_alert_channels,
+	// max_team_members, retention_days and check_interval_min are enforced
+	// (see quota.go); isolation is not implemented.
+	if cfg.Tenants.Enabled && cfg.Tenants.Isolation != "" && cfg.Tenants.Isolation != "strict" {
+		logger.Warn("tenants.isolation is not implemented: workspaces are always isolated", "isolation", cfg.Tenants.Isolation)
 	}
 	if cfg.Dashboard.Branding.Logo != "" || (cfg.Dashboard.Branding.Title != "" && cfg.Dashboard.Branding.Title != "AnubisWatch") {
 		logger.Warn("dashboard.branding is not applied to the dashboard yet")

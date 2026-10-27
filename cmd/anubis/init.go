@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -14,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
 
 // initInteractiveWithPath runs interactive wizard with specific config path
@@ -83,10 +86,18 @@ func initInteractiveWithPath(configPath string) {
 	enableEncryption := askBool(reader, "Enable Encryption", false)
 	encryptionKey := ""
 	if enableEncryption {
-		encryptionKey = askPassword(reader, "Encryption Key")
-		if encryptionKey == "" {
-			encryptionKey = generateSecurePassword()
-			fmt.Printf("   Generated key: %s\n", encryptionKey)
+		for {
+			encryptionKey = askPassword(reader, "Encryption Key (empty = generate)")
+			if encryptionKey == "" {
+				encryptionKey = generateEncryptionKey()
+				fmt.Printf("   Generated key: %s\n", encryptionKey)
+				break
+			}
+			if err := core.ValidateEncryptionKey(encryptionKey); err != nil {
+				fmt.Printf("   ✗ %v\n", err)
+				continue
+			}
+			break
 		}
 	}
 
@@ -166,7 +177,7 @@ func initInteractiveWithPath(configPath string) {
 		}
 	}
 
-	if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
+	if err := os.WriteFile(configPath, []byte(config), 0600); err != nil {
 		fmt.Fprintf(os.Stderr, "❌ Failed to write config: %v\n", err)
 		os.Exit(1)
 	}
@@ -443,6 +454,16 @@ func generateSecurePassword() string {
 		result[i] = chars[n.Int64()]
 	}
 	return string(result)
+}
+
+// generateEncryptionKey returns 32 random bytes as 64 hex characters, the
+// recommended storage key size (the key string is used as typed, not decoded).
+func generateEncryptionKey() string {
+	b := make([]byte, core.RecommendedEncryptionKeyBytes)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("crypto/rand: %v", err))
+	}
+	return hex.EncodeToString(b)
 }
 
 func randomSuffix() string {

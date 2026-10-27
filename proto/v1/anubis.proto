@@ -69,7 +69,7 @@ message Pagination {
 message Soul {
   string id = 1;
   string name = 2;
-  string type = 3; // http, tcp, udp, dns, smtp, imap, icmp, grpc, websocket, tls
+  string type = 3; // http, tcp, udp, dns, smtp, imap, icmp, grpc, websocket, tls, heartbeat
   string target = 4;
   int32 interval = 5;
   int32 timeout = 6;

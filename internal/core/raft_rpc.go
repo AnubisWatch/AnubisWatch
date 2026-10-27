@@ -113,6 +113,11 @@ type InstallSnapshotRequest struct {
 	Offset            uint64 `json:"offset"`
 	Data              []byte `json:"data"`
 	Done              bool   `json:"done"`
+	// Configuration is the leader's committed membership (every member,
+	// itself included). The receiver adopts it as its configuration base,
+	// since the membership entries the snapshot replaces are no longer in the
+	// log. Older leaders omit it; the receiver then keeps its own.
+	Configuration []RaftPeer `json:"configuration,omitempty"`
 }
 
 // InstallSnapshotResponse is the response to an InstallSnapshot RPC

@@ -243,7 +243,11 @@ type AlertEvent struct {
 	// RuleID identifies the rule that produced this event. The dedup window is
 	// keyed by (rule, soul, status), so the dispatch path needs the rule to
 	// release that entry when an alert could not be delivered.
-	RuleID       string            `json:"rule_id,omitempty" yaml:"-"`
+	RuleID string `json:"rule_id,omitempty" yaml:"-"`
+	// Kind is empty for rule alerts, or AlertKindFlappingStarted /
+	// AlertKindFlappingStopped for flap notifications, which are
+	// deduplicated separately from status alerts.
+	Kind         string            `json:"kind,omitempty" yaml:"-"`
 	ID           string            `json:"id"`
 	ChannelID    string            `json:"channel_id"`
 	ChannelType  AlertChannelType  `json:"channel_type"`
@@ -541,7 +545,7 @@ func (r AlertRule) validate(index int) error {
 type MaintenanceWindow struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
-	Description string    `json:"description,omitempty"`
+	Description string    `json:"description"` // always sent, "" when unset
 	SoulIDs     []string  `json:"soul_ids,omitempty"`
 	Tags        []string  `json:"tags,omitempty"`
 	WorkspaceID string    `json:"workspace_id"`

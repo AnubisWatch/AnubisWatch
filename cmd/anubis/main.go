@@ -22,6 +22,10 @@ var (
 )
 
 func main() {
+	if _, err := parseConfigPathFromArgs(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
 	// Parse CLI commands
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
@@ -53,6 +57,8 @@ func main() {
 			statusCommand()
 		case "export":
 			exportCommand()
+		case "report", "reports":
+			reportCommand()
 		case "logs":
 			logsCommand()
 		case "config":
@@ -65,6 +71,8 @@ func main() {
 			logoutCommand()
 		case "admin":
 			adminCommand()
+		case "apikey", "apikeys":
+			apikeyCommand()
 		case "help", "-h", "--help":
 			printUsage()
 		default:
@@ -99,7 +107,8 @@ Commands:
   backup          Create or manage backups
   restore         Restore from backup
   status          Show detailed system status
-  export          Export configuration to JSON/YAML
+  export          Export souls/config, or a soul's judgments (export judgments)
+  report sla      SLA report: availability, downtime, MTTR, error budget
   logs            View recent logs
   config          Configuration management
   souls           Souls management
@@ -107,6 +116,7 @@ Commands:
   login           Sign in and save a session token for client commands
   logout          End the saved session
   admin           Operator maintenance (admin reset-password)
+  apikey          Manage API keys for automation (list, create, revoke)
   help            Show this help
 
 Subcommands:
@@ -120,7 +130,8 @@ Environment Variables:
   ANUBIS_CONFIG              Config file path (default: ./anubis.json)
   ANUBIS_HOST                Server bind host (client commands: server to contact)
   ANUBIS_PORT                Server bind port (client commands default to the config file's port)
-  ANUBIS_API_TOKEN           API token for client commands (default: token saved by anubis login)
+  ANUBIS_API_TOKEN           API key (anb_...) or session token for client commands
+                            (default: token saved by anubis login)
   ANUBIS_TOKEN_FILE          Where anubis login stores the token (default: next to the user config)
   ANUBIS_DATA_DIR            Data directory path
   ANUBIS_ENCRYPTION_KEY      Encryption key for storage

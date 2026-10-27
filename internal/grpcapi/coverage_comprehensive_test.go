@@ -311,7 +311,7 @@ func TestJourneyRunToPB_Concrete(t *testing.T) {
 	if len(pb.Steps) != 1 {
 		t.Fatalf("Expected 1 step, got %d", len(pb.Steps))
 	}
-	if pb.Steps[0].Name != "step1" || pb.Steps[0].Extracted["k"] != "v" {
+	if pb.Steps[0].Name != "step1" || pb.Steps[0].Extracted["k"] != "[REDACTED]" {
 		t.Errorf("Unexpected step fields: name=%q extracted=%v", pb.Steps[0].Name, pb.Steps[0].Extracted)
 	}
 }

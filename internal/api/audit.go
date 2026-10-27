@@ -1,11 +1,13 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -87,6 +89,14 @@ func (al *AuditLogger) Log(eventType, userID, resource, action, status string, d
 		event.Details = data
 	}
 
+	if al.buffer == nil {
+		if al.backend != nil {
+			if err := al.backend.Write(event); err != nil {
+				al.logger.Error("audit backend write failed", "err", err)
+			}
+		}
+		return
+	}
 	select {
 	case al.buffer <- event:
 		// Buffered successfully
@@ -105,7 +115,7 @@ func (al *AuditLogger) Log(eventType, userID, resource, action, status string, d
 }
 
 // LogRequest logs an HTTP request
-func (al *AuditLogger) LogRequest(r *http.Request, userID string, status int, duration time.Duration) {
+func (al *AuditLogger) LogRequest(r *http.Request, userID string, status int, duration time.Duration, requestIDs ...string) {
 	eventType := "http_request"
 	action := r.Method
 	resource := r.URL.Path
@@ -129,7 +139,33 @@ func (al *AuditLogger) LogRequest(r *http.Request, userID string, status int, du
 		"referer": sanitizeURL(r.Header.Get("Referer")),
 	}
 
-	al.Log(eventType, userID, resource, action, statusStr, details)
+	requestID := r.Header.Get("X-Request-ID")
+	if len(requestIDs) > 0 && requestIDs[0] != "" {
+		requestID = requestIDs[0]
+	}
+	if requestID == "" {
+		requestID = generateRequestID()
+	}
+	peer := r.RemoteAddr
+	if host, _, err := net.SplitHostPort(peer); err == nil {
+		peer = host
+	}
+	encoded, _ := json.Marshal(details)
+	event := &AuditEvent{Timestamp: time.Now().UTC(), EventType: eventType, UserID: userID,
+		IPAddress: peer, UserAgent: r.UserAgent(), Resource: resource, Action: action,
+		Status: statusStr, RequestID: requestID, Details: encoded}
+	if al.buffer != nil {
+		select {
+		case al.buffer <- event:
+			return
+		default:
+		}
+	}
+	if al.backend != nil {
+		if err := al.backend.Write(event); err != nil {
+			al.logger.Error("audit backend write failed", "err", err)
+		}
+	}
 }
 
 // LogAuth logs authentication events
@@ -398,4 +434,33 @@ func ValidateSecureHeaders(headers http.Header) []string {
 	}
 
 	return issues
+}
+
+// structuredAuditBackend sends sanitized security events to the configured log sink.
+// Production log retention is owned by that sink, like other application logs.
+type structuredAuditBackend struct{ logger *slog.Logger }
+
+func (b *structuredAuditBackend) Write(event *AuditEvent) error {
+	// Audit retention is independent of the operational verbosity setting.
+	// Calling the configured handler directly preserves its sink and attributes
+	// while avoiding Info events being dropped by an operational Warn/Error gate.
+	record := slog.NewRecord(event.Timestamp, slog.LevelInfo, "security_audit", 0)
+	record.Add("event_type", event.EventType, "user_id", event.UserID, "ip_address", event.IPAddress, "user_agent", event.UserAgent, "resource", event.Resource, "action", event.Action, "status", event.Status, "request_id", event.RequestID, "details", event.Details)
+	return b.logger.Handler().Handle(context.Background(), record)
+}
+func (b *structuredAuditBackend) Query(AuditFilter) ([]*AuditEvent, error) {
+	return nil, fmt.Errorf("query audit events through the configured log sink")
+}
+
+// Unwrap preserves ResponseController access to streaming and upgrade features.
+func (rr *responseRecorder) Unwrap() http.ResponseWriter { return rr.ResponseWriter }
+
+func (rr *responseRecorder) Flush() {
+	if !rr.written {
+		rr.WriteHeader(http.StatusOK)
+	}
+	_ = http.NewResponseController(rr.ResponseWriter).Flush()
+}
+func (rr *responseRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	return http.NewResponseController(rr.ResponseWriter).Hijack()
 }

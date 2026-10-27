@@ -18,9 +18,9 @@ func TestAuthMethods_PublicAndReflectsAuthenticator(t *testing.T) {
 		auth     Authenticator
 		want     map[string]bool
 	}{
-		{"local", "local", &mockAuthenticator{}, map[string]bool{"local": true, "oidc": false, "ldap": false}},
-		{"oidc keeps local admin login", "oidc", &mockOIDCAuth{}, map[string]bool{"local": true, "oidc": true, "ldap": false}},
-		{"ldap", "ldap", &mockAuthenticator{}, map[string]bool{"local": false, "oidc": false, "ldap": true}},
+		{"local", "local", &mockAuthenticator{}, map[string]bool{"local": true, "oidc": false, "ldap": false, "password_reset": false}},
+		{"oidc keeps local admin login", "oidc", &mockOIDCAuth{}, map[string]bool{"local": true, "oidc": true, "ldap": false, "password_reset": false}},
+		{"ldap", "ldap", &mockAuthenticator{}, map[string]bool{"local": false, "oidc": false, "ldap": true, "password_reset": false}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -40,7 +40,7 @@ func TestAuthMethods_PublicAndReflectsAuthenticator(t *testing.T) {
 				t.Fatal(err)
 			}
 			if len(got) != len(tc.want) {
-				t.Fatalf("response must hold only the three method flags, got %v", got)
+				t.Fatalf("response must hold only the method flags, got %v", got)
 			}
 			for key, want := range tc.want {
 				if got[key] != want {

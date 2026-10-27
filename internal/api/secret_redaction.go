@@ -37,6 +37,9 @@ type soulMonitorDTO struct {
 	Status    string      `json:"status"`
 	LastCheck interface{} `json:"last_check,omitempty"`
 	Latency   int64       `json:"latency,omitempty"`
+	// Flapping mirrors the latest judgment's flap flag (see core/flap.go);
+	// it is a flag beside status so status values stay unchanged.
+	Flapping bool `json:"flapping"`
 }
 
 type redactedSoulDTO struct {
@@ -61,9 +64,14 @@ type redactedSoulDTO struct {
 	GRPC        map[string]any   `json:"grpc,omitempty"`
 	WebSocket   map[string]any   `json:"websocket,omitempty"`
 	TLS         *core.TLSConfig  `json:"tls,omitempty"`
-	CreatedAt   interface{}      `json:"created_at,omitempty"`
-	UpdatedAt   interface{}      `json:"updated_at,omitempty"`
-	HasSecrets  map[string]bool  `json:"has_secrets,omitempty"`
+	Heartbeat   map[string]any   `json:"heartbeat,omitempty"`
+	// Confirmation retries and flap detection (core/flap.go).
+	Retries       int                       `json:"retries,omitempty"`
+	RetryInterval core.Duration             `json:"retry_interval,omitzero"`
+	FlapDetection *core.FlapDetectionConfig `json:"flap_detection,omitempty"`
+	CreatedAt     interface{}               `json:"created_at,omitempty"`
+	UpdatedAt     interface{}               `json:"updated_at,omitempty"`
+	HasSecrets    map[string]bool           `json:"has_secrets,omitempty"`
 }
 
 type redactedChannelDTO struct {
@@ -370,6 +378,20 @@ func redactWebSocketConfig(cfg *core.WebSocketConfig) (map[string]any, bool) {
 	return out, hasSecret
 }
 
+// redactHeartbeatConfig hides the ping token; GET /souls/:id/heartbeat
+// reveals it to roles that may edit souls.
+func redactHeartbeatConfig(cfg *core.HeartbeatConfig) (map[string]any, bool) {
+	if cfg == nil {
+		return nil, false
+	}
+	out := map[string]any{"grace": cfg.Grace}
+	token, secret := redactAnyValue(cfg.Token, true)
+	if secret {
+		out["token"] = token
+	}
+	return out, secret
+}
+
 func redactedSoulDTOFromCore(soul *core.Soul) *redactedSoulDTO {
 	if soul == nil {
 		return nil
@@ -388,6 +410,7 @@ func redactedSoulDTOFromCore(soul *core.Soul) *redactedSoulDTO {
 	imapCfg, imapSecret := redactIMAPConfig(soul.IMAP)
 	grpcCfg, grpcSecret := redactGRPCConfig(soul.GRPC)
 	wsCfg, wsSecret := redactWebSocketConfig(soul.WebSocket)
+	hbCfg, hbSecret := redactHeartbeatConfig(soul.Heartbeat)
 	setSecretFlag("target", targetSecret)
 	setSecretFlag("http", httpSecret)
 	setSecretFlag("tcp", tcpSecret)
@@ -396,45 +419,63 @@ func redactedSoulDTOFromCore(soul *core.Soul) *redactedSoulDTO {
 	setSecretFlag("imap", imapSecret)
 	setSecretFlag("grpc", grpcSecret)
 	setSecretFlag("websocket", wsSecret)
+	setSecretFlag("heartbeat", hbSecret)
 	var secretFlags map[string]bool
 	if len(hasSecrets) > 0 {
 		secretFlags = hasSecrets
 	}
 	return &redactedSoulDTO{
-		ID:          soul.ID,
-		WorkspaceID: soul.WorkspaceID,
-		Name:        soul.Name,
-		Type:        soul.Type,
-		Target:      target,
-		Weight:      soul.Weight,
-		Timeout:     soul.Timeout,
-		Enabled:     soul.Enabled,
-		Tags:        slices.Clone(soul.Tags),
-		Regions:     slices.Clone(soul.Regions),
-		Region:      soul.Region,
-		HTTP:        httpCfg,
-		TCP:         tcpCfg,
-		UDP:         udpCfg,
-		DNS:         soul.DNS,
-		SMTP:        smtpCfg,
-		IMAP:        imapCfg,
-		ICMP:        soul.ICMP,
-		GRPC:        grpcCfg,
-		WebSocket:   wsCfg,
-		TLS:         soul.TLS,
-		CreatedAt:   soul.CreatedAt,
-		UpdatedAt:   soul.UpdatedAt,
-		HasSecrets:  secretFlags,
+		ID:            soul.ID,
+		WorkspaceID:   soul.WorkspaceID,
+		Name:          soul.Name,
+		Type:          soul.Type,
+		Target:        target,
+		Weight:        soul.Weight,
+		Timeout:       soul.Timeout,
+		Enabled:       soul.Enabled,
+		Tags:          slices.Clone(soul.Tags),
+		Regions:       slices.Clone(soul.Regions),
+		Region:        soul.Region,
+		HTTP:          httpCfg,
+		TCP:           tcpCfg,
+		UDP:           udpCfg,
+		DNS:           soul.DNS,
+		SMTP:          smtpCfg,
+		IMAP:          imapCfg,
+		ICMP:          soul.ICMP,
+		GRPC:          grpcCfg,
+		WebSocket:     wsCfg,
+		TLS:           soul.TLS,
+		Heartbeat:     hbCfg,
+		Retries:       soul.Retries,
+		RetryInterval: soul.RetryInterval,
+		FlapDetection: cloneFlapDetection(soul.FlapDetection),
+		CreatedAt:     soul.CreatedAt,
+		UpdatedAt:     soul.UpdatedAt,
+		HasSecrets:    secretFlags,
 	}
 }
 
 func redactedSoulMonitorResponse(soul *core.Soul, status string, lastCheck interface{}, latency int64) soulMonitorDTO {
 	return soulMonitorDTO{
-		redactedSoulDTOFromCore(soul),
-		status,
-		lastCheck,
-		latency,
+		redactedSoulDTO: redactedSoulDTOFromCore(soul),
+		Status:          status,
+		LastCheck:       lastCheck,
+		Latency:         latency,
 	}
+}
+
+func cloneFlapDetection(f *core.FlapDetectionConfig) *core.FlapDetectionConfig {
+	if f == nil {
+		return nil
+	}
+	c := *f
+	return &c
+}
+
+// judgmentFlapping reports the flap flag a judgment carries.
+func judgmentFlapping(j *core.Judgment) bool {
+	return j != nil && j.Details != nil && j.Details.Flapping
 }
 
 // redactedJudgmentFromCore clones a judgment for REST serialization and drops
@@ -561,6 +602,17 @@ func mergeSecretAnyMap(existing map[string]interface{}, incoming map[string]inte
 func mergeSoulSecrets(existing, incoming *core.Soul) {
 	if existing == nil || incoming == nil {
 		return
+	}
+	// The ping token is server-managed: an update keeps it whatever the
+	// body says (the rotate endpoint is the only way to change it).
+	if existing.Type == core.CheckHeartbeat && incoming.Type == core.CheckHeartbeat && existing.Heartbeat != nil {
+		if incoming.Heartbeat == nil {
+			incoming.Heartbeat = &core.HeartbeatConfig{Grace: existing.Heartbeat.Grace}
+		}
+		incoming.Heartbeat.Token = existing.Heartbeat.Token
+	} else if incoming.Heartbeat != nil {
+		// Switching to heartbeat: a fresh token is generated.
+		incoming.Heartbeat.Token = ""
 	}
 	// A redaction marker means "reuse the secret already bound to this
 	// endpoint", not "copy it to an arbitrary destination". Refuse all
