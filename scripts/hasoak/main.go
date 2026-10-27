@@ -47,6 +47,11 @@ const (
 	soulWeight    = 5 * time.Second
 )
 
+// sessionJar is shared by every node's client: HA sessions are cluster-wide,
+// and cookies ignore the port, so one login serves all three nodes and a
+// restarted node does not cost another login against the rate limit.
+var sessionJar, _ = cookiejar.New(nil)
+
 type options struct {
 	binary, output  string
 	duration, quiet time.Duration
@@ -372,10 +377,9 @@ func (n *node) start(binary string) error {
 	}
 	done := make(chan struct{})
 	go func() { _ = cmd.Wait(); logf.Close(); close(done) }()
-	jar, _ := cookiejar.New(nil)
 	n.mu.Lock()
 	n.cmd, n.done = cmd, done
-	n.client = &http.Client{Timeout: 5 * time.Second, Jar: jar}
+	n.client = &http.Client{Timeout: 5 * time.Second, Jar: sessionJar}
 	n.mu.Unlock()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
