@@ -56,7 +56,6 @@ jobs:
         run: ./scripts/check-go-coverage.sh
         env:
           ANUBIS_DATA_DIR: /tmp/anubis-data
-          ANUBIS_CONFIG: /tmp/anubis-test.json
 
       - name: Upload coverage to Codecov
         # Skipped when CODECOV_TOKEN is not configured. The coverage GATE is
