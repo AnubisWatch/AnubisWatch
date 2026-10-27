@@ -77,6 +77,9 @@ type Node struct {
 	logBaseTerm uint64
 	commitIndex uint64
 	lastApplied uint64
+	// appliedDirty is set while lastApplied is ahead of the persisted hard
+	// state because writing it failed (see persistApplied).
+	appliedDirty bool
 	// restoring marks a snapshot restore in flight. The node must not
 	// campaign while its state is being replaced.
 	restoring bool
@@ -1992,15 +1995,34 @@ func (n *Node) checkStandardCommit(index uint64) bool {
 	return voters > 0 && votes > voters/2
 }
 
+// appliedPersistEvery bounds how many applied entries may share one
+// hard-state write.
+const appliedPersistEvery = 256
+
 // processCommitted applies committed entries to FSM.
 // lastApplied is advanced only after the entry has been applied successfully.
+//
+// The applied index is persisted once per pass (and every
+// appliedPersistEvery entries) rather than after each entry: that write is an
+// fsync of its own, and paying it per entry halved how fast a follower could
+// catch up. The FSM's own writes are durable when Apply returns, so a crash
+// can only leave the persisted index behind the store, and the entries after
+// it are applied again on restart. That replay is safe: plain sets and
+// deletes converge, command handlers must be idempotent, and the one
+// compare-and-set (shared authentication) is guarded by a revision that only
+// grows, so a replayed change is a no-op.
 func (n *Node) processCommitted(commitIndex uint64) {
 	n.applyMu.Lock()
 	defer n.applyMu.Unlock()
+	unpersisted := 0
 	for {
 		n.mu.RLock()
 		if n.lastApplied >= commitIndex {
+			dirty := n.appliedDirty
 			n.mu.RUnlock()
+			if (unpersisted > 0 || dirty) && !n.persistApplied() {
+				return
+			}
 			// Nothing left to apply: the pass succeeded, so the next
 			// failure starts from the initial backoff again.
 			n.resetApplyRetryBackoff()
@@ -2055,20 +2077,33 @@ func (n *Node) processCommitted(commitIndex uint64) {
 			return
 		}
 		n.mu.Lock()
-		old := n.lastApplied
 		n.lastApplied = nextIndex
-		if err := n.persistHardStateLocked(); err != nil {
-			n.lastApplied = old
-			n.mu.Unlock()
-			n.notifyApply(entry.Index, entry.Term, err)
-			// The entry reached the FSM but the applied index could not be
-			// persisted, so the pass must be repeated once storage recovers.
-			n.scheduleApplyRetry()
-			return
-		}
 		n.mu.Unlock()
 		n.notifyApply(entry.Index, entry.Term, nil)
+		if unpersisted++; unpersisted >= appliedPersistEvery {
+			if !n.persistApplied() {
+				return
+			}
+			unpersisted = 0
+		}
 	}
+}
+
+// persistApplied writes the hard state after entries were applied. On
+// failure the in-memory applied index stays where it is -- those entries are
+// in the store -- and the write is retried by the next pass. Caller holds
+// n.applyMu.
+func (n *Node) persistApplied() bool {
+	n.mu.Lock()
+	err := n.persistHardStateLocked()
+	n.appliedDirty = err != nil
+	n.mu.Unlock()
+	if err != nil {
+		n.logger.Error("Failed to persist the applied index", "error", err)
+		n.scheduleApplyRetry()
+		return false
+	}
+	return true
 }
 
 // skipCommittedEntry consumes a committed entry that can never be applied.

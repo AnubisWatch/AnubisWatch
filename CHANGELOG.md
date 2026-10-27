@@ -55,6 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   frames. Judgments and summaries end up exactly as when saved one by one;
   a replayed batch still counts nothing twice. Measured catch-up: 37–61
   entries per second on the same disk.
+- The applied index is now persisted once per apply pass (at most every
+  256 entries) instead of after every entry, which was a second fsync per
+  entry. Found by a 2-hour soak: at ~2500 monitors a restarted follower
+  stayed seconds behind the leader, and its API with it. After a crash the
+  entries past the persisted index are applied again, which is safe: plain
+  writes converge, command handlers are idempotent, and the shared
+  authentication compare-and-set is guarded by a growing revision.
 
 ### HA: Raft snapshots are files, not in-memory records
 
