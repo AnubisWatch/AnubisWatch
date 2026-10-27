@@ -66,6 +66,9 @@ const (
 	ForwardApply      = "apply"
 	ForwardAddPeer    = "add_peer"
 	ForwardRemovePeer = "remove_peer"
+	// ForwardReadIndex asks the leader for a linearizable read point: it
+	// confirms its leadership and answers its commit index, appending nothing.
+	ForwardReadIndex = "read_index"
 )
 
 // ForwardRequest is sent by a follower to the leader to run a leader-only

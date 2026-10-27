@@ -186,6 +186,21 @@ func (n *Node) VerifyLeader(timeout time.Duration) error {
 // commit index to apply locally. It returns the read index.
 func (n *Node) ReadBarrier(timeout time.Duration) (uint64, error) {
 	deadline := time.Now().Add(timeout)
+	readIndex, err := n.readIndex(timeout)
+	if err != nil {
+		return 0, err
+	}
+	if err := n.WaitForApplied(readIndex, time.Until(deadline)); err != nil {
+		return 0, err
+	}
+	return readIndex, nil
+}
+
+// readIndex is the leader half of ReadBarrier: once this term's first entry
+// has committed and a quorum confirmed this node still leads, every write
+// acknowledged before the call is at or below the returned commit index.
+func (n *Node) readIndex(timeout time.Duration) (uint64, error) {
+	deadline := time.Now().Add(timeout)
 	var readIndex uint64
 	for {
 		n.mu.RLock()
@@ -205,9 +220,6 @@ func (n *Node) ReadBarrier(timeout time.Duration) (uint64, error) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if err := n.VerifyLeader(time.Until(deadline)); err != nil {
-		return 0, err
-	}
-	if err := n.WaitForApplied(readIndex, time.Until(deadline)); err != nil {
 		return 0, err
 	}
 	return readIndex, nil

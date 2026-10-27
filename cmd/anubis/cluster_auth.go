@@ -38,8 +38,15 @@ func newClusterAuthenticator(local *auth.LocalAuthenticator, mgr *cluster.Manage
 	return auth.NewClusterAuthenticator(local, shared)
 }
 
+// Barrier makes the next Load linearizable. It is a ReadIndex round trip to
+// the leader, not a log entry: it runs before every authenticated request.
+// Only a leader too old to answer read_index gets the old write barrier.
 func (s *clusterAuthStore) Barrier() error {
-	_, _, err := s.mgr.ApplyMutation(core.FSMCommand{Op: core.FSMSet, Key: clusterAuthBarrierKey, Value: []byte("1")}, clusterAuthTimeout)
+	_, err := s.mgr.ReadBarrier(clusterAuthTimeout)
+	if !errors.Is(err, raft.ErrReadIndexUnsupported) {
+		return err
+	}
+	_, _, err = s.mgr.ApplyMutation(core.FSMCommand{Op: core.FSMSet, Key: clusterAuthBarrierKey, Value: []byte("1")}, clusterAuthTimeout)
 	return err
 }
 func (s *clusterAuthStore) Load() (*auth.ClusterAuthState, error) {

@@ -20,6 +20,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Upgrade note:** restoring onto a fresh node needs the original node's
   backup key (`<data>/backup.key` or `ANUBIS_BACKUP_ENCRYPTION_KEY`).
 
+### HA: authentication no longer writes to Raft on every request
+
+- Found by the new HA soak (`scripts/hasoak`). In cluster mode every
+  authenticated request ran its quorum barrier as a Raft write (a barrier
+  key, fsynced on a quorum) while holding the authenticator's mutex, and
+  re-imported the whole shared auth state. On a follower that was catching up
+  after a pause, each barrier waited out its 5 s timeout and every other
+  request queued behind it: the node's API, `/api/v1/cluster/status`
+  included, answered after 20–30 s.
+- Followers now get a linearizable read point from the leader with a new
+  `read_index` forward (ReadIndex: the leader confirms its leadership and
+  answers its commit index; nothing is appended), then wait to apply up to
+  it. A leader too old to answer gets the old write barrier, so rolling
+  upgrades keep working.
+- Concurrent requests share one barrier, it runs outside the mutex, and the
+  shared state is imported only when its revision changed.
+
 ### Dashboard branding is applied
 
 - `dashboard.branding` parsed but did nothing (a startup warning said so).

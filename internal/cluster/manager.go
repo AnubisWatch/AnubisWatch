@@ -908,8 +908,10 @@ func (m *Manager) VerifyLeader(timeout time.Duration) error {
 }
 
 // ReadBarrier makes the next local read linearizable: it returns once this
-// node has applied every write committed before the call. Only the leader can
-// serve it (raft.Node.ReadBarrier).
+// node has applied every write committed before the call. A follower asks the
+// leader for its read index; no log entry is written
+// (raft.Node.ReadBarrierOrForward). raft.ErrReadIndexUnsupported reports a
+// leader too old to answer.
 func (m *Manager) ReadBarrier(timeout time.Duration) (uint64, error) {
 	m.mu.RLock()
 	node := m.node
@@ -917,7 +919,7 @@ func (m *Manager) ReadBarrier(timeout time.Duration) (uint64, error) {
 	if node == nil {
 		return 0, &core.RaftError{Code: core.ErrNotLeader, Message: "standalone node"}
 	}
-	return node.ReadBarrier(timeout)
+	return node.ReadBarrierOrForward(timeout)
 }
 
 // Leader returns the current leader's ID
