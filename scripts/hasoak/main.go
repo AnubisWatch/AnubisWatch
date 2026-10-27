@@ -113,7 +113,7 @@ func run(o options) (*result, error) {
 	binary := o.binary
 	if binary == "" {
 		binary = filepath.Join(out, "anubis")
-		build := exec.Command("go", "build", "-o", binary, "./cmd/anubis")
+		build := exec.CommandContext(context.Background(), "go", "build", "-o", binary, "./cmd/anubis")
 		build.Stdout, build.Stderr = os.Stderr, os.Stderr
 		if err := build.Run(); err != nil {
 			return res, fmt.Errorf("build: %w", err)
@@ -291,7 +291,7 @@ func run(o options) (*result, error) {
 }
 
 func freePort() int {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	l, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		panic(err)
 	}
@@ -331,7 +331,7 @@ func setup(out string) ([]*node, error) {
 			"necropolis": map[string]any{
 				"enabled": true, "node_name": ids[i], "region": "default",
 				"bind_addr": raft[i], "advertise_addr": raft[i],
-				"cluster_secret": "ha-soak-cluster-secret-0123456789",
+				"cluster_secret": "ha-soak-cluster-secret-0123456789", // #nosec G101 -- throwaway local cluster
 				"discovery":      map[string]any{"mode": "manual"},
 				"raft": map[string]any{
 					"node_id": ids[i], "bind_addr": raft[i], "advertise_addr": raft[i], "region": "default",
@@ -355,7 +355,7 @@ func (n *node) start(binary string) error {
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command(binary, "serve", "--config", n.config) // #nosec G204 -- local soak binary
+	cmd := exec.CommandContext(context.Background(), binary, "serve", "--config", n.config) // #nosec G204 -- local soak binary
 	env := []string{}
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "ANUBIS_") {
@@ -377,11 +377,8 @@ func (n *node) start(binary string) error {
 	n.mu.Unlock()
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
-		if resp, err := http.Get(n.base + "/health"); err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return nil
-			}
+		if status, _, err := n.raw("GET", "/health", nil); err == nil && status == http.StatusOK {
+			return nil
 		}
 		time.Sleep(200 * time.Millisecond)
 	}

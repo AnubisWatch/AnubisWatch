@@ -217,22 +217,11 @@ jobs:
       - name: Install golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 
-      - name: Migrate and verify golangci-lint config
-        run: |
-          cp .golangci.yml /tmp/golangci.yml
-          "$(go env GOPATH)/bin/golangci-lint" migrate \
-            --skip-validation \
-            --config /tmp/golangci.yml
-          # v2's migrator preserves this removed legacy linter in `disable`.
-          sed -i '/^[[:space:]]*disable:$/,+1d' /tmp/golangci.yml
-          "$(go env GOPATH)/bin/golangci-lint" config verify \
-            --config /tmp/golangci.yml
+      - name: Verify golangci-lint config
+        run: '"$(go env GOPATH)/bin/golangci-lint" config verify'
 
       - name: Run golangci-lint
-        run: |
-          "$(go env GOPATH)/bin/golangci-lint" run \
-            --config /tmp/golangci.yml \
-            --timeout=5m
+        run: '"$(go env GOPATH)/bin/golangci-lint" run --timeout=5m'
 
       - name: Run go vet
         run: go vet ./...

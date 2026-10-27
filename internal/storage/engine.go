@@ -1311,21 +1311,14 @@ func (w *writeAheadLog) currentSize() int64 {
 	return w.size
 }
 
-// rewrite atomically replaces the WAL with a fresh generation containing only
-// the supplied live entries (all PUTs), discarding superseded values and
-// tombstones. It writes a temp file, fsyncs it, then renames it over the WAL
-// (atomic on POSIX) and reopens the handle in append mode. A crash before the
-// rename leaves the old WAL intact; a crash after it leaves the complete new
-// WAL — recovery is consistent either way. The caller must ensure no writes
-// are in flight (CobaltDB holds writeMu).
-func (w *writeAheadLog) rewrite(entries []walEntry) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.rewriteLocked(entries)
-}
-
-// rewriteLocked performs rewrite while the caller holds w.mu. Recovery uses
-// this form because it already owns the WAL and B+Tree locks during replay.
+// rewriteLocked atomically replaces the WAL with a fresh generation
+// containing only the supplied live entries (all PUTs), discarding superseded
+// values and tombstones. It writes a temp file, fsyncs it, then renames it
+// over the WAL (atomic on POSIX) and reopens the handle in append mode. A
+// crash before the rename leaves the old WAL intact; a crash after it leaves
+// the complete new WAL — recovery is consistent either way. The caller holds
+// w.mu and ensures no writes are in flight; recovery uses it while it owns
+// the WAL and B+Tree locks during replay.
 func (w *writeAheadLog) rewriteLocked(entries []walEntry) error {
 	tmpPath, total, err := w.writeCompact(entries)
 	if err != nil {

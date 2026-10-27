@@ -363,7 +363,7 @@ func TestWALFaultInjection(t *testing.T) {
 	if err := os.Mkdir(w2.path+".compact", 0o700); err != nil {
 		t.Fatal(err)
 	}
-	requireError(t, w2.rewrite(nil))
+	requireError(t, w2.rewriteLocked(nil))
 	_ = w2.Close()
 
 	db := newTestDB(t)
