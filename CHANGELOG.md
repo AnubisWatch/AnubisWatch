@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Upgrade note:** restoring onto a fresh node needs the original node's
   backup key (`<data>/backup.key` or `ANUBIS_BACKUP_ENCRYPTION_KEY`).
 
+### Flap state after a longer outage
+
+- A new runner looked for the soul's last judgment only two intervals plus a
+  minute back, so after a longer outage a flapping soul lost its flag and its
+  owed `flapping_stopped` notice. When that short lookup finds nothing and flap
+  detection is on, the runner now looks back over the flap window.
+
 ### ICMP souls on Kubernetes
 
 - Unprivileged ICMP uses ping sockets, which Linux allows only for groups in

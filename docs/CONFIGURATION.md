@@ -612,7 +612,9 @@ as dedup window (separate from status alerts) and do not open incidents. Flap
 state is evaluated by the node that owns the soul; a new runner (interval
 change, ownership move, restart) restores it from the soul's latest stored
 judgment (`details.flapping`, `details.flap_baseline`), so the flag and the
-single "stopped" notice survive the handover.
+single "stopped" notice survive the handover. The lookup covers the flap
+`window`; a soul whose last judgment is older than that (an outage longer than
+the window) starts unflagged and gets no "stopped" notice.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
