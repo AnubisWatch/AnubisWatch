@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Upgrade note:** restoring onto a fresh node needs the original node's
   backup key (`<data>/backup.key` or `ANUBIS_BACKUP_ENCRYPTION_KEY`).
 
+### ICMP souls on Kubernetes
+
+- Unprivileged ICMP uses ping sockets, which Linux allows only for groups in
+  `net.ipv4.ping_group_range`. Docker opens that range by default, but many
+  Kubernetes runtimes do not, so every ICMP soul was judged dead with a bare
+  "permission denied". The Helm chart and `deploy/k8s` manifests now set the
+  pod-scoped safe sysctl, and the judgment message names the sysctl.
+
 ### WebSocket per-user limit and duplicate session checks
 
 - Concurrent handshakes of one user could exceed `maxConnsPerUser`: the slot

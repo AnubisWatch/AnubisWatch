@@ -113,6 +113,10 @@ spec:
         fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
+        # Unprivileged ping sockets for ICMP souls (safe, pod-scoped sysctl).
+        sysctls:
+          - name: net.ipv4.ping_group_range
+            value: "0 2147483647"
       containers:
         - name: anubiswatch
           image: ghcr.io/anubiswatch/anubiswatch:v0.2.1
