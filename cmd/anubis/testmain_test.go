@@ -64,15 +64,14 @@ func runPackageTests(m *testing.M) int {
 	os.Setenv("ANUBIS_DATA_DIR", data)
 	os.Setenv(testRootEnv, root)
 	// Keep client commands from reading the developer's own config file or
-	// `anubis login` token. Tests that need either set these themselves.
-	if os.Getenv("ANUBIS_CONFIG") == "" {
-		configPath := filepath.Join(root, "config.json")
-		if err := os.WriteFile(configPath, []byte("{}"), 0600); err != nil {
-			fmt.Fprintf(os.Stderr, "test config: %v\n", err)
-			return 1
-		}
-		os.Setenv("ANUBIS_CONFIG", configPath)
+	// `anubis login` token, or a config path the environment (CI) exports.
+	// Tests that need either set these themselves.
+	configPath := filepath.Join(root, "config.json")
+	if err := os.WriteFile(configPath, []byte("{}"), 0600); err != nil {
+		fmt.Fprintf(os.Stderr, "test config: %v\n", err)
+		return 1
 	}
+	os.Setenv("ANUBIS_CONFIG", configPath)
 	os.Setenv("ANUBIS_TOKEN_FILE", filepath.Join(root, "token"))
 	return m.Run()
 }
