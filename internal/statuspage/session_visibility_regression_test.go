@@ -153,3 +153,31 @@ func TestPublicAndProtectedPagesAreUnaffected(t *testing.T) {
 			protected.Body.String())
 	}
 }
+
+// X-API-Key on a private page was a stub that refused every key. It now
+// accepts an "anb_" API key the validator accepts for the page's workspace,
+// and nothing else: a session token is not accepted through the header.
+func TestPrivatePageAcceptsAPIKeyHeader(t *testing.T) {
+	const key = "anb_k1_secret"
+	for _, tc := range []struct {
+		name      string
+		validator SessionValidator
+		header    string
+		want      int
+	}{
+		{"valid key", sessionRegressionValidator{token: key, workspace: "workspace-1"}, key, http.StatusOK},
+		{"key of another workspace", sessionRegressionValidator{token: key, workspace: "workspace-2"}, key, http.StatusUnauthorized},
+		{"unknown key", sessionRegressionValidator{token: key, workspace: "workspace-1"}, "anb_k2_other", http.StatusUnauthorized},
+		{"session token in the header", sessionRegressionValidator{token: "valid-session", workspace: "workspace-1"}, "valid-session", http.StatusUnauthorized},
+		{"no validator configured", nil, key, http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := sessionRegressionRequest(t, core.VisibilityPrivate, tc.validator, func(r *http.Request) {
+				r.Header.Set("X-API-Key", tc.header)
+			})
+			if rec.Code != tc.want {
+				t.Errorf("status = %d, want %d (body: %.120s)", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+}

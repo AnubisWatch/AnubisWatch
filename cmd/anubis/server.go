@@ -795,6 +795,10 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		apiKeys.SetOwnerCheck(oc.CheckKeyOwner)
 	}
 	restServer.SetAPIKeys(apiKeys)
+	// Private status pages accept an API key of their workspace in X-API-Key.
+	statusPageHandler.SetSessionValidator(statusPageSessionValidator{
+		auth: &api.KeyAwareAuthenticator{Authenticator: authenticator, Keys: apiKeys},
+	})
 	restServer.SetRuntimeStats(func() api.RuntimeStats {
 		l := probeEngine.Liveness()
 		rs := api.RuntimeStats{

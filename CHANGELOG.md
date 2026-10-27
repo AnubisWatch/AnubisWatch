@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Upgrade note:** restoring onto a fresh node needs the original node's
   backup key (`<data>/backup.key` or `ANUBIS_BACKUP_ENCRYPTION_KEY`).
 
+### Private status pages accept API keys
+
+- `X-API-Key` on a private status page was a stub that refused every key.
+  It now accepts an `anb_` API key of the page's workspace; other values,
+  session tokens included, are refused through that header.
+
 ### WAL checkpoints no longer stall writes
 
 - A checkpoint held the write lock while it serialized and fsynced the whole

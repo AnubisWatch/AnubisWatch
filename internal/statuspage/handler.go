@@ -269,10 +269,14 @@ func (h *Handler) validateSession(token string, workspaceID string) bool {
 	return h.sessionValidator.ValidateStatusPageSession(token, workspaceID)
 }
 
-// validateAPIKey validates an API key
+// validateAPIKey accepts an API key ("anb_...") of the page's workspace. The
+// session validator authenticates it like a bearer token; any other value in
+// X-API-Key is refused, so a session token cannot be smuggled through it.
 func (h *Handler) validateAPIKey(key string, workspaceID string) bool {
-	// Implementation would validate against API key store
-	return false
+	if !core.IsAPIKeyToken(key) {
+		return false
+	}
+	return h.validateSession(key, workspaceID)
 }
 
 // requestAuthentication sends authentication challenge
