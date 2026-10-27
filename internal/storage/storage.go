@@ -1570,10 +1570,6 @@ func (db *CobaltDB) ApplyFSMCommand(cmd *core.FSMCommand) error {
 	return nil
 }
 
-// fsmSetBatchBytes bounds the raw value bytes of one batched WAL frame;
-// encoding and encryption overhead keep the frame under maxWALEntryBytes.
-const fsmSetBatchBytes = 512 * 1024
-
 // ApplyFSMSets applies consecutive FSMSet commands like ApplyFSMCommand would,
 // in as few WAL frames (and fsyncs) as fit. A later set of the same key wins,
 // as it would applied in order.
@@ -1589,13 +1585,14 @@ func (db *CobaltDB) ApplyFSMSets(cmds []core.FSMCommand) error {
 		return err
 	}
 	for i := range cmds {
-		if size > 0 && size+len(cmds[i].Value) > fsmSetBatchBytes {
+		cost := walBatchCost(cmds[i].Key, cmds[i].Value)
+		if size > 0 && size+cost > walBatchBudget {
 			if err := flush(); err != nil {
 				return err
 			}
 		}
 		values[cmds[i].Key] = cmds[i].Value
-		size += len(cmds[i].Value)
+		size += cost
 	}
 	if err := flush(); err != nil {
 		return err

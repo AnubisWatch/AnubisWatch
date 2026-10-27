@@ -2505,12 +2505,28 @@ func (n *Node) maybeTakeSnapshot() {
 	n.compactLog(snapIndex)
 }
 
-// compactLog removes log entries that are included in the snapshot
+// compactLog removes log entries that are included in the snapshot. The
+// in-memory log and the persisted base change under n.mu; the stored entries
+// below the new base are deleted after it is released, because nothing reads
+// them any more and deleting thousands of keys must not stop heartbeats and
+// AppendEntries (it did, for close to a minute, in the HA soak).
 func (n *Node) compactLog(snapshotIndex uint64) {
+	oldBase, newBase, ok := n.compactLogLocked(snapshotIndex)
+	if !ok || n.storage == nil || oldBase+1 > newBase {
+		return
+	}
+	if err := n.storage.DeleteRange(oldBase+1, newBase); err != nil {
+		n.logger.Error("Failed to compact persistent log", "error", err)
+	}
+}
+
+// compactLogLocked moves the log base and reports the stored range that the
+// caller must delete.
+func (n *Node) compactLogLocked(snapshotIndex uint64) (uint64, uint64, bool) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if snapshotIndex <= n.logBase || snapshotIndex > n.lastLogIndexLocked() {
-		return
+		return 0, 0, false
 	}
 	// Keep the TrailingLogs entries up to and including the snapshot index,
 	// so a follower slightly behind can still catch up from the log instead
@@ -2525,12 +2541,12 @@ func (n *Node) compactLog(snapshotIndex uint64) {
 		}
 	}
 	if newBase <= n.logBase {
-		return
+		return 0, 0, false
 	}
 	newBaseTerm := n.getLogTerm(newBase)
 	pos, ok := n.logPosition(newBase)
 	if !ok {
-		return
+		return 0, 0, false
 	}
 	retained := make([]core.RaftLogEntry, 0, len(n.log)-pos)
 	retained = append(retained, core.RaftLogEntry{Index: newBase, Term: newBaseTerm})
@@ -2539,11 +2555,7 @@ func (n *Node) compactLog(snapshotIndex uint64) {
 	n.logBase, n.logBaseTerm, n.log = newBase, newBaseTerm, retained
 	if err := n.persistHardStateLocked(); err != nil {
 		n.logger.Error("Failed to persist compacted log base", "error", err)
-		return
+		return 0, 0, false
 	}
-	if n.storage != nil && oldBase+1 <= newBase {
-		if err := n.storage.DeleteRange(oldBase+1, newBase); err != nil {
-			n.logger.Error("Failed to compact persistent log", "error", err)
-		}
-	}
+	return oldBase, newBase, true
 }

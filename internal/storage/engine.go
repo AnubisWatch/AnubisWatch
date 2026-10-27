@@ -512,6 +512,54 @@ func (db *CobaltDB) putMany(values map[string][]byte) error {
 	return nil
 }
 
+// walBatchBudget bounds the estimated raw size of one batched WAL frame.
+// A BATCH frame base64-encodes its values inside a JSON map, and that map is
+// base64-encoded again inside the WAL entry, so the encoded frame is roughly
+// 1.8x the raw bytes plus per-item overhead; this keeps it well under
+// maxWALEntryBytes.
+const walBatchBudget = 256 * 1024
+
+// walBatchCost estimates one key/value's share of walBatchBudget, including
+// JSON quoting and the encryption salt, nonce and tag.
+func walBatchCost(key string, value []byte) int {
+	return len(key) + len(value) + 96
+}
+
+// deleteMany removes keys in one WAL frame and one fsync. A batch frame with
+// nil values replays as tombstones, exactly like DELETE entries (older
+// versions replay it the same way).
+func (db *CobaltDB) deleteMany(keys []string) error {
+	db.closedMu.Lock()
+	closed := db.closed
+	db.closedMu.Unlock()
+	if closed {
+		return fmt.Errorf("database is closed")
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	tombstones := make(map[string][]byte, len(keys))
+	for _, key := range keys {
+		tombstones[key] = nil
+	}
+	sorted := append([]string(nil), keys...)
+	sort.Strings(sorted)
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	if err := db.wal.AppendBatch(tombstones); err != nil {
+		return fmt.Errorf("WAL batch delete failed: %w", err)
+	}
+	db.data.mu.Lock()
+	defer db.data.mu.Unlock()
+	for _, key := range sorted {
+		if err := db.data.insert(key, nil); err != nil {
+			return err
+		}
+	}
+	db.data.nextSeq++
+	return nil
+}
+
 // Delete removes a key-value pair
 func (db *CobaltDB) Delete(key string) error {
 	db.closedMu.Lock()

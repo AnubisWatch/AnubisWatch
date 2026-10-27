@@ -20,6 +20,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Upgrade note:** restoring onto a fresh node needs the original node's
   backup key (`<data>/backup.key` or `ANUBIS_BACKUP_ENCRYPTION_KEY`).
 
+### HA: log compaction no longer stalls the cluster for a minute
+
+- Found by the HA soak: after a snapshot, compaction deleted every compacted
+  log entry with its own fsync while holding the Raft mutex. With ~8000
+  entries that took close to a minute, during which the leader sent no
+  heartbeats and followers answered no AppendEntries; writes waited 35–70 s
+  and the leader finally stepped down. Compacted entries are now deleted
+  after the mutex is released, in batched tombstone frames (replayed exactly
+  like DELETE entries, also by older versions).
+- The size estimate for batched WAL frames now counts keys, the double
+  base64 encoding and encryption overhead; a 5000-entry log append no longer
+  exceeds the frame limit.
+
 ### HA: followers catch up 3–4× faster
 
 - Found by the HA soak: a node restarted or paused under load drained its

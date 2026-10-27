@@ -139,10 +139,6 @@ func encodeLogEntry(log *core.RaftLogEntry) (string, []byte, error) {
 	return fmt.Sprintf("raft/log/%d", log.Index), jsonData, nil
 }
 
-// logBatchBytes bounds the raw size of one batched WAL frame; base64, JSON
-// and encryption overhead keep the encoded frame under maxWALEntryBytes.
-const logBatchBytes = 512 * 1024
-
 // StoreLogs stores entries in as few WAL frames as fit, each written and
 // fsynced once, instead of one fsync per entry: a follower catching up
 // receives up to MaxAppendEntries entries per AppendEntries.
@@ -162,26 +158,35 @@ func (s *CobaltDBLogStore) StoreLogs(logs []core.RaftLogEntry) error {
 		if err != nil {
 			return err
 		}
-		if size > 0 && size+len(value) > logBatchBytes {
+		cost := walBatchCost(key, value)
+		if size > 0 && size+cost > walBatchBudget {
 			if err := flush(); err != nil {
 				return err
 			}
 		}
 		batch[key] = value
-		size += len(value)
+		size += cost
 	}
 	return flush()
 }
 
 // DeleteRange deletes all log entries in the given range (inclusive)
+//
+// Compaction removes thousands of entries at once; one fsync per key took
+// close to a minute on an ordinary disk. Keys are deleted in batched frames.
 func (s *CobaltDBLogStore) DeleteRange(minIdx, maxIdx uint64) error {
 	if minIdx > maxIdx {
 		return nil
 	}
+	const perFrame = 2048
+	keys := make([]string, 0, min(maxIdx-minIdx+1, perFrame))
 	for i := minIdx; ; i++ {
-		key := fmt.Sprintf("raft/log/%d", i)
-		if err := s.db.Delete(key); err != nil {
-			return err
+		keys = append(keys, fmt.Sprintf("raft/log/%d", i))
+		if len(keys) == perFrame || i == maxIdx {
+			if err := s.db.deleteMany(keys); err != nil {
+				return err
+			}
+			keys = keys[:0]
 		}
 		if i == maxIdx {
 			break

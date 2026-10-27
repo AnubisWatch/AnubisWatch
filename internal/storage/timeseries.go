@@ -131,10 +131,6 @@ func (ts *TimeSeriesStore) SaveJudgment(ctx context.Context, j *core.Judgment) e
 	return nil
 }
 
-// judgmentBatchBytes bounds the raw bytes of one batched WAL frame; encoding
-// and encryption overhead keep the frame under maxWALEntryBytes.
-const judgmentBatchBytes = 512 * 1024
-
 // SaveJudgments saves judgments as SaveJudgment would one after another, in
 // as few WAL frames (and fsyncs) as fit. A judgment that is already stored
 // (or repeated in the batch) is skipped, so replaying a batch is safe. Frames
@@ -210,10 +206,10 @@ func (ts *TimeSeriesStore) SaveJudgments(ctx context.Context, judgments []*core.
 			markers = append(markers, marker)
 		}
 		groupSize := 0
-		for _, v := range group {
-			groupSize += len(v)
+		for k, v := range group {
+			groupSize += walBatchCost(k, v)
 		}
-		if size > 0 && size+groupSize > judgmentBatchBytes {
+		if size > 0 && size+groupSize > walBatchBudget {
 			if err := flush(); err != nil {
 				return err
 			}
