@@ -1,3 +1,4 @@
+{{- include "anubiswatch.clusterValidation" . }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -5,42 +6,12 @@ metadata:
   labels:
     {{- include "anubiswatch.labels" . | nindent 4 }}
 data:
+  {{- if .Values.config.necropolis.enabled }}
+  {{- range $ordinal := until 3 }}
+  anubis-{{ $ordinal }}.yaml: |
+    {{- include "anubiswatch.runtimeConfig" (dict "root" $ "ordinal" $ordinal) | nindent 4 }}
+  {{- end }}
+  {{- else }}
   anubis.yaml: |
-    environment: {{ .Values.config.environment | quote }}
-    server:
-      host: {{ .Values.config.server.host | quote }}
-      port: {{ .Values.config.server.port }}
-      grpc_port: {{ .Values.service.grpcPort }}
-      tls:
-        enabled: {{ .Values.config.server.tls.enabled }}
-        {{- if .Values.config.server.tls.cert }}
-        cert: {{ .Values.config.server.tls.cert | quote }}
-        {{- end }}
-        {{- if .Values.config.server.tls.key }}
-        key: {{ .Values.config.server.tls.key | quote }}
-        {{- end }}
-        min_version: {{ .Values.config.server.tls.min_version | default 3 }}
-      trusted_proxies: {{ .Values.config.server.trustedProxies | toJson }}
-      allowed_origins: {{ .Values.config.server.allowedOrigins | toJson }}
-
-    auth:
-      enabled: true
-      type: {{ .Values.config.auth.type }}
-      local:
-        admin_email: {{ .Values.config.auth.local.adminEmail | quote }}
-
-    dashboard:
-      enabled: {{ .Values.config.dashboard.enabled }}
-
-    storage:
-      path: {{ .Values.config.storage.path }}
-      encryption:
-        enabled: {{ .Values.config.storage.encryption.enabled }}
-
-    necropolis:
-      enabled: {{ .Values.config.necropolis.enabled }}
-
-    logging:
-      level: {{ .Values.config.logging.level }}
-      format: {{ .Values.config.logging.format }}
-      output: stdout
+    {{- include "anubiswatch.runtimeConfig" (dict "root" .) | nindent 4 }}
+  {{- end }}

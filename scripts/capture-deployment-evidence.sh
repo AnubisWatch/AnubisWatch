@@ -11,7 +11,7 @@ Usage:
 Environment:
   NAMESPACE                       Kubernetes namespace, default anubiswatch.
   RELEASE                         Helm release, default anubiswatch.
-  ANUBIS_EVIDENCE_WORKLOAD        Workload to inspect, default statefulset/anubiswatch.
+  ANUBIS_EVIDENCE_WORKLOAD        Workload to inspect, default deployment/anubiswatch.
   ANUBIS_EVIDENCE_VALUES          Optional values file to checksum only.
   ANUBIS_EVIDENCE_IMAGE           Optional expected image tag or digest to record.
   ANUBIS_EVIDENCE_BASE_URL        Optional URL to run production smoke checks against.
@@ -41,7 +41,7 @@ fi
 
 NAMESPACE="${NAMESPACE:-anubiswatch}"
 RELEASE="${RELEASE:-anubiswatch}"
-WORKLOAD="${ANUBIS_EVIDENCE_WORKLOAD:-statefulset/anubiswatch}"
+WORKLOAD="${ANUBIS_EVIDENCE_WORKLOAD:-deployment/anubiswatch}"
 VALUES_FILE="${ANUBIS_EVIDENCE_VALUES:-}"
 IMAGE_REF="${ANUBIS_EVIDENCE_IMAGE:-}"
 BASE_URL="${ANUBIS_EVIDENCE_BASE_URL:-}"

@@ -14,7 +14,7 @@ Environment:
   ANUBIS_SMOKE_PASSWORD        Optional admin password for authenticated checks.
   ANUBIS_SMOKE_INSECURE=true   Pass -k to curl for non-public test certs.
   ANUBIS_SMOKE_NAMESPACE       Optional Kubernetes namespace for rollout checks.
-  ANUBIS_SMOKE_WORKLOAD        Optional workload, default statefulset/anubiswatch.
+  ANUBIS_SMOKE_WORKLOAD        Optional workload, default deployment/anubiswatch.
 
 Examples:
   scripts/production-smoke.sh https://anubiswatch.example.com
@@ -123,7 +123,7 @@ json_escape() {
 
 run_kubernetes_check() {
     local namespace="${ANUBIS_SMOKE_NAMESPACE:-}"
-    local workload="${ANUBIS_SMOKE_WORKLOAD:-statefulset/anubiswatch}"
+    local workload="${ANUBIS_SMOKE_WORKLOAD:-deployment/anubiswatch}"
 
     if [[ -z "$namespace" ]]; then
         return
@@ -141,7 +141,6 @@ run_public_checks() {
     expect_status GET /ready 200 "readiness endpoint" \
         '"status"[[:space:]]*:[[:space:]]*"ready"' \
         '"checks"[[:space:]]*:'
-    expect_status GET /metrics 200 "metrics endpoint" 'anubis_build_info'
     expect_status GET /api/openapi.json 200 "OpenAPI document" \
         '"openapi"[[:space:]]*:[[:space:]]*"3\.[0-9]+\.[0-9]+"' \
         '"/api/v1/auth/login"[[:space:]]*:'
@@ -202,6 +201,28 @@ run_authenticated_checks() {
         '"judgments"[[:space:]]*:'
 }
 
+
+run_metrics_check() {
+    local cookie_jar="$TMP_DIR/cookies.txt"
+    if [[ -f "$cookie_jar" ]]; then
+        expect_authenticated_status "$cookie_jar" /metrics 200 "authenticated metrics endpoint" 'anubis_build_info'
+        return
+    fi
+    local body_file="$TMP_DIR/metrics.txt"
+    local status
+    status="$(curl "${CURL_FLAGS[@]}" -o "$body_file" -w '%{http_code}' "$BASE_URL/metrics")" || fail "metrics request failed"
+    case "$status" in
+        200)
+            grep -Eq 'anubis_build_info' "$body_file" || fail "metrics response did not contain build information"
+            log "ok: public metrics endpoint"
+            ;;
+        401)
+            log "ok: metrics requires authentication; authenticated scrape NOT RUN (no smoke credentials supplied)"
+            ;;
+        *) fail "metrics returned HTTP $status, expected 200 or protected 401" ;;
+    esac
+}
+
 if [[ "$BASE_URL" != http://* && "$BASE_URL" != https://* ]]; then
     fail "BASE_URL must start with http:// or https://"
 fi
@@ -213,5 +234,6 @@ fi
 run_kubernetes_check
 run_public_checks
 run_authenticated_checks
+run_metrics_check
 
 log "all smoke checks passed for $BASE_URL"

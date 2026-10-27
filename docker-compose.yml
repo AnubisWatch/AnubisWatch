@@ -5,8 +5,11 @@
 #   export ANUBIS_ADMIN_PASSWORD=<your-secure-password>
 #   docker-compose up -d
 #
-# Scale to 3 nodes:
-#   docker-compose up -d --scale anubis=3
+# Standalone instances cannot be scaled against one data volume.
+# The optional cluster profile is a local three-node demo: it has no peer TLS
+# and publishes on loopback only. A supported HA deployment needs verified
+# peer mTLS and separate data volumes (see the Helm chart's HA example).
+# Every published port binds to ANUBIS_BIND_HOST (default 127.0.0.1).
 #
 # View logs:
 #   docker-compose logs -f
@@ -20,12 +23,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/anubiswatch/anubiswatch:latest
+    image: ${ANUBIS_IMAGE:-ghcr.io/anubiswatch/anubiswatch:latest}
     container_name: anubis
     hostname: anubis
+    read_only: true
+    tmpfs:
+      - /var/lib/anubis
     restart: unless-stopped
     ports:
-      - "8080:8080"      # HTTP API
+      - "${ANUBIS_BIND_HOST:-127.0.0.1}:${ANUBIS_PORT:-8080}:8080"  # HTTP API
     volumes:
       - anubis-data:/data
       - ./configs/container.anubis.json:/etc/anubis/anubis.json:ro
@@ -48,21 +54,24 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/anubiswatch/anubiswatch:latest
+    image: ${ANUBIS_IMAGE:-ghcr.io/anubiswatch/anubiswatch:latest}
     container_name: anubis-1
     hostname: anubis-1
+    read_only: true
+    tmpfs:
+      - /var/lib/anubis
     restart: unless-stopped
     profiles:
       - cluster
     ports:
-      - "8081:8080"
+      - "${ANUBIS_BIND_HOST:-127.0.0.1}:8081:8080"
     volumes:
       - anubis-data-1:/data
       - ./configs/container.anubis.json:/etc/anubis/anubis.json:ro
     environment:
       - ANUBIS_CONFIG=/etc/anubis/anubis.json
       - ANUBIS_ADMIN_PASSWORD=${ANUBIS_ADMIN_PASSWORD:?set a strong admin password}
-      - ANUBIS_CLUSTER_SECRET=${ANUBIS_CLUSTER_SECRET:?set ANUBIS_CLUSTER_SECRET to a shared random value for cluster gossip auth}
+      - ANUBIS_CLUSTER_SECRET=${ANUBIS_CLUSTER_SECRET:-}
       - ANUBIS_NODE_ID=anubis-1
       - ANUBIS_BIND_ADDR=0.0.0.0:7946
       - ANUBIS_RAFT_PORT=7946
@@ -77,21 +86,24 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/anubiswatch/anubiswatch:latest
+    image: ${ANUBIS_IMAGE:-ghcr.io/anubiswatch/anubiswatch:latest}
     container_name: anubis-2
     hostname: anubis-2
+    read_only: true
+    tmpfs:
+      - /var/lib/anubis
     restart: unless-stopped
     profiles:
       - cluster
     ports:
-      - "8082:8080"
+      - "${ANUBIS_BIND_HOST:-127.0.0.1}:8082:8080"
     volumes:
       - anubis-data-2:/data
       - ./configs/container.anubis.json:/etc/anubis/anubis.json:ro
     environment:
       - ANUBIS_CONFIG=/etc/anubis/anubis.json
       - ANUBIS_ADMIN_PASSWORD=${ANUBIS_ADMIN_PASSWORD:?set a strong admin password}
-      - ANUBIS_CLUSTER_SECRET=${ANUBIS_CLUSTER_SECRET:?set ANUBIS_CLUSTER_SECRET to a shared random value for cluster gossip auth}
+      - ANUBIS_CLUSTER_SECRET=${ANUBIS_CLUSTER_SECRET:-}
       - ANUBIS_NODE_ID=anubis-2
       - ANUBIS_BIND_ADDR=0.0.0.0:7946
       - ANUBIS_RAFT_PORT=7946
@@ -108,21 +120,24 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ghcr.io/anubiswatch/anubiswatch:latest
+    image: ${ANUBIS_IMAGE:-ghcr.io/anubiswatch/anubiswatch:latest}
     container_name: anubis-3
     hostname: anubis-3
+    read_only: true
+    tmpfs:
+      - /var/lib/anubis
     restart: unless-stopped
     profiles:
       - cluster
     ports:
-      - "8083:8080"
+      - "${ANUBIS_BIND_HOST:-127.0.0.1}:8083:8080"
     volumes:
       - anubis-data-3:/data
       - ./configs/container.anubis.json:/etc/anubis/anubis.json:ro
     environment:
       - ANUBIS_CONFIG=/etc/anubis/anubis.json
       - ANUBIS_ADMIN_PASSWORD=${ANUBIS_ADMIN_PASSWORD:?set a strong admin password}
-      - ANUBIS_CLUSTER_SECRET=${ANUBIS_CLUSTER_SECRET:?set ANUBIS_CLUSTER_SECRET to a shared random value for cluster gossip auth}
+      - ANUBIS_CLUSTER_SECRET=${ANUBIS_CLUSTER_SECRET:-}
       - ANUBIS_NODE_ID=anubis-3
       - ANUBIS_BIND_ADDR=0.0.0.0:7946
       - ANUBIS_RAFT_PORT=7946
@@ -142,7 +157,7 @@ services:
     profiles:
       - monitoring
     ports:
-      - "9091:9090"
+      - "${ANUBIS_BIND_HOST:-127.0.0.1}:9091:9090"
     volumes:
       - prometheus-data:/prometheus
     # Use the image's bundled configuration. Add an explicit config mount only
@@ -158,7 +173,7 @@ services:
     profiles:
       - monitoring
     ports:
-      - "3000:3000"
+      - "${ANUBIS_BIND_HOST:-127.0.0.1}:3000:3000"
     volumes:
       - grafana-data:/var/lib/grafana
     # No provisioning directory is mounted by default because the repository

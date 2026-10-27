@@ -1,0 +1,42 @@
+# HA overlay. Apply after a filled values-production.yaml in a NEW release.
+# Use an image containing the replicated cluster authentication implementation;
+# never infer that support from an old chart appVersion.
+image:
+  tag: ""
+  # Preferred for production: fill a reviewed registry digest, or explicit tag.
+  digest: ""
+
+config:
+  auth:
+    type: local
+  necropolis:
+    enabled: true
+
+cluster:
+  domain: cluster.local
+  # Existing Secret with tls.crt, tls.key and ca.crt; do not put private keys here.
+  raftTLSSecret: ""
+
+statefulSet:
+  replicas: 3
+  podManagementPolicy: Parallel
+  updateStrategy:
+    type: RollingUpdate
+
+persistence:
+  enabled: true
+
+autoscaling:
+  enabled: false
+
+pdb:
+  enabled: true
+  minAvailable: 2
+
+secrets:
+  # Fill from a secret store. Same HMAC secret on every voter.
+  clusterSecret: ""
+
+# Empty map keeps the chart's default required hostname anti-affinity,
+# which needs three schedulable nodes. Provide a non-empty map to replace it.
+affinity: {}

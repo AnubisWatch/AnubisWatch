@@ -17,7 +17,36 @@ dashboard:
 logging:
   level: "info"
   format: "text"
-  output: "stdout"
+  output: "stdout"      # stdout | stderr | file | both
+  # file: ""            # default <storage.path>/logs/anubis.log
+  # max_size_mb: 100    # file|both: rotate at this size
+  # max_backups: 5      # file|both: rotated files kept
+
+# Probe engine tuning. max_concurrent_checks caps scheduled + manual checks
+# running at once on this node (default 100, valid 1-10000).
+probe:
+  max_concurrent_checks: 100
+
+# Alert channels ignore HTTP(S)_PROXY (an implicit proxy would bypass the SSRF
+# policy). Set an explicit proxy only if this host can reach Slack, webhooks
+# and other HTTP channels solely through one.
+# alerting:
+#   proxy: "http://proxy.internal:3128"
+
+# Outgoing mail for status page subscriptions (double opt-in confirmation,
+# incident updates, unsubscribe links) and "Forgot password?" reset links.
+# Off unless mail.host is set; server.public_url is then required, because the
+# emails link back to it. The relay is dialed through the SSRF policy.
+# server:
+#   public_url: "https://status.example.com"
+# mail:
+#   host: "smtp.example.com"
+#   port: 587                       # default 587, or 465 with tls: implicit
+#   username: "anubis@example.com"
+#   password: "${ANUBIS_MAIL_PASSWORD}"
+#   from: "AnubisWatch <status@example.com>"
+#   tls: "starttls"                 # starttls (default) | implicit | none
+#   timeout: "30s"
 
 souls:
   - name: "Google DNS"

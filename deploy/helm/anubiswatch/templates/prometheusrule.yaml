@@ -1,0 +1,52 @@
+{{- if and .Values.monitoring.enabled .Values.monitoring.prometheusRule.enabled }}
+{{- $selector := printf "namespace=%q,service=%q" .Release.Namespace (include "anubiswatch.fullname" .) }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "anubiswatch.fullname" . }}
+  labels:
+    {{- include "anubiswatch.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: anubiswatch.self
+      rules:
+        # A monitor cannot page about its own death: alert from Prometheus.
+        - alert: AnubisWatchDown
+          expr: up{ {{- $selector -}} } == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: AnubisWatch {{ "{{" }} $labels.pod {{ "}}" }} cannot be scraped
+            description: Prometheus has not reached /metrics for 5 minutes, so no checks or alerts from this instance can be trusted.
+        - alert: AnubisWatchSchedulerStalled
+          expr: |
+            anubis_scheduled_souls{ {{- $selector -}} } > 0
+            and (time() - anubis_last_judgment_timestamp_seconds{ {{- $selector -}} }) > {{ .Values.monitoring.prometheusRule.schedulerStaleSeconds }}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: AnubisWatch {{ "{{" }} $labels.pod {{ "}}" }} stopped producing judgments
+            description: Souls are scheduled but no check has completed for over {{ .Values.monitoring.prometheusRule.schedulerStaleSeconds }}s; monitored targets are not being watched.
+        - alert: AnubisWatchReplicationDropping
+          expr: increase(anubis_replication_dropped_total{ {{- $selector -}} }[15m]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: AnubisWatch {{ "{{" }} $labels.pod {{ "}}" }} dropped replicated judgments
+            description: The cluster replication backlog overflowed; some judgments or alert state were discarded. Check quorum and leader health.
+        {{- if .Values.config.necropolis.enabled }}
+        - alert: AnubisWatchNoLeader
+          expr: max(anubis_cluster_leader{ {{- $selector -}} }) < 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: AnubisWatch cluster has no Raft leader
+            description: No voter reports leadership for 2 minutes; writes and failover are stalled.
+        {{- end }}
+{{- end }}

@@ -9,6 +9,7 @@ data:
     server:
       host: 0.0.0.0
       port: 8080
+      metrics_auth: true
       # Management gRPC is opt-in. A positive port requires TLS unless the
       # process is explicitly bound to a loopback IP.
       grpc_port: 0

@@ -25,42 +25,79 @@ function Test-Admin {
     return $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+$Repo = "AnubisWatch/anubiswatch"
+
 function Get-Platform {
-    $arch = if ([Environment]::Is64BitOperatingSystem) { "amd64" } else { "386" }
-    return "windows", $arch
+    # Releases publish windows/amd64 only.
+    if (-not [Environment]::Is64BitOperatingSystem) {
+        throw "AnubisWatch publishes 64-bit Windows binaries only"
+    }
+    return "windows", "amd64"
+}
+
+function Resolve-Version {
+    param([string]$Requested)
+    if ($Requested -ne "latest") {
+        return $Requested
+    }
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -UseBasicParsing
+    if (-not $release.tag_name) {
+        throw "Could not resolve the latest release tag"
+    }
+    return $release.tag_name
+}
+
+# Test-Checksum checks the archive against the release's checksums.txt.
+# Set ANUBIS_SKIP_CHECKSUM=1 to install without it.
+function Test-Checksum {
+    param([string]$Dir, [string]$File, [string]$Tag)
+    if ($env:ANUBIS_SKIP_CHECKSUM -eq "1") {
+        Write-Info "Skipping checksum verification (ANUBIS_SKIP_CHECKSUM=1)"
+        return
+    }
+    $sumsUrl = "https://github.com/$Repo/releases/download/$Tag/checksums.txt"
+    $sumsPath = Join-Path $Dir "checksums.txt"
+    Invoke-WebRequest -Uri $sumsUrl -OutFile $sumsPath -UseBasicParsing
+    $expected = $null
+    foreach ($line in Get-Content $sumsPath) {
+        $parts = $line -split '\s+', 2
+        if ($parts.Count -eq 2 -and $parts[1].TrimStart('*') -eq $File) {
+            $expected = $parts[0].ToLowerInvariant()
+        }
+    }
+    if (-not $expected) {
+        throw "No checksum listed for $File"
+    }
+    $actual = (Get-FileHash -Algorithm SHA256 -Path (Join-Path $Dir $File)).Hash.ToLowerInvariant()
+    if ($actual -ne $expected) {
+        throw "Checksum mismatch for ${File}: expected $expected, got $actual"
+    }
+    Write-Success "Checksum verified"
 }
 
 function Install-Anubis {
     $platform, $arch = Get-Platform
-    $filename = "anubis_${platform}_${arch}.zip"
-    $url = "https://github.com/AnubisWatch/anubiswatch/releases/download/$Version/$filename"
-    $tempDir = [System.IO.Path]::GetTempPath() + [System.Guid]::NewGuid().ToString()
-    
+    $tag = Resolve-Version $Version
+    $name = "anubis-$platform-$arch"
+    $filename = "$name.zip"
+    $url = "https://github.com/$Repo/releases/download/$tag/$filename"
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
+
     New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
-    
-    Write-Info "Downloading AnubisWatch..."
     try {
-        Invoke-WebRequest -Uri $url -OutFile "$tempDir\$filename" -UseBasicParsing
-    } catch {
-        Write-Error "Download failed. Using local build if available."
-        if (Test-Path ".\anubis.exe") {
-            Copy-Item ".\anubis.exe" "$InstallDir\anubis.exe"
-        }
-        return
+        Write-Info "Downloading AnubisWatch $tag..."
+        Invoke-WebRequest -Uri $url -OutFile (Join-Path $tempDir $filename) -UseBasicParsing
+        Test-Checksum -Dir $tempDir -File $filename -Tag $tag
+
+        Write-Info "Extracting..."
+        Expand-Archive -Path (Join-Path $tempDir $filename) -DestinationPath $tempDir -Force
+
+        New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+        Copy-Item (Join-Path $tempDir "$name.exe") (Join-Path $InstallDir "anubis.exe") -Force
+    } finally {
+        Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
-    
-    Write-Info "Extracting..."
-    Expand-Archive -Path "$tempDir\$filename" -DestinationPath $tempDir -Force
-    
-    # Create install directory
-    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    
-    # Copy binary
-    Copy-Item "$tempDir\anubis.exe" "$InstallDir\anubis.exe" -Force
-    
-    # Cleanup
-    Remove-Item -Path $tempDir -Recurse -Force
-    
+
     Write-Success "Installed to $InstallDir"
 }
 
@@ -94,13 +131,20 @@ pause
 }
 
 function Main {
+    $ErrorActionPreference = "Stop"
     Write-Banner
     
     if (!(Test-Admin)) {
         Write-Info "Installing for current user only (run as admin for system-wide install)"
     }
     
-    Install-Anubis
+    try {
+        Install-Anubis
+    } catch {
+        Write-Error "Installation failed: $_"
+        # return, not exit: under `iwr | iex` exit would close the caller's shell.
+        return
+    }
     Initialize-Config
     
     if ($AddToPath) {

@@ -29,5 +29,8 @@
     "format": "json",
     "output": "stdout"
   },
+  "probe": {
+    "max_concurrent_checks": 100
+  },
   "souls": []
 }

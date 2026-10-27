@@ -6,13 +6,13 @@ on:
   pull_request:
     branches: [main, master, develop]
 
+# Read-only by default; only the two jobs that upload SARIF get
+# security-events: write.
 permissions:
   contents: read
-  security-events: write
-  id-token: write
 
 env:
-  GO_VERSION: '1.27.2'
+  GO_VERSION: '1.27.3'
   NODE_VERSION: '22'
   ANUBIS_DATA_DIR: /tmp/anubis
   ANUBIS_CONFIG: /tmp/anubis.json
@@ -29,15 +29,15 @@ jobs:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Cache Go modules
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
@@ -62,12 +62,12 @@ jobs:
         # Skipped when CODECOV_TOKEN is not configured. The coverage GATE is
         # the check-go-coverage.sh step above; this is reporting on top of it.
         if: env.CODECOV_TOKEN != ''
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage-filtered.out
           flags: backend
-          fail_ci_if_error: true
+          fail_ci_if_error: false
 
   # Frontend Tests
   test-frontend:
@@ -79,15 +79,15 @@ jobs:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 10
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
@@ -97,9 +97,20 @@ jobs:
         working-directory: web
         run: pnpm install --frozen-lockfile
 
+      - name: Check API types match the OpenAPI spec
+        # src/api/schema.generated.ts is generated from
+        # internal/api/openapi.yaml; fails when someone edits the spec without
+        # running `pnpm run gen:api` (offline, no network beyond the install).
+        working-directory: web
+        run: pnpm run check:api
+
       - name: Run linter
         working-directory: web
         run: pnpm run lint
+
+      - name: Type-check
+        working-directory: web
+        run: pnpm exec tsc --noEmit
 
       - name: Run tests and enforce coverage threshold
         working-directory: web
@@ -109,12 +120,12 @@ jobs:
         # Skipped when CODECOV_TOKEN is not configured. The coverage GATE is
         # the vitest thresholds in the step above; this is reporting on top.
         if: env.CODECOV_TOKEN != ''
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./web/coverage/coverage-final.json
           flags: frontend
-          fail_ci_if_error: true
+          fail_ci_if_error: false
 
   # Dashboard E2E
   e2e-dashboard:
@@ -122,20 +133,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 10
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
@@ -164,7 +175,7 @@ jobs:
 
       - name: Upload Playwright artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: playwright-trace-and-results
           path: |
@@ -181,17 +192,20 @@ jobs:
   static-analysis:
     name: Static Analysis (gofmt/vet/gosec/govulncheck)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Cache Go modules
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
@@ -240,14 +254,18 @@ jobs:
       # the audit trail in the CI log.
       - name: Run gosec
         id: gosec
-        uses: securego/gosec@v2.29.0
-        with:
-          args: >-
-            -exclude=G115,G304,G301,G306,G505,G103,G104,G703,G118,G401,G302,G404,G402,G704,G123
-            -exclude-dir=web/node_modules
-            -exclude-dir=internal/grpcapi/v1
-            -severity=medium
-            -confidence=medium
+        # Build the pinned scanner with the same Go toolchain as the project.
+        # v2.29's parser cannot read Go1.27 export data; a successful SSA scan
+        # must not be replaced by a type-error or an empty report.
+        run: |
+          go run github.com/securego/gosec/v2/cmd/gosec@v2.30.0 \
+            -exclude=G115,G304,G301,G306,G505,G103,G104,G703,G118,G401,G302,G404,G402,G704,G123 \
+            -exclude-dir=web/node_modules \
+            -exclude-dir=internal/grpcapi/v1 \
+            -exclude-dir=.temp_files \
+            -exclude-dir=.tmp \
+            -exclude-dir=.wrongstack \
+            -severity=medium -confidence=medium \
             -fmt sarif -out gosec.sarif ./...
 
       - name: Assert gosec clean
@@ -264,7 +282,7 @@ jobs:
           fi
 
       - name: Upload SARIF to GitHub
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         # always(), so a gosec finding still gets reported — but only if the
         # file exists. When an earlier step fails, gosec is skipped and never
         # writes gosec.sarif; uploading unconditionally then adds a second,
@@ -301,10 +319,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Check shell script syntax
-        run: bash -n scripts/*.sh
+        run: |
+          bash -n run.sh
+          bash scripts/check-shell-syntax.sh
+          bash scripts/check-shell-syntax_test.sh
+
+      - name: Test standalone launcher and Compose configuration
+        run: |
+          bash scripts/launcher_test.sh
+          bash scripts/compose_test.sh
+
+      - name: Test Kubernetes drill without a cluster
+        run: bash scripts/k8s-drill/k8s-drill_test.sh
 
       - name: Verify production script help output
         run: |
@@ -339,20 +368,20 @@ jobs:
     needs: [test-backend, static-analysis, script-validation]
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
         with:
           version: 10
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
@@ -361,6 +390,19 @@ jobs:
       - name: Build embedded dashboard assets
         working-directory: web
         run: pnpm install --frozen-lockfile && pnpm run build:embed
+
+      # `go build`/`go install` from a checkout embeds the committed
+      # internal/dashboard/dist, so it must be exactly what web/ builds to
+      # (the Vite build is deterministic). Rebuild with `make dashboard` and
+      # commit the result when this fails.
+      - name: Verify committed dashboard build is current
+        run: |
+          changes="$(git status --porcelain -- internal/dashboard/dist)"
+          if [ -n "$changes" ]; then
+            echo "::error::internal/dashboard/dist is stale; run 'make dashboard' and commit it"
+            echo "$changes"
+            exit 1
+          fi
 
       - name: Build binary
         run: CGO_ENABLED=0 go build -ldflags "-s -w -X main.Version=${{ github.sha }}" -o anubis ./cmd/anubis
@@ -374,7 +416,7 @@ jobs:
           ANUBIS_DATA_DIR: /tmp/anubis-data
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: anubis-linux-amd64
           path: anubis
@@ -403,7 +445,7 @@ jobs:
           docker save ghcr.io/anubiswatch/anubiswatch:${{ github.sha }} > anubis-image.tar
 
       - name: Upload Docker image artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: anubis-docker-image
           path: anubis-image.tar
@@ -417,10 +459,10 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -451,16 +493,53 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Run load tests
-        run: go test -v -run TestLoad_ ./internal/probe/...
+        run: |
+          set -o pipefail
+          go test -count=1 -v -run TestLoad_ ./internal/probe/... | tee /tmp/load-test-output.log
+        env:
+          ANUBIS_RUN_LOAD_TESTS: "true"
         timeout-minutes: 15
+
+      # The load tests skip themselves unless ANUBIS_RUN_LOAD_TESTS=true, and
+      # a subset also skips itself on CI (GitHub Actions always sets CI=true),
+      # so assert on the captured output that every discovered TestLoad_
+      # actually executed and that only the expected CI skips happened.
+      # Scope: this job only runs on push to main, so the guard protects main
+      # rather than pull requests.
+      - name: Verify load tests actually ran
+        run: |
+          set -uo pipefail
+          DISCOVERED=$(grep -o -- "^func TestLoad_[A-Za-z0-9_]*" internal/probe/load_test.go | sed 's/^func //' | sort || true)
+          RAN=$(grep -o -- "^--- \(PASS\|SKIP\): TestLoad_[A-Za-z0-9_]*" /tmp/load-test-output.log | sed 's/^--- \(PASS\|SKIP\): //' | sort -u || true)
+          PASS_COUNT=$(grep -c -- "^--- PASS: TestLoad_" /tmp/load-test-output.log || true)
+          SKIP_COUNT=$(grep -c -- "^--- SKIP: TestLoad_" /tmp/load-test-output.log || true)
+          EXPECTED_CI_SKIPS=$(grep -c -- 'Skip("Skipping load test in CI environment")' internal/probe/load_test.go || true)
+          echo "Load tests: discovered=$(printf '%s\n' "$DISCOVERED" | grep -c . || true) passed=$PASS_COUNT skipped=$SKIP_COUNT expected_ci_skips=$EXPECTED_CI_SKIPS"
+          MISSING=$(comm -23 <(printf '%s\n' "$DISCOVERED") <(printf '%s\n' "$RAN"))
+          if [ -n "$MISSING" ]; then
+            echo "::error::Load tests did not run: $MISSING"
+            cat /tmp/load-test-output.log
+            exit 1
+          fi
+          if [ "$SKIP_COUNT" -ne "$EXPECTED_CI_SKIPS" ]; then
+            echo "::error::Unexpected load test skips: got $SKIP_COUNT, expected $EXPECTED_CI_SKIPS"
+            grep -- '^--- SKIP: TestLoad_' /tmp/load-test-output.log || true
+            cat /tmp/load-test-output.log
+            exit 1
+          fi
+          if [ "$PASS_COUNT" -lt 1 ]; then
+            echo "::error::No load test passed; the load test suite became a no-op"
+            cat /tmp/load-test-output.log
+            exit 1
+          fi
 
   # Benchmarks
   benchmarks:
@@ -470,10 +549,10 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -481,7 +560,7 @@ jobs:
         run: go test -bench=. -benchmem ./internal/... 2>&1 | tee benchmark.txt
 
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: benchmark-results
           path: benchmark.txt
@@ -493,15 +572,15 @@ jobs:
     needs: build
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Download binary
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: anubis-linux-amd64
 
@@ -519,10 +598,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
 
       - name: Set up Helm
-        uses: azure/setup-helm@v5
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
         with:
           version: '3.14.4'
 
@@ -535,6 +620,9 @@ jobs:
             --set secrets.adminPassword='StrongPass123!' \
             --set secrets.encryptionKey='StrongEncryptionKey123!'
 
+      - name: Test Helm topology and rollout guardrails
+        run: go test ./deploy/helm/anubiswatch/tests -count=1
+
       - name: Template Helm charts
         run: |
           helm template anubiswatch deploy/helm/anubiswatch \
@@ -545,6 +633,15 @@ jobs:
             --set secrets.adminPassword='StrongPass123!' \
             --set secrets.encryptionKey='StrongEncryptionKey123!' \
             > helm-deploy-production-example.yaml
+          helm template anubiswatch-ha deploy/helm/anubiswatch \
+            -f deploy/helm/anubiswatch/values-production.example.yaml \
+            -f deploy/helm/anubiswatch/values-ha.example.yaml \
+            --set image.tag='${{ github.sha }}' \
+            --set secrets.adminPassword='StrongPass123!' \
+            --set secrets.encryptionKey='StrongEncryptionKey123!' \
+            --set secrets.clusterSecret='StrongClusterSecret123!' \
+            --set cluster.raftTLSSecret=anubiswatch-peer-tls \
+            > helm-deploy-ha.yaml
 
       - name: Validate rendered Kubernetes manifests
         run: |
@@ -552,7 +649,8 @@ jobs:
             -strict \
             -summary \
             /work/helm-deploy.yaml \
-            /work/helm-deploy-production-example.yaml
+            /work/helm-deploy-production-example.yaml \
+            /work/helm-deploy-ha.yaml
 
       - name: Verify Helm secret guardrails
         run: |
@@ -584,12 +682,13 @@ jobs:
             if helm template anubiswatch "$chart" \
               --set secrets.adminPassword='StrongPass123!' \
               --set config.necropolis.enabled=true \
+              --set image.tag='reviewed-ha-candidate' \
               --set secrets.clusterSecret='StrongClusterSecret123!' \
-              >/tmp/unsupported-cluster.yaml 2>/tmp/unsupported-cluster.err; then
-              echo "Expected $chart to reject unsupported cluster topology"
+              >/tmp/missing-peer-tls.yaml 2>/tmp/missing-peer-tls.err; then
+              echo "Expected $chart to reject cluster mode without peer TLS"
               exit 1
             fi
-            grep -q "config.necropolis.enabled is not supported by this production chart" /tmp/unsupported-cluster.err
+            grep -q "cluster.raftTLSSecret is required" /tmp/missing-peer-tls.err
 
             if helm template anubiswatch "$chart" \
               --set secrets.adminPassword='StrongPass123!' \
@@ -605,13 +704,16 @@ jobs:
   docker-security:
     name: Docker Security Scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     needs: build
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Download Docker image
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: anubis-docker-image
 
@@ -619,7 +721,7 @@ jobs:
         run: docker load < anubis-image.tar
 
       - name: Run blocking Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@v0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ghcr.io/anubiswatch/anubiswatch:${{ github.sha }}
           format: 'sarif'
@@ -648,7 +750,70 @@ jobs:
           exit-code: '1'
 
       - name: Upload SARIF to GitHub
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4
         if: always()
         with:
           sarif_file: trivy-results.sarif
+
+  # Kubernetes Acceptance Drill (next.md P0-B): disposable kind cluster,
+  # all eight scenarios, structured evidence. Measured runtime: ~18-20 min
+  # wall on a 1 control-plane + 3 worker kind topology (run18, 2026-10-24);
+  # the 45-minute job budget and 35-minute drill timeout leave headroom for
+  # slower CI runners. Gated to push-to-main like the other long jobs.
+  k8s-drill:
+    name: Kubernetes Acceptance Drill (kind, 8 scenarios)
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
+        with:
+          version: 'v1.31.3'
+
+      - name: Install Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: '3.14.4'
+
+      - name: Create disposable kind cluster (1 control-plane + 3 workers)
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1
+        with:
+          cluster_name: anubis-drill-ci
+          config: scripts/k8s-drill/kind-ci.yaml
+
+      - name: Build the image under test
+        run: docker build -q -t anubiswatch:ci-drill .
+
+      - name: Load the image into kind
+        run: kind load docker-image anubiswatch:ci-drill --name anubis-drill-ci
+
+      - name: Run the acceptance drill (8 scenarios)
+        run: |
+          set -o pipefail
+          scripts/k8s-drill/k8s-drill.sh \
+            --kubeconfig "$HOME/.kube/config" \
+            --context kind-anubis-drill-ci \
+            --image anubiswatch:ci-drill \
+            --namespace anubiswatch-drill \
+            --output-dir "$RUNNER_TEMP/k8s-drill" \
+            2>&1 | tee /tmp/k8s-drill-output.log
+        timeout-minutes: 35
+
+      # results.json (structured per-scenario evidence with source/image
+      # identity) plus the raw drill log. The disposable drill CA and
+      # per-run credentials stay in the (ephemeral) state directory and are
+      # deliberately not uploaded.
+      - name: Upload drill evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: k8s-drill-results
+          path: |
+            ${{ runner.temp }}/k8s-drill/results.json
+            /tmp/k8s-drill-output.log
+          if-no-files-found: error

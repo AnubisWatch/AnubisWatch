@@ -1,0 +1,14 @@
+# Disposable kind cluster for the Kubernetes acceptance drill run in CI
+# (.github/workflows/ci.yml, job "k8s-drill").
+#
+# Three workers are required: the drill's ha-topology scenario verifies that
+# the three voters land on three distinct schedulable nodes, and the drill's
+# own preflight refuses to run against a cluster with fewer than three
+# schedulable workers.
+apiVersion: kind.x-k8s.io/v1alpha4
+kind: Cluster
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
+  - role: worker

@@ -5,6 +5,8 @@ image:
   repository: ghcr.io/anubiswatch/anubiswatch
   pullPolicy: IfNotPresent
   tag: ""
+  # Optional immutable registry reference, e.g. sha256:<64 lowercase hex digits>.
+  digest: ""
 
 imagePullSecrets: []
 nameOverride: ""
@@ -80,12 +82,33 @@ monitoring:
     enabled: false
     interval: 30s
     scrapeTimeout: 10s
+    # Existing Secret containing a workspace-scoped API/session token.
+    bearerTokenSecret:
+      name: ""
+      key: token
+  # Self-monitoring alerts (needs the Prometheus Operator and the
+  # ServiceMonitor above): instance down, scheduler stalled, replication
+  # drops, and no Raft leader in cluster mode.
+  prometheusRule:
+    enabled: false
+    # Extra labels, e.g. the release label your Prometheus selects rules by.
+    labels: {}
+    # Fire when souls are scheduled but no judgment completed for this long.
+    # Keep it above twice your longest check interval.
+    schedulerStaleSeconds: 900
 
 persistence:
   enabled: true
   storageClass: ""
   accessMode: ReadWriteOnce
   size: 10Gi
+
+# Cluster mode is opt-in and uses exactly three static voters. The referenced
+# Secret is managed outside Helm; each certificate must allow client/server TLS
+# and cover *.RELEASE-headless.NAMESPACE.svc.DOMAIN (using the actual fullname).
+cluster:
+  domain: cluster.local
+  raftTLSSecret: ""
 
 statefulSet:
   replicas: 3
@@ -100,6 +123,8 @@ config:
   server:
     host: 0.0.0.0
     port: 8080
+    # Protect monitor metadata; authenticated scrapes are scoped to the token workspace.
+    metricsAuth: true
     tls:
       enabled: false
       cert: ""
@@ -114,6 +139,21 @@ config:
     allowedOrigins:
       - "http://localhost:8080"
       - "http://127.0.0.1:8080"
+    # Public base URL used for links in emails (subscription confirm and
+    # unsubscribe, password reset). Required when config.mail.host is set.
+    publicURL: ""
+
+  # Outgoing SMTP for status page subscriptions and password reset emails.
+  # Off while host is empty. The password comes from secrets.mailPassword (or
+  # the mail-password key of secrets.existingSecret).
+  mail:
+    host: ""
+    port: 587
+    username: ""
+    from: ""
+    # starttls | implicit | none
+    tls: starttls
+    timeout: 30s
 
   dashboard:
     enabled: true
@@ -136,13 +176,22 @@ config:
     format: json
 
 secrets:
-  # Required. Set with --set secrets.adminPassword='...' or a values file.
+  # Name of a Secret you manage (kubectl, External Secrets, Sealed Secrets…)
+  # with the keys admin-password, plus encryption-key when
+  # config.storage.encryption.enabled and cluster-secret in cluster mode.
+  # When set, the chart creates no Secret and the values below are ignored,
+  # so no credential passes through Helm values or shell history. Pods do not
+  # restart on their own when that Secret changes.
+  existingSecret: ""
+  # Required unless existingSecret is set. Set with --set secrets.adminPassword='...' or a values file.
   # Must be at least 12 characters and contain at least 3 of:
   # uppercase, lowercase, digits, special characters. Placeholder/default
   # values such as admin, password, and CHANGE_ME are rejected.
   adminPassword: ""
   encryptionKey: ""
   clusterSecret: ""
+  # SMTP password for config.mail.username (key mail-password).
+  mailPassword: ""
 
 nodeSelector: {}
 

@@ -1,5 +1,5 @@
 {{- if .Values.config.necropolis.enabled }}
-{{- fail "config.necropolis.enabled is not supported by this production chart: ordinal bootstrap/join and Raft mTLS are not configured; deploy the supported single-node topology or provide a separately validated cluster manifest" }}
+{{- include "anubiswatch.clusterValidation" . }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -17,6 +17,12 @@ spec:
       {{- include "anubiswatch.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with omit .Values.podAnnotations "checksum/config" "checksum/secrets" }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       labels:
         {{- include "anubiswatch.selectorLabels" . | nindent 8 }}
     spec:
@@ -33,17 +39,16 @@ spec:
         - name: anubis
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: {{ include "anubiswatch.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command:
-            - /bin/anubis
+            - /bin/sh
+            - -ec
           args:
-            - serve
-            - --config
-            - /etc/anubis/anubis.yaml
-            {{- if .Values.config.necropolis.enabled }}
-            - --cluster
-            {{- end }}
+            - |
+              ordinal="${HOSTNAME##*-}"
+              case "$ordinal" in 0|1|2) ;; *) echo "unexpected voter ordinal" >&2; exit 1 ;; esac
+              exec /bin/anubis serve --cluster --config "$ANUBIS_CONFIG"
           ports:
             - name: http
               containerPort: {{ .Values.service.httpPort }}
@@ -85,10 +90,21 @@ spec:
               mountPath: /etc/anubis
               readOnly: true
             - name: data
-              mountPath: {{ .Values.config.storage.path }}
+              mountPath: {{ .Values.config.storage.path | quote }}
+            - name: raft-tls
+              mountPath: /etc/anubis/raft-tls
+              readOnly: true
+            - name: runtime
+              mountPath: /var/lib/anubis
+            - name: tmp
+              mountPath: /tmp
           env:
+            - name: ANUBIS_NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: ANUBIS_CONFIG
-              value: /etc/anubis/anubis.yaml
+              value: /etc/anubis/$(ANUBIS_NODE_ID).yaml
             - name: ANUBIS_DATA_DIR
               value: {{ .Values.config.storage.path | quote }}
             - name: ANUBIS_LOG_LEVEL
@@ -96,26 +112,30 @@ spec:
             - name: ANUBIS_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "anubiswatch.fullname" . }}-secrets
+                  name: {{ include "anubiswatch.secretName" . }}
                   key: admin-password
-            {{- if .Values.secrets.encryptionKey }}
+            {{- if include "anubiswatch.hasEncryptionKey" . }}
             - name: ANUBIS_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "anubiswatch.fullname" . }}-secrets
+                  name: {{ include "anubiswatch.secretName" . }}
                   key: encryption-key
             {{- end }}
-            {{- if .Values.secrets.clusterSecret }}
+            {{- if include "anubiswatch.hasClusterSecret" . }}
             - name: ANUBIS_CLUSTER_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "anubiswatch.fullname" . }}-secrets
+                  name: {{ include "anubiswatch.secretName" . }}
                   key: cluster-secret
             {{- end }}
-            - name: ANUBIS_NODE_ID
+            {{- if include "anubiswatch.hasMailPassword" . }}
+            - name: ANUBIS_MAIL_PASSWORD
               valueFrom:
-                fieldRef:
-                  fieldPath: metadata.name
+                secretKeyRef:
+                  name: {{ include "anubiswatch.secretName" . }}
+                  key: mail-password
+                  optional: {{ not .Values.secrets.mailPassword }}
+            {{- end }}
             - name: ANUBIS_POD_IP
               valueFrom:
                 fieldRef:
@@ -124,14 +144,43 @@ spec:
         - name: config
           configMap:
             name: {{ include "anubiswatch.configName" . }}
+            items:
+              {{- range $ordinal := until 3 }}
+              - key: anubis-{{ $ordinal }}.yaml
+                path: {{ include "anubiswatch.fullname" $ }}-{{ $ordinal }}.yaml
+              {{- end }}
+        - name: raft-tls
+          secret:
+            secretName: {{ .Values.cluster.raftTLSSecret | quote }}
+            defaultMode: 0440
+            items:
+              - key: tls.crt
+                path: tls.crt
+              - key: tls.key
+                path: tls.key
+              - key: ca.crt
+                path: ca.crt
+        - name: runtime
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- if .Values.affinity }}
+        {{- toYaml .Values.affinity | nindent 8 }}
+        {{- else }}
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  {{- include "anubiswatch.selectorLabels" . | nindent 18 }}
+        {{- end }}
       {{- with .Values.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}

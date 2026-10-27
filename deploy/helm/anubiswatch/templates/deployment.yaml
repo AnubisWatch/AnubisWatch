@@ -20,10 +20,12 @@ spec:
       {{- include "anubiswatch.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
       annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with omit .Values.podAnnotations "checksum/config" "checksum/secrets" }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
       labels:
         {{- include "anubiswatch.selectorLabels" . | nindent 8 }}
     spec:
@@ -40,7 +42,7 @@ spec:
         - name: {{ .Chart.Name }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: {{ include "anubiswatch.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - serve
@@ -73,21 +75,29 @@ spec:
             - name: ANUBIS_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "anubiswatch.fullname" . }}-secrets
+                  name: {{ include "anubiswatch.secretName" . }}
                   key: admin-password
-            {{- if .Values.secrets.encryptionKey }}
+            {{- if include "anubiswatch.hasEncryptionKey" . }}
             - name: ANUBIS_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "anubiswatch.fullname" . }}-secrets
+                  name: {{ include "anubiswatch.secretName" . }}
                   key: encryption-key
             {{- end }}
-            {{- if .Values.secrets.clusterSecret }}
+            {{- if include "anubiswatch.hasClusterSecret" . }}
             - name: ANUBIS_CLUSTER_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "anubiswatch.fullname" . }}-secrets
+                  name: {{ include "anubiswatch.secretName" . }}
                   key: cluster-secret
+            {{- end }}
+            {{- if include "anubiswatch.hasMailPassword" . }}
+            - name: ANUBIS_MAIL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "anubiswatch.secretName" . }}
+                  key: mail-password
+                  optional: {{ not .Values.secrets.mailPassword }}
             {{- end }}
           volumeMounts:
             - name: config

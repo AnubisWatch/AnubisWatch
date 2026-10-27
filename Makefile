@@ -10,7 +10,7 @@ LDFLAGS   := -s -w \
   -X main.Commit=$(COMMIT) \
   -X main.BuildDate=$(DATE)
 
-.PHONY: all build clean test test-coverage test-short benchmark lint dashboard dashboard-coverage run docker preflight-production smoke-production capture-production-evidence help
+.PHONY: all build clean test test-coverage test-short benchmark lint dashboard dashboard-coverage dashboard-api-types dashboard-check-api run docker preflight-production smoke-production capture-production-evidence help
 
 all: dashboard build ## Build dashboard and binary
 
@@ -64,8 +64,14 @@ vet: ## Run go vet
 # Dashboard
 dashboard: ## Build React dashboard
 	@echo "⚖️  Building dashboard..."
-	cd web && pnpm install --frozen-lockfile && pnpm run build:embed
+	cd web && pnpm install --frozen-lockfile && pnpm run check:api && pnpm run build:embed
 	@echo "✓ Dashboard built"
+
+dashboard-api-types: ## Regenerate web/src/api/schema.generated.ts from the OpenAPI spec
+	cd web && pnpm run gen:api
+
+dashboard-check-api: ## Fail if the dashboard API types are stale against the OpenAPI spec
+	cd web && pnpm run check:api
 
 dashboard-dev: ## Run dashboard dev server
 	cd web && pnpm run dev
