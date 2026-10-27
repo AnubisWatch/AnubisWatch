@@ -9,12 +9,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"mime"
 	"net"
 	"net/http"
-	"net/smtp"
 	"net/url"
 	"strconv"
 	"strings"
@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
+	"github.com/AnubisWatch/anubiswatch/internal/mail"
 	"github.com/AnubisWatch/anubiswatch/internal/probe"
 )
 
@@ -33,10 +34,36 @@ var sharedHTTPClient struct {
 	c    *http.Client
 }
 
+// alertProxy is the explicit alerting.proxy URL, or nil. It is read when the
+// shared client is built, so ConfigureHTTPProxy must run before the first send.
+var alertProxy *url.URL
+
+// ConfigureHTTPProxy sets alerting.proxy for HTTP alert channels; "" means
+// direct connections through the SSRF-checked dialer. Call it at startup,
+// before any alert is sent.
+func ConfigureHTTPProxy(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		alertProxy = nil
+		return nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return fmt.Errorf("alerting.proxy must be an http:// or https:// URL")
+	}
+	alertProxy = u
+	return nil
+}
+
 func getHTTPClient() *http.Client {
 	sharedHTTPClient.once.Do(func() {
+		transport := newDispatcherTransport()
+		if alertProxy != nil {
+			transport = newProxiedDispatcherTransport(alertProxy)
+		}
 		sharedHTTPClient.c = &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout:   30 * time.Second,
+			Transport: transport,
 			// Disable redirects to prevent SSRF via HTTP redirects
 			CheckRedirect: func(req *http.Request, via []*http.Request) error {
 				return http.ErrUseLastResponse
@@ -44,6 +71,46 @@ func getHTTPClient() *http.Client {
 		}
 	})
 	return sharedHTTPClient.c
+}
+
+// newDispatcherTransport builds the transport every HTTP alert channel uses.
+// Dispatchers validate a channel URL when it is saved and again before a
+// send, but that resolution and the connection's own resolution were two
+// separate DNS lookups: a hostname that answered with a public address for
+// the check and a private one for the dial (DNS rebinding) reached internal
+// services. Dialing through probe.SafeDialContext validates the addresses
+// the connection actually uses and pins it to one of them, under the same
+// security.allow_private_targets / allowed_networks policy as probes.
+//
+// Proxy is deliberately nil, matching the probe HTTP checker: with an
+// environment proxy the dial goes to the proxy, which resolves and connects
+// to the alert target itself, bypassing the policy entirely.
+func newDispatcherTransport() *http.Transport {
+	return &http.Transport{
+		Proxy: nil,
+		DialContext: probe.SafeDialContext(&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}),
+		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          20,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
+// newProxiedDispatcherTransport sends every HTTP alert through the operator's
+// explicit alerting.proxy. The proxy is usually on a private network, so the
+// connection to it is a plain dial outside the SSRF policy; dispatchers still
+// run probe.ValidateTarget on the target before each send, but the proxy
+// resolves the name itself, so DNS-rebinding protection is the proxy's job.
+func newProxiedDispatcherTransport(proxy *url.URL) *http.Transport {
+	t := newDispatcherTransport()
+	t.Proxy = http.ProxyURL(proxy)
+	t.DialContext = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	return t
 }
 
 // redactURL renders a request URL without the parts that can carry a credential:
@@ -435,87 +502,29 @@ func buildEmailMessage(from string, to []string, subject, htmlBody string, now t
 	return []byte(b.String())
 }
 
-// sendSMTP delivers msg honouring ctx for dial and I/O.
+// sendSMTP delivers msg honouring ctx for dial and I/O. The transport (SSRF-safe
+// dial, TLS modes, guarded AUTH PLAIN) is shared with the server-level relay
+// in internal/mail.
 func sendSMTP(ctx context.Context, host string, port int, tlsMode, username, password, from string, to []string, msg []byte) error {
-	if host == "" {
-		return fmt.Errorf("smtp_host is empty")
-	}
-	tlsMode = strings.ToLower(tlsMode)
-	if tlsMode == "" || tlsMode == "auto" {
-		tlsMode = "auto"
-		if port == 465 {
-			tlsMode = "implicit"
-		}
-	}
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	tlsConfig := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
-
-	dialer := &net.Dialer{}
-	var conn net.Conn
-	var err error
-	if tlsMode == "implicit" {
-		conn, err = (&tls.Dialer{NetDialer: dialer, Config: tlsConfig}).DialContext(ctx, "tcp", addr)
-	} else {
-		conn, err = dialer.DialContext(ctx, "tcp", addr)
-	}
-	if err != nil {
-		return err
-	}
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
-	}
-	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stop()
-
-	client, err := smtp.NewClient(conn, host)
-	if err != nil {
-		conn.Close()
-		return err
-	}
-	defer client.Close()
-
-	if tlsMode == "auto" || tlsMode == "starttls" {
-		if ok, _ := client.Extension("STARTTLS"); ok {
-			if err := client.StartTLS(tlsConfig); err != nil {
-				return fmt.Errorf("STARTTLS: %w", err)
-			}
-		} else if tlsMode == "starttls" {
-			return fmt.Errorf("server %s does not offer STARTTLS", host)
-		}
-	}
-	if username != "" {
-		if ok, _ := client.Extension("AUTH"); !ok {
-			return fmt.Errorf("server %s does not support AUTH but credentials are configured", host)
-		}
-		if err := client.Auth(&plainAuth{username: username, password: password, host: host}); err != nil {
-			return err
-		}
-	}
-	if err := client.Mail(from); err != nil {
-		return err
-	}
-	for _, rcpt := range to {
-		if err := client.Rcpt(rcpt); err != nil {
-			return err
-		}
-	}
-	w, err := client.Data()
-	if err != nil {
-		return err
-	}
-	if _, err := w.Write(msg); err != nil {
-		return err
-	}
-	if err := w.Close(); err != nil {
-		return err
-	}
-	return client.Quit()
+	return mail.SendRaw(ctx, mail.Server{Host: host, Port: port, TLS: tlsMode, Username: username, Password: password}, from, to, msg)
 }
 
 // Validate validates email configuration
+//
+// A literal smtp_host IP is checked against the SSRF policy here so a blocked
+// address is rejected when the channel is saved. A host name is not resolved
+// here (saving a channel must not depend on DNS); it is enforced when the
+// send dials it.
 func (d *EmailDispatcher) Validate(config map[string]any) error {
-	if _, ok := config["smtp_host"]; !ok {
+	host, _ := config["smtp_host"].(string)
+	host = strings.TrimSpace(host)
+	if host == "" {
 		return fmt.Errorf("smtp_host is required")
+	}
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+		if err := probe.ValidateAddress(ip.String()); err != nil {
+			return fmt.Errorf("smtp_host blocked: %w", err)
+		}
 	}
 	if _, ok := config["to"]; !ok {
 		return fmt.Errorf("to is required")
@@ -547,13 +556,13 @@ func (d *EmailDispatcher) buildEmailBody(event *core.AlertEvent) string {
 <p><strong>Time:</strong> %s</p>
 <p><strong>Message:</strong> %s</p>
 <h3>Details:</h3>
-<ul>`, statusColor, event.Status, event.SoulName, event.Status, event.Timestamp.Format(time.RFC3339), event.Message)
+<ul>`, statusColor, event.Status, html.EscapeString(event.SoulName), event.Status, event.Timestamp.Format(time.RFC3339), html.EscapeString(event.Message))
 
 	for key, value := range event.Details {
 		b.WriteString("<li><strong>")
-		b.WriteString(key)
+		b.WriteString(html.EscapeString(key))
 		b.WriteString(":</strong> ")
-		b.WriteString(value)
+		b.WriteString(html.EscapeString(value))
 		b.WriteString("</li>")
 	}
 
@@ -564,49 +573,6 @@ func (d *EmailDispatcher) buildEmailBody(event *core.AlertEvent) string {
 </html>`)
 
 	return b.String()
-}
-
-// Simple auth for SMTP
-type plainAuth struct {
-	identity string
-	username string
-	password string
-	host     string
-}
-
-// isLocalSMTPHost mirrors net/smtp's isLocalhost: the standard library allows PLAIN
-// credentials on a local relay without TLS.
-func isLocalSMTPHost(name string) bool {
-	switch name {
-	case "localhost", "127.0.0.1", "::1":
-		return true
-	}
-	return false
-}
-
-// Start answers the SMTP AUTH PLAIN challenge. net/smtp's PlainAuth refuses to send
-// credentials over a connection that is neither TLS-protected nor local, and
-// refuses a server presenting a name other than the configured host. Without those
-// checks EmailDispatcher.Send handed the operator's SMTP username and password to
-// smtp.SendMail, which transmits them in the clear whenever the server advertises
-// AUTH but not STARTTLS.
-//
-// A nil ServerInfo means the caller did not describe the connection; net/smtp always
-// supplies one, so the checks apply on every real send.
-func (a *plainAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
-	if server != nil {
-		if !server.TLS && !isLocalSMTPHost(server.Name) {
-			return "", nil, fmt.Errorf("refusing to send SMTP credentials over an unencrypted connection to %q", server.Name)
-		}
-		if server.Name != a.host {
-			return "", nil, fmt.Errorf("refusing to send SMTP credentials to %q, which is not the configured host %q", server.Name, a.host)
-		}
-	}
-	return "PLAIN", []byte(a.identity + "\x00" + a.username + "\x00" + a.password), nil
-}
-
-func (a *plainAuth) Next(fromServer []byte, more bool) ([]byte, error) {
-	return nil, nil
 }
 
 // PagerDutyDispatcher sends alerts to PagerDuty
@@ -624,7 +590,9 @@ func (d *PagerDutyDispatcher) Send(ctx context.Context, event *core.AlertEvent, 
 	// Build PagerDuty event
 	severity := d.mapSeverity(event.Severity)
 	action := "trigger"
-	if event.Status == core.SoulAlive {
+	// A "flapping started" notice is a problem even if the soul happens to
+	// be alive at that instant; it must not resolve the open incident.
+	if event.Status == core.SoulAlive && event.Kind != core.AlertKindFlappingStarted {
 		action = "resolve"
 	}
 
@@ -750,8 +718,8 @@ func (d *OpsGenieDispatcher) Send(ctx context.Context, event *core.AlertEvent, c
 		Tags:        []string{string(event.Status), string(event.Severity)},
 	}
 
-	// Close alert on recovery
-	if event.Status == core.SoulAlive {
+	// Close alert on recovery (a "flapping started" notice is not one).
+	if event.Status == core.SoulAlive && event.Kind != core.AlertKindFlappingStarted {
 		return d.closeAlert(ctx, host, apiKey, payload.Alias)
 	}
 
@@ -918,18 +886,18 @@ func (d *TelegramDispatcher) Send(ctx context.Context, event *core.AlertEvent, c
 	message := fmt.Sprintf("%s *%s Alert*\n\n*Soul:* %s\n*Status:* %s\n*Severity:* %s\n*Time:* %s\n\n*Message:*\n%s",
 		emoji,
 		event.Status,
-		event.SoulName,
+		escapeTelegramMarkdown(event.SoulName),
 		event.Status,
 		event.Severity,
 		event.Timestamp.Format(time.RFC3339),
-		event.Message)
+		escapeTelegramMarkdown(event.Message))
 
 	// Add details
 	if len(event.Details) > 0 {
 		var detailsBuilder strings.Builder
 		detailsBuilder.WriteString("\n\n*Details:*\n")
 		for key, value := range event.Details {
-			fmt.Fprintf(&detailsBuilder, "• *%s:* %s\n", key, value)
+			fmt.Fprintf(&detailsBuilder, "• *%s:* %s\n", escapeTelegramMarkdown(key), escapeTelegramMarkdown(value))
 		}
 		message += detailsBuilder.String()
 	}
@@ -969,6 +937,17 @@ func (d *TelegramDispatcher) Send(ctx context.Context, event *core.AlertEvent, c
 	}
 
 	return nil
+}
+
+// telegramMarkdownEscaper backslash-escapes the entity characters of Telegram's
+// legacy Markdown parse mode.
+var telegramMarkdownEscaper = strings.NewReplacer("\\", "\\\\", "_", "\\_", "*", "\\*", "`", "\\`", "[", "\\[")
+
+// escapeTelegramMarkdown makes user-controlled text literal under
+// parse_mode=Markdown. An unbalanced entity character (a soul named
+// "billing_api") otherwise makes Telegram reject the whole message.
+func escapeTelegramMarkdown(s string) string {
+	return telegramMarkdownEscaper.Replace(s)
 }
 
 // Validate validates Telegram configuration

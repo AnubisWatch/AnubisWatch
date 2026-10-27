@@ -99,6 +99,7 @@ func TestCheckerRegistry(t *testing.T) {
 		core.CheckGRPC,
 		core.CheckWebSocket,
 		core.CheckTLS,
+		core.CheckHeartbeat,
 	}
 
 	for _, checkType := range expectedCheckers {
@@ -1902,59 +1903,12 @@ func TestEngine_GetSoulStatus_ExistingSoul(t *testing.T) {
 	}
 }
 
-// Test judgeSoul with circuit breaker open (covers early return skip path)
-func TestEngine_judgeSoul_CircuitBreakerOpen(t *testing.T) {
-	engine := newTestEngine(t, EngineOptions{
-		Registry: NewCheckerRegistry(),
-		NodeID:   "test-node",
-		Region:   "test-region",
-		Store:    &mockProbeStorage{},
-		Alerter:  &mockProbeAlerter{},
-		Logger:   newTestProbeLogger(),
-		Config: EngineConfig{
-			CircuitBreaker: CircuitBreakerConfig{
-				Enabled:          true,
-				FailureThreshold: 2,
-				SuccessThreshold: 2,
-				Timeout:          10 * time.Second, // Long timeout so circuit stays open
-			},
-		},
-	})
-
-	soul := &core.Soul{
-		ID:     "cb-open-soul",
-		Name:   "CB Open",
-		Type:   core.CheckHTTP,
-		Target: "https://example.com",
-		HTTP:   &core.HTTPConfig{Method: "GET", ValidStatus: []int{200}},
-	}
-
-	// Record enough failures to open circuit
-	for i := 0; i < 2; i++ {
-		engine.recordFailure(soul.ID)
-	}
-
-	// Verify circuit is open
-	cb := engine.getCircuitBreaker(soul.ID)
-	cb.mu.RLock()
-	state := cb.state
-	cb.mu.RUnlock()
-	if state != "open" {
-		t.Fatalf("Expected circuit open, got %s", state)
-	}
-
-	runner := &soulRunner{soul: soul}
-	ctx := context.Background()
-
-	// Should skip check due to open circuit
-	engine.judgeSoul(ctx, runner)
-
-	// No stats should have been incremented (check was skipped)
-	stats := engine.Stats()
-	if stats["total_checks"].(int64) != 0 {
-		t.Errorf("Expected 0 total checks (skipped), got %d", stats["total_checks"])
-	}
-}
+// TestEngine_judgeSoul_CircuitBreakerOpen used to assert that an open breaker
+// skipped the check (total_checks stayed 0). That skip hid downtime: no
+// judgment was recorded, so history had gaps and uptime under-weighted the
+// outage. The breaker no longer gates scheduled checks; the open-breaker
+// cases now live in TestEngineOpenCircuitStillJudges (engine_schedule_test.go),
+// which uses a local fake checker instead of reaching example.com.
 
 // Test judgeSoul with context already cancelled (covers ctx.Done in semaphore select)
 func TestEngine_judgeSoul_ContextCancelled(t *testing.T) {

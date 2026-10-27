@@ -214,7 +214,8 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 		return judgment, nil
 	}
 
-	if resp.Header.Get("Upgrade") != "websocket" {
+	// RFC 6455 §4.2.2: the Upgrade value is compared ASCII case-insensitively.
+	if !strings.EqualFold(strings.TrimSpace(resp.Header.Get("Upgrade")), "websocket") {
 		judgment.Status = core.SoulDead
 		judgment.Message = "Server did not accept WebSocket upgrade"
 		return judgment, nil

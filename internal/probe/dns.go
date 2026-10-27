@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,6 +37,168 @@ func normalizeNameserverAddress(nameserver string) (string, error) {
 		return "", fmt.Errorf("invalid nameserver address %q", nameserver)
 	}
 	return net.JoinHostPort(bare, "53"), nil
+}
+
+// dnsNamesEqual compares two DNS names: case-insensitive, ignoring the
+// trailing root dot that resolvers commonly append.
+func dnsNamesEqual(a, b string) bool {
+	return strings.EqualFold(strings.TrimSuffix(a, "."), strings.TrimSuffix(b, "."))
+}
+
+// dnsMXValue is an MX record value split into its parts.
+type dnsMXValue struct {
+	preference    int
+	hasPreference bool
+	host          string
+}
+
+// parseDNSMX splits an MX record value ("<preference> <host>") into its parts.
+// A bare host name yields a value without a preference.
+func parseDNSMX(value string) dnsMXValue {
+	fields := strings.Fields(value)
+	if len(fields) < 2 {
+		return dnsMXValue{host: strings.TrimSpace(value)}
+	}
+	parsed := dnsMXValue{host: fields[len(fields)-1]}
+	if preference, err := strconv.Atoi(fields[0]); err == nil {
+		parsed.preference = preference
+		parsed.hasPreference = true
+	}
+	return parsed
+}
+
+// dnsSRVValue is an SRV record value split into its parts. The has* flags
+// record which fields were actually present in the value: an SRV value that
+// omits priority or weight must not be treated as carrying priority 0 or
+// weight 0, otherwise a short "host:port" expectation is compared against the
+// resolved record's priority and weight and never matches.
+type dnsSRVValue struct {
+	priority    int
+	weight      int
+	port        int
+	hasPriority bool
+	hasWeight   bool
+	hasPort     bool
+	// hasMeta reports whether the value carried complete metadata, i.e.
+	// both priority and weight were parsed.
+	hasMeta bool
+	target  string
+}
+
+// parseDNSSRV splits an SRV record value into its parts. Two renderings are
+// accepted: "<target>:<port> (priority=N, weight=M)" (as produced by resolve)
+// and the dig/host presentation form "<priority> <weight> <port> <target>".
+// A bare target name yields a value without metadata.
+func parseDNSSRV(value string) dnsSRVValue {
+	trimmed := strings.TrimSpace(value)
+	fields := strings.Fields(trimmed)
+	if len(fields) == 0 {
+		return dnsSRVValue{}
+	}
+	parsed := dnsSRVValue{target: trimmed}
+	if idx := strings.IndexByte(fields[0], ':'); idx > 0 {
+		parsed.target = fields[0][:idx]
+		if port, err := strconv.Atoi(fields[0][idx+1:]); err == nil {
+			parsed.port = port
+			parsed.hasPort = true
+		}
+		if priority, ok := dnsExtractInt(trimmed, "priority="); ok {
+			parsed.priority = priority
+			parsed.hasPriority = true
+		}
+		if weight, ok := dnsExtractInt(trimmed, "weight="); ok {
+			parsed.weight = weight
+			parsed.hasWeight = true
+		}
+		parsed.hasMeta = parsed.hasPriority && parsed.hasWeight
+		return parsed
+	}
+	if len(fields) >= 4 {
+		if priority, err := strconv.Atoi(fields[0]); err == nil {
+			parsed.priority = priority
+			parsed.hasPriority = true
+		}
+		if weight, err := strconv.Atoi(fields[1]); err == nil {
+			parsed.weight = weight
+			parsed.hasWeight = true
+		}
+		if port, err := strconv.Atoi(fields[2]); err == nil {
+			parsed.port = port
+			parsed.hasPort = true
+		}
+		parsed.target = fields[len(fields)-1]
+		parsed.hasMeta = parsed.hasPriority && parsed.hasWeight
+	}
+	return parsed
+}
+
+// dnsExtractInt reads the integer that follows marker in s.
+func dnsExtractInt(s, marker string) (int, bool) {
+	idx := strings.Index(s, marker)
+	if idx < 0 {
+		return 0, false
+	}
+	rest := s[idx+len(marker):]
+	end := 0
+	for end < len(rest) && rest[end] >= '0' && rest[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return 0, false
+	}
+	value, err := strconv.Atoi(rest[:end])
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
+
+// dnsRecordMatches reports whether a resolved record value satisfies an
+// expectation. Record types whose value is a domain name are compared with
+// DNS-name equality (case-insensitive, trailing root dot ignored); all other
+// record types keep an exact comparison. For MX and SRV only the domain-name
+// part of the value gets name equality — the preference, port, priority and
+// weight are not names and stay exact.
+func dnsRecordMatches(recordType, actual, expected string) bool {
+	switch recordType {
+	case "CNAME", "NS", "PTR":
+		return dnsNamesEqual(actual, expected)
+	case "MX":
+		if actual == expected {
+			return true
+		}
+		got, want := parseDNSMX(actual), parseDNSMX(expected)
+		if !dnsNamesEqual(got.host, want.host) {
+			return false
+		}
+		if got.hasPreference && want.hasPreference {
+			return got.preference == want.preference
+		}
+		return true
+	case "SRV":
+		if actual == expected {
+			return true
+		}
+		got, want := parseDNSSRV(actual), parseDNSSRV(expected)
+		if !dnsNamesEqual(got.target, want.target) {
+			return false
+		}
+		// Only the metadata fields present on both sides constrain the
+		// match: a "host:port" expectation carries no priority or weight,
+		// so it must not be compared against the resolved record's values.
+		if got.hasPriority && want.hasPriority && got.priority != want.priority {
+			return false
+		}
+		if got.hasWeight && want.hasWeight && got.weight != want.weight {
+			return false
+		}
+		if got.hasPort && want.hasPort && got.port != want.port {
+			return false
+		}
+		return true
+	default:
+		return actual == expected
+	}
 }
 
 // NewDNSChecker creates a new DNS checker
@@ -181,7 +344,7 @@ func (c *DNSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 		for _, exp := range cfg.Expected {
 			found := false
 			for _, rec := range records {
-				if rec == exp {
+				if dnsRecordMatches(recordType, rec, exp) {
 					found = true
 					break
 				}
@@ -255,7 +418,7 @@ func (c *DNSChecker) judgePropagation(ctx context.Context, soul *core.Soul, cfg 
 			for _, exp := range cfg.Expected {
 				found := false
 				for _, rec := range records {
-					if rec == exp {
+					if dnsRecordMatches(recordType, rec, exp) {
 						found = true
 						break
 					}

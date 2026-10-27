@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/textproto"
@@ -18,6 +19,62 @@ import (
 
 func hasAuthCredentials(auth *core.AuthCreds) bool {
 	return auth != nil && (strings.TrimSpace(auth.Username) != "" || strings.TrimSpace(auth.Password) != "")
+}
+
+func quoteIMAPString(value string) (string, error) {
+	if strings.ContainsAny(value, "\x00\r\n") {
+		return "", fmt.Errorf("IMAP quoted strings cannot contain NUL, CR, or LF")
+	}
+
+	var quoted strings.Builder
+	quoted.Grow(len(value) + 2)
+	quoted.WriteByte('"')
+	for i := 0; i < len(value); i++ {
+		if value[i] == '"' || value[i] == '\\' {
+			quoted.WriteByte('\\')
+		}
+		quoted.WriteByte(value[i])
+	}
+	quoted.WriteByte('"')
+	return quoted.String(), nil
+}
+
+// smtpCapabilityValues extracts the values advertised for an SMTP capability.
+//
+// Servers advertise the AUTH extension in two shapes: the RFC form
+// "250-AUTH LOGIN PLAIN" and the Exim/sendmail form "250-AUTH=PLAIN", where
+// the mechanism is attached to the keyword with '='. Both must resolve to the
+// same capability keyword so AUTH detection does not depend on the server
+// implementation. The keyword itself is still matched exactly (case
+// insensitively), so a lookalike such as "250 XSTARTTLS" is not accepted.
+func smtpCapabilityValues(capabilities []string, name string) ([]string, bool) {
+	var values []string
+	found := false
+	for _, response := range capabilities {
+		if len(response) < 4 || !strings.HasPrefix(response, "250") {
+			continue
+		}
+		fields := strings.Fields(response[4:])
+		if len(fields) == 0 {
+			continue
+		}
+		keyword := fields[0]
+		params := fields[1:]
+		if idx := strings.IndexByte(keyword, '='); idx >= 0 {
+			params = append([]string{keyword[idx+1:]}, params...)
+			keyword = keyword[:idx]
+		}
+		if !strings.EqualFold(keyword, name) {
+			continue
+		}
+		found = true
+		for _, param := range params {
+			if param != "" {
+				values = append(values, param)
+			}
+		}
+	}
+	return values, found
 }
 
 // SMTPChecker implements SMTP health checks
@@ -93,8 +150,10 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		return failJudgment(soul, fmt.Errorf("SMTP deadline setup failed: %w", deadlineErr)), nil
 	}
 	defer stopDeadline()
+	// Bound the total peer data read: textproto/ReadString have no line or
+	// reply-size limit, so a hostile server could stream unbounded data.
 
-	reader := bufio.NewReader(conn)
+	reader := bufio.NewReader(io.LimitReader(conn, maxReadSize))
 	textReader := textproto.NewReader(reader)
 
 	judgment := &core.Judgment{
@@ -178,15 +237,7 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 
 	// STARTTLS if requested
 	if cfg.StartTLS {
-		hasSTARTTLS := false
-		for _, capability := range capabilities {
-			if strings.Contains(capability, "STARTTLS") {
-				hasSTARTTLS = true
-				break
-			}
-		}
-
-		if !hasSTARTTLS {
+		if _, hasSTARTTLS := smtpCapabilityValues(capabilities, "STARTTLS"); !hasSTARTTLS {
 			return failJudgment(soul, fmt.Errorf("STARTTLS requested but not advertised")), nil
 		}
 
@@ -227,7 +278,7 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		}
 
 		// Re-create reader/writer
-		reader = bufio.NewReader(conn)
+		reader = bufio.NewReader(io.LimitReader(conn, maxReadSize))
 		textReader = textproto.NewReader(reader)
 
 		// Send EHLO again over TLS and use only capabilities advertised on the
@@ -252,19 +303,15 @@ func (c *SMTPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 
 	// AUTH if credentials provided
 	if cfg.Auth != nil && cfg.Auth.Username != "" {
-		// Check for AUTH capability
-		hasAuth := false
+		authMechanisms, hasAuth := smtpCapabilityValues(capabilities, "AUTH")
 		supportsLogin := false
 		supportsPlain := false
-		for _, capability := range capabilities {
-			if strings.Contains(capability, "AUTH") {
-				hasAuth = true
-				if strings.Contains(capability, "LOGIN") {
-					supportsLogin = true
-				}
-				if strings.Contains(capability, "PLAIN") {
-					supportsPlain = true
-				}
+		for _, mechanism := range authMechanisms {
+			if strings.EqualFold(mechanism, "LOGIN") {
+				supportsLogin = true
+			}
+			if strings.EqualFold(mechanism, "PLAIN") {
+				supportsPlain = true
 			}
 		}
 
@@ -375,6 +422,14 @@ func (c *IMAPChecker) Validate(soul *core.Soul) error {
 	if soul.IMAP != nil && hasAuthCredentials(soul.IMAP.Auth) && !soul.IMAP.TLS {
 		return configError("imap.auth", "credentials require TLS")
 	}
+	if soul.IMAP != nil && soul.IMAP.Auth != nil {
+		if _, err := quoteIMAPString(soul.IMAP.Auth.Username); err != nil {
+			return configError("imap.auth.username", err.Error())
+		}
+		if _, err := quoteIMAPString(soul.IMAP.Auth.Password); err != nil {
+			return configError("imap.auth.password", err.Error())
+		}
+	}
 
 	// Security warning for disabled TLS verification
 	if soul.IMAP != nil && soul.IMAP.InsecureSkipVerify {
@@ -394,6 +449,18 @@ func (c *IMAPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	}
 	if hasAuthCredentials(cfg.Auth) && !cfg.TLS {
 		return failJudgment(soul, fmt.Errorf("IMAP credentials require TLS")), nil
+	}
+	quotedUsername, quotedPassword := "", ""
+	if cfg.Auth != nil && cfg.Auth.Username != "" {
+		var quoteErr error
+		quotedUsername, quoteErr = quoteIMAPString(cfg.Auth.Username)
+		if quoteErr != nil {
+			return failJudgment(soul, fmt.Errorf("invalid IMAP username: %w", quoteErr)), nil
+		}
+		quotedPassword, quoteErr = quoteIMAPString(cfg.Auth.Password)
+		if quoteErr != nil {
+			return failJudgment(soul, fmt.Errorf("invalid IMAP password: %w", quoteErr)), nil
+		}
 	}
 
 	timeout := soul.Timeout.Duration
@@ -445,7 +512,7 @@ func (c *IMAPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	}
 	defer stopDeadline()
 
-	reader := bufio.NewReader(conn)
+	reader := bufio.NewReader(io.LimitReader(conn, maxReadSize))
 
 	judgment := &core.Judgment{
 		ID:         core.GenerateID(),
@@ -490,8 +557,7 @@ func (c *IMAPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 
 	// LOGIN if credentials provided
 	if cfg.Auth != nil && cfg.Auth.Username != "" {
-		fmt.Fprintf(conn, "A002 LOGIN \"%s\" \"%s\"\r\n",
-			cfg.Auth.Username, cfg.Auth.Password)
+		fmt.Fprintf(conn, "A002 LOGIN %s %s\r\n", quotedUsername, quotedPassword)
 
 		for {
 			line, err = reader.ReadString('\n')

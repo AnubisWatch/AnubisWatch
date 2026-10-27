@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -41,16 +42,21 @@ func (c *TLSChecker) Validate(soul *core.Soul) error {
 		return configError("target", "target host:port is required")
 	}
 
-	// Strip scheme if present (e.g., "https://example.com:443" -> "example.com:443")
+	// Normalize URL-shaped targets to the TCP endpoint used for the handshake.
+	// Paths, queries, and fragments are HTTP concerns and must not become part
+	// of the port passed to the dialer.
 	target := soul.Target
-	if strings.HasPrefix(target, "https://") {
-		target = strings.TrimPrefix(target, "https://")
-	} else if strings.HasPrefix(target, "http://") {
-		target = strings.TrimPrefix(target, "http://")
-	}
-
-	// Ensure port is specified
-	if !strings.Contains(target, ":") {
+	if strings.HasPrefix(target, "https://") || strings.HasPrefix(target, "http://") {
+		parsed, err := url.Parse(target)
+		if err != nil || parsed.Hostname() == "" {
+			return configError("target", "target must be a valid HTTP(S) URL or host:port")
+		}
+		port := parsed.Port()
+		if port == "" {
+			port = "443"
+		}
+		target = net.JoinHostPort(parsed.Hostname(), port)
+	} else if !strings.Contains(target, ":") {
 		target += ":443"
 	}
 

@@ -43,7 +43,9 @@ type Executor struct {
 
 	// saveRun persists a finished run; nil means e.db.SaveJourneyRun. Cluster
 	// mode replaces it so runs replicate to every node.
-	saveRun func(ctx context.Context, run *core.JourneyRun) error
+	saveRun                 func(ctx context.Context, run *core.JourneyRun) error
+	saveRunOnce             func(ctx context.Context, run *core.JourneyRun) error
+	allowInsecureSkipVerify bool
 }
 
 // SetRunSaver replaces how finished runs are persisted (default: the local
@@ -51,6 +53,23 @@ type Executor struct {
 func (e *Executor) SetRunSaver(fn func(ctx context.Context, run *core.JourneyRun) error) {
 	e.mu.Lock()
 	e.saveRun = fn
+	e.mu.Unlock()
+}
+
+// SetRunOnceSaver overrides persistence for manual runs only. Clustered manual
+// calls wait for consensus, while scheduled runs can retain their batch saver.
+// A nil override falls back to SetRunSaver or the local database.
+func (e *Executor) SetRunOnceSaver(fn func(ctx context.Context, run *core.JourneyRun) error) {
+	e.mu.Lock()
+	e.saveRunOnce = fn
+	e.mu.Unlock()
+}
+
+// SetAllowInsecureSkipVerify sets the process TLS override for journey checks.
+// The secure default matches the probe engine's process policy.
+func (e *Executor) SetAllowInsecureSkipVerify(allow bool) {
+	e.mu.Lock()
+	e.allowInsecureSkipVerify = allow
 	e.mu.Unlock()
 }
 
@@ -229,7 +248,10 @@ func (e *Executor) RunOnce(ctx context.Context, journey *core.JourneyConfig) (*c
 		return nil, fmt.Errorf("journey %s has no steps", journey.ID)
 	}
 
-	run := e.executeJourneyRun(ctx, journey, false)
+	run, err := e.executeJourneyRunResult(ctx, journey, false)
+	if err != nil {
+		return run, err
+	}
 	if run == nil {
 		return nil, fmt.Errorf("journey %s execution skipped", journey.ID)
 	}
@@ -248,6 +270,14 @@ func (e *Executor) executeJourney(ctx context.Context, journey *core.JourneyConf
 }
 
 func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyConfig, allowDedupSkip bool) *core.JourneyRun {
+	run, _ := e.executeJourneyRunResult(ctx, journey, allowDedupSkip)
+	return run
+}
+
+// executeJourneyRunResult keeps the completed check separate from its storage
+// outcome. Manual callers need both; scheduled failures are logged and retried
+// by later executions without advancing dedup state.
+func (e *Executor) executeJourneyRunResult(ctx context.Context, journey *core.JourneyConfig, allowDedupSkip bool) (*core.JourneyRun, error) {
 	startTime := time.Now()
 
 	e.logger.Debug("executing journey", "journey_id", journey.ID, "name", journey.Name)
@@ -294,7 +324,7 @@ func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyC
 		// publish its interrupted check as downtime. A journey-budget timeout
 		// cancels executionCtx only and must still be recorded.
 		if allowDedupSkip && ctx.Err() != nil {
-			return nil
+			return nil, nil
 		}
 		run.Steps = append(run.Steps, stepResult)
 
@@ -353,13 +383,16 @@ func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyC
 		e.mu.RUnlock()
 		if lastHash == hash {
 			e.logger.Debug("skipping journey run save - health and extracted values unchanged", "journey_id", journey.ID)
-			return nil
+			return nil, nil
 		}
 	}
 
 	// Save the journey run with retry. Failed saves must remain retryable.
 	e.mu.RLock()
 	save := e.saveRun
+	if !allowDedupSkip && e.saveRunOnce != nil {
+		save = e.saveRunOnce
+	}
 	e.mu.RUnlock()
 	if save == nil {
 		save = e.db.SaveJourneyRun
@@ -368,10 +401,15 @@ func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyC
 		return save(ctx, run)
 	}); err != nil {
 		e.logger.Error("failed to save journey run after retries", "journey_id", journey.ID, "err", err)
-		// Continue - don't fail the journey execution due to storage issues
+		return run, fmt.Errorf("save journey run: %w", err)
 	} else if hash != "" {
 		e.mu.Lock()
-		e.lastHash[journey.ID] = hash
+		// Assign/Stop cancel a retired scheduled generation under this lock.
+		// Its already in-flight saver may finish after the successor saved;
+		// that late completion must not replace the successor's dedup hash.
+		if !allowDedupSkip || ctx.Err() == nil {
+			e.lastHash[journey.ID] = hash
+		}
 		e.mu.Unlock()
 	}
 
@@ -380,7 +418,7 @@ func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyC
 		"status", run.Status,
 		"duration_ms", run.Duration)
 
-	return run
+	return run, nil
 }
 
 // executeStep executes a single journey step
@@ -502,6 +540,11 @@ func (e *Executor) executeStep(ctx context.Context, jctx *JourneyContext, step c
 		result.Message = fmt.Sprintf("unknown step type: %s", step.Type)
 		return result
 	}
+
+	e.mu.RLock()
+	allowInsecure := e.allowInsecureSkipVerify
+	e.mu.RUnlock()
+	soul = probe.ApplySecurityPolicy(soul, allowInsecure, e.logger)
 
 	if err := checker.Validate(soul); err != nil {
 		result.Status = core.SoulDead
@@ -755,15 +798,13 @@ func (e *Executor) extractRegex(s, pattern string) string {
 	}
 
 	matches := re.FindStringSubmatch(s)
+	// A match without a capturing group extracts nothing (pinned by
+	// TestExtractRegex and the cookie-regex regression); only a capturing
+	// group yields a value.
 	if len(matches) < 2 {
 		return ""
 	}
-
-	// Return first capturing group, or full match if no groups
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return matches[0]
+	return matches[1]
 }
 
 // getChecker returns a checker for the given type

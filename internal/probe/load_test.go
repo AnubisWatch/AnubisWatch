@@ -42,6 +42,9 @@ func createLoadEngine() *Engine {
 		Config:   DefaultEngineConfig(),
 	}
 	opts.Config.MaxConcurrentChecks = 100
+	// Load tests measure the all-souls-at-once burst (the worst case), so
+	// they opt out of the production first-check spread.
+	opts.Config.StartJitter = 0
 
 	return NewEngine(opts)
 }
