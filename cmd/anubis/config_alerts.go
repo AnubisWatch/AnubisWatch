@@ -139,6 +139,15 @@ func loadConfiguredAlerts(cfg *core.Config, mgr *alert.Manager, logger *slog.Log
 			rule.CreatedAt = now
 		}
 		rule.Channels = resolveChannelRefs(rule.Channels, channelIDs)
+		if rule.Escalation != nil && len(rule.Escalation.Stages) == 0 {
+			// The rule names a shared policy from verdicts.escalation.
+			policy, ok := cfg.Verdicts.EscalationPolicyByName(rule.Escalation.Name)
+			if !ok {
+				logger.Warn("configured rule names an unknown escalation policy; skipping", "rule", rule.Name, "policy", rule.Escalation.Name)
+				continue
+			}
+			rule.Escalation = &policy
+		}
 		if rule.Escalation != nil {
 			escalation := *rule.Escalation
 			escalation.Stages = make([]core.EscalationStage, len(rule.Escalation.Stages))

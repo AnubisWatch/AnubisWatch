@@ -1131,7 +1131,7 @@ resolves names itself, so DNS-rebinding protection is the proxy's responsibility
 | Field | Type | Default | Required | Description |
 |-------|------|---------|----------|-------------|
 | `rules` | array | - | No | Alert rules list |
-| `escalation` | array | - | No | Escalation policies |
+| `escalation` | array | - | No | Shared escalation policies that rules name |
 
 ### `verdicts.rules[]` Block
 
@@ -1261,13 +1261,26 @@ verdicts:
 
 ### Escalation Policies
 
+A rule escalates when it has an `escalation` block: either its own `stages`,
+or the `name` of a shared policy declared under `verdicts.escalation`. Stage
+channels are channel names, like a rule's `channels`. Naming a policy that
+does not exist fails config validation. The rule's own `channels` are
+notified when the incident opens; each stage then fires once, `wait` after
+the previous stage (the first one: after the incident opened), as long as
+its `condition` holds: `not_acknowledged` (the default) stops at
+acknowledgement, `not_resolved` continues until the incident resolves. An
+omitted or zero `wait` means 15 minutes.
+
 ```yaml
 verdicts:
+  rules:
+    - name: "Service Down"
+      # ...conditions and channels...
+      escalation:
+        name: "production-escalation"
   escalation:
     - name: "production-escalation"
       stages:
-        - wait: 0s
-          channels: ["ops-slack", "ntfy-push"]
         - wait: 5m
           channels: ["pagerduty-oncall"]
           condition: "not_acknowledged"

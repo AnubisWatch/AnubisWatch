@@ -2012,9 +2012,6 @@ func warnUnimplementedConfig(cfg *core.Config, logger *slog.Logger) {
 	if cfg.Tenants.Enabled && cfg.Tenants.Isolation != "" && cfg.Tenants.Isolation != "strict" {
 		logger.Warn("tenants.isolation is not implemented: workspaces are always isolated", "isolation", cfg.Tenants.Isolation)
 	}
-	if len(cfg.Verdicts.Escalation) > 0 {
-		logger.Warn("verdicts.escalation is ignored; set escalation on individual alert rules instead")
-	}
 	if cfg.Necropolis.Distribution.Redundancy > 1 {
 		logger.Warn("necropolis.distribution.redundancy is ignored: each soul is probed by exactly one node")
 	}

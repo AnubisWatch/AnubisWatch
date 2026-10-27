@@ -1869,3 +1869,37 @@ func TestDashboardBrandingValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestValidate_EscalationPolicies(t *testing.T) {
+	rule := func(esc *EscalationPolicy) AlertRule {
+		return AlertRule{Name: "r", Conditions: []AlertCondition{{Type: "consecutive_failures", Threshold: 3}}, Channels: []string{"c"}, Escalation: esc}
+	}
+	stage := []EscalationStage{{Channels: []string{"c"}}}
+	tests := []struct {
+		name    string
+		v       VerdictsConfig
+		wantErr string
+	}{
+		{"named policy", VerdictsConfig{Rules: []AlertRule{rule(&EscalationPolicy{Name: "p"})}, Escalation: []EscalationPolicy{{Name: "p", Stages: stage}}}, ""},
+		{"inline stages", VerdictsConfig{Rules: []AlertRule{rule(&EscalationPolicy{Stages: stage})}}, ""},
+		{"unknown policy", VerdictsConfig{Rules: []AlertRule{rule(&EscalationPolicy{Name: "nope"})}}, `unknown escalation policy "nope"`},
+		{"empty reference", VerdictsConfig{Rules: []AlertRule{rule(&EscalationPolicy{})}}, "set stages"},
+		{"policy without name", VerdictsConfig{Escalation: []EscalationPolicy{{Stages: stage}}}, "name is required"},
+		{"duplicate policy", VerdictsConfig{Escalation: []EscalationPolicy{{Name: "p", Stages: stage}, {Name: "p", Stages: stage}}}, "duplicate"},
+		{"policy without stages", VerdictsConfig{Escalation: []EscalationPolicy{{Name: "p"}}}, "at least one stage"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.v.validateEscalation()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}

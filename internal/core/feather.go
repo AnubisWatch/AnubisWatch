@@ -23,6 +23,46 @@ type EscalationPolicy struct {
 	Stages []EscalationStage `json:"stages" yaml:"stages"`
 }
 
+// EscalationPolicyByName returns the shared policy called name.
+func (v VerdictsConfig) EscalationPolicyByName(name string) (EscalationPolicy, bool) {
+	for _, p := range v.Escalation {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return EscalationPolicy{}, false
+}
+
+// validateEscalation checks the shared policies and that every rule naming
+// one (escalation: {name: ...} without stages) names a policy that exists.
+func (v VerdictsConfig) validateEscalation() error {
+	seen := make(map[string]bool, len(v.Escalation))
+	for i, p := range v.Escalation {
+		if p.Name == "" {
+			return &ConfigError{Field: fmt.Sprintf("verdicts.escalation[%d].name", i), Message: "name is required"}
+		}
+		if seen[p.Name] {
+			return &ConfigError{Field: fmt.Sprintf("verdicts.escalation[%d].name", i), Message: fmt.Sprintf("duplicate escalation policy %q", p.Name)}
+		}
+		seen[p.Name] = true
+		if len(p.Stages) == 0 {
+			return &ConfigError{Field: fmt.Sprintf("verdicts.escalation[%d].stages", i), Message: "at least one stage is required"}
+		}
+	}
+	for i, r := range v.Rules {
+		if r.Escalation == nil || len(r.Escalation.Stages) > 0 {
+			continue
+		}
+		if r.Escalation.Name == "" {
+			return &ConfigError{Field: fmt.Sprintf("verdicts.rules[%d].escalation", i), Message: "set stages, or name a policy from verdicts.escalation"}
+		}
+		if !seen[r.Escalation.Name] {
+			return &ConfigError{Field: fmt.Sprintf("verdicts.rules[%d].escalation.name", i), Message: fmt.Sprintf("unknown escalation policy %q", r.Escalation.Name)}
+		}
+	}
+	return nil
+}
+
 // EscalationStage defines a single escalation stage
 type EscalationStage struct {
 	Wait      Duration `json:"wait" yaml:"wait"`

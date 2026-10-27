@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Shared escalation policies work
+
+- `verdicts.escalation` parsed but did nothing (startup only warned). A rule
+  now uses a shared policy with `escalation: {name: <policy>}`; unknown
+  names, unnamed or duplicate policies and policies without stages fail
+  config validation.
+
 ### Restores refuse archives they cannot verify
 
 - `anubis restore` refused a tampered signed archive but restored the same

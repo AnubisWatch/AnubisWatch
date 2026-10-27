@@ -437,6 +437,9 @@ func (c *Config) validate() error {
 			return err
 		}
 	}
+	if err := c.Verdicts.validateEscalation(); err != nil {
+		return err
+	}
 
 	// Validate journeys
 	for i, journey := range c.Journeys {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/alert"
 	"github.com/AnubisWatch/anubiswatch/internal/core"
@@ -212,4 +213,51 @@ func channelIDsOf(channels []*core.AlertChannel) []string {
 		ids = append(ids, ch.ID)
 	}
 	return ids
+}
+
+// verdicts.escalation parsed but was only warned about at startup: there was
+// no way for a rule to use a shared policy. A rule now names one.
+func TestConfiguredRuleUsesNamedEscalationPolicy(t *testing.T) {
+	body := configAlertsYAML + `
+    - name: "Escalated"
+      enabled: true
+      scope:
+        type: "all"
+      conditions:
+        - type: "consecutive_failures"
+          threshold: 3
+      channels:
+        - "Admin Alerts"
+      escalation:
+        name: "oncall"
+  escalation:
+    - name: "oncall"
+      stages:
+        - wait: 5m
+          channels: ["Admin Alerts"]
+          condition: "not_acknowledged"
+`
+	db := newConfigAlertsDB(t)
+	cfg := loadAlertsTestConfig(t, body)
+	mgr := startConfiguredAlertManager(t, db, cfg)
+
+	rule, err := mgr.GetRule(configEntityID(configRuleIDPrefix, "Escalated"))
+	if err != nil {
+		t.Fatalf("rule with a named escalation policy not registered: %v", err)
+	}
+	esc := rule.Escalation
+	if esc == nil || esc.Name != "oncall" || len(esc.Stages) != 1 {
+		t.Fatalf("escalation = %+v, want the oncall policy's stage", esc)
+	}
+	stage := esc.Stages[0]
+	if stage.Condition != "not_acknowledged" || stage.Wait.Duration != 5*time.Minute {
+		t.Fatalf("stage = %+v", stage)
+	}
+	if want := configEntityID(configChannelIDPrefix, "Admin Alerts"); len(stage.Channels) != 1 || stage.Channels[0] != want {
+		t.Fatalf("stage channels = %v, want channel name resolved to [%s]", stage.Channels, want)
+	}
+	// Resolving channel IDs must not write through to the shared policy.
+	if got := cfg.Verdicts.Escalation[0].Stages[0].Channels[0]; got != "Admin Alerts" {
+		t.Fatalf("shared policy channels changed to %q", got)
+	}
 }
