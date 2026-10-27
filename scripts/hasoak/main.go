@@ -1,3 +1,5 @@
+//go:build unix
+
 // Command hasoak runs a local three-node HA fault-injection soak against real
 // anubis processes on loopback. It never connects to a deployed instance.
 //
