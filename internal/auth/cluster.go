@@ -102,6 +102,65 @@ type ClusterAuthenticator struct {
 	store   ClusterStateStore
 	seed    json.RawMessage
 	stopped bool
+	// importedRevision is the shared revision a.local mirrors; 0 forces the
+	// next sync to import. Guarded by mu.
+	importedRevision uint64
+	// barriers coalesces the quorum barrier every request needs, and runs
+	// it without mu, so one slow barrier does not queue the whole node.
+	barriers barrierGroup
+}
+
+// barrierGroup shares quorum barriers between concurrent callers. A caller
+// only ever waits on a barrier that started after it arrived, so each one
+// still observes every write acknowledged before its call.
+type barrierGroup struct {
+	mu      sync.Mutex
+	running *barrierCall
+	next    *barrierCall // starts when running ends; joined meanwhile
+}
+
+type barrierCall struct {
+	done chan struct{}
+	err  error
+}
+
+func (g *barrierGroup) do(fn func() error) error {
+	g.mu.Lock()
+	if g.running == nil {
+		c := &barrierCall{done: make(chan struct{})}
+		g.running = c
+		g.mu.Unlock()
+		g.run(c, fn)
+		return c.err
+	}
+	if c := g.next; c != nil {
+		// Not started yet, so it starts after this call arrived.
+		g.mu.Unlock()
+		<-c.done
+		return c.err
+	}
+	// The running barrier may have started before this call: schedule the
+	// next one and run it once the current one ends.
+	c := &barrierCall{done: make(chan struct{})}
+	g.next = c
+	running := g.running
+	g.mu.Unlock()
+	<-running.done
+	g.mu.Lock()
+	g.running, g.next = c, nil
+	g.mu.Unlock()
+	g.run(c, fn)
+	return c.err
+}
+
+func (g *barrierGroup) run(c *barrierCall, fn func() error) {
+	c.err = fn()
+	g.mu.Lock()
+	if g.running == c {
+		g.running = nil
+	}
+	g.mu.Unlock()
+	close(c.done)
 }
 
 func NewClusterAuthenticator(local *LocalAuthenticator, store ClusterStateStore) (*ClusterAuthenticator, error) {
@@ -256,12 +315,20 @@ func importClusterAuth(a *LocalAuthenticator, raw []byte) error {
 	return nil
 }
 
-func (a *ClusterAuthenticator) load() (*ClusterAuthState, error) {
+// barrier proves quorum and makes the next local read linearizable. It is
+// shared between concurrent callers and must run without a.mu held.
+func (a *ClusterAuthenticator) barrier() error {
+	if err := a.barriers.do(a.store.Barrier); err != nil {
+		return fmt.Errorf("authentication quorum unavailable: %w", err)
+	}
+	return nil
+}
+
+// sync brings a.local up to the shared state already made visible by a
+// barrier, importing it only when its revision changed. Caller holds a.mu.
+func (a *ClusterAuthenticator) sync() (*ClusterAuthState, error) {
 	if a.stopped {
 		return nil, errors.New("authenticator is stopped")
-	}
-	if err := a.store.Barrier(); err != nil {
-		return nil, fmt.Errorf("authentication quorum unavailable: %w", err)
 	}
 	for attempt := 0; attempt < 8; attempt++ {
 		state, err := a.store.Load()
@@ -272,8 +339,12 @@ func (a *ClusterAuthenticator) load() (*ClusterAuthState, error) {
 			if state.Revision == 0 {
 				return nil, errors.New("invalid authentication revision")
 			}
-			if err := importClusterAuth(a.local, state.Data); err != nil {
-				return nil, err
+			if state.Revision != a.importedRevision {
+				a.importedRevision = 0
+				if err := importClusterAuth(a.local, state.Data); err != nil {
+					return nil, err
+				}
+				a.importedRevision = state.Revision
 			}
 			return state, nil
 		}
@@ -291,11 +362,17 @@ func (a *ClusterAuthenticator) load() (*ClusterAuthState, error) {
 
 // mutate re-evaluates after CAS conflicts. Never return generated tokens or
 // claim a successful revocation until its shared transaction is confirmed.
+//
+// The barrier runs once, before a.mu: a CAS retry needs no new one, because
+// the failed CAS returned only after this node applied the conflicting write.
 func (a *ClusterAuthenticator) mutate(fn func() error) error {
+	if err := a.barrier(); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for attempt := 0; attempt < 16; attempt++ {
-		state, err := a.load()
+		state, err := a.sync()
 		if err != nil {
 			return err
 		}
@@ -303,6 +380,9 @@ func (a *ClusterAuthenticator) mutate(fn func() error) error {
 		if err != nil {
 			return err
 		}
+		// fn changes a.local; until a CAS commits that change, a.local no
+		// longer mirrors any shared revision.
+		a.importedRevision = 0
 		operationErr := fn()
 		after, err := snapshotClusterAuth(a.local)
 		if err != nil {
@@ -326,9 +406,12 @@ func (a *ClusterAuthenticator) mutate(fn func() error) error {
 	return errors.New("authentication state changed concurrently; retry")
 }
 func (a *ClusterAuthenticator) Authenticate(token string) (*api.User, error) {
+	if err := a.barrier(); err != nil {
+		return nil, err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, err := a.load(); err != nil {
+	if _, err := a.sync(); err != nil {
 		return nil, err
 	}
 	return a.local.Authenticate(token)

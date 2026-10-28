@@ -410,6 +410,23 @@ paths:
           description: New password fails the password policy
         '401':
           description: Current password is incorrect
+  /api/v1/branding:
+    get:
+      tags:
+      - Authentication
+      summary: Dashboard branding
+      description: >-
+        Public. The dashboard's title, logo and default theme from
+        dashboard.branding, so the login page can show them. Holds nothing
+        secret.
+      security: []
+      responses:
+        '200':
+          description: Branding
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardBranding'
   /api/v1/auth/methods:
     get:
       tags:
@@ -3152,6 +3169,20 @@ components:
       scheme: bearer
       bearerFormat: JWT
   schemas:
+    DashboardBranding:
+      type: object
+      required: [title, logo, theme]
+      properties:
+        title:
+          type: string
+          description: Dashboard title ("AnubisWatch" when unset)
+        logo:
+          type: string
+          description: Logo as an https URL or a same-origin path; empty for the default logo
+        theme:
+          type: string
+          enum: [auto, dark, light]
+          description: Default theme for viewers who have not chosen one (auto keeps the dashboard default)
     User:
       type: object
       required: [id, email, name, role, workspace, created_at]

@@ -2,6 +2,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { LayoutDashboard, Ghost, Scale, Bell, Route, Network, Globe, Settings, LogOut, LayoutGrid, AlertOctagon, Wrench, X, ScrollText } from 'lucide-react'
 import { useEffect, useMemo } from 'react'
 import { useAuth } from '../api/hooks'
+import { DEFAULT_BRANDING, DEFAULT_LOGO, useBrandingStore } from '../stores/brandingStore'
 
 interface SidebarProps {
   /** Mobile drawer visibility; ignored at md: and above where the sidebar is always shown. */
@@ -40,6 +41,8 @@ const LotusDecoration = () => (
 export function Sidebar({ open = false, onClose }: SidebarProps = {}) {
   const location = useLocation()
   const { logout } = useAuth()
+  const branding = useBrandingStore((state) => state.branding)
+  const customTitle = branding.title !== DEFAULT_BRANDING.title
   const currentPath = useMemo(() => location.pathname, [location])
 
   // Close the mobile drawer with Escape
@@ -89,20 +92,26 @@ export function Sidebar({ open = false, onClose }: SidebarProps = {}) {
             <div className="absolute inset-0 bg-[#D4AF37]/30 rounded-full blur-lg animate-pulse" />
             <div className="relative w-14 h-14 rounded-full bg-gradient-to-br from-[#1a1a2e] to-[#0a0a15] flex items-center justify-center
                           border-2 border-[#D4AF37] shadow-lg shadow-[#D4AF37]/30 glow-gold">
-              <img src="/jackal-logo.svg" alt="Anubis" className="w-10 h-10" />
+              <img src={branding.logo || DEFAULT_LOGO} alt={branding.title} className="w-10 h-10 object-contain" />
             </div>
             {/* Decorative dots */}
             <div className="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-[#40E0D0] border border-[#1a1a2e]" />
           </div>
 
-          <div>
-            <h1 className="text-2xl font-cinzel font-bold gradient-gold-shine tracking-wider">Anubis</h1>
-            <div className="flex items-center gap-1">
-              <AnkhDecoration />
-              <p className="text-xs text-[#D4AF37] font-philosopher tracking-[0.2em] uppercase">Watch</p>
-              <AnkhDecoration />
+          {customTitle ? (
+            <div className="min-w-0">
+              <h1 className="text-xl font-cinzel font-bold gradient-gold-shine tracking-wide break-words">{branding.title}</h1>
             </div>
-          </div>
+          ) : (
+            <div>
+              <h1 className="text-2xl font-cinzel font-bold gradient-gold-shine tracking-wider">Anubis</h1>
+              <div className="flex items-center gap-1">
+                <AnkhDecoration />
+                <p className="text-xs text-[#D4AF37] font-philosopher tracking-[0.2em] uppercase">Watch</p>
+                <AnkhDecoration />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Tagline */}

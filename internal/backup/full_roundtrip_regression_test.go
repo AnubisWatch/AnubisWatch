@@ -75,6 +75,15 @@ func TestBackupRestoreRoundTripsEverything(t *testing.T) {
 	dstDir := t.TempDir()
 	dst := openRoundtripStore(t, dstDir)
 	rm := NewManager(nil, dstDir, newTestLogger())
+	// A replacement node verifies the archive with the backup key the
+	// operator kept from the original node.
+	key, err := os.ReadFile(m.keyFilePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rm.keyFilePath(), key, 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := rm.Restore(ctx, dst, path, DefaultRestoreOptions()); err != nil {
 		t.Fatalf("Restore: %v", err)
 	}

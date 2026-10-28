@@ -413,6 +413,10 @@ func (c *Config) validate() error {
 		return err
 	}
 
+	if err := c.Dashboard.Branding.validate(); err != nil {
+		return err
+	}
+
 	// Validate souls
 	for i, soul := range c.Souls {
 		if err := soul.validate(i); err != nil {
@@ -432,6 +436,9 @@ func (c *Config) validate() error {
 		if err := rule.validate(i); err != nil {
 			return err
 		}
+	}
+	if err := c.Verdicts.validateEscalation(); err != nil {
+		return err
 	}
 
 	// Validate journeys

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, type AuthMethods } from "../api/client";
 import { dispatchAuthSessionChanged } from "../api/authEvents";
+import { DEFAULT_LOGO, useBrandingStore } from "../stores/brandingStore";
 
 
 const AnkhIcon = () => (
@@ -17,6 +18,7 @@ const AnkhIcon = () => (
 );
 
 export function Login() {
+	const branding = useBrandingStore((state) => state.branding);
 	const navigate = useNavigate();
 	const [searchParams] = useSearchParams();
 	const [email, setEmail] = useState("");
@@ -80,9 +82,9 @@ export function Login() {
 				<div className="mb-8 text-center">
 					<div className="mb-5 inline-flex h-20 w-20 items-center justify-center rounded-2xl border border-[var(--border-strong)] bg-[var(--bg-elevated)] shadow-[var(--shadow-soft)]">
 						<img
-							src="/jackal-logo.svg"
-							alt="AnubisWatch"
-							className="h-12 w-12"
+							src={branding.logo || DEFAULT_LOGO}
+							alt={branding.title}
+							className="h-12 w-12 object-contain"
 						/>
 					</div>
 					<div className="mb-3 flex items-center justify-center gap-2 text-[var(--accent-primary)]">
@@ -92,7 +94,7 @@ export function Login() {
 						</span>
 					</div>
 					<h1 className="text-3xl font-semibold tracking-tight text-[var(--text-primary)]">
-						AnubisWatch
+						{branding.title}
 					</h1>
 					<p className="mt-2 text-sm text-[var(--text-secondary)]">
 						Monitor your realm with a calmer, clearer command center.

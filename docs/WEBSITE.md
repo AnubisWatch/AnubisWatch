@@ -41,7 +41,7 @@
 # The Judgment Never Sleeps
 
 ### Subheadline
-Open-source uptime monitoring for the modern age. One binary, eight protocols, zero dependencies.
+Open-source uptime monitoring for the modern age. One binary, ten protocols plus heartbeat push monitors, no external services.
 
 ### Hero Visual
 Geometric Anubis jackal silhouette with EKG heartbeat line running horizontally through it. Dark tomb background with golden accents.
@@ -101,7 +101,7 @@ Your monitor dies, you don't know your site is down until users complain. Irony:
 # One Binary to Judge Them All
 
 ### Intro
-AnubisWatch is written in Go 1.26 with zero external dependencies. The React 19 dashboard is compiled into the binary. What you get is a single executable that does one thing: weigh your uptime, forever.
+AnubisWatch is written in Go 1.26 and needs no database, broker or cache. The React 19 dashboard is compiled into the binary. What you get is a single executable that does one thing: weigh your uptime, forever.
 
 ### Feature Grid
 
@@ -111,11 +111,11 @@ No Node.js, no Python, no Java. One statically-linked Go binary that runs anywhe
 #### 🎛️ Embedded Dashboard
 Beautiful React 19 dashboard compiled into the binary. No separate frontend deployment. No CORS nightmares. No `npm install`. Just `anubis serve`.
 
-#### 🌐 Eight Protocols
-HTTP, TCP, UDP, DNS, SMTP, ICMP, gRPC, WebSocket, TLS. If your infrastructure speaks it, AnubisWatch can judge it.
+#### 🌐 Ten Protocols
+HTTP, TCP, UDP, DNS, SMTP, IMAP, ICMP, gRPC, WebSocket, TLS — plus heartbeat push monitors for cron jobs and workers. If your infrastructure speaks it, AnubisWatch can judge it.
 
 #### 🔗 Raft Consensus
-Built-in distributed clustering. Every node is a probe and a controller. Automatic leader election. Self-healing. The Necropolis never sleeps.
+Built-in distributed clustering (experimental). Every node is a probe and a controller, with automatic leader election. Single-node is the supported production setup today.
 
 #### 💾 CobaltDB Storage
 Embedded B+Tree database with encryption at rest. No external database. No migrations. Time-series compaction built in.
@@ -134,7 +134,7 @@ AI agent integration out of the box. Ask Claude, Cursor, or your MCP client: "Wh
 ## 5. Protocol Support
 
 ### Section Title
-# Eight Protocols. One Judge.
+# Ten Protocols. One Judge.
 
 ### Protocol Cards
 
@@ -246,7 +246,7 @@ WebSocket-powered live updates. No page refresh. Watch judgments roll in as they
 |---------|-------------|-------------|-------------|---------|
 | **Self-Hosted** | ✅ Yes | ✅ Yes | ❌ SaaS only | ❌ SaaS only |
 | **Single Binary** | ✅ Go | ❌ Node.js + npm | ❌ N/A | ❌ N/A |
-| **Protocol Support** | ✅ 8 protocols | ⚠️ 4-5 protocols | ❌ 1-2 protocols | ⚠️ 2 protocols |
+| **Protocol Support** | ✅ 10 protocols + heartbeat | ⚠️ 4-5 protocols | ❌ 1-2 protocols | ⚠️ 2 protocols |
 | **Distributed Probes** | ✅ Raft consensus | ❌ Single node | ❌ Cloud only | ⚠️ SaaS multi-location |
 | **Synthetic Monitoring** | ✅ Multi-step journeys | ❌ No | ❌ No | ✅ Yes (SaaS) |
 | **Embedded Dashboard** | ✅ React 19 (compiled) | ⚠️ Vue.js (separate) | ❌ Web UI | ✅ Web UI |
@@ -401,10 +401,10 @@ The Judgment Never Sleeps. ⚖️
 
 ```html
 <title>AnubisWatch — The Judgment Never Sleeps | Open-Source Uptime Monitoring</title>
-<meta name="description" content="Zero-dependency uptime monitoring in a single Go binary. Eight protocols, embedded React dashboard, Raft clustering, and CobaltDB storage.">
+<meta name="description" content="Uptime monitoring in a single Go binary with no external services. Ten protocols, embedded React dashboard, Raft clustering, and CobaltDB storage.">
 <meta name="keywords" content="uptime monitoring, synthetic monitoring, open source, self-hosted, Go, single binary, Raft, alerting">
 <meta property="og:title" content="AnubisWatch — The Judgment Never Sleeps">
-<meta property="og:description" content="One binary. Eight protocols. Zero downtime.">
+<meta property="og:description" content="One binary. Ten protocols. No external services.">
 <meta property="og:image" content="https://anubis.watch/og-image.png">
 <meta property="og:url" content="https://anubis.watch">
 <meta name="twitter:card" content="summary_large_image">

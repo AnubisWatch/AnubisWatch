@@ -94,7 +94,7 @@ AnubisWatch/
 ### Go Code
 
 - Follow standard Go conventions (gofmt, govet)
-- Match CI's pinned `golangci-lint` v2.15.0 and temporary config migration/verification in `.github/workflows/ci.yml`; the checked-in config uses the legacy format, so invoking a v2 linter with that file directly is insufficient
+- Run `make lint`: it uses CI's pinned `golangci-lint` v2.15.0 with the checked-in v2 `.golangci.yml`
 - Keep functions focused and small
 - Document exported types and functions
 - Use meaningful variable names

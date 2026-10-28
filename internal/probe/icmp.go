@@ -2,9 +2,11 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net"
+	"syscall"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
@@ -100,6 +102,11 @@ func (c *ICMPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	// Listen for ICMP packets
 	conn, err := icmp.ListenPacket(network, "")
 	if err != nil {
+		if !cfg.Privileged && errors.Is(err, syscall.EACCES) {
+			// Unprivileged ping sockets are refused unless the process
+			// group is in net.ipv4.ping_group_range (Linux).
+			err = fmt.Errorf("%w (allow unprivileged ping with sysctl net.ipv4.ping_group_range=\"0 2147483647\"; the Helm chart sets it per pod)", err)
+		}
 		return failJudgment(soul, fmt.Errorf("ICMP listen failed: %w", err)), nil
 	}
 	defer conn.Close()

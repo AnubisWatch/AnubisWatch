@@ -3,9 +3,12 @@ package core
 import (
 	"crypto/tls"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // VerdictsConfig holds alert rules configuration
@@ -18,6 +21,46 @@ type VerdictsConfig struct {
 type EscalationPolicy struct {
 	Name   string            `json:"name" yaml:"name"`
 	Stages []EscalationStage `json:"stages" yaml:"stages"`
+}
+
+// EscalationPolicyByName returns the shared policy called name.
+func (v VerdictsConfig) EscalationPolicyByName(name string) (EscalationPolicy, bool) {
+	for _, p := range v.Escalation {
+		if p.Name == name {
+			return p, true
+		}
+	}
+	return EscalationPolicy{}, false
+}
+
+// validateEscalation checks the shared policies and that every rule naming
+// one (escalation: {name: ...} without stages) names a policy that exists.
+func (v VerdictsConfig) validateEscalation() error {
+	seen := make(map[string]bool, len(v.Escalation))
+	for i, p := range v.Escalation {
+		if p.Name == "" {
+			return &ConfigError{Field: fmt.Sprintf("verdicts.escalation[%d].name", i), Message: "name is required"}
+		}
+		if seen[p.Name] {
+			return &ConfigError{Field: fmt.Sprintf("verdicts.escalation[%d].name", i), Message: fmt.Sprintf("duplicate escalation policy %q", p.Name)}
+		}
+		seen[p.Name] = true
+		if len(p.Stages) == 0 {
+			return &ConfigError{Field: fmt.Sprintf("verdicts.escalation[%d].stages", i), Message: "at least one stage is required"}
+		}
+	}
+	for i, r := range v.Rules {
+		if r.Escalation == nil || len(r.Escalation.Stages) > 0 {
+			continue
+		}
+		if r.Escalation.Name == "" {
+			return &ConfigError{Field: fmt.Sprintf("verdicts.rules[%d].escalation", i), Message: "set stages, or name a policy from verdicts.escalation"}
+		}
+		if !seen[r.Escalation.Name] {
+			return &ConfigError{Field: fmt.Sprintf("verdicts.rules[%d].escalation.name", i), Message: fmt.Sprintf("unknown escalation policy %q", r.Escalation.Name)}
+		}
+	}
+	return nil
 }
 
 // EscalationStage defines a single escalation stage
@@ -270,11 +313,47 @@ type DashboardConfig struct {
 	Branding DashboardBranding `json:"branding" yaml:"branding"`
 }
 
-// DashboardBranding defines dashboard customization
+// DashboardBranding defines dashboard customization. It is public (the login
+// page shows it), so it holds nothing secret.
 type DashboardBranding struct {
 	Title string `json:"title" yaml:"title"`
+	// Logo is an https:// URL or a same-origin path ("/..."); the dashboard's
+	// CSP allows both as images.
 	Logo  string `json:"logo" yaml:"logo"`
 	Theme string `json:"theme" yaml:"theme"` // auto, dark, light
+}
+
+// MaxBrandingTitleRunes bounds dashboard.branding.title.
+const MaxBrandingTitleRunes = 64
+
+func (b DashboardBranding) validate() error {
+	if n := utf8.RuneCountInString(b.Title); n > MaxBrandingTitleRunes {
+		return fmt.Errorf("dashboard.branding.title is %d characters; at most %d", n, MaxBrandingTitleRunes)
+	}
+	for _, r := range b.Title {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("dashboard.branding.title must not contain control characters")
+		}
+	}
+	switch b.Theme {
+	case "", "auto", "dark", "light":
+	default:
+		return fmt.Errorf("dashboard.branding.theme must be auto, dark or light, not %q", b.Theme)
+	}
+	if b.Logo == "" {
+		return nil
+	}
+	if len(b.Logo) > 2048 {
+		return fmt.Errorf("dashboard.branding.logo is longer than 2048 bytes")
+	}
+	if strings.HasPrefix(b.Logo, "/") && !strings.HasPrefix(b.Logo, "//") {
+		return nil
+	}
+	u, err := url.Parse(b.Logo)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil {
+		return fmt.Errorf("dashboard.branding.logo must be an https:// URL or a path starting with /")
+	}
+	return nil
 }
 
 // AuthConfig defines authentication settings

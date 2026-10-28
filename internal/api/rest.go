@@ -177,6 +177,8 @@ type RESTServer struct {
 	sessions                  *liveSessionRegistry
 	sessionRevalidateInterval time.Duration
 
+	// branding is dashboard.branding, served by GET /api/v1/branding.
+	branding core.DashboardBranding
 	// apiKeys authenticates "anb_" bearer tokens and backs /api/v1/api-keys
 	// (nil: API keys disabled). See apikeys.go.
 	apiKeys APIKeyManager
@@ -562,6 +564,7 @@ func (s *RESTServer) setupRoutes() {
 
 	// Auth
 	s.router.Handle("GET", "/api/v1/auth/methods", s.handleAuthMethods)
+	s.router.Handle("GET", "/api/v1/branding", s.handleBranding)
 	s.router.Handle("POST", "/api/v1/auth/login", s.handleLogin)
 	s.router.Handle("POST", "/api/v1/auth/logout", s.handleLogout)
 	s.router.Handle("GET", "/api/v1/auth/me", s.requireAuth(s.handleMe))

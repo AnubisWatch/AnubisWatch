@@ -460,3 +460,65 @@ func TestFlap_RestoredWhenRunnerRestarts(t *testing.T) {
 		t.Fatalf("restored from a non-flapping judgment: %+v", r3)
 	}
 }
+
+// windowedLatestStore honours since, like the real store.
+type windowedLatestStore struct {
+	recordingProbeStorage
+	latest *core.Judgment
+	calls  []time.Time
+}
+
+func (s *windowedLatestStore) LatestJudgment(ctx context.Context, ws, soulID string, since time.Time) (*core.Judgment, error) {
+	s.calls = append(s.calls, since)
+	if s.latest == nil || s.latest.Timestamp.Before(since) {
+		return nil, nil
+	}
+	return s.latest, nil
+}
+
+// A process that was down longer than two intervals still restores a flag
+// set within the flap window, so the owed "stopped" notice is sent. The
+// wider scan runs only when the short one is empty and flap detection is on.
+func TestFlap_RestoredAfterLongOutage(t *testing.T) {
+	soul := retrySoul(0, 0)
+	soul.FlapDetection = &core.FlapDetectionConfig{Enabled: true, Threshold: 4, Window: core.Duration{Duration: 10 * time.Minute}}
+	h := newRetryHarness(t, soul, EngineConfig{}, core.SoulDead)
+	store := &windowedLatestStore{recordingProbeStorage: recordingProbeStorage{souls: map[string]*core.Soul{}}}
+	h.engine.store = store
+	short := 2*h.runner.interval + time.Minute
+	if short >= 8*time.Minute {
+		t.Fatalf("control: interval %v leaves no gap between the scans", h.runner.interval)
+	}
+	flagged := func(age time.Duration) *core.Judgment {
+		return &core.Judgment{SoulID: soul.ID, Status: core.SoulDead, Timestamp: h.clock.Now().Add(-age),
+			Details: &core.JudgmentDetails{Flapping: true, FlapBaseline: core.SoulAlive}}
+	}
+
+	store.latest = flagged(8 * time.Minute)
+	r := &soulRunner{soul: soul, interval: h.runner.interval}
+	h.engine.restoreRunnerFlap(context.Background(), r)
+	if !r.flapping || r.flapBaseline != core.SoulAlive {
+		t.Fatalf("flag 8m old (window 10m) not restored: %+v", r)
+	}
+	if len(store.calls) != 2 || !store.calls[1].Equal(h.clock.Now().Add(-10*time.Minute)) {
+		t.Fatalf("lookups = %v, want short then window", store.calls)
+	}
+
+	// Older than the window is beyond the bounded scan: the soul starts
+	// unflagged (documented limit).
+	store.calls, store.latest = nil, flagged(20*time.Minute)
+	r = &soulRunner{soul: soul, interval: h.runner.interval}
+	h.engine.restoreRunnerFlap(context.Background(), r)
+	if r.flapping {
+		t.Fatal("flag older than the window was restored")
+	}
+
+	// Flap detection off: only the short scan runs.
+	soul.FlapDetection = &core.FlapDetectionConfig{Enabled: false}
+	store.calls, store.latest = nil, flagged(8*time.Minute)
+	r = &soulRunner{soul: soul, interval: h.runner.interval}
+	h.engine.restoreRunnerFlap(context.Background(), r)
+	if len(store.calls) != 1 {
+		t.Fatalf("lookups with flap detection off = %d, want 1", len(store.calls))
+	}
+}

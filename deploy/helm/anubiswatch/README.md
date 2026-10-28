@@ -1,6 +1,6 @@
 # AnubisWatch Helm Chart
 
-Zero-dependency, single-binary uptime and synthetic monitoring platform.
+Single-binary uptime and synthetic monitoring platform that needs no external runtime services.
 
 ## Prerequisites
 

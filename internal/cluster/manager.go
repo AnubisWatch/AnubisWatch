@@ -82,7 +82,7 @@ type Manager struct {
 	node          *raft.Node
 	db            *storage.CobaltDB
 	logStore      *storage.CobaltDBLogStore
-	snapshotStore *storage.CobaltDBSnapshotStore
+	snapshotStore raft.SnapshotStore
 	stableStore   *storage.CobaltDBStableStore
 	fsm           *raft.StorageFSM
 	logger        *slog.Logger
@@ -175,7 +175,13 @@ func NewManager(cfg core.NecropolisConfig, db *storage.CobaltDB, logger *slog.Lo
 
 	// Create Raft storage components
 	m.logStore = storage.NewCobaltDBLogStore(db)
-	m.snapshotStore = storage.NewCobaltDBSnapshotStore(db)
+	// Snapshots are files beside the WAL, not CobaltDB records: inside the
+	// in-memory tree they would double the node's memory.
+	snapshots, err := storage.NewFileSnapshotStore(db)
+	if err != nil {
+		return nil, err
+	}
+	m.snapshotStore = snapshots
 	m.stableStore = storage.NewCobaltDBStableStore(db)
 
 	// Create FSM backed by storage
@@ -198,6 +204,13 @@ func NewManager(cfg core.NecropolisConfig, db *storage.CobaltDB, logger *slog.Lo
 // raft.StorageFSM.SetCommandHandler). Set it before Start.
 func (m *Manager) SetCommandHandler(table string, h raft.CommandHandler) {
 	m.fsm.SetCommandHandler(table, h)
+}
+
+// SetBatchCommandHandler routes runs of replicated commands for table inside
+// one batch to h (see raft.StorageFSM.SetBatchCommandHandler). Set it before
+// Start.
+func (m *Manager) SetBatchCommandHandler(table string, h raft.BatchCommandHandler) {
+	m.fsm.SetBatchCommandHandler(table, h)
 }
 
 // SetApplyObserver registers fn to see every replicated command after it is
@@ -908,8 +921,10 @@ func (m *Manager) VerifyLeader(timeout time.Duration) error {
 }
 
 // ReadBarrier makes the next local read linearizable: it returns once this
-// node has applied every write committed before the call. Only the leader can
-// serve it (raft.Node.ReadBarrier).
+// node has applied every write committed before the call. A follower asks the
+// leader for its read index; no log entry is written
+// (raft.Node.ReadBarrierOrForward). raft.ErrReadIndexUnsupported reports a
+// leader too old to answer.
 func (m *Manager) ReadBarrier(timeout time.Duration) (uint64, error) {
 	m.mu.RLock()
 	node := m.node
@@ -917,7 +932,19 @@ func (m *Manager) ReadBarrier(timeout time.Duration) (uint64, error) {
 	if node == nil {
 		return 0, &core.RaftError{Code: core.ErrNotLeader, Message: "standalone node"}
 	}
-	return node.ReadBarrier(timeout)
+	return node.ReadBarrierOrForward(timeout)
+}
+
+// TableReadBarrier is ReadBarrier for a read of only the state that commands
+// of table write; on a follower behind on other writes it returns sooner.
+func (m *Manager) TableReadBarrier(table string, timeout time.Duration) (uint64, error) {
+	m.mu.RLock()
+	node := m.node
+	m.mu.RUnlock()
+	if node == nil {
+		return 0, &core.RaftError{Code: core.ErrNotLeader, Message: "standalone node"}
+	}
+	return node.TableReadBarrierOrForward(table, timeout)
 }
 
 // Leader returns the current leader's ID

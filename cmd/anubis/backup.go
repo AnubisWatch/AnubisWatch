@@ -274,6 +274,8 @@ func restoreCommand() {
 		fmt.Println("  --skip-status-pages Do not restore status pages")
 		fmt.Println("  --skip-journeys     Do not restore journeys")
 		fmt.Println("  --force             Continue on errors")
+		fmt.Println("  --allow-unsigned    Restore an archive whose signature this node cannot")
+		fmt.Println("                      verify (unsigned, or no backup key here)")
 		fmt.Println()
 		fmt.Println("Examples:")
 		fmt.Println("  anubis restore anubis_backup_20260115_143022.json.gz")
@@ -290,6 +292,7 @@ func restoreCommand() {
 	skipStatusPages := false
 	skipJourneys := false
 	force := false
+	allowUnsigned := false
 
 	// Parse flags
 	for i := 3; i < len(os.Args); i++ {
@@ -304,6 +307,8 @@ func restoreCommand() {
 			skipJourneys = true
 		case "--force":
 			force = true
+		case "--allow-unsigned":
+			allowUnsigned = true
 		}
 	}
 
@@ -359,6 +364,9 @@ func restoreCommand() {
 		IncludeSystemConfig: true,
 		IncludeUsers:        true,
 		ContinueOnError:     force,
+		// --force only continues past record errors; trusting an
+		// unverifiable archive is a separate, explicit choice.
+		AllowUnauthenticated: allowUnsigned,
 	}
 
 	ctx := context.Background()

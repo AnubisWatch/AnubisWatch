@@ -418,15 +418,31 @@ export function useDashboards() {
   }
 }
 
-// App, Header and Sidebar each mount useAuth; concurrent session checks
-// share one /auth/me request instead of spending three per page load.
+// App, Header and Sidebar each mount useAuth. Concurrent session checks share
+// one /auth/me request, and a result stays valid for a few seconds so the
+// components that mount right after the first check reuse it: a page load
+// then costs one request, not two (the per-IP budget counts every one).
+// A session event (login, logout, 401) drops the cached result, and so does
+// the last consumer unmounting.
+const CURRENT_USER_TTL_MS = 5000
+let mountedAuthConsumers = 0
 let currentUserRequest: Promise<User> | null = null
+let recentUser: { user: User; at: number } | null = null
 
 function fetchCurrentUser(): Promise<User> {
+  if (recentUser && Date.now() - recentUser.at < CURRENT_USER_TTL_MS) {
+    return Promise.resolve(recentUser.user)
+  }
   if (!currentUserRequest) {
-    currentUserRequest = api.get<User>('/auth/me').finally(() => {
-      currentUserRequest = null
-    })
+    currentUserRequest = api
+      .get<User>('/auth/me')
+      .then((user) => {
+        recentUser = { user, at: Date.now() }
+        return user
+      })
+      .finally(() => {
+        currentUserRequest = null
+      })
   }
   return currentUserRequest
 }
@@ -462,6 +478,7 @@ export function useAuth() {
     const sequenceRef = syncSequence
     const handleSessionChange = (event: Event) => {
       const change = (event as CustomEvent<AuthSessionChange>).detail
+      if (change?.state !== 'authenticated') recentUser = null
       if (change?.state === 'anonymous') {
         ++syncSequence.current
         setUser(null)
@@ -480,11 +497,13 @@ export function useAuth() {
     }
 
     window.addEventListener(AUTH_SESSION_CHANGED_EVENT, handleSessionChange)
+    mountedAuthConsumers++
     syncSession().catch(() => {
       // Initial anonymous and unavailable-server states are both unauthorized.
     })
     return () => {
       window.removeEventListener(AUTH_SESSION_CHANGED_EVENT, handleSessionChange)
+      if (--mountedAuthConsumers <= 0) recentUser = null
       ++sequenceRef.current
     }
   }, [syncSession])
