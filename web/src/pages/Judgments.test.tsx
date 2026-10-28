@@ -27,7 +27,7 @@ describe("Judgments", () => {
 			soul_name: "Payments API",
 			status: "passed" as const,
 			latency: 120,
-			purity: 96,
+			status_code: 200,
 			region: "eu-west",
 			timestamp: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
 			error: "",
@@ -38,7 +38,7 @@ describe("Judgments", () => {
 			soul_name: "Billing Worker",
 			status: "failed" as const,
 			latency: 1800,
-			purity: 42,
+			status_code: 0,
 			region: "us-east",
 			timestamp: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
 			error: "Connection timeout",
@@ -150,15 +150,15 @@ describe("Judgments", () => {
 		expect(revokeObjectURL).toHaveBeenCalledWith("blob:test-url");
 	});
 
-	it("covers every time range, purity band, CSV escaping, and refresh completion", async () => {
+	it("covers every time range, status-code band, CSV escaping, and refresh completion", async () => {
 		vi.useFakeTimers({ shouldAdvanceTime: true });
 		vi.setSystemTime(new Date("2026-07-06T12:00:00Z"));
 		const refetch = vi.fn().mockResolvedValue(undefined);
 		judgmentsMocks.useJudgments.mockReturnValue({
 			data: [
-				{ ...sampleJudgments[0], id: "high", timestamp: "2026-07-06T11:30:00Z", soul_name: 'Quoted "Name"', purity: 95 },
-				{ ...sampleJudgments[0], id: "mid", timestamp: "2026-07-05T12:00:00Z", soul_name: "", region: undefined, error: undefined, purity: 75 },
-				{ ...sampleJudgments[1], id: "low", timestamp: "2026-06-10T12:00:00Z", purity: 10 },
+				{ ...sampleJudgments[0], id: "high", timestamp: "2026-07-06T11:30:00Z", soul_name: 'Quoted "Name"', status_code: 200 },
+				{ ...sampleJudgments[0], id: "mid", timestamp: "2026-07-05T12:00:00Z", soul_name: "", region: undefined, error: undefined, status_code: 404 },
+				{ ...sampleJudgments[1], id: "low", timestamp: "2026-06-10T12:00:00Z", status_code: 503 },
 			], loading: false, error: null, refetch,
 		});
 		render(<MemoryRouter><Judgments /></MemoryRouter>);
@@ -175,6 +175,41 @@ describe("Judgments", () => {
 		await waitFor(() => expect(refetch).toHaveBeenCalled());
 		await act(async () => { await vi.advanceTimersByTimeAsync(500); });
 		expect(screen.getByLabelText("Refresh judgments")).not.toHaveClass("animate-spin");
+	});
+
+	it("shows latency and status code from the API, not a purity score", async () => {
+		judgmentsMocks.useJudgments.mockReturnValue({
+			data: [
+				{ ...sampleJudgments[0], id: "a", latency: 100, status_code: 200 },
+				{ ...sampleJudgments[0], id: "b", latency: 300, status_code: 0 },
+				{ ...sampleJudgments[1], id: "c", latency: 2000, status_code: 503 },
+			],
+			loading: false,
+			error: null,
+			refetch: vi.fn(),
+		});
+		render(<MemoryRouter><Judgments /></MemoryRouter>);
+
+		const headers = screen.getAllByRole("columnheader").map((h) => h.textContent);
+		expect(headers).toEqual(["Status", "Soul", "Latency", "Code", "Region", "Time"]);
+		expect(screen.queryByText(/purity/i)).not.toBeInTheDocument();
+		const rows = screen.getAllByRole("row").slice(1);
+		expect(rows.map((r) => r.querySelectorAll("td")[2].textContent)).toEqual(["100ms", "300ms", "2000ms"]);
+		expect(rows.map((r) => r.querySelectorAll("td")[3].textContent)).toEqual(["200", "—", "503"]);
+		expect(screen.getByText("503")).toHaveClass("text-rose-400");
+		// Average of 100, 300, 2000 and nearest-rank p95.
+		expect(screen.getByText("Avg Latency").nextElementSibling).toHaveTextContent("800ms");
+		expect(screen.getByText("P95 Latency").nextElementSibling).toHaveTextContent("2000ms");
+
+		let blob: Blob | undefined;
+		createObjectURL.mockImplementationOnce(((b: Blob) => { blob = b; return "blob:test-url"; }) as never);
+		fireEvent.click(screen.getByRole("button", { name: /export/i }));
+		const csv = await blob!.text();
+		const [header, ...lines] = csv.split("\n");
+		expect(header).toBe('"id","soul_id","soul_name","status","latency_ms","status_code","region","timestamp","error"');
+		expect(lines[0]).toContain('"a","soul-1","Payments API","passed","100","200"');
+		expect(lines[1]).toContain('"b","soul-1","Payments API","passed","300","0"');
+		expect(csv).not.toMatch(/purity/);
 	});
 
 	it("retries from the error state", async () => {

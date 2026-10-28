@@ -1,12 +1,18 @@
 package statuspage
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html"
 	"net"
 	"net/http"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,6 +29,8 @@ type Handler struct {
 	templateCache    map[string]*Template
 	defaultTheme     core.StatusPageTheme
 	sessionValidator SessionValidator
+	// subs is set by EnableSubscriptions when outgoing mail is configured.
+	subs *subscriptions
 }
 
 // SessionValidator reports whether a session token may view pages in a workspace.
@@ -121,6 +129,11 @@ func (h *Handler) CanServeHost(host string) bool {
 
 // ServeHTTP handles status page requests
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Subscription endpoints share the /status/ prefix with page slugs.
+	if h.serveSubscriptionRoute(w, r) {
+		return
+	}
+
 	// Determine which status page to serve
 	domain := normalizeHost(r.Host)
 
@@ -140,6 +153,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Password submissions use POST, then redirect to a URL without credentials.
+	setPageCacheControl(w, page, 60)
+	if page.Visibility == core.VisibilityProtected && r.Method == http.MethodPost {
+		r.Body = http.MaxBytesReader(w, r.Body, 4096)
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "Invalid form", http.StatusBadRequest)
+			return
+		}
+		if h.verifyPagePassword(r.PostForm.Get("password"), page) {
+			expiry := time.Now().Add(8 * time.Hour)
+			// #nosec G124 -- Secure on TLS/proxied HTTPS; local HTTP requires a non-Secure cookie. HttpOnly and Strict always apply.
+			http.SetCookie(w, &http.Cookie{Name: "anubis_page_pass", Value: pagePasswordTicket(page, expiry), Path: "/", Expires: expiry, MaxAge: 8 * 60 * 60, HttpOnly: true, Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https", SameSite: http.SameSiteStrictMode})
+			q := r.URL.Query()
+			q.Del("password")
+			// Use the page's canonical origin-relative path. A request path
+			// beginning // must never become a redirect to another authority.
+			clean := url.URL{Path: "/status/" + page.Slug, RawQuery: q.Encode()}
+			// #nosec G710 -- fixed /status/ prefix, no scheme/authority, encoded query.
+			http.Redirect(w, r, clean.RequestURI(), http.StatusSeeOther)
+			return
+		}
+		h.showPasswordForm(w, r, page)
+		return
+	}
 	// Check visibility
 	if !h.pageAccessAllowed(r, page) {
 		if page.Visibility == core.VisibilityPrivate {
@@ -156,6 +193,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
+	data.SubscriptionsAvailable = h.SubscriptionsAvailable()
 
 	// Serve appropriate format
 	acceptHeader := r.Header.Get("Accept")
@@ -203,11 +241,12 @@ func (h *Handler) pageAccessAllowed(r *http.Request, page *core.StatusPage) bool
 
 // isAuthenticated checks if request is authenticated for private pages
 func (h *Handler) isAuthenticated(r *http.Request, page *core.StatusPage) bool {
-	// Check session cookie or API key
-	sessionCookie, err := r.Cookie("anubis_session")
-	if err == nil && sessionCookie.Value != "" {
-		// Validate session (implementation depends on auth system)
-		return h.validateSession(sessionCookie.Value, page.WorkspaceID)
+	// auth_token is issued by REST/OIDC login. Keep the legacy cookie for
+	// existing status-page clients, but never let it override a supplied login.
+	for _, name := range []string{"auth_token", "anubis_session"} {
+		if cookie, err := r.Cookie(name); err == nil && cookie.Value != "" {
+			return h.validateSession(cookie.Value, page.WorkspaceID)
+		}
 	}
 
 	// Check API key header
@@ -244,19 +283,37 @@ func (h *Handler) requestAuthentication(w http.ResponseWriter, r *http.Request) 
 
 // checkPasswordProtection checks password protection
 func (h *Handler) checkPasswordProtection(r *http.Request, page *core.StatusPage) bool {
-	// Check password cookie
-	passCookie, err := r.Cookie("anubis_page_pass")
-	if err == nil && passCookie.Value != "" {
-		return h.verifyPagePassword(passCookie.Value, page)
+	if page == nil || page.PasswordHash == "" {
+		return false
 	}
-
-	// Check form submission
-	password := r.URL.Query().Get("password")
-	if password != "" {
-		return h.verifyPagePassword(password, page)
+	cookie, err := r.Cookie("anubis_page_pass")
+	if err != nil {
+		return false
 	}
-
-	return false
+	parts := strings.Split(cookie.Value, ".")
+	if len(parts) != 2 {
+		return false
+	}
+	data, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return false
+	}
+	payload := strings.Split(string(data), "|")
+	if len(payload) != 2 || payload[0] != page.ID {
+		return false
+	}
+	expires, err := strconv.ParseInt(payload[1], 10, 64)
+	if err != nil || time.Now().Unix() >= expires {
+		return false
+	}
+	expected := pagePasswordTicket(page, time.Unix(expires, 0))
+	return hmac.Equal([]byte(cookie.Value), []byte(expected))
+}
+func pagePasswordTicket(page *core.StatusPage, expires time.Time) string {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(page.ID + "|" + strconv.FormatInt(expires.Unix(), 10)))
+	mac := hmac.New(sha256.New, []byte(page.PasswordHash))
+	mac.Write([]byte(payload))
+	return payload + "." + hex.EncodeToString(mac.Sum(nil))
 }
 
 // verifyPagePassword verifies the page password
@@ -347,7 +404,7 @@ func (h *Handler) showPasswordForm(w http.ResponseWriter, r *http.Request, page 
         <div class="logo">𓃥</div>
         <h1>%s</h1>
         <p>This status page is password protected</p>
-        <form method="GET" action="">
+        <form method="POST" action="">
             <input type="password" name="password" placeholder="Enter password" required autofocus>
             <button type="submit">Access Status Page</button>
         </form>
@@ -429,8 +486,13 @@ func (h *Handler) buildStatusPageData(page *core.StatusPage) (*core.StatusPageDa
 		souls = append(souls, soulInfo)
 	}
 
+	// Operator-posted incidents and maintenance announcements override the
+	// component status they name (incidents.go).
+	announcements := core.PublicAnnouncements(h.announcementsWithWindows(page), now)
+	applyIncidentImpact(souls, page.Incidents, announcements, now)
+
 	// Calculate overall status
-	overallStatus := core.CalculateOverallStatus(souls)
+	overallStatus := overallWithIncidents(core.CalculateOverallStatus(souls), page.Incidents)
 
 	// Get groups with soul data
 	var soulsByID map[string]core.SoulStatusInfo
@@ -484,6 +546,9 @@ func (h *Handler) buildStatusPageData(page *core.StatusPage) (*core.StatusPageDa
 		Groups:    groups,
 		Incidents: statusIncidents,
 		Uptime:    uptimeData,
+
+		IncidentHistory: core.PublicIncidentHistory(page.Incidents, now),
+		Maintenance:     announcements,
 	}, nil
 }
 
@@ -504,13 +569,20 @@ func (h *Handler) buildUptimeData(page *core.StatusPage, souls []core.SoulStatus
 	})
 
 	// Calculate overall uptime percentage
+	// Days without any judgment (Status "unknown") are not downtime; the
+	// per-soul figure in buildStatusPageData skips them the same way.
 	var totalUptime float64
+	judgedDays := 0
 	for _, day := range days {
+		if day.Status == "unknown" {
+			continue
+		}
 		totalUptime += day.Uptime
+		judgedDays++
 	}
 	overallPercent := 0.0
-	if len(days) > 0 {
-		overallPercent = totalUptime / float64(len(days))
+	if judgedDays > 0 {
+		overallPercent = totalUptime / float64(judgedDays)
 	}
 
 	return core.UptimeData{
@@ -538,9 +610,19 @@ func (h *Handler) serveHTML(w http.ResponseWriter, r *http.Request, page *core.S
 	html := h.renderStatusPage(page, data, theme)
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=60")
+	setPageCacheControl(w, page, 60)
 	// Write failure past this point means the client is gone; not actionable.
 	_, _ = w.Write([]byte(html))
+}
+
+// setPageCacheControl keeps session/password protected output out of shared
+// caches, including the JSON, badge, widget, feed and authentication responses.
+func setPageCacheControl(w http.ResponseWriter, page *core.StatusPage, publicMaxAge int) {
+	if page.Visibility == core.VisibilityPrivate || page.Visibility == core.VisibilityProtected {
+		w.Header().Set("Cache-Control", "private, no-store")
+		return
+	}
+	w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d", publicMaxAge))
 }
 
 // renderStatusPage renders the status page HTML
@@ -592,26 +674,8 @@ func (h *Handler) renderStatusPage(page *core.StatusPage, data *core.StatusPageD
 		)
 	}
 
-	// Build incidents
-	incidentsHTML := ""
-	if len(data.Incidents) > 0 {
-		incidentsHTML = `<div class="incidents-section"><h2>Active Incidents</h2>`
-		for _, inc := range data.Incidents {
-			incidentsHTML += fmt.Sprintf(`
-			<div class="incident severity-%s">
-				<h3>%s</h3>
-				<p>%s</p>
-				<div class="incident-meta">
-					<span>Started: %s</span>
-					<span>Status: %s</span>
-				</div>
-			</div>`,
-				html.EscapeString(string(inc.Severity)), html.EscapeString(inc.Title), html.EscapeString(inc.Description),
-				inc.StartedAt.Format(time.RFC3339), html.EscapeString(string(inc.Status)),
-			)
-		}
-		incidentsHTML += "</div>"
-	}
+	// Build active incidents and pending maintenance (incidents.go)
+	incidentsHTML := renderActiveSections(data)
 
 	// Build uptime chart (simplified)
 	uptimeHTML := fmt.Sprintf(`
@@ -629,6 +693,10 @@ func (h *Handler) renderStatusPage(page *core.StatusPage, data *core.StatusPageD
 			dayClass, day.Date, day.Uptime)
 	}
 	uptimeHTML += "</div></div>"
+	uptimeHTML += renderHistorySection(data)
+	if data.SubscriptionsAvailable {
+		uptimeHTML += subscribeFormHTML(page)
+	}
 
 	// Sanitize custom CSS: strip anything that could break out of the <style> block
 	// or inject CSSexpression/behaviors/urls that could lead to script execution
@@ -763,6 +831,23 @@ func (h *Handler) renderStatusPage(page *core.StatusPage, data *core.StatusPageD
         .incident.severity-high { border-left: 4px solid #f97316; }
         .incident.severity-medium { border-left: 4px solid #f59e0b; }
         .incident.severity-low { border-left: 4px solid #3b82f6; }
+        .incident.impact-critical { border-left: 4px solid #ef4444; }
+        .incident.impact-major { border-left: 4px solid #f97316; }
+        .incident.impact-minor { border-left: 4px solid #f59e0b; }
+        .incident.impact-none { border-left: 4px solid #3b82f6; }
+        .active-incidents.impact-critical h2 { color: #ef4444; }
+        .active-incidents.impact-major h2 { color: #f97316; }
+        .active-incidents.impact-minor h2 { color: #f59e0b; }
+        .impact-badge, .phase-badge { font-size: 0.75rem; padding: 0.1rem 0.5rem; border-radius: 999px; border: 1px solid var(--border); vertical-align: middle; }
+        .incident-meta { display: flex; flex-wrap: wrap; gap: 1rem; font-size: 0.85rem; color: rgba(255,255,255,0.6); }
+        .incident-affected { font-size: 0.85rem; margin-top: 0.5rem; }
+        .incident-timeline { list-style: none; margin-top: 0.75rem; border-left: 2px solid var(--border); padding-left: 1rem; }
+        .incident-timeline li { margin-bottom: 0.75rem; overflow-wrap: anywhere; }
+        .incident-timeline time { font-size: 0.8rem; color: rgba(255,255,255,0.5); }
+        .incident a, .announcement a { color: var(--accent); }
+        .announcement { background: var(--card-bg); border: 1px solid var(--border); border-left: 4px solid #3b82f6; border-radius: 0.75rem; padding: 1.5rem; margin-bottom: 1rem; }
+        .announcement.phase-completed { opacity: 0.7; border-left-color: #64748b; }
+        .history-window, .history-empty { color: rgba(255,255,255,0.6); margin-bottom: 1rem; }
         .uptime-section {
             margin: 2rem 0;
             text-align: center;
@@ -866,75 +951,9 @@ func (h *Handler) renderStatusPage(page *core.StatusPage, data *core.StatusPageD
 	)
 }
 
-// SubscribeHandler handles subscription requests
-func (h *Handler) SubscribeHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	// Parse request
-	var req struct {
-		PageID     string `json:"page_id"`
-		Email      string `json:"email"`
-		WebhookURL string `json:"webhook_url,omitempty"`
-		Type       string `json:"type"` // email, webhook, rss
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
-	}
-
-	// Validate
-	if req.PageID == "" {
-		http.Error(w, "Page ID required", http.StatusBadRequest)
-		return
-	}
-
-	if req.Type == "" {
-		req.Type = "email"
-	}
-
-	if req.Type == "email" && req.Email == "" {
-		http.Error(w, "Email required for email subscriptions", http.StatusBadRequest)
-		return
-	}
-
-	if req.Type == "webhook" && req.WebhookURL == "" {
-		http.Error(w, "Webhook URL required for webhook subscriptions", http.StatusBadRequest)
-		return
-	}
-
-	// Create subscription
-	sub := &core.StatusPageSubscription{
-		ID:           core.GenerateID(),
-		PageID:       req.PageID,
-		Email:        req.Email,
-		WebhookURL:   req.WebhookURL,
-		Type:         req.Type,
-		SubscribedAt: time.Now().UTC(),
-		Confirmed:    false, // Require email confirmation
-	}
-
-	// Store subscription
-	if h.repository != nil {
-		if err := h.repository.SaveSubscription(sub); err != nil {
-			http.Error(w, "Failed to save subscription", http.StatusInternalServerError)
-			return
-		}
-	}
-
-	// Return success
-	w.Header().Set("Content-Type", "application/json")
-	// Client is gone on write failure; nothing actionable remains.
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"success":               true,
-		"message":               "Subscription created. Please confirm your subscription.",
-		"subscription_id":       sub.ID,
-		"confirmation_required": req.Type == "email",
-	})
-}
+// maxSubscribeBodyBytes caps a subscription request: a page ID, an email, a
+// webhook URL and a type fit in a few hundred bytes.
+const maxSubscribeBodyBytes = 4096
 
 // BadgeHandler serves embeddable status badge (SVG/PNG)
 func (h *Handler) BadgeHandler(w http.ResponseWriter, r *http.Request) {
@@ -952,6 +971,7 @@ func (h *Handler) BadgeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setPageCacheControl(w, page, 60)
 	if !h.pageAccessAllowed(r, page) {
 		h.requestAuthentication(w, r)
 		return
@@ -1003,7 +1023,7 @@ func (h *Handler) BadgeHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Serve SVG badge
 	w.Header().Set("Content-Type", "image/svg+xml")
-	w.Header().Set("Cache-Control", "public, max-age=60")
+	setPageCacheControl(w, page, 60)
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	badgeText := "AnubisWatch"
@@ -1057,6 +1077,7 @@ func (h *Handler) WidgetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setPageCacheControl(w, page, 60)
 	if !h.pageAccessAllowed(r, page) {
 		h.requestAuthentication(w, r)
 		return
@@ -1095,7 +1116,7 @@ func (h *Handler) WidgetHandler(w http.ResponseWriter, r *http.Request) {
 	showDetails := style == "detailed"
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=60")
+	setPageCacheControl(w, page, 60)
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
 
@@ -1197,6 +1218,7 @@ func (h *Handler) RSSFeedHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setPageCacheControl(w, page, 300)
 	if !h.pageAccessAllowed(r, page) {
 		h.requestAuthentication(w, r)
 		return
@@ -1208,16 +1230,25 @@ func (h *Handler) RSSFeedHandler(w http.ResponseWriter, r *http.Request) {
 		incidents = []core.Incident{}
 	}
 
+	feedBaseURL := "https://" + page.CustomDomain
+	if page.CustomDomain == "" {
+		scheme := "http"
+		if r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+			scheme = "https"
+		}
+		feedBaseURL = fmt.Sprintf("%s://%s/status/%s", scheme, r.Host, pageID)
+	}
+
 	// Build RSS feed
 	rss := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
   <channel>
     <title>%s - Status Updates</title>
     <description>Status updates for %s</description>
-    <link>https://%s</link>
+    <link>%s</link>
     <lastBuildDate>%s</lastBuildDate>
     <generator>AnubisWatch</generator>
-`, html.EscapeString(page.Name), html.EscapeString(page.Name), html.EscapeString(page.CustomDomain), time.Now().UTC().Format(time.RFC1123Z))
+`, html.EscapeString(page.Name), html.EscapeString(page.Name), html.EscapeString(feedBaseURL), time.Now().UTC().Format(time.RFC1123Z))
 
 	for _, inc := range incidents {
 		// Get soul name for context
@@ -1228,21 +1259,24 @@ func (h *Handler) RSSFeedHandler(w http.ResponseWriter, r *http.Request) {
 
 		rss += fmt.Sprintf(`    <item>
       <title>%s - %s</title>
-      <description><![CDATA[Incident on %s: %s]]></description>
+      <description>Incident on %s: %s</description>
       <pubDate>%s</pubDate>
-      <link>https://%s/incidents/%s</link>
+      <link>%s/incidents/%s</link>
       <guid isPermaLink="false">%s</guid>
     </item>
 `, html.EscapeString(soulName), html.EscapeString(string(inc.Status)), html.EscapeString(soulName), html.EscapeString(string(inc.Status)),
 			inc.StartedAt.Format(time.RFC1123Z),
-			html.EscapeString(page.CustomDomain), html.EscapeString(inc.ID), html.EscapeString(inc.ID))
+			html.EscapeString(feedBaseURL), html.EscapeString(inc.ID), html.EscapeString(inc.ID))
 	}
+
+	// The page's own incidents and scheduled maintenance (incidents.go).
+	rss += rssPageItems(page, h.announcementsWithWindows(page), feedBaseURL, time.Now())
 
 	rss += `  </channel>
 </rss>`
 
 	w.Header().Set("Content-Type", "application/rss+xml")
-	w.Header().Set("Cache-Control", "public, max-age=300")
+	setPageCacheControl(w, page, 300)
 	// Client is gone on write failure; nothing actionable remains.
 	_, _ = w.Write([]byte(rss))
 }
@@ -1253,9 +1287,8 @@ func (h *Handler) Router() http.Handler {
 
 	// Main status page handler
 	mux.HandleFunc("/status/", func(w http.ResponseWriter, r *http.Request) {
-		// Check if this is a subscription request
-		if r.URL.Path == "/status/subscribe" {
-			h.SubscribeHandler(w, r)
+		// Subscription endpoints
+		if h.serveSubscriptionRoute(w, r) {
 			return
 		}
 		// Check if this is an RSS feed request

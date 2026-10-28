@@ -121,6 +121,7 @@ export async function waitForIncident(
 	page: import("@playwright/test").Page,
 	server: { baseURL: string },
 	token: string,
+	soulId: string,
 	timeoutMs = 90_000,
 ): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
@@ -131,11 +132,17 @@ export async function waitForIncident(
 		);
 		if (res.status() === 200) {
 			const incidents = await res.json();
-			if (Array.isArray(incidents) && incidents.length > 0) return;
+			// The server is shared between specs: wait for this soul's
+			// incident, not for any incident another spec left open.
+			if (
+				Array.isArray(incidents) &&
+				incidents.some((i: { soul_id?: string }) => i.soul_id === soulId)
+			)
+				return;
 		}
 		await page.waitForTimeout(3_000);
 	}
-	throw new Error(`No incidents created within ${timeoutMs}ms`);
+	throw new Error(`No incident for soul ${soulId} within ${timeoutMs}ms`);
 }
 
 export function filterExpectedE2EIssues(issues: string[]): string[] {

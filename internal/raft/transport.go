@@ -84,6 +84,15 @@ func NewTCPTransport(bindAddr, advertiseAddr string, tlsConfig *tls.Config, logg
 	return t, nil
 }
 
+// clientAuthName names the ClientAuth mode a listener will enforce, for
+// startup logs; "none" for a nil config (plaintext listener).
+func clientAuthName(cfg *tls.Config) string {
+	if cfg == nil {
+		return "none"
+	}
+	return cfg.ClientAuth.String()
+}
+
 // Start starts listening for incoming connections
 func (t *TCPTransport) Start() error {
 	var listener net.Listener
@@ -105,7 +114,8 @@ func (t *TCPTransport) Start() error {
 	t.logger.Info("TCP transport started",
 		"bind_addr", t.bindAddr,
 		"advertise_addr", t.advertiseAddr,
-		"tls", t.tlsConfig != nil)
+		"tls", t.tlsConfig != nil,
+		"client_auth", clientAuthName(t.tlsConfig))
 
 	// Accept connections
 	go t.acceptLoop()
@@ -611,21 +621,29 @@ func (t *TCPTransport) sendRPCOn(peerID, poolKey string, method string, req inte
 // the peer ID as its key; Forward RPCs use their own (see SendForward).
 func (t *TCPTransport) getPooledConnection(poolKey, peerID string) (net.Conn, error) {
 	t.connMu.Lock()
-	defer t.connMu.Unlock()
+	if t.shutdown.Load() {
+		t.connMu.Unlock()
+		return nil, fmt.Errorf("transport stopped")
+	}
 
 	// Check existing connection
 	if conn, ok := t.connections[poolKey]; ok {
 		// Connection exists, assume it's healthy
 		// The actual RPC will reveal if it's stale
+		t.connMu.Unlock()
 		return conn, nil
 	}
 
 	// Get peer address
 	addr, ok := t.peerAddrs[peerID]
+	t.connMu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("unknown peer %s", peerID)
 	}
 
+	// Dial outside the pool lock: an unreachable peer must not prevent votes,
+	// replication or existing connections to other peers from making progress.
+	// The caller serializes this pool key; recheck ownership after the dial.
 	// Create new connection with timeout
 	const connectionTimeout = 5 * time.Second
 	var conn net.Conn
@@ -644,6 +662,20 @@ func (t *TCPTransport) getPooledConnection(poolKey, peerID string) (net.Conn, er
 		return nil, fmt.Errorf("failed to connect to %s (%s): %w", peerID, addr, err)
 	}
 
+	t.connMu.Lock()
+	defer t.connMu.Unlock()
+	if t.shutdown.Load() {
+		conn.Close()
+		return nil, fmt.Errorf("transport stopped during connection")
+	}
+	if current, exists := t.peerAddrs[peerID]; !exists || current != addr {
+		conn.Close()
+		return nil, fmt.Errorf("peer %s changed during connection", peerID)
+	}
+	if existing, exists := t.connections[poolKey]; exists {
+		conn.Close()
+		return existing, nil
+	}
 	t.connections[poolKey] = conn
 	t.logger.Debug("Created connection to peer", "peer_id", peerID, "address", addr)
 

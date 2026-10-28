@@ -40,6 +40,7 @@ config:
   server:
     host: 0.0.0.0
     port: 8080
+    metricsAuth: true
     # TLS terminates at the ingress configured below. Pod traffic is HTTP
     # inside the cluster, so no nonexistent certificate paths are advertised.
     tls:

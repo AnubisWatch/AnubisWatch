@@ -15,15 +15,20 @@ import (
 // Manager handles alert routing and delivery
 // The high priest who receives omens and dispatches messengers
 type Manager struct {
-	mu        sync.RWMutex
-	channels  map[string]*core.AlertChannel
-	rules     map[string]*core.AlertRule
-	history   *core.AlertHistory
-	incidents map[string]*core.Incident
+	mu          sync.RWMutex
+	dedupMu     sync.Mutex        // serializes enqueue claims, persistence and release
+	dedupClaims map[string]string // dedup key -> owning event ID; guarded by history.Mu
+	channels    map[string]*core.AlertChannel
+	rules       map[string]*core.AlertRule
+	history     *core.AlertHistory
+	incidents   map[string]*core.Incident
 	// failureStreak tracks consecutive non-alive judgments per (ruleID, soulID).
 	// Used by the consecutive_failures condition to know when a streak crosses
 	// its threshold. Reset to 0 by any non-failure judgment.
 	failureStreak map[string]int
+	// flapBaselines holds, per flapping soul, the status it had when
+	// flapping started (guarded by mu).
+	flapBaselines map[string]core.SoulStatus
 
 	// statusSince records when each soul first entered its current status, so
 	// the status_for condition can honour its configured dwell time instead of
@@ -31,6 +36,7 @@ type Manager struct {
 	// holding only the latest status, so a status change resets the clock and
 	// the map stays bounded by the number of souls rather than growing per rule.
 	statusSince map[string]statusHold
+	rateSamples map[string][]rateSample
 
 	// Dispatchers
 	dispatchers map[core.AlertChannelType]ChannelDispatcher
@@ -452,9 +458,28 @@ func (m *Manager) DeleteRule(id string) error {
 
 // ProcessJudgment evaluates a judgment against alert rules
 func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, judgment *core.Judgment) {
+	if soul == nil || judgment == nil {
+		return
+	}
+	// The soul is the authoritative routing context; do not mutate caller state.
+	copyJudgment := *judgment
+	copyJudgment.WorkspaceID = defaultWorkspace(soul.WorkspaceID)
+	copyJudgment.SoulID = soul.ID
+	judgment = &copyJudgment
 	if m.isSuppressedByMaintenance(soul, time.Now().UTC()) {
 		m.mu.Lock()
 		m.stats.filteredAlerts++
+		// The alert is suppressed, but the check still happened: a healthy
+		// result ends any run of failures. Skipping the streak update here let
+		// a failure run span a recovery that only occurred inside the window,
+		// so the first failure after maintenance could page as the Nth.
+		if judgment.Status != core.SoulDead {
+			for _, rule := range m.rules {
+				if rule.Enabled && m.ruleApplies(rule, soul) {
+					delete(m.failureStreak, rule.ID+":"+soul.ID)
+				}
+			}
+		}
 		m.mu.Unlock()
 		m.logger.Debug("Alert suppressed by active maintenance window",
 			"soul_id", soul.ID,
@@ -468,6 +493,24 @@ func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, j
 		rules = append(rules, rule)
 	}
 	m.mu.RUnlock()
+
+	m.noteRateJudgment(judgment, rules)
+
+	// Flap detection (set by the owning probe engine): while the soul flaps,
+	// rule alerts are suppressed and auto-resolve waits; the judgments that
+	// start and end flapping send one notice per covering rule instead.
+	var flapping bool
+	var flapChange string
+	var flapBaseline core.SoulStatus
+	if judgment.Details != nil {
+		flapping, flapChange = judgment.Details.Flapping, judgment.Details.FlapChange
+		flapBaseline = judgment.Details.FlapBaseline
+	}
+	// When flapping ends, rules compare against the status the soul had when
+	// it started flapping (the last status alerts acted on), not the previous
+	// judgment: a soul that went hard down while flagged otherwise
+	// stabilizes dead->dead and its outage would never alert.
+	rulePrev := m.flapRulePrev(soul.ID, prevStatus, flapChange, flapBaseline)
 
 	// Check each rule
 	for _, rule := range rules {
@@ -490,8 +533,15 @@ func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, j
 		// status_for can measure how long the current status has held.
 		m.noteStatus(soul.ID, judgment.Status)
 
+		if flapChange != "" {
+			m.enqueueFlapNotice(rule, soul, prevStatus, judgment, flapChange)
+		}
+		if flapping {
+			continue
+		}
+
 		// Check conditions
-		triggered := m.checkConditions(rule, prevStatus, judgment)
+		triggered := m.checkConditions(rule, rulePrev, judgment)
 		if !triggered {
 			// On a healthy judgment, auto-resolve any open incident for
 			// this (rule, soul) pair if the rule has AutoResolve enabled.
@@ -515,7 +565,7 @@ func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, j
 			SoulName:    soul.Name,
 			WorkspaceID: soul.WorkspaceID,
 			Status:      judgment.Status,
-			PrevStatus:  prevStatus,
+			PrevStatus:  rulePrev,
 			Judgment:    judgment,
 			Message:     judgment.Message,
 			Details:     m.extractDetails(judgment),
@@ -529,24 +579,86 @@ func (m *Manager) ProcessJudgment(soul *core.Soul, prevStatus core.SoulStatus, j
 		// rather than creating a duplicate.
 		m.recordIncident(rule, soul, event)
 
-		// Check deduplication before queuing
-		if m.isDuplicate(rule, event) {
-			m.logger.Debug("Alert deduplicated",
-				"rule", rule.Name,
-				"soul_id", event.SoulID)
-			continue
-		}
-		// Share the new dedup record, so a node that takes this soul over
-		// keeps honouring the cooldown instead of re-sending the alert.
-		m.persistDedup(event)
+		m.enqueueAlert(rule, event)
+	}
+}
 
-		// Send to queue
-		select {
-		case m.queue <- event:
-		default:
-			m.logger.Warn("Alert queue full, dropping event",
-				"soul_id", soul.ID)
+// flapRulePrev returns the previous status rules should see. On the
+// judgment that stops flapping it is the pre-flap baseline: the one the
+// probe engine records (replicated with the judgment, so it survives an
+// ownership change), else the prevStatus this manager saw when flapping
+// started.
+func (m *Manager) flapRulePrev(soulID string, prevStatus core.SoulStatus, change string, baseline core.SoulStatus) core.SoulStatus {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	switch change {
+	case core.FlapStarted:
+		if m.flapBaselines == nil {
+			m.flapBaselines = make(map[string]core.SoulStatus)
 		}
+		if baseline == "" {
+			baseline = prevStatus
+		}
+		m.flapBaselines[soulID] = baseline
+	case core.FlapStopped:
+		if baseline == "" {
+			baseline = m.flapBaselines[soulID]
+		}
+		delete(m.flapBaselines, soulID)
+		if baseline != "" {
+			return baseline
+		}
+	}
+	return prevStatus
+}
+
+// enqueueFlapNotice sends the "flapping started" / "flapping stopped" notice
+// for one rule through the normal dedup and dispatch path. Notices do not
+// open incidents.
+func (m *Manager) enqueueFlapNotice(rule *core.AlertRule, soul *core.Soul, prevStatus core.SoulStatus, judgment *core.Judgment, change string) {
+	kind := core.AlertKindFlappingStarted
+	severity := core.SeverityWarning
+	message := fmt.Sprintf("%s is flapping (current status: %s); status alerts are suppressed until it stabilizes", soul.Name, judgment.Status)
+	if change == core.FlapStopped {
+		kind = core.AlertKindFlappingStopped
+		severity = core.SeverityInfo
+		message = fmt.Sprintf("%s stopped flapping; current status: %s", soul.Name, judgment.Status)
+	}
+	details := m.extractDetails(judgment)
+	details["flapping"] = change
+	m.enqueueAlert(rule, &core.AlertEvent{
+		ID:          generateAlertID(),
+		RuleID:      rule.ID,
+		Kind:        kind,
+		SoulID:      soul.ID,
+		SoulName:    soul.Name,
+		WorkspaceID: soul.WorkspaceID,
+		Status:      judgment.Status,
+		PrevStatus:  prevStatus,
+		Judgment:    judgment,
+		Message:     message,
+		Details:     details,
+		Severity:    severity,
+		Timestamp:   time.Now().UTC(),
+	})
+}
+
+// enqueueAlert keeps a dedup reservation only when the queue accepted the event.
+// The reservation is established before publishing to workers, so fast failures
+// cannot release it before it has been persisted.
+func (m *Manager) enqueueAlert(rule *core.AlertRule, event *core.AlertEvent) {
+	m.dedupMu.Lock()
+	defer m.dedupMu.Unlock()
+	if m.isDuplicate(rule, event) {
+		m.logger.Debug("Alert deduplicated", "rule", rule.Name, "soul_id", event.SoulID)
+		return
+	}
+	m.persistDedup(event)
+	select {
+	case m.queue <- event:
+	default:
+		m.releaseDedupLocked(event)
+		m.logger.Warn("Alert queue full, dropping event", "soul_id", event.SoulID)
 	}
 }
 
@@ -733,7 +845,13 @@ func (m *Manager) dispatch(event *core.AlertEvent) {
 			continue
 		}
 
-		if !channel.ShouldNotify(event) {
+		// Filters may select the destination type, so populate the private
+		// per-channel routing fields before evaluating them. Keeping this copy
+		// channel-local also prevents concurrent dispatchers racing on the event.
+		channelEvent := *event
+		channelEvent.ChannelID = channel.ID
+		channelEvent.ChannelType = channel.Type
+		if !channel.ShouldNotify(&channelEvent) {
 			m.mu.Lock()
 			m.stats.filteredAlerts++
 			m.mu.Unlock()
@@ -755,13 +873,10 @@ func (m *Manager) dispatch(event *core.AlertEvent) {
 		wg.Add(1)
 		sem <- struct{}{}
 
-		go func(ch *core.AlertChannel) {
+		go func(ch *core.AlertChannel, channelEvent core.AlertEvent) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			// Each dispatcher gets private routing fields. Sharing event here lets
-			// concurrent channels race while assigning ChannelID/ChannelType.
-			channelEvent := *event
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			err := m.sendToChannel(ctx, &channelEvent, ch)
 			cancel()
@@ -778,7 +893,7 @@ func (m *Manager) dispatch(event *core.AlertEvent) {
 					"channel", ch.ID,
 					"soul_id", event.SoulID)
 			}
-		}(channel)
+		}(channel, channelEvent)
 	}
 
 	wg.Wait()
@@ -805,11 +920,23 @@ func (m *Manager) dispatch(event *core.AlertEvent) {
 // releaseDedup drops the entry isDuplicate recorded for this event, so an
 // undelivered alert can be attempted again on the next judgment.
 func (m *Manager) releaseDedup(event *core.AlertEvent) {
+	m.dedupMu.Lock()
+	defer m.dedupMu.Unlock()
+	m.releaseDedupLocked(event)
+}
+
+func (m *Manager) releaseDedupLocked(event *core.AlertEvent) {
 	if event == nil || event.RuleID == "" {
 		return
 	}
-	key := dedupKey(event.RuleID, event.SoulID, event.Status)
+	key := dedupKey(event.RuleID, event.SoulID, dedupStatus(event))
 	m.history.Mu.Lock()
+	owner, owns := m.dedupClaims[key]
+	if !owns || owner != event.ID {
+		m.history.Mu.Unlock()
+		return
+	}
+	delete(m.dedupClaims, key)
 	delete(m.history.Entries, key)
 	m.history.Mu.Unlock()
 	if store, ok := m.storage.(DedupStateStore); ok {
@@ -956,6 +1083,11 @@ func (m *Manager) registerDispatchers() {
 
 // ruleApplies checks if a rule applies to a soul
 func (m *Manager) ruleApplies(rule *core.AlertRule, soul *core.Soul) bool {
+	// A rule belongs to one workspace (empty means "default", as in dispatch):
+	// it must never fire for, or open incidents on, another workspace's souls.
+	if workspaceOrDefault(rule.WorkspaceID) != workspaceOrDefault(soul.WorkspaceID) {
+		return false
+	}
 	scope := rule.Scope
 
 	// When Type is unset, infer from which sub-field is populated. This
@@ -1099,8 +1231,11 @@ func (m *Manager) checkConditions(rule *core.AlertRule, prevStatus core.SoulStat
 				return true
 			}
 		case "failure_rate":
-			// Would need historical data
-			if judgment.Status == core.SoulDead {
+			if m.failureRateCondition(cond, judgment) {
+				return true
+			}
+		case "percentage":
+			if m.percentageCondition(cond, judgment) {
 				return true
 			}
 		case "degraded":
@@ -1193,12 +1328,22 @@ func (m *Manager) rateLimitStep(key string, channel *core.AlertChannel, event *c
 }
 
 // isDuplicate checks if an identical alert was recently sent (deduplication)
-func (m *Manager) isDuplicate(rule *core.AlertRule, event *core.AlertEvent) bool {
+func (m *Manager) isDuplicate(rule *core.AlertRule, event *core.AlertEvent) (duplicate bool) {
 	// Build dedup key: rule + soul + status
-	key := dedupKey(rule.ID, event.SoulID, event.Status)
+	key := dedupKey(rule.ID, event.SoulID, dedupStatus(event))
+	status := dedupStatus(event)
 
 	m.history.Mu.Lock()
 	defer m.history.Mu.Unlock()
+
+	defer func() {
+		if !duplicate {
+			if m.dedupClaims == nil {
+				m.dedupClaims = make(map[string]string)
+			}
+			m.dedupClaims[key] = event.ID
+		}
+	}()
 
 	entry, exists := m.history.Entries[key]
 	if !exists {
@@ -1209,7 +1354,7 @@ func (m *Manager) isDuplicate(rule *core.AlertRule, event *core.AlertEvent) bool
 			Count:      1,
 			FirstSent:  time.Now(),
 			LastSent:   time.Now(),
-			SoulStatus: event.Status,
+			SoulStatus: status,
 		}
 		return false
 	}
@@ -1229,12 +1374,12 @@ func (m *Manager) isDuplicate(rule *core.AlertRule, event *core.AlertEvent) bool
 	}
 
 	// Within dedup window - check if status changed
-	if entry.SoulStatus != event.Status {
+	if entry.SoulStatus != status {
 		// Status changed, allow alert
 		entry.FirstSent = time.Now()
 		entry.LastSent = time.Now()
 		entry.Count = 1
-		entry.SoulStatus = event.Status
+		entry.SoulStatus = status
 		return false
 	}
 
@@ -1414,7 +1559,9 @@ func (m *Manager) evaluateCondition(cond core.AlertCondition, prevStatus core.So
 	case "status_for":
 		return m.statusForCondition(cond, judgment)
 	case "failure_rate":
-		return judgment.Status == core.SoulDead
+		return m.failureRateCondition(cond, judgment)
+	case "percentage":
+		return m.percentageCondition(cond, judgment)
 	case "degraded":
 		return judgment.Status == core.SoulDegraded
 	case "recovery":
@@ -1736,15 +1883,19 @@ func (m *Manager) checkEscalations() {
 		if !ok || rule.Escalation == nil || len(rule.Escalation.Stages) == 0 {
 			continue
 		}
+		// Decide under the read lock: shouldEscalate reads incident fields
+		// (AckedAt, LastEscalatedAt, EscalationLevel) that updateIncident and
+		// escalateIncident write under the write lock. Reading them after
+		// RUnlock raced with an acknowledge or escalation.
+		if !m.shouldEscalate(inc, rule) {
+			continue
+		}
 		work = append(work, escalationWork{incident: inc, rule: rule})
 	}
 	m.mu.RUnlock()
 
 	for _, w := range work {
-		// Check if escalation is needed
-		if m.shouldEscalate(w.incident, w.rule) {
-			m.escalateIncident(w.incident, w.rule)
-		}
+		m.escalateIncident(w.incident, w.rule)
 	}
 }
 
@@ -1802,13 +1953,25 @@ func (m *Manager) escalateIncident(incident *core.Incident, rule *core.AlertRule
 		return
 	}
 
+	// Snapshot the fields used after m.mu is released below: updateIncident
+	// replaces the incident object under the write lock while escalation
+	// dispatch runs, so reading the live pointer after Unlock raced with it.
+	incidentID := incident.ID
+	soulID := incident.SoulID
+	soulName := incident.SoulName
+	workspaceID := incident.WorkspaceID
+	level := incident.EscalationLevel
+
 	// Get current stage
-	stage := esc.Stages[incident.EscalationLevel]
+	stage := esc.Stages[level]
 
 	// Get escalation channels
 	channels := make([]*core.AlertChannel, 0, len(stage.Channels))
 	for _, chID := range stage.Channels {
-		if ch, ok := m.channels[chID]; ok {
+		// Same eligibility as dispatch: a disabled channel is never notified
+		// and a channel of another workspace never sees this incident.
+		if ch, ok := m.channels[chID]; ok && ch.Enabled &&
+			workspaceOrDefault(ch.WorkspaceID) == workspaceOrDefault(workspaceID) {
 			channels = append(channels, ch)
 		}
 	}
@@ -1816,7 +1979,7 @@ func (m *Manager) escalateIncident(incident *core.Incident, rule *core.AlertRule
 	if len(channels) == 0 {
 		m.mu.Unlock()
 		m.logger.Warn("No escalation channels available",
-			"incident_id", incident.ID,
+			"incident_id", incidentID,
 			"rule_id", rule.ID)
 		return
 	}
@@ -1825,12 +1988,12 @@ func (m *Manager) escalateIncident(incident *core.Incident, rule *core.AlertRule
 	now := time.Now()
 	event := &core.AlertEvent{
 		ID:          generateAlertID(),
-		SoulID:      incident.SoulID,
-		SoulName:    incident.SoulName,
-		WorkspaceID: incident.WorkspaceID,
+		SoulID:      soulID,
+		SoulName:    soulName,
+		WorkspaceID: workspaceID,
 		Status:      core.SoulDead, // Escalations are for critical incidents
 		PrevStatus:  core.SoulDead,
-		Message:     fmt.Sprintf("[ESCALATED Level %d] %s", incident.EscalationLevel+1, incident.SoulName),
+		Message:     fmt.Sprintf("[ESCALATED Level %d] %s", level+1, soulName),
 		Severity:    core.SeverityCritical,
 		Timestamp:   now,
 	}
@@ -1848,7 +2011,7 @@ func (m *Manager) escalateIncident(incident *core.Incident, rule *core.AlertRule
 		if err != nil {
 			m.logger.Error("Failed to send escalation alert",
 				"channel", channel.ID,
-				"incident_id", incident.ID,
+				"incident_id", incidentID,
 				"error", err)
 		}
 	}
@@ -1857,11 +2020,12 @@ func (m *Manager) escalateIncident(incident *core.Incident, rule *core.AlertRule
 	m.mu.Lock()
 	incident.EscalationLevel++
 	incident.LastEscalatedAt = &now
+	newLevel := incident.EscalationLevel
 
 	if m.storage != nil {
 		if err := m.storage.SaveIncident(incident); err != nil {
 			m.logger.Error("Failed to save escalated incident",
-				"incident_id", incident.ID,
+				"incident_id", incidentID,
 				"error", err)
 		}
 	}
@@ -1870,8 +2034,8 @@ func (m *Manager) escalateIncident(incident *core.Incident, rule *core.AlertRule
 	notify()
 
 	m.logger.Info("Incident escalated",
-		"incident_id", incident.ID,
-		"level", incident.EscalationLevel,
+		"incident_id", incidentID,
+		"level", newLevel,
 		"channels", len(channels))
 }
 

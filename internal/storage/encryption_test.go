@@ -107,7 +107,7 @@ func TestEncryptor_RandReaderFailure(t *testing.T) {
 }
 
 func TestEncryptor_EncryptDecrypt(t *testing.T) {
-	enc, err := newEncryptor("test-secret-key")
+	enc, err := newEncryptor("test-secret-key-0123456789abcdef")
 	if err != nil {
 		t.Fatalf("newEncryptor failed: %v", err)
 	}
@@ -139,8 +139,8 @@ func TestEncryptor_EncryptDecrypt(t *testing.T) {
 }
 
 func TestEncryptor_DifferentKeys(t *testing.T) {
-	enc1, _ := newEncryptor("key-one")
-	enc2, _ := newEncryptor("key-two")
+	enc1, _ := newEncryptor("key-one-0123456789abcdef")
+	enc2, _ := newEncryptor("key-two-0123456789abcdef")
 
 	plaintext := []byte("secret data")
 	ciphertext, _ := enc1.encrypt(plaintext)
@@ -159,7 +159,7 @@ func TestEncryptor_EmptyKey(t *testing.T) {
 }
 
 func TestEncryptor_DecryptTampered(t *testing.T) {
-	enc, _ := newEncryptor("test-key")
+	enc, _ := newEncryptor("test-key-0123456789abcdef")
 
 	plaintext := []byte("original data")
 	ciphertext, _ := enc.encrypt(plaintext)
@@ -173,7 +173,7 @@ func TestEncryptor_DecryptTampered(t *testing.T) {
 }
 
 func TestEncryptor_IsEncrypted(t *testing.T) {
-	enc, _ := newEncryptor("test-key")
+	enc, _ := newEncryptor("test-key-0123456789abcdef")
 
 	plaintext := []byte("hello")
 	ciphertext, _ := enc.encrypt(plaintext)

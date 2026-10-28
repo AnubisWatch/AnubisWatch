@@ -83,9 +83,14 @@ type MCPResponse struct {
 
 // MCPError represents an MCP error
 type MCPError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
 }
+
+// mcpQuotaExceededCode is the JSON-RPC server-error code for a tool call
+// refused by a workspace quota (REST answers the same refusal with 409).
+const mcpQuotaExceededCode = -32002
 
 // NewMCPServer creates a new MCP server
 func NewMCPServer(store Storage, probe ProbeEngine, alert AlertManager, logger *slog.Logger) *MCPServer {
@@ -170,7 +175,7 @@ func (s *MCPServer) registerBuiltinTools() {
 	s.tools["create_soul"] = MCPTool{
 		Name:               "create_soul",
 		Description:        "Create a new monitoring soul",
-		InputSchema:        json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"Soul name"},"type":{"type":"string","description":"Check type (http, tcp, etc.)"},"target":{"type":"string","description":"Target URL/address"},"interval":{"type":"string","description":"Check interval (e.g., 30s, 1m)"}},"required":["name","type","target"]}`),
+		InputSchema:        json.RawMessage(`{"type":"object","properties":{"name":{"type":"string","description":"Soul name"},"type":{"type":"string","enum":["http","tcp","udp","dns","smtp","imap","icmp","grpc","websocket","tls","heartbeat"],"description":"Check type; heartbeat is a push monitor that needs no target (its ping URL is in the result)"},"target":{"type":"string","description":"Target URL/address (not used by heartbeat)"},"interval":{"type":"string","description":"Check interval, or for heartbeat the expected ping period (e.g., 30s, 1h)"}},"required":["name","type"]}`),
 		ContextHandler:     s.handleCreateSoul,
 		RequiredPermission: "souls:*", // mirrors REST POST /api/v1/souls
 	}
@@ -361,6 +366,11 @@ func (s *MCPServer) handleCallTool(ctx context.Context, req *MCPRequest) *MCPRes
 		return s.errorResponse(req.ID, -32603, "Tool handler not configured")
 	}
 	if err != nil {
+		if qe, ok := core.AsQuotaExceeded(err); ok {
+			resp := s.errorResponse(req.ID, mcpQuotaExceededCode, qe.Error())
+			resp.Error.Data = map[string]interface{}{"code": "quota_exceeded", "quota": qe.Quota, "workspace": qe.Workspace}
+			return resp
+		}
 		return s.errorResponse(req.ID, -32603, err.Error())
 	}
 
@@ -528,11 +538,31 @@ func (s *MCPServer) handleListSouls(ctx context.Context, args json.RawMessage) (
 		souls = filtered
 	}
 
-	redacted := make([]*redactedSoulDTO, 0, len(souls))
+	redacted := make([]mcpSoulDTO, 0, len(souls))
 	for _, soul := range souls {
-		redacted = append(redacted, redactedSoulDTOFromCore(soul))
+		redacted = append(redacted, s.mcpSoulView(soul))
 	}
 	return redacted, nil
+}
+
+// mcpSoulDTO is the redacted soul plus its current flap flag.
+type mcpSoulDTO struct {
+	*redactedSoulDTO
+	Flapping bool `json:"flapping"`
+}
+
+// mcpSoulView builds the MCP view of a soul; flapping comes from the latest
+// judgment, like the REST monitor view.
+func (s *MCPServer) mcpSoulView(soul *core.Soul) mcpSoulDTO {
+	view := mcpSoulDTO{redactedSoulDTO: redactedSoulDTOFromCore(soul)}
+	if soul == nil || s.store == nil {
+		return view
+	}
+	judgments, err := s.store.ListJudgmentsNoCtx(soul.ID, time.Time{}, time.Now().Add(time.Hour), 1)
+	if err == nil && len(judgments) > 0 {
+		view.Flapping = judgmentFlapping(judgments[0])
+	}
+	return view
 }
 
 func (s *MCPServer) handleGetSoul(ctx context.Context, args json.RawMessage) (interface{}, error) {
@@ -550,7 +580,7 @@ func (s *MCPServer) handleGetSoul(ctx context.Context, args json.RawMessage) (in
 	if !mcpCanAccessWorkspace(ctx, soul.WorkspaceID) {
 		return nil, errAccessDenied
 	}
-	return redactedSoulDTOFromCore(soul), nil
+	return s.mcpSoulView(soul), nil
 }
 
 func (s *MCPServer) handleForceCheck(ctx context.Context, args json.RawMessage) (interface{}, error) {

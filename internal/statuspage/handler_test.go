@@ -1402,7 +1402,7 @@ func TestHandler_SubscribeHandler_MethodNotAllowed(t *testing.T) {
 
 func TestHandler_SubscribeHandler_InvalidJSON(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo)
+	handler := enableTestSubscriptions(NewHandler(repo))
 
 	req := httptest.NewRequest("POST", "/status/subscribe", nil)
 	req.Header.Set("Content-Type", "application/json")
@@ -1417,7 +1417,7 @@ func TestHandler_SubscribeHandler_InvalidJSON(t *testing.T) {
 
 func TestHandler_SubscribeHandler_MissingPageID(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo)
+	handler := enableTestSubscriptions(NewHandler(repo))
 
 	jsonBody := `{"type": "email", "email": "user@example.com"}`
 	req := httptest.NewRequest("POST", "/status/subscribe",
@@ -1434,7 +1434,7 @@ func TestHandler_SubscribeHandler_MissingPageID(t *testing.T) {
 
 func TestHandler_SubscribeHandler_MissingEmail(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo)
+	handler := enableTestSubscriptions(NewHandler(repo))
 
 	jsonBody := `{"page_id": "test", "type": "email"}`
 	req := httptest.NewRequest("POST", "/status/subscribe",
@@ -1451,7 +1451,7 @@ func TestHandler_SubscribeHandler_MissingEmail(t *testing.T) {
 
 func TestHandler_SubscribeHandler_MissingWebhookURL(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo)
+	handler := enableTestSubscriptions(NewHandler(repo))
 
 	jsonBody := `{"page_id": "test", "type": "webhook"}`
 	req := httptest.NewRequest("POST", "/status/subscribe",
@@ -1468,7 +1468,7 @@ func TestHandler_SubscribeHandler_MissingWebhookURL(t *testing.T) {
 
 func TestHandler_SubscribeHandler_ValidWebhook(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo)
+	handler := enableTestSubscriptions(NewHandler(repo))
 
 	jsonBody := `{"page_id": "test", "type": "webhook", "webhook_url": "https://example.com/hook"}`
 	req := httptest.NewRequest("POST", "/status/subscribe",
@@ -1478,9 +1478,9 @@ func TestHandler_SubscribeHandler_ValidWebhook(t *testing.T) {
 
 	handler.SubscribeHandler(w, req)
 
-	// Should succeed or fail based on mock repository
-	if w.Code != http.StatusOK && w.Code != http.StatusCreated && w.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 200, 201, or 500, got %d", w.Code)
+	// Only email subscriptions exist; webhook requests are refused.
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400 for a webhook subscription, got %d", w.Code)
 	}
 }
 
@@ -1803,7 +1803,7 @@ func TestHandler_BadgeHandler_NotFound(t *testing.T) {
 // TestHandler_SubscribeHandler_EmptyEmail tests subscribe with missing email
 func TestHandler_SubscribeHandler_EmptyEmail(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo)
+	handler := enableTestSubscriptions(NewHandler(repo))
 
 	req := httptest.NewRequest("POST", "/status/test/subscribe", nil)
 	w := httptest.NewRecorder()
@@ -1944,7 +1944,7 @@ func TestHandler_Router_WidgetRoute(t *testing.T) {
 
 func TestHandler_Router_SubscribeRoute(t *testing.T) {
 	repo := &mockRepository{}
-	handler := NewHandler(repo)
+	handler := enableTestSubscriptions(NewHandler(repo))
 
 	router := handler.Router()
 
@@ -1954,8 +1954,8 @@ func TestHandler_Router_SubscribeRoute(t *testing.T) {
 
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK && w.Code != http.StatusCreated {
-		t.Errorf("Expected status 200 or 201 for subscribe route, got %d", w.Code)
+	if w.Code != http.StatusAccepted {
+		t.Errorf("Expected status 202 for subscribe route, got %d", w.Code)
 	}
 }
 
@@ -2020,9 +2020,9 @@ func TestHandler_serveHTML_DefaultThemeFallback(t *testing.T) {
 
 func TestHandler_SubscribeHandler_RepositoryError(t *testing.T) {
 	repo := &mockRepositoryNotFound{}
-	handler := NewHandler(repo)
+	handler := enableTestSubscriptions(NewHandler(repo))
 
-	jsonBody := `{"page_id": "test", "type": "webhook", "webhook_url": "https://example.com/hook"}`
+	jsonBody := `{"page_id": "test", "type": "email", "email": "user@example.com"}`
 	req := httptest.NewRequest("POST", "/status/subscribe",
 		strings.NewReader(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
@@ -2030,8 +2030,9 @@ func TestHandler_SubscribeHandler_RepositoryError(t *testing.T) {
 
 	handler.SubscribeHandler(w, req)
 
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("Expected status 500, got %d", w.Code)
+	// The page cannot be resolved, so nothing is stored.
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404, got %d", w.Code)
 	}
 }
 

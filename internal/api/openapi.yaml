@@ -68,10 +68,16 @@ tags:
   description: Raft cluster management
 - name: Journeys
   description: Multi-step synthetic monitoring
+- name: API Keys
+  description: Long-lived bearer credentials for automation
+- name: Members
+  description: Accounts, workspace roles and invitations
 - name: Status Pages
   description: Public status page configuration
 - name: System
   description: System health and metrics
+- name: Reports
+  description: SLA reports and judgment export
 paths:
   /api/docs:
     get:
@@ -99,6 +105,7 @@ paths:
       - System
   /api/v1/alerts/channels:
     get:
+      deprecated: true
       tags:
       - Alerts
       summary: List alert channels
@@ -113,6 +120,7 @@ paths:
                 items:
                   $ref: '#/components/schemas/AlertChannel'
     post:
+      deprecated: true
       tags:
       - Alerts
       summary: Create alert channel
@@ -130,8 +138,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AlertChannel'
+        '409':
+          $ref: '#/components/responses/QuotaExceeded'
   /api/v1/alerts/channels/{id}:
     get:
+      deprecated: true
       summary: Get an alert channel
       tags:
       - Alerts
@@ -150,6 +161,7 @@ paths:
         '404':
           description: Not found
     put:
+      deprecated: true
       requestBody:
         required: true
         content:
@@ -169,6 +181,7 @@ paths:
         '403':
           description: Insufficient role
     delete:
+      deprecated: true
       summary: Delete an alert channel
       tags:
       - Alerts
@@ -183,6 +196,7 @@ paths:
           description: Insufficient role
   /api/v1/alerts/channels/{id}/test:
     post:
+      deprecated: true
       summary: Send a test notification through a channel
       tags:
       - Alerts
@@ -197,6 +211,7 @@ paths:
           description: Insufficient role
   /api/v1/alerts/rules:
     get:
+      deprecated: true
       tags:
       - Alerts
       summary: List alert rules
@@ -211,6 +226,7 @@ paths:
                 items:
                   $ref: '#/components/schemas/AlertRule'
     post:
+      deprecated: true
       tags:
       - Alerts
       summary: Create alert rule
@@ -230,6 +246,7 @@ paths:
                 $ref: '#/components/schemas/AlertRule'
   /api/v1/alerts/rules/{id}:
     get:
+      deprecated: true
       summary: Get an alert rule
       tags:
       - Alerts
@@ -242,6 +259,7 @@ paths:
         '404':
           description: Not found
     put:
+      deprecated: true
       requestBody:
         required: true
         content:
@@ -261,6 +279,7 @@ paths:
         '403':
           description: Insufficient role
     delete:
+      deprecated: true
       summary: Delete an alert rule
       tags:
       - Alerts
@@ -273,6 +292,97 @@ paths:
           description: Rule deleted
         '403':
           description: Insufficient role
+  /api/v1/api-keys:
+    get:
+      description: >-
+        Lists the current workspace's API keys, including revoked and expired
+        ones. The secret and its hash are never returned. Requires the
+        apikeys permission (admin, owner) and an interactive session: a
+        request authenticated with an API key is refused with 403.
+      responses:
+        '200':
+          description: API keys
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/APIKey'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Missing permission, or the caller is an API key
+      security:
+      - BearerAuth: []
+      summary: List API keys
+      tags:
+      - API Keys
+    post:
+      description: >-
+        Issues an API key ("anb_<id>_<secret>") in the caller's workspace. The
+        plaintext is in the response's `key` field and is never shown again;
+        only its SHA-256 is stored. The role defaults to the caller's and may
+        not rank above it (owner > admin > editor > api > viewer). Expiry is
+        optional and at most 366 days away. Send it as
+        `Authorization: Bearer anb_...` on REST, gRPC metadata, WebSocket and SSE.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/APIKeyCreate'
+      responses:
+        '201':
+          description: Created; `key` holds the one-time plaintext
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIKeyCreated'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Role above the caller's, missing permission, or the caller is an API key
+        '503':
+          $ref: '#/components/responses/LeaderUnavailableError'
+      security:
+      - BearerAuth: []
+      summary: Create API key
+      tags:
+      - API Keys
+  /api/v1/api-keys/{id}:
+    delete:
+      description: >-
+        Revokes a key in the caller's workspace. Revocation is immediate and
+        permanent; open WebSocket/SSE streams using the key close within the
+        session re-check interval. Revoking an already revoked key is a no-op.
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Revoked key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIKey'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Missing permission, or the caller is an API key
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '503':
+          $ref: '#/components/responses/LeaderUnavailableError'
+      security:
+      - BearerAuth: []
+      summary: Revoke API key
+      tags:
+      - API Keys
   /api/v1/auth/change-password:
     put:
       summary: Change the authenticated user's password
@@ -309,7 +419,9 @@ paths:
         Public. Tells the login page which sign-in methods exist so it can
         offer an SSO button (GET /api/v1/auth/oidc/login) and/or the password
         form. Exposes no configuration details or user data. The password
-        form applies when local or ldap is true.
+        form applies when local or ldap is true. password_reset is true when
+        outgoing mail (mail.host) is configured, so the login page can offer
+        "Forgot password?".
       security: []
       responses:
         '200':
@@ -332,6 +444,9 @@ paths:
                   ldap:
                     type: boolean
                     description: Passwords are checked against LDAP
+                  password_reset:
+                    type: boolean
+                    description: POST /api/v1/auth/reset-password emails a reset link (mail is configured)
   /api/v1/auth/login:
     post:
       tags:
@@ -422,10 +537,14 @@ paths:
         schema:
           type: string
       responses:
-        '302':
-          description: Redirect to the dashboard with a session established
+        '200':
+          description: Session established (API clients; Accept without text/html). The session is set as the HttpOnly auth_token cookie; the body holds only the user.
+        '303':
+          description: Browser navigation (Accept includes text/html). Redirects to / with the auth_token cookie set, or to /login?sso_error=1 on any failure.
+        '400':
+          description: Provider error, missing code/state, or missing/mismatched oidc_state/oidc_nonce cookies (API clients)
         '401':
-          description: State or token validation failed
+          description: State or token validation failed (API clients)
   /api/v1/auth/oidc/login:
     get:
       summary: Begin the OIDC authorization-code flow
@@ -443,8 +562,13 @@ paths:
       summary: Request a password reset token
       tags:
       - Authentication
-      description: Always returns 200 regardless of whether the address exists; the response does not
-        reveal account existence.
+      description: >-
+        Always returns 200 regardless of whether the address exists; the
+        response does not reveal account existence. When outgoing mail is
+        configured (mail.host and server.public_url), the token is emailed as a
+        link to the dashboard page {server.public_url}/reset-password?token=...
+        (at most 3 emails per address per hour). Otherwise there is no
+        delivery channel and the message points to `anubis admin reset-password`.
       security: *id003
       requestBody:
         required: true
@@ -513,6 +637,18 @@ paths:
       responses:
         '200':
           description: Paginated list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AlertChannel'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
       security:
       - BearerAuth: []
       summary: List channels
@@ -528,6 +664,8 @@ paths:
       responses:
         '201':
           description: Channel created
+        '409':
+          $ref: '#/components/responses/QuotaExceeded'
       security:
       - BearerAuth: []
       summary: Create channel
@@ -765,6 +903,12 @@ paths:
       responses:
         '200':
           description: List
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CustomDashboard'
       security:
       - BearerAuth: []
       summary: List dashboards
@@ -780,6 +924,10 @@ paths:
       responses:
         '201':
           description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomDashboard'
       security:
       - BearerAuth: []
       summary: Create dashboard
@@ -821,6 +969,10 @@ paths:
       responses:
         '200':
           description: Details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomDashboard'
       security:
       - BearerAuth: []
       summary: Get dashboard
@@ -836,6 +988,10 @@ paths:
       responses:
         '200':
           description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomDashboard'
       security:
       - BearerAuth: []
       summary: Update dashboard
@@ -873,9 +1029,23 @@ paths:
       - SSE
   /api/v1/incidents:
     get:
+      parameters:
+      - name: status
+        in: query
+        description: >-
+          active (open and acknowledged), open, acknowledged or resolved;
+          omitted or all lists every incident.
+        schema:
+          type: string
       responses:
         '200':
           description: List of incidents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Incident'
       security:
       - BearerAuth: []
       summary: List incidents
@@ -951,7 +1121,7 @@ paths:
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/Journey'
+                  $ref: '#/components/schemas/JourneyListItem'
     post:
       tags:
       - Journeys
@@ -970,6 +1140,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Journey'
+        '409':
+          $ref: '#/components/responses/QuotaExceeded'
   /api/v1/journeys/{id}:
     delete:
       parameters:
@@ -996,6 +1168,10 @@ paths:
       responses:
         '200':
           description: Details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Journey'
       security:
       - BearerAuth: []
       summary: Get journey
@@ -1011,6 +1187,10 @@ paths:
       responses:
         '200':
           description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Journey'
       security:
       - BearerAuth: []
       summary: Update journey
@@ -1051,7 +1231,13 @@ paths:
           type: string
       responses:
         '200':
-          description: List
+          description: The most recent runs, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/JourneyRun'
       security:
       - BearerAuth: []
       summary: List journey runs
@@ -1073,6 +1259,10 @@ paths:
       responses:
         '200':
           description: Run details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JourneyRun'
       security:
       - BearerAuth: []
       summary: Get journey run
@@ -1117,6 +1307,12 @@ paths:
       responses:
         '200':
           description: List
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/MaintenanceWindow'
       security:
       - BearerAuth: []
       summary: List maintenance windows
@@ -1132,6 +1328,10 @@ paths:
       responses:
         '201':
           description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaintenanceWindow'
       security:
       - BearerAuth: []
       summary: Create maintenance window
@@ -1163,6 +1363,10 @@ paths:
       responses:
         '200':
           description: Details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaintenanceWindow'
       security:
       - BearerAuth: []
       summary: Get maintenance window
@@ -1178,6 +1382,10 @@ paths:
       responses:
         '200':
           description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaintenanceWindow'
       security:
       - BearerAuth: []
       summary: Update maintenance window
@@ -1214,6 +1422,18 @@ paths:
       responses:
         '200':
           description: Paginated list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, pagination]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AlertRule'
+                  pagination:
+                    $ref: '#/components/schemas/Pagination'
       security:
       - BearerAuth: []
       summary: List rules
@@ -1329,6 +1549,8 @@ paths:
                 $ref: '#/components/schemas/Soul'
         '400':
           $ref: '#/components/responses/BadRequestError'
+        '409':
+          $ref: '#/components/responses/QuotaExceeded'
   /api/v1/souls/{id}:
     parameters:
     - name: id
@@ -1435,6 +1657,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [data, total, has_more, next_cursor]
                 properties:
                   data:
                     type: array
@@ -1447,6 +1670,7 @@ paths:
                     type: boolean
                   next_cursor:
                     type: string
+                    description: Empty when there is no further page.
   /api/v1/souls/{id}/uptime:
     parameters:
     - name: id
@@ -1461,7 +1685,7 @@ paths:
       description: >-
         Uptime over the last 24 hours, 7 days and 30 days, plus a series of
         equal buckets over the requested range: 5-minute buckets for 1h,
-        hourly for 24h, calendar days for 7d and 30d. Only alive results count
+        hourly for 24h, calendar days for 7d, 30d, 90d and 1y. Only alive results count
         as up. uptime_percent is null for a period with no checks.
       parameters:
       - name: range
@@ -1469,7 +1693,7 @@ paths:
         description: Period the series covers.
         schema:
           type: string
-          enum: [1h, 24h, 7d, 30d]
+          enum: [1h, 24h, 7d, 30d, 90d, 1y]
           default: 7d
       - name: tz_offset_minutes
         in: query
@@ -1484,39 +1708,318 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  soul_id:
-                    type: string
-                  windows:
-                    type: object
-                    description: Keyed by "24h", "7d" and "30d".
-                    additionalProperties:
-                      $ref: '#/components/schemas/UptimeWindow'
-                  series:
-                    type: object
-                    properties:
-                      range:
-                        type: string
-                      step_seconds:
-                        type: integer
-                      points:
-                        type: array
-                        description: Equal buckets, oldest first.
-                        items:
-                          allOf:
-                          - $ref: '#/components/schemas/UptimeWindow'
-                          - type: object
-                            properties:
-                              start:
-                                type: string
-                                format: date-time
+                $ref: '#/components/schemas/SoulUptime'
         '400':
           description: Invalid range or tz_offset_minutes
         '403':
           description: Soul belongs to another workspace
         '404':
           description: Soul not found
+  /api/v1/souls/{id}/judgments/export:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      tags:
+      - Reports
+      summary: Export a soul's judgments
+      description: >-
+        Streams the soul's judgments in [from, to), oldest first, as CSV or
+        NDJSON, without loading the period into memory. The period is clipped
+        to raw-judgment retention (X-Export-Clipped). At most `limit` rows are
+        sent; the X-Export-Truncated trailer is true when more remained, so a
+        client continues from the last timestamp. Text cells of the CSV that
+        start with = + - @ (or tab / carriage return) are prefixed with a
+        single quote to stop spreadsheet formula injection. Requires
+        judgments:read; a soul of another workspace answers 404. Each
+        buffered write (32 KiB) must reach the client within 30 seconds and
+        a whole export within 15 minutes, or the stream is cut off.
+      parameters:
+      - $ref: '#/components/parameters/ReportFrom'
+      - $ref: '#/components/parameters/ReportTo'
+      - name: format
+        in: query
+        schema:
+          type: string
+          enum: [csv, ndjson]
+          default: csv
+      - name: limit
+        in: query
+        description: Maximum rows to send.
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000000
+          default: 100000
+      responses:
+        '200':
+          description: The export, as an attachment (Content-Disposition).
+          headers:
+            X-Export-From:
+              schema:
+                type: string
+                format: date-time
+            X-Export-To:
+              schema:
+                type: string
+                format: date-time
+            X-Export-Clipped:
+              schema:
+                type: boolean
+          content:
+            text/csv:
+              schema:
+                type: string
+                description: >-
+                  Header row timestamp,id,soul_id,status,duration_ms,status_code,region,jackal_id,message.
+            application/x-ndjson:
+              schema:
+                $ref: '#/components/schemas/JudgmentExportRecord'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: The role lacks judgments:read
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '429':
+          description: >-
+            Too many exports running (at most 2 per user and 8 per server);
+            retry after Retry-After seconds.
+  /api/v1/reports/sla:
+    get:
+      tags:
+      - Reports
+      summary: SLA report
+      description: >-
+        Availability, failed checks, estimated downtime, incidents and MTTR,
+        latency percentiles and (with `target`) the error budget, per soul of
+        the workspace and in total, over [from, to). Whole UTC hours and days
+        are read from the time-series rollups, so long periods never scan raw
+        judgments; raw judgments fill only partial hours and time before
+        rollups began. Enabled maintenance windows that apply to a soul are
+        excluded time, and embalmed results are ignored. A period older than
+        what retention keeps is clipped (clipped=true, retention_horizon).
+        Requires judgments:read.
+      parameters:
+      - $ref: '#/components/parameters/ReportFrom'
+      - $ref: '#/components/parameters/ReportTo'
+      - $ref: '#/components/parameters/ReportSoulID'
+      - $ref: '#/components/parameters/ReportTarget'
+      responses:
+        '200':
+          description: SLA report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SLAResponse'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: The role lacks judgments:read
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '503':
+          description: The report exceeded its 60-second time budget; pick a shorter period or one soul.
+  /api/v1/reports/sla.csv:
+    get:
+      tags:
+      - Reports
+      summary: SLA report as CSV
+      description: >-
+        The SLA report as a CSV attachment: one row per soul, then a total row
+        with an empty soul_id and soul_name "(total)". Text cells are
+        protected against formula injection as in the judgment export.
+      parameters:
+      - $ref: '#/components/parameters/ReportFrom'
+      - $ref: '#/components/parameters/ReportTo'
+      - $ref: '#/components/parameters/ReportSoulID'
+      - $ref: '#/components/parameters/ReportTarget'
+      responses:
+        '200':
+          description: CSV attachment
+          content:
+            text/csv:
+              schema:
+                type: string
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: The role lacks judgments:read
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '503':
+          description: The report exceeded its 60-second time budget; pick a shorter period or one soul.
+  /api/v1/souls/{id}/heartbeat:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      tags:
+      - Souls
+      summary: Heartbeat ping URLs and last ping
+      description: >-
+        For a heartbeat (push) soul: its expected interval and grace, the
+        ping state (last ping time, event, measured run duration, failure
+        message) and, for roles that may edit souls, the secret ping token
+        and URLs. Soul list/get responses always redact the token.
+      responses:
+        '200':
+          description: Heartbeat info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeartbeatInfo'
+        '400':
+          description: Soul is not a heartbeat monitor
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Soul belongs to another workspace
+        '404':
+          description: Soul not found
+  /api/v1/souls/{id}/heartbeat/rotate:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    post:
+      tags:
+      - Souls
+      summary: Rotate a heartbeat ping token
+      description: >-
+        Generates a new ping token. The old ping URL stops working
+        immediately; update the job's ping URL afterwards.
+      responses:
+        '200':
+          description: New token and ping URLs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeartbeatInfo'
+        '400':
+          description: Soul is not a heartbeat monitor
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Insufficient role or soul belongs to another workspace
+        '404':
+          description: Soul not found
+        '503':
+          $ref: '#/components/responses/LeaderUnavailableError'
+  /api/v1/heartbeat/{token}:
+    parameters:
+    - &id_hb_token
+      name: token
+      in: path
+      required: true
+      description: The heartbeat soul's secret ping token.
+      schema:
+        type: string
+    get:
+      tags:
+      - Souls
+      summary: Heartbeat ping (success)
+      description: &id_hb_ping_desc >-
+        Public, token-authenticated ping from a cron job or worker; no session
+        or API key. Records a success: the soul's owner records an alive
+        judgment (duration = time since the last /start). When no ping
+        arrives within the soul's weight (interval) plus grace, the soul is
+        judged dead, and again every interval until a ping arrives. Answers
+        a plain-text "OK". Limited to 30 pings per token per minute on top
+        of the per-IP limit. Example cron line:
+        `0 3 * * * /usr/local/bin/backup.sh && curl -fsS -m 10 --retry 3 https://anubis.example.com/api/v1/heartbeat/TOKEN`
+      security: []
+      responses: &id_hb_responses
+        '200':
+          description: Ping recorded
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: OK
+        '404':
+          description: Unknown token
+        '429':
+          description: Too many pings for this token
+        '503':
+          description: Cluster leader unavailable; retry
+    post:
+      tags:
+      - Souls
+      summary: Heartbeat ping (success)
+      description: *id_hb_ping_desc
+      security: []
+      responses: *id_hb_responses
+  /api/v1/heartbeat/{token}/start:
+    parameters:
+    - *id_hb_token
+    get:
+      tags:
+      - Souls
+      summary: Heartbeat run started
+      description: &id_hb_start_desc >-
+        Marks the start of a run; the next success or fail ping records the
+        time since this start as the judgment's duration. Records no
+        judgment and does not reset the deadline.
+      security: []
+      responses: *id_hb_responses
+    post:
+      tags:
+      - Souls
+      summary: Heartbeat run started
+      description: *id_hb_start_desc
+      security: []
+      responses: *id_hb_responses
+  /api/v1/heartbeat/{token}/fail:
+    parameters:
+    - *id_hb_token
+    get:
+      tags:
+      - Souls
+      summary: Heartbeat failure
+      description: >-
+        Records an explicit failure (a dead judgment). The optional message is
+        the msg query parameter.
+      parameters:
+      - name: msg
+        in: query
+        schema:
+          type: string
+          maxLength: 1024
+      security: []
+      responses: *id_hb_responses
+    post:
+      tags:
+      - Souls
+      summary: Heartbeat failure
+      description: >-
+        Records an explicit failure (a dead judgment). The request body, of
+        any content type, is the failure message (first 1KB kept, control
+        characters removed), e.g. `curl -fsS --data-binary @/tmp/job.log
+        https://anubis.example.com/api/v1/heartbeat/TOKEN/fail`.
+      security: []
+      requestBody:
+        required: false
+        content:
+          text/plain:
+            schema:
+              type: string
+              maxLength: 1024
+      responses: *id_hb_responses
   /api/v1/souls/{id}/logs:
     get:
       parameters:
@@ -1556,9 +2059,11 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [souls, judgments, alerts]
                 properties:
                   souls:
                     type: object
+                    required: [total, healthy, degraded, dead, unknown, embalmed]
                     properties:
                       total:
                         type: integer
@@ -1574,6 +2079,7 @@ paths:
                         type: integer
                   judgments:
                     type: object
+                    required: [today, failures, avg_latency_ms]
                     properties:
                       today:
                         type: integer
@@ -1582,7 +2088,7 @@ paths:
                       avg_latency_ms:
                         type: number
                   alerts:
-                    type: object
+                    $ref: '#/components/schemas/AlertManagerStats'
       security:
       - BearerAuth: []
       summary: Stats overview
@@ -1647,6 +2153,10 @@ paths:
       responses:
         '200':
           description: Details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusPage'
       security:
       - BearerAuth: []
       summary: Get status page
@@ -1662,13 +2172,604 @@ paths:
       responses:
         '200':
           description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusPage'
       security:
       - BearerAuth: []
       summary: Update status page
+      description: >-
+        Partial update: omitted fields keep their stored values. incidents and
+        announcements are read-only here and always keep their stored values;
+        use the /incidents and /announcements sub-resources.
       tags:
       - Status Pages
+  /api/v1/status-pages/{id}/incidents:
+    parameters:
+    - in: path
+      name: id
+      required: true
+      schema:
+        type: string
+    get:
+      tags:
+      - Status Pages
+      summary: List status page incidents
+      description: Operator-posted incidents on the page, with their update timelines.
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Incidents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StatusIncident'
+        '404':
+          description: Status page not found in the caller's workspace
+    post:
+      tags:
+      - Status Pages
+      summary: Create status page incident
+      description: >-
+        Opens an incident with its first timeline update. Requires
+        settings:write. Title and message are plain text (no HTML; URLs are
+        linked on the public page). Confirmed email subscribers are notified
+        once, unless the incident is created already resolved.
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StatusIncidentCreate'
+      responses:
+        '201':
+          description: Incident created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusIncident'
+        '400':
+          description: Invalid incident
+        '404':
+          description: Status page not found in the caller's workspace
+  /api/v1/status-pages/{id}/incidents/{incidentId}:
+    parameters:
+    - in: path
+      name: id
+      required: true
+      schema:
+        type: string
+    - in: path
+      name: incidentId
+      required: true
+      schema:
+        type: string
+    patch:
+      tags:
+      - Status Pages
+      summary: Edit status page incident
+      description: >-
+        Edits title, impact or affected souls. The status cannot be patched:
+        post an update so the timeline and subscribers record the change.
+        Sends no notification.
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StatusIncidentPatch'
+      responses:
+        '200':
+          description: Incident updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusIncident'
+        '400':
+          description: Invalid change
+        '404':
+          description: Page or incident not found
+    delete:
+      tags:
+      - Status Pages
+      summary: Delete status page incident
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: Page or incident not found
+  /api/v1/status-pages/{id}/incidents/{incidentId}/updates:
+    parameters:
+    - in: path
+      name: id
+      required: true
+      schema:
+        type: string
+    - in: path
+      name: incidentId
+      required: true
+      schema:
+        type: string
+    post:
+      tags:
+      - Status Pages
+      summary: Post incident update
+      description: >-
+        Appends a timeline entry and moves the incident to its status
+        (resolved sets resolved_at; any other status reopens it). Each update
+        notifies confirmed subscribers exactly once.
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StatusIncidentUpdateCreate'
+      responses:
+        '201':
+          description: Update posted; returns the incident
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusIncident'
+        '400':
+          description: Invalid update
+        '404':
+          description: Page or incident not found
+  /api/v1/status-pages/{id}/incidents/{incidentId}/resolve:
+    parameters:
+    - in: path
+      name: id
+      required: true
+      schema:
+        type: string
+    - in: path
+      name: incidentId
+      required: true
+      schema:
+        type: string
+    post:
+      tags:
+      - Status Pages
+      summary: Resolve status page incident
+      description: >-
+        Posts a resolved update. The body is optional; without a message the
+        update reads "This incident has been resolved."
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                  maxLength: 5000
+      responses:
+        '201':
+          description: Resolved; returns the incident
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusIncident'
+        '404':
+          description: Page or incident not found
+  /api/v1/status-pages/{id}/announcements:
+    parameters:
+    - in: path
+      name: id
+      required: true
+      schema:
+        type: string
+    get:
+      tags:
+      - Status Pages
+      summary: List scheduled maintenance announcements
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Announcements, each with its current phase
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StatusAnnouncement'
+        '404':
+          description: Status page not found in the caller's workspace
+    post:
+      tags:
+      - Status Pages
+      summary: Create scheduled maintenance announcement
+      description: >-
+        starts_at and ends_at are required unless maintenance_window_id names
+        a one-off (non-recurring) maintenance window in the same workspace,
+        which then supplies the schedule and, when omitted, the title, message
+        and affected souls (limited to souls shown on the page).
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StatusAnnouncementInput'
+      responses:
+        '201':
+          description: Announcement created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusAnnouncement'
+        '400':
+          description: Invalid announcement
+        '404':
+          description: Status page not found in the caller's workspace
+  /api/v1/status-pages/{id}/announcements/{announcementId}:
+    parameters:
+    - in: path
+      name: id
+      required: true
+      schema:
+        type: string
+    - in: path
+      name: announcementId
+      required: true
+      schema:
+        type: string
+    patch:
+      tags:
+      - Status Pages
+      summary: Edit scheduled maintenance announcement
+      description: Fields the body omits keep their stored values.
+      security:
+      - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StatusAnnouncementInput'
+      responses:
+        '200':
+          description: Announcement updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusAnnouncement'
+        '400':
+          description: Invalid change
+        '404':
+          description: Page or announcement not found
+    delete:
+      tags:
+      - Status Pages
+      summary: Delete scheduled maintenance announcement
+      security:
+      - BearerAuth: []
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          description: Page or announcement not found
+  /api/v1/auth/accept-invite:
+    post:
+      summary: Accept an invitation
+      description: >-
+        Public. Redeems the one-time invitation token (from the emailed or
+        shared /accept-invite link), creating a local account with the given
+        name and password and the invited role in the invited workspace. If
+        the address already has a local account, `password` must be its
+        current password and the membership is added to it (name is ignored).
+        The token is single-use, expires seven days after it was issued, and
+        is void once its inviter is disabled, removed, or no longer holds
+        members:* at or above the invited role.
+      tags:
+      - Members
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token:
+                  type: string
+                name:
+                  type: string
+                  maxLength: 100
+                password:
+                  type: string
+                  description: At least 12 characters from 3 of 4 classes
+      responses:
+        '201':
+          description: Account created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Member'
+        '400':
+          description: Invalid or expired token, or the password fails the policy
+        '409':
+          description: An account with this email already exists
+        '503':
+          $ref: '#/components/responses/LeaderUnavailableError'
+  /api/v1/members:
+    get:
+      summary: List workspace members
+      description: >-
+        Lists the accounts holding a role in the caller's workspace: local
+        accounts, and OIDC/LDAP accounts provisioned at their first sign-in.
+        Requires members:* (owner, admin) and an interactive session; API keys
+        are refused with 403.
+      tags:
+      - Members
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: Members
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Member'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Missing permission, or the caller is an API key
+    post:
+      summary: Create a member
+      description: >-
+        Creates a local account with an initial password in the caller's
+        workspace; the account must change it at its first sign-in. An email
+        that already has an account is refused (409): existing accounts join a
+        workspace only by accepting an invitation. The role may not rank above
+        the caller's (owner > admin > editor > api > viewer). Counts against
+        tenants.default_quotas.max_team_members.
+      tags:
+      - Members
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemberCreate'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Member'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Role above the caller's, missing permission, or the caller is an API key
+        '409':
+          description: Already a member, email has an account, account limit, or max_team_members reached
+        '503':
+          $ref: '#/components/responses/LeaderUnavailableError'
+  /api/v1/members/{id}:
+    patch:
+      summary: Update a member
+      description: >-
+        Changes a member's role in the caller's workspace, disables or
+        enables the account, or renames it. The caller may not manage a member
+        ranked above it, grant a role above its own, or leave the workspace
+        without an enabled owner. Disabling, and any role change that is not a
+        pure upgrade, ends the account's sessions and live WebSocket/SSE
+        streams; its API keys stop authenticating while it lacks the role.
+        Disabling affects every workspace, so only the configured admin may
+        disable an account that belongs to other workspaces too.
+      tags:
+      - Members
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MemberUpdate'
+      responses:
+        '200':
+          description: Updated member
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Member'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Privilege escalation, self-disable, or the caller is an API key
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          description: Would leave the workspace without an enabled owner
+        '503':
+          $ref: '#/components/responses/LeaderUnavailableError'
+    delete:
+      summary: Remove a member from the workspace
+      description: >-
+        Removes the account from the caller's workspace and ends its sessions.
+        An account left without any workspace is deleted.
+      tags:
+      - Members
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Removed
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Member ranked above the caller, or the caller is an API key
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          description: Would leave the workspace without an enabled owner
+        '503':
+          $ref: '#/components/responses/LeaderUnavailableError'
+  /api/v1/users/{id}:
+    delete:
+      summary: Delete an account
+      description: >-
+        Deletes the account everywhere and ends its sessions. The configured
+        admin (auth.local.admin_email) and the caller's own account cannot be
+        deleted, and only the configured admin may delete an account that
+        belongs to other workspaces.
+      tags:
+      - Members
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Deleted
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Not allowed for this account, or the caller is an API key
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '409':
+          description: Would leave a workspace without an enabled owner
+        '503':
+          $ref: '#/components/responses/LeaderUnavailableError'
+  /api/v1/invitations:
+    get:
+      summary: List pending invitations
+      description: Pending, unexpired invitations to the caller's workspace. Tokens are never returned.
+      tags:
+      - Members
+      security:
+      - bearerAuth: []
+      responses:
+        '200':
+          description: Invitations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Invitation'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Missing permission, or the caller is an API key
+    post:
+      summary: Invite a member
+      description: >-
+        Invites an email address to the caller's workspace with a role no
+        higher than the caller's. The single-use token is stored only as a
+        SHA-256 hash and expires after seven days. With mail configured
+        (mail.* and server.public_url) the /accept-invite link is emailed and
+        not returned; otherwise, or if the email cannot be queued,
+        `invite_url` carries it this one time for the administrator to share.
+        Re-inviting an address replaces its pending invitation. Pending
+        invitations count against max_team_members.
+      tags:
+      - Members
+      security:
+      - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                role:
+                  $ref: '#/components/schemas/MemberRole'
+      responses:
+        '201':
+          description: Invitation created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvitationCreated'
+        '400':
+          $ref: '#/components/responses/BadRequestError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Role above the caller's, missing permission, or the caller is an API key
+        '409':
+          description: Already a member, too many pending invitations, or max_team_members reached
+        '503':
+          $ref: '#/components/responses/LeaderUnavailableError'
+  /api/v1/invitations/{id}:
+    delete:
+      summary: Revoke an invitation
+      tags:
+      - Members
+      security:
+      - bearerAuth: []
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        '204':
+          description: Revoked
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Invitation role above the caller's, or the caller is an API key
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '503':
+          $ref: '#/components/responses/LeaderUnavailableError'
   /api/v1/users/me:
     get:
+      deprecated: true
       summary: Get the authenticated user
       tags:
       - Authentication
@@ -1681,7 +2782,13 @@ paths:
     get:
       responses:
         '200':
-          description: List of workspaces
+          description: Workspaces the caller can access
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Workspace'
       security:
       - BearerAuth: []
       summary: List workspaces
@@ -1748,6 +2855,26 @@ paths:
       summary: Update workspace
       tags:
       - Workspaces
+  /api/v1/quota:
+    get:
+      tags:
+      - Workspaces
+      summary: Get workspace quota usage
+      description: >-
+        Resource counts of the caller's workspace against its quotas
+        (tenants.default_quotas). When tenants are disabled, enforced is false
+        and every limit is 0, meaning unlimited.
+      security:
+      - BearerAuth: []
+      responses:
+        '200':
+          description: Quota usage
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuotaUsage'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
   /health:
     get:
       servers:
@@ -1857,6 +2984,134 @@ paths:
       summary: Public status page
       tags:
       - Status Pages
+  /status/subscribe:
+    post:
+      summary: Subscribe to a status page by email (double opt-in)
+      description: >-
+        Public. Sends a confirmation email whose single-use link expires after
+        48 hours; nothing else is sent until it is confirmed. The answer is
+        identical whether the address is new, pending or already subscribed.
+        Accepts JSON or an HTML form post (the page's own form). Rate limited
+        per client IP (10 per 10 minutes) and per address (3 confirmation
+        emails per day). Answers 503 when the server has no outgoing mail.
+      tags:
+      - Status Pages
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+              - email
+              properties:
+                page_id:
+                  type: string
+                  description: Status page ID (or give slug)
+                slug:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                type:
+                  type: string
+                  enum:
+                  - email
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                page_id:
+                  type: string
+                email:
+                  type: string
+      responses:
+        '202':
+          description: Accepted; a confirmation email is sent if the address can receive one
+        '400':
+          description: Invalid request or email address
+        '404':
+          description: Status page not found
+        '429':
+          description: Too many requests
+        '503':
+          description: Subscriptions unavailable (no outgoing mail configured)
+  /status/subscriptions/confirm:
+    get:
+      summary: Show the subscription confirmation button
+      description: Renders a page with a POST button, so link scanners cannot confirm.
+      tags:
+      - Status Pages
+      security: []
+      parameters:
+      - &id_sub_page
+        in: query
+        name: page
+        required: true
+        schema:
+          type: string
+      - &id_sub_id
+        in: query
+        name: id
+        required: true
+        schema:
+          type: string
+      - &id_sub_token
+        in: query
+        name: token
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Confirmation page
+        '400':
+          description: Link invalid or expired
+    post:
+      summary: Confirm a subscription
+      description: Marks the subscription confirmed; the token is single use.
+      tags:
+      - Status Pages
+      security: []
+      parameters:
+      - *id_sub_page
+      - *id_sub_id
+      - *id_sub_token
+      responses:
+        '200':
+          description: Subscription confirmed
+        '400':
+          description: Link invalid or expired
+  /status/subscriptions/unsubscribe:
+    get:
+      summary: Show the unsubscribe button
+      tags:
+      - Status Pages
+      security: []
+      parameters:
+      - *id_sub_page
+      - *id_sub_id
+      - *id_sub_token
+      responses:
+        '200':
+          description: Unsubscribe page
+        '400':
+          description: Link invalid
+    post:
+      summary: Unsubscribe (also the RFC 8058 one-click target of List-Unsubscribe)
+      tags:
+      - Status Pages
+      security: []
+      parameters:
+      - *id_sub_page
+      - *id_sub_id
+      - *id_sub_token
+      responses:
+        '200':
+          description: Unsubscribed (idempotent)
+        '400':
+          description: Link invalid
   /ws:
     get:
       responses:
@@ -1866,6 +3121,31 @@ paths:
       tags:
       - WebSocket
 components:
+  parameters:
+    ReportFrom:
+      name: from
+      in: query
+      description: Start of the period (inclusive), RFC3339 or YYYY-MM-DD (UTC). Defaults to 30 days before to.
+      schema:
+        type: string
+    ReportTo:
+      name: to
+      in: query
+      description: End of the period (exclusive), RFC3339 or YYYY-MM-DD (UTC). Defaults to now; later values are cut to now.
+      schema:
+        type: string
+    ReportSoulID:
+      name: soul_id
+      in: query
+      description: Report on this soul only.
+      schema:
+        type: string
+    ReportTarget:
+      name: target
+      in: query
+      description: SLO target in percent (0 < target <= 100), e.g. 99.9; adds error_budget.
+      schema:
+        type: number
   securitySchemes:
     bearerAuth:
       type: http
@@ -1874,6 +3154,7 @@ components:
   schemas:
     User:
       type: object
+      required: [id, email, name, role, workspace, created_at]
       properties:
         id:
           type: string
@@ -1883,16 +3164,18 @@ components:
         name:
           type: string
         role:
-          type: string
-          enum:
-          - admin
-          - user
-          - viewer
+          $ref: '#/components/schemas/MemberRole'
         workspace:
           type: string
         created_at:
           type: string
           format: date-time
+        must_change_password:
+          type: boolean
+          description: The account was created with an initial password; until it is changed only /auth/me and /auth/change-password are allowed
+        api_key_id:
+          type: string
+          description: Set when the request authenticated with an API key; id is then apikey:<api_key_id>
     Duration:
       type: string
       description: >-
@@ -1912,8 +3195,10 @@ components:
       - grpc
       - websocket
       - tls
+      - heartbeat
     Soul:
       type: object
+      required: [id, workspace_id, name, type, target, weight, timeout, enabled]
       properties:
         id:
           type: string
@@ -1955,18 +3240,152 @@ components:
           type: string
         http:
           $ref: '#/components/schemas/HTTPConfig'
+        tcp:
+          $ref: '#/components/schemas/TCPConfig'
+        udp:
+          $ref: '#/components/schemas/UDPConfig'
+        dns:
+          $ref: '#/components/schemas/DNSConfig'
+        smtp:
+          $ref: '#/components/schemas/SMTPConfig'
+        imap:
+          $ref: '#/components/schemas/IMAPConfig'
+        icmp:
+          $ref: '#/components/schemas/ICMPConfig'
+        grpc:
+          $ref: '#/components/schemas/GRPCConfig'
+        websocket:
+          $ref: '#/components/schemas/WebSocketConfig'
+        tls:
+          $ref: '#/components/schemas/TLSConfig'
+        heartbeat:
+          $ref: '#/components/schemas/HeartbeatConfig'
+        retries:
+          type: integer
+          minimum: 0
+          maximum: 5
+          description: Confirmation retries before a failed check is recorded as dead.
+        retry_interval:
+          $ref: '#/components/schemas/Duration'
+        flap_detection:
+          $ref: '#/components/schemas/FlapDetection'
+        flapping:
+          type: boolean
+          description: >-
+            True while the soul is flapping (its latest judgment carries the
+            flag). Status alerts are suppressed while it is set; status keeps
+            its usual value.
+        last_check:
+          type: string
+          format: date-time
+          description: Time of the latest judgment; absent until the soul has been checked.
+        latency:
+          type: integer
+          description: Latency of the latest judgment in milliseconds; absent (0) until checked.
+        has_secrets:
+          type: object
+          description: Which redacted secret fields (for example http.headers.Authorization) are set.
+          additionalProperties:
+            type: boolean
         created_at:
           type: string
           format: date-time
         updated_at:
           type: string
           format: date-time
+    FlapDetection:
+      type: object
+      required: [enabled]
+      description: >-
+        Per-soul override of probe.flap_detection. A soul is flapping after
+        threshold status changes within window, and stops flapping once fewer
+        than half the threshold (rounded up) remain in the window.
+      properties:
+        enabled:
+          type: boolean
+        threshold:
+          type: integer
+          minimum: 0
+          maximum: 50
+          description: Status changes that start flapping; 0 inherits (default 5, explicit 2-50).
+        window:
+          allOf:
+          - $ref: '#/components/schemas/Duration'
+          description: Sliding window; unset inherits (default 10m, explicit 10s-24h).
+    HeartbeatConfig:
+      type: object
+      description: >-
+        Push-monitor settings. The soul's weight is the expected ping
+        interval (at most 31 days).
+      properties:
+        grace:
+          allOf:
+          - $ref: '#/components/schemas/Duration'
+          description: >-
+            How late a ping may be before the soul is judged dead; 1s to 7d,
+            default half the interval.
+        token:
+          type: string
+          description: >-
+            Ping token. Generated by the server and always returned as
+            [REDACTED] here; read it from GET /api/v1/souls/{id}/heartbeat.
+            Ignored on create and update (use the rotate endpoint).
+    HeartbeatState:
+      type: object
+      nullable: true
+      description: Null until the soul has received a ping.
+      required: [soul_id, workspace_id, pings]
+      properties:
+        soul_id:
+          type: string
+        workspace_id:
+          type: string
+        last_ping_at:
+          type: string
+          format: date-time
+        last_event:
+          type: string
+          enum: [success, fail]
+        last_start_at:
+          type: string
+          format: date-time
+        last_duration:
+          type: integer
+          description: Run time in nanoseconds, measured from the matching /start.
+        last_message:
+          type: string
+        last_source:
+          type: string
+        last_node:
+          type: string
+        pings:
+          type: integer
+    HeartbeatInfo:
+      type: object
+      required: [soul_id, interval, grace, state]
+      properties:
+        soul_id:
+          type: string
+        token:
+          type: string
+          description: Present only for roles that may edit souls.
+        ping_url:
+          type: string
+        start_url:
+          type: string
+        fail_url:
+          type: string
+        interval:
+          $ref: '#/components/schemas/Duration'
+        grace:
+          $ref: '#/components/schemas/Duration'
+        state:
+          $ref: '#/components/schemas/HeartbeatState'
     SoulCreate:
       type: object
       required:
       - name
       - type
-      - target
       properties:
         name:
           type: string
@@ -1976,7 +3395,7 @@ components:
           type: string
           description: >-
             http(s):// URL for http, ws(s):// URL for websocket, host:port for
-            the other types.
+            the other types. Required except for heartbeat.
         weight:
           allOf:
           - $ref: '#/components/schemas/Duration'
@@ -2000,32 +3419,41 @@ components:
         http:
           $ref: '#/components/schemas/HTTPConfig'
         tcp:
-          type: object
-          description: TCP settings (banner_match, send, expect_regex).
+          $ref: '#/components/schemas/TCPConfig'
         udp:
-          type: object
-          description: UDP settings.
+          $ref: '#/components/schemas/UDPConfig'
         dns:
-          type: object
-          description: DNS settings; record_type is one of A, AAAA, CNAME, MX, TXT, NS, SOA, PTR, SRV.
+          $ref: '#/components/schemas/DNSConfig'
         smtp:
-          type: object
-          description: SMTP settings.
+          $ref: '#/components/schemas/SMTPConfig'
         imap:
-          type: object
-          description: IMAP settings.
+          $ref: '#/components/schemas/IMAPConfig'
         icmp:
-          type: object
-          description: ICMP settings.
+          $ref: '#/components/schemas/ICMPConfig'
         grpc:
-          type: object
-          description: gRPC health-check settings.
+          $ref: '#/components/schemas/GRPCConfig'
         websocket:
-          type: object
-          description: WebSocket settings.
+          $ref: '#/components/schemas/WebSocketConfig'
         tls:
-          type: object
-          description: TLS certificate settings.
+          $ref: '#/components/schemas/TLSConfig'
+        heartbeat:
+          $ref: '#/components/schemas/HeartbeatConfig'
+        retries:
+          type: integer
+          minimum: 0
+          maximum: 5
+          default: 0
+          description: >-
+            Re-run a failed check up to this many times, retry_interval apart,
+            before recording it as dead. Exactly one judgment is recorded per
+            scheduled check, with details.attempts. Ignored for heartbeat souls
+            and manual checks.
+        retry_interval:
+          allOf:
+          - $ref: '#/components/schemas/Duration'
+          description: Pause between retries; default 5s, at least 100ms and shorter than weight.
+        flap_detection:
+          $ref: '#/components/schemas/FlapDetection'
     SoulUpdate:
       allOf:
       - $ref: '#/components/schemas/SoulCreate'
@@ -2082,8 +3510,294 @@ components:
         insecure_skip_verify:
           type: boolean
           description: Only honoured when the server runs with --insecure-skip-verify.
+    TCPConfig:
+      type: object
+      properties:
+        banner_match:
+          type: string
+        send:
+          type: string
+        expect_regex:
+          type: string
+    UDPConfig:
+      type: object
+      properties:
+        send_hex:
+          type: string
+        expect_contains:
+          type: string
+    DNSConfig:
+      type: object
+      properties:
+        record_type:
+          type: string
+          enum: [A, AAAA, CNAME, MX, TXT, NS, SOA, PTR, SRV]
+        expected:
+          type: array
+          items:
+            type: string
+        nameservers:
+          type: array
+          items:
+            type: string
+        dnssec_validate:
+          type: boolean
+        propagation_check:
+          type: boolean
+        propagation_threshold:
+          type: integer
+    AuthCreds:
+      type: object
+      description: Login credentials; the password is returned as [REDACTED].
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+    SMTPConfig:
+      type: object
+      properties:
+        ehlo_domain:
+          type: string
+        starttls:
+          type: boolean
+        insecure_skip_verify:
+          type: boolean
+        auth:
+          $ref: '#/components/schemas/AuthCreds'
+        banner_contains:
+          type: string
+    IMAPConfig:
+      type: object
+      properties:
+        tls:
+          type: boolean
+        auth:
+          $ref: '#/components/schemas/AuthCreds'
+        check_mailbox:
+          type: string
+        insecure_skip_verify:
+          type: boolean
+    ICMPConfig:
+      type: object
+      properties:
+        count:
+          type: integer
+        interval:
+          $ref: '#/components/schemas/Duration'
+        max_loss_percent:
+          type: number
+        feather:
+          $ref: '#/components/schemas/Duration'
+        ipv6:
+          type: boolean
+        privileged:
+          type: boolean
+    GRPCConfig:
+      type: object
+      properties:
+        service:
+          type: string
+          description: Service name for the gRPC health check; empty checks the server.
+        tls:
+          type: boolean
+        tls_ca:
+          type: string
+        insecure_skip_verify:
+          type: boolean
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+        feather:
+          $ref: '#/components/schemas/Duration'
+    WebSocketConfig:
+      type: object
+      properties:
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        subprotocols:
+          type: array
+          items:
+            type: string
+        send:
+          type: string
+        expect_contains:
+          type: string
+        ping_check:
+          type: boolean
+        feather:
+          $ref: '#/components/schemas/Duration'
+        insecure_skip_verify:
+          type: boolean
+    TLSConfig:
+      type: object
+      properties:
+        expiry_warn_days:
+          type: integer
+        expiry_critical_days:
+          type: integer
+        min_protocol:
+          type: string
+        forbidden_ciphers:
+          type: array
+          items:
+            type: string
+        expected_issuer:
+          type: string
+        expected_san:
+          type: array
+          items:
+            type: string
+        check_ocsp:
+          type: boolean
+        min_key_bits:
+          type: integer
+    SLAReport:
+      type: object
+      required: [period_seconds, excluded_seconds, monitored_seconds, no_data_seconds, checks, failed, availability_percent, downtime_seconds, incidents, mttr_seconds, latency, sources]
+      description: >-
+        SLA of one soul, or of the workspace (summary, soul_id omitted) where
+        durations are summed over souls (soul-seconds).
+      properties:
+        soul_id:
+          type: string
+        soul_name:
+          type: string
+        soul_type:
+          type: string
+        period_seconds:
+          type: number
+        excluded_seconds:
+          type: number
+          description: Maintenance time cut out of the period.
+        monitored_seconds:
+          type: number
+          description: period_seconds minus excluded_seconds.
+        no_data_seconds:
+          type: number
+          description: Monitored time without any recorded check.
+        checks:
+          type: integer
+        failed:
+          type: integer
+        availability_percent:
+          type: number
+          nullable: true
+          description: Alive checks / all checks; null without checks.
+        downtime_seconds:
+          type: number
+          description: Estimated per bucket as bucket length x failed / checks.
+        incidents:
+          type: integer
+          description: Alert incidents that started in the period.
+        mttr_seconds:
+          type: number
+          nullable: true
+          description: Mean time to resolve over those incidents that are resolved.
+        latency:
+          type: object
+          nullable: true
+          required: [avg_ms, p50_ms, p95_ms, p99_ms, exact]
+          properties:
+            avg_ms:
+              type: number
+            p50_ms:
+              type: number
+            p95_ms:
+              type: number
+            p99_ms:
+              type: number
+            exact:
+              type: boolean
+              description: False when rollup averages stood in for checks.
+        error_budget:
+          type: object
+          required: [target_percent, allowed_downtime_seconds, consumed_downtime_seconds, remaining_downtime_seconds, remaining_percent, met]
+          description: Present when target was given.
+          properties:
+            target_percent:
+              type: number
+            allowed_downtime_seconds:
+              type: number
+            consumed_downtime_seconds:
+              type: number
+            remaining_downtime_seconds:
+              type: number
+            remaining_percent:
+              type: number
+              nullable: true
+              description: Negative once overspent; null when the target allows no downtime.
+            met:
+              type: boolean
+        sources:
+          type: object
+          required: [raw, hour, day]
+          description: Buckets read from each source.
+          properties:
+            raw:
+              type: integer
+            hour:
+              type: integer
+            day:
+              type: integer
+    SLAResponse:
+      type: object
+      required: [from, to, generated_at, target_percent, retention_horizon, clipped, summary, souls]
+      properties:
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        generated_at:
+          type: string
+          format: date-time
+        target_percent:
+          type: number
+          nullable: true
+        retention_horizon:
+          type: string
+          format: date-time
+          nullable: true
+          description: Oldest instant retention keeps data for; null when unlimited.
+        clipped:
+          type: boolean
+          description: True when from was moved forward to retention_horizon.
+        summary:
+          $ref: '#/components/schemas/SLAReport'
+        souls:
+          type: array
+          items:
+            $ref: '#/components/schemas/SLAReport'
+    JudgmentExportRecord:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        id:
+          type: string
+        soul_id:
+          type: string
+        status:
+          type: string
+        duration_ms:
+          type: number
+        status_code:
+          type: integer
+        region:
+          type: string
+        jackal_id:
+          type: string
+        message:
+          type: string
     UptimeWindow:
       type: object
+      required: [checks, up, failures, uptime_percent, avg_latency_ms]
       properties:
         checks:
           type: integer
@@ -2097,32 +3811,97 @@ components:
           description: Null when there were no checks in the period.
         avg_latency_ms:
           type: number
+    SoulUptime:
+      type: object
+      required: [soul_id, windows, series]
+      properties:
+        soul_id:
+          type: string
+        windows:
+          $ref: '#/components/schemas/UptimeWindows'
+        series:
+          type: object
+          required: [range, step_seconds, points]
+          properties:
+            range:
+              type: string
+              enum: [1h, 24h, 7d, 30d, 90d, 1y]
+            step_seconds:
+              type: integer
+            points:
+              type: array
+              description: Equal buckets, oldest first.
+              items:
+                $ref: '#/components/schemas/UptimePoint'
+    UptimeWindows:
+      type: object
+      description: The fixed trailing periods, keyed by "24h", "7d" and "30d".
+      required: [24h, 7d, 30d]
+      properties:
+        24h:
+          $ref: '#/components/schemas/UptimeWindow'
+        7d:
+          $ref: '#/components/schemas/UptimeWindow'
+        30d:
+          $ref: '#/components/schemas/UptimeWindow'
+    UptimePoint:
+      allOf:
+      - $ref: '#/components/schemas/UptimeWindow'
+      - type: object
+        required: [start]
+        properties:
+          start:
+            type: string
+            format: date-time
     Judgment:
       type: object
+      description: >-
+        One check result. Latency is duration, in nanoseconds; the failure
+        reason is message.
+      required: [id, soul_id, workspace_id, jackal_id, region, timestamp, duration, status, status_code, message]
       properties:
         id:
           type: string
         soul_id:
+          type: string
+        workspace_id:
           type: string
         soul_name:
           type: string
           description: >-
             Name of the soul, on list responses (GET /api/v1/judgments and
             GET /api/v1/souls/{id}/judgments)
-        status:
+        jackal_id:
           type: string
-          enum:
-          - alive
-          - dead
-          - degraded
-          - unknown
-        latency_ms:
-          type: integer
+          description: Probe node that ran the check.
+        region:
+          type: string
         timestamp:
           type: string
           format: date-time
-        error:
+        duration:
+          type: integer
+          format: int64
+          description: Check latency in nanoseconds.
+        status:
+          $ref: '#/components/schemas/SoulStatus'
+        status_code:
+          type: integer
+          description: Protocol-specific code (HTTP status, DNS rcode, ...); 0 when not applicable.
+        message:
           type: string
+          description: Human-readable result; the failure reason for a dead judgment.
+        details:
+          type: object
+          description: Protocol-specific details (assertions, attempts, flapping, packet loss, ...).
+          additionalProperties: true
+        tls_info:
+          type: object
+          description: Certificate details for TLS-capable checks.
+          additionalProperties: true
+    SoulStatus:
+      type: string
+      enum: [alive, dead, degraded, unknown, embalmed]
     AlertChannelType:
       type: string
       enum:
@@ -2137,6 +3916,7 @@ components:
       - webhook
     AlertChannel:
       type: object
+      required: [id, name, type, enabled, config, rate_limit, retry_policy]
       properties:
         id:
           type: string
@@ -2151,6 +3931,7 @@ components:
         config:
           type: object
           description: Type-specific settings; secret values are redacted.
+          additionalProperties: true
         filters:
           type: array
           items:
@@ -2182,6 +3963,7 @@ components:
           $ref: '#/components/schemas/AlertChannelType'
         config:
           type: object
+          additionalProperties: true
           description: >-
             Type-specific settings, validated per type (for example url for
             webhook, webhook_url for slack and discord). On update, redacted
@@ -2240,6 +4022,7 @@ components:
           type: string
     AlertRule:
       type: object
+      required: [id, name, enabled, scope, conditions, channels, severity, cooldown, auto_resolve, created_at]
       properties:
         id:
           type: string
@@ -2393,6 +4176,92 @@ components:
           - or
         anomaly_std_dev:
           type: number
+    Incident:
+      type: object
+      required: [id, rule_id, soul_id, workspace_id, status, severity, started_at, notes, events, escalation_level]
+      properties:
+        id:
+          type: string
+        rule_id:
+          type: string
+        soul_id:
+          type: string
+        soul_name:
+          type: string
+        workspace_id:
+          type: string
+        status:
+          type: string
+          enum: [open, acknowledged, resolved]
+        severity:
+          type: string
+          enum: [critical, warning, info]
+        started_at:
+          type: string
+          format: date-time
+        acked_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+        acked_by:
+          type: string
+        resolved_by:
+          type: string
+        notes:
+          type: array
+          nullable: true
+          items:
+            type: object
+            properties:
+              author:
+                type: string
+              message:
+                type: string
+              timestamp:
+                type: string
+                format: date-time
+        events:
+          type: array
+          nullable: true
+          description: Alert events of the incident, with their judgments.
+          items:
+            type: object
+            additionalProperties: true
+        escalation_level:
+          type: integer
+        last_escalated_at:
+          type: string
+          format: date-time
+    AlertManagerStats:
+      type: object
+      required: [total_alerts, sent_alerts, failed_alerts, acknowledged_alerts, resolved_alerts, rate_limited_alerts, filtered_alerts, active_incidents, last_alert_time, verdicts_by_severity]
+      properties:
+        total_alerts:
+          type: integer
+        sent_alerts:
+          type: integer
+        failed_alerts:
+          type: integer
+        acknowledged_alerts:
+          type: integer
+        resolved_alerts:
+          type: integer
+        rate_limited_alerts:
+          type: integer
+        filtered_alerts:
+          type: integer
+        active_incidents:
+          type: integer
+        last_alert_time:
+          type: string
+          format: date-time
+        verdicts_by_severity:
+          type: object
+          nullable: true
+          additionalProperties:
+            type: integer
     ClusterNodeRequest:
       type: object
       required:
@@ -2410,6 +4279,7 @@ components:
           type: string
     ClusterStatus:
       type: object
+      required: [is_clustered, node_id]
       properties:
         is_clustered:
           type: boolean
@@ -2422,6 +4292,8 @@ components:
         term:
           type: integer
         peer_count:
+          type: integer
+        commit_index:
           type: integer
     Peer:
       type: object
@@ -2510,6 +4382,7 @@ components:
           - system
     Journey:
       type: object
+      required: [id, workspace_id, name, weight, timeout, continue_on_failure, variables, steps, enabled, created_at, updated_at]
       properties:
         id:
           type: string
@@ -2527,6 +4400,7 @@ components:
           type: boolean
         variables:
           type: object
+          nullable: true
           additionalProperties:
             type: string
         steps:
@@ -2541,6 +4415,88 @@ components:
         updated_at:
           type: string
           format: date-time
+    JourneyListItem:
+      description: A journey as GET /api/v1/journeys lists it, with run statistics.
+      allOf:
+      - $ref: '#/components/schemas/Journey'
+      - type: object
+        required: [step_count, last_status, avg_duration, success_rate]
+        properties:
+          step_count:
+            type: integer
+          last_run:
+            type: string
+            format: date-time
+            description: Start of the latest run; absent before the first run.
+          last_status:
+            type: string
+            enum: [passed, failed, pending, unknown]
+            description: Latest run (alive is passed, dead is failed); unknown before the first run.
+          avg_duration:
+            type: number
+            description: Mean duration of the recent runs, in milliseconds.
+          success_rate:
+            type: number
+            description: Percentage of the recent runs that passed.
+    JourneyRun:
+      type: object
+      required: [id, journey_id, workspace_id, jackal_id, region, started_at, completed_at, duration, status, steps, variables]
+      properties:
+        id:
+          type: string
+        journey_id:
+          type: string
+        workspace_id:
+          type: string
+        jackal_id:
+          type: string
+        region:
+          type: string
+        started_at:
+          type: integer
+          format: int64
+          description: Unix time in milliseconds.
+        completed_at:
+          type: integer
+          format: int64
+          description: Unix time in milliseconds.
+        duration:
+          type: integer
+          format: int64
+          description: Total duration in milliseconds.
+        status:
+          $ref: '#/components/schemas/SoulStatus'
+        steps:
+          type: array
+          nullable: true
+          items:
+            $ref: '#/components/schemas/JourneyStepResult'
+        variables:
+          type: object
+          nullable: true
+          description: Captured variables; secret-looking values are masked.
+          additionalProperties:
+            type: string
+    JourneyStepResult:
+      type: object
+      required: [name, step_index, status, duration, message]
+      properties:
+        name:
+          type: string
+        step_index:
+          type: integer
+        status:
+          $ref: '#/components/schemas/SoulStatus'
+        duration:
+          type: integer
+          format: int64
+          description: Milliseconds.
+        message:
+          type: string
+        extracted:
+          type: object
+          additionalProperties:
+            type: string
     JourneyCreate:
       type: object
       required:
@@ -2630,6 +4586,7 @@ components:
           type: string
     StatusPage:
       type: object
+      required: [id, workspace_id, name, slug, description, logo_url, favicon_url, custom_domain, theme, visibility, enabled, souls, groups, incidents, uptime_days, subscriber_count, created_at, updated_at]
       properties:
         id:
           type: string
@@ -2648,7 +4605,7 @@ components:
         custom_domain:
           type: string
         theme:
-          type: object
+          $ref: '#/components/schemas/StatusPageTheme'
         visibility:
           type: string
           enum:
@@ -2658,16 +4615,43 @@ components:
         password_set:
           type: boolean
           description: Whether a password is configured; the password itself is never returned.
+        subscriber_count:
+          type: integer
+          minimum: 0
+          readOnly: true
+          description: >-
+            Number of confirmed email subscribers. Computed on read; pending
+            (unconfirmed) subscriptions are not counted and no address is
+            returned. Ignored on create and PUT.
         enabled:
           type: boolean
         souls:
           type: array
+          nullable: true
           items:
             type: string
         groups:
           type: array
+          nullable: true
           items:
-            type: object
+            $ref: '#/components/schemas/StatusGroup'
+        incidents:
+          type: array
+          nullable: true
+          readOnly: true
+          description: >-
+            Read-only. Ignored on create and PUT (the stored value is kept);
+            write through /api/v1/status-pages/{id}/incidents.
+          items:
+            $ref: '#/components/schemas/StatusIncident'
+        announcements:
+          type: array
+          readOnly: true
+          description: >-
+            Read-only. Ignored on create and PUT (the stored value is kept);
+            write through /api/v1/status-pages/{id}/announcements.
+          items:
+            $ref: '#/components/schemas/StatusAnnouncement'
         uptime_days:
           type: integer
         created_at:
@@ -2676,6 +4660,188 @@ components:
         updated_at:
           type: string
           format: date-time
+    StatusPageTheme:
+      type: object
+      properties:
+        primary_color:
+          type: string
+        background_color:
+          type: string
+        text_color:
+          type: string
+        accent_color:
+          type: string
+        font_family:
+          type: string
+        custom_css:
+          type: string
+    StatusGroup:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        soul_ids:
+          type: array
+          items:
+            type: string
+        order:
+          type: integer
+    StatusIncident:
+      type: object
+      required: [id, title, description, status, severity, started_at, updated_at, affected_souls, updates]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+          description: The first update's message.
+        status:
+          type: string
+          enum: [investigating, identified, monitoring, resolved]
+        impact:
+          type: string
+          enum: [none, minor, major, critical]
+        severity:
+          type: string
+          description: Legacy severity derived from impact.
+        affected_souls:
+          type: array
+          nullable: true
+          items:
+            type: string
+        started_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+        updates:
+          type: array
+          nullable: true
+          items:
+            type: object
+            required: [id, message, status, updated_at]
+            properties:
+              id:
+                type: string
+              message:
+                type: string
+              status:
+                type: string
+              updated_at:
+                type: string
+                format: date-time
+    StatusIncidentCreate:
+      type: object
+      required: [title, message]
+      properties:
+        title:
+          type: string
+          maxLength: 200
+        message:
+          type: string
+          maxLength: 5000
+          description: Plain text; becomes the first timeline update.
+        impact:
+          type: string
+          enum: [none, minor, major, critical]
+          default: minor
+        status:
+          type: string
+          enum: [investigating, identified, monitoring, resolved]
+          default: investigating
+        affected_souls:
+          type: array
+          description: Soul IDs; each must be shown on the page.
+          items:
+            type: string
+    StatusIncidentPatch:
+      type: object
+      properties:
+        title:
+          type: string
+          maxLength: 200
+        impact:
+          type: string
+          enum: [none, minor, major, critical]
+        affected_souls:
+          type: array
+          items:
+            type: string
+    StatusIncidentUpdateCreate:
+      type: object
+      required: [message, status]
+      properties:
+        message:
+          type: string
+          maxLength: 5000
+        status:
+          type: string
+          enum: [investigating, identified, monitoring, resolved]
+    StatusAnnouncement:
+      type: object
+      required: [id, title, message, affected_souls, starts_at, ends_at, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        message:
+          type: string
+        affected_souls:
+          type: array
+          nullable: true
+          items:
+            type: string
+        starts_at:
+          type: string
+          format: date-time
+        ends_at:
+          type: string
+          format: date-time
+        maintenance_window_id:
+          type: string
+        phase:
+          type: string
+          enum: [upcoming, in_progress, completed]
+          description: Derived from the schedule; never stored.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    StatusAnnouncementInput:
+      type: object
+      properties:
+        title:
+          type: string
+          maxLength: 200
+        message:
+          type: string
+          maxLength: 5000
+        affected_souls:
+          type: array
+          items:
+            type: string
+        starts_at:
+          type: string
+          format: date-time
+        ends_at:
+          type: string
+          format: date-time
+        maintenance_window_id:
+          type: string
+          description: A one-off maintenance window to take the schedule from.
     StatusPageCreate:
       type: object
       required:
@@ -2751,6 +4917,44 @@ components:
         uptime_days:
           type: integer
           default: 90
+    MaintenanceWindow:
+      type: object
+      required: [id, name, description, workspace_id, start_time, end_time, enabled, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          description: Always present; empty when the window has no description.
+        soul_ids:
+          type: array
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+        workspace_id:
+          type: string
+        start_time:
+          type: string
+          format: date-time
+        end_time:
+          type: string
+          format: date-time
+        recurring:
+          type: string
+          enum: ['', none, daily, weekly, monthly]
+        enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
     MaintenanceWindowCreate:
       type: object
       required:
@@ -2832,46 +5036,76 @@ components:
         widgets:
           type: array
           items:
+            $ref: '#/components/schemas/WidgetConfig'
+    CustomDashboard:
+      type: object
+      required: [id, name, workspace_id, widgets, refresh_sec, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        workspace_id:
+          type: string
+        description:
+          type: string
+        widgets:
+          type: array
+          description: Always an array; empty when the dashboard has no widgets.
+          items:
+            $ref: '#/components/schemas/WidgetConfig'
+        refresh_sec:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    WidgetConfig:
+      type: object
+      required: [id, title, type, grid, query]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        type:
+          type: string
+          enum:
+          - line_chart
+          - bar_chart
+          - gauge
+          - stat
+          - table
+        grid:
+          type: object
+          required: [x, y, width, height]
+          properties:
+            x:
+              type: integer
+            y:
+              type: integer
+            width:
+              type: integer
+              minimum: 1
+              maximum: 12
+            height:
+              type: integer
+        query:
+          $ref: '#/components/schemas/WidgetQuery'
+        thresholds:
+          type: array
+          items:
             type: object
+            required: [value, color, op]
             properties:
-              id:
+              value:
+                type: number
+              color:
                 type: string
-              title:
+              op:
                 type: string
-              type:
-                type: string
-                enum:
-                - line_chart
-                - bar_chart
-                - gauge
-                - stat
-                - table
-              grid:
-                type: object
-                properties:
-                  x:
-                    type: integer
-                  y:
-                    type: integer
-                  width:
-                    type: integer
-                    minimum: 1
-                    maximum: 12
-                  height:
-                    type: integer
-              query:
-                $ref: '#/components/schemas/WidgetQuery'
-              thresholds:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    value:
-                      type: number
-                    color:
-                      type: string
-                    op:
-                      type: string
     WidgetQuery:
       type: object
       required:
@@ -2897,6 +5131,41 @@ components:
           description: Number with an h, d or w suffix, such as 24h or 7d.
         aggregation:
           type: string
+    Workspace:
+      type: object
+      required: [id, name, slug, description, owner_id, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        slug:
+          type: string
+        description:
+          type: string
+        owner_id:
+          type: string
+        settings:
+          type: object
+          additionalProperties: true
+        quotas:
+          type: object
+          additionalProperties: true
+        features:
+          type: object
+          additionalProperties: true
+        status:
+          type: string
+          enum: [active, suspended, trial, deleted]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        deleted_at:
+          type: string
+          format: date-time
     WorkspaceInput:
       type: object
       required:
@@ -2987,6 +5256,7 @@ components:
           $ref: '#/components/schemas/Pagination'
     Pagination:
       type: object
+      required: [total, offset, limit, has_more]
       properties:
         total:
           type: integer
@@ -2998,6 +5268,218 @@ components:
           type: boolean
         next_offset:
           type: integer
+    QuotaCounter:
+      type: object
+      required: [used, limit]
+      properties:
+        used:
+          type: integer
+        limit:
+          type: integer
+          description: 0 means unlimited
+    QuotaUsage:
+      type: object
+      required: [workspace, enforced, souls, journeys, alert_channels, team_members, check_interval_min, retention_days]
+      properties:
+        workspace:
+          type: string
+        enforced:
+          type: boolean
+          description: Whether tenants.enabled is on, so the limits apply
+        souls:
+          $ref: '#/components/schemas/QuotaCounter'
+        journeys:
+          $ref: '#/components/schemas/QuotaCounter'
+        alert_channels:
+          $ref: '#/components/schemas/QuotaCounter'
+        team_members:
+          $ref: '#/components/schemas/QuotaCounter'
+        check_interval_min:
+          type: string
+          description: Shortest allowed check interval ("0s" means no floor)
+          example: 30s
+        retention_days:
+          type: integer
+          description: Cap on time-series retention in days (0 means no cap)
+    QuotaExceededError:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+          example: quota_exceeded
+        quota:
+          type: string
+          enum: [max_souls, max_journeys, max_alert_channels, max_team_members, check_interval_min]
+        workspace:
+          type: string
+        limit:
+          description: The count limit, or the minimum interval for check_interval_min
+          oneOf:
+          - type: integer
+          - type: string
+        current:
+          type: integer
+    MemberRole:
+      type: string
+      enum: [owner, admin, editor, api, viewer]
+    Member:
+      type: object
+      required: [id, email, name, role, workspace, source, disabled, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          $ref: '#/components/schemas/MemberRole'
+        workspace:
+          type: string
+        source:
+          type: string
+          enum: [local, oidc, ldap]
+        disabled:
+          type: boolean
+        must_change_password:
+          type: boolean
+        configured_admin:
+          type: boolean
+          description: The account named by auth.local.admin_email; it cannot be disabled or deleted
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        last_login_at:
+          type: string
+          format: date-time
+    MemberCreate:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        password:
+          type: string
+          description: Initial password (policy-checked); omit to add an existing account
+        role:
+          $ref: '#/components/schemas/MemberRole'
+    MemberUpdate:
+      type: object
+      properties:
+        role:
+          $ref: '#/components/schemas/MemberRole'
+        disabled:
+          type: boolean
+        name:
+          type: string
+    Invitation:
+      type: object
+      required: [id, email, role, workspace, invited_by, created_at, expires_at]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/MemberRole'
+        workspace:
+          type: string
+        invited_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+    InvitationCreated:
+      allOf:
+      - $ref: '#/components/schemas/Invitation'
+      - type: object
+        required: [email_sent]
+        properties:
+          email_sent:
+            type: boolean
+          invite_url:
+            type: string
+            description: The one-time accept link, present only when it was not emailed
+    APIKey:
+      type: object
+      required: [id, name, prefix, workspace_id, owner_id, role, status, created_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        prefix:
+          type: string
+          description: Non-secret head of the key (anb_<id>)
+        workspace_id:
+          type: string
+        owner_id:
+          type: string
+        owner_email:
+          type: string
+        role:
+          type: string
+          enum: [owner, admin, editor, api, viewer]
+        status:
+          type: string
+          enum: [active, expired, revoked]
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+          description: Updated at most every few minutes
+        revoked_at:
+          type: string
+          format: date-time
+        revoked_by:
+          type: string
+    APIKeyCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 100
+        role:
+          type: string
+          enum: [owner, admin, editor, api, viewer]
+          description: Defaults to the caller's role; may not rank above it
+        expires_at:
+          type: string
+          format: date-time
+          description: Optional, at most 366 days ahead
+        expires_in_days:
+          type: integer
+          minimum: 0
+          maximum: 366
+          description: Alternative to expires_at; 0 or absent means no expiry
+    APIKeyCreated:
+      allOf:
+      - $ref: '#/components/schemas/APIKey'
+      - type: object
+        required: [key]
+        properties:
+          key:
+            type: string
+            description: The plaintext key. Shown once; store it now.
     Error:
       type: object
       properties:
@@ -3008,6 +5490,14 @@ components:
         code:
           type: integer
   responses:
+    QuotaExceeded:
+      description: >-
+        The create would exceed a workspace quota. Existing resources stay
+        readable and editable; delete one or raise the limit.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/QuotaExceededError'
     BadRequestError:
       description: Invalid request
       content:

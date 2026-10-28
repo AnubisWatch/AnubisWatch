@@ -7,6 +7,13 @@ import {
   dispatchAuthSessionChanged,
   type AuthSessionChange,
 } from './authEvents'
+import type { components, paths } from './schema.generated'
+
+/** GET /souls/:id/judgments, with the judgments normalised for the UI. */
+type SoulJudgmentsPage = Omit<
+  paths['/api/v1/souls/{id}/judgments']['get']['responses'][200]['content']['application/json'],
+  'data'
+> & { data: Judgment[] }
 
 // Generic hook for API calls
 function useApi<T>(
@@ -153,7 +160,7 @@ export function useSoul(id: string | undefined) {
 export function useSoulJudgments(soulId: string | undefined) {
   return useApi<Judgment[]>(
     async () => {
-      const resp = await api.get<{data: Judgment[]; total: number; has_more: boolean; next_cursor?: string}>(`/souls/${soulId}/judgments`)
+      const resp = await api.get<SoulJudgmentsPage>(`/souls/${soulId}/judgments`)
       return resp.data
     },
     [soulId]
@@ -318,15 +325,8 @@ export function useClusterStatus() {
   return useApi<ClusterStatus>(() => api.get<ClusterStatus>('/cluster/status'))
 }
 
-export interface ClusterPeer {
-  id: string
-  name: string
-  address: string
-  state: string
-  last_contact: string
-  is_leader?: boolean
-  region?: string
-}
+/** GET /cluster/peers item. */
+export type ClusterPeer = components['schemas']['Peer']
 
 export function useClusterPeers() {
   return useApi<ClusterPeer[]>(() => api.get<ClusterPeer[]>('/cluster/peers'))
@@ -347,7 +347,7 @@ export function useStatusPages() {
     await refetchPages().catch(() => {})
   }, [refetchPages])
 
-  const createPage = async (page: Omit<StatusPage, 'id'>) => {
+  const createPage = async (page: Omit<StatusPage, 'id' | 'subscriber_count'>) => {
     const result = await api.post<StatusPage>('/status-pages', page)
     await refreshPages()
     return result
@@ -418,6 +418,19 @@ export function useDashboards() {
   }
 }
 
+// App, Header and Sidebar each mount useAuth; concurrent session checks
+// share one /auth/me request instead of spending three per page load.
+let currentUserRequest: Promise<User> | null = null
+
+function fetchCurrentUser(): Promise<User> {
+  if (!currentUserRequest) {
+    currentUserRequest = api.get<User>('/auth/me').finally(() => {
+      currentUserRequest = null
+    })
+  }
+  return currentUserRequest
+}
+
 // Auth API hooks
 export function useAuth() {
   const [user, setUser] = useState<User | null>(null)
@@ -428,7 +441,7 @@ export function useAuth() {
     const sequence = ++syncSequence.current
     setLoading(true)
     try {
-      const currentUser = await api.get<User>('/auth/me')
+      const currentUser = await fetchCurrentUser()
       if (sequence === syncSequence.current) {
         setUser(currentUser)
         dispatchAuthSessionChanged({ state: 'authenticated', user: currentUser })

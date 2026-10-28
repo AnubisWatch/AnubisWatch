@@ -105,7 +105,7 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 	// WrapDialerContext resolves the hostname, validates all IPs, and dials
 	// the literal IP so an attacker who changes DNS between Validate() and
 	// Judge() cannot redirect the connection to an internal address.
-	grpcDialCtx := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+	grpcDialCtx := DefaultValidator.Load().WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
 	// net/http speaks HTTP/2 over TLS (ALPN) and, with UnencryptedHTTP2,
 	// h2c with prior knowledge for http:// targets. HTTP/1 is disabled: gRPC
 	// needs HTTP/2. (golang.org/x/net/http2.Transport is deprecated.)
@@ -150,6 +150,10 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 		return failJudgment(soul, fmt.Errorf("failed to create request: %w", err)), nil
 	}
 
+	for name, value := range cfg.Metadata {
+		req.Header.Set(name, value)
+	}
+	// Metadata cannot override the transport headers required by gRPC.
 	req.Header.Set("Content-Type", "application/grpc")
 	req.Header.Set("TE", "trailers")
 
@@ -217,11 +221,13 @@ func (c *gRPCChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgmen
 
 	// Performance budget check
 	if cfg.Feather.Duration > 0 && duration > cfg.Feather.Duration {
+		// Only a healthy check is downgraded; a failed one keeps its status
+		// and the message that explains why it failed.
 		if judgment.Status == core.SoulAlive {
 			judgment.Status = core.SoulDegraded
+			judgment.Message = fmt.Sprintf("gRPC health check in %s (exceeds feather %s)",
+				duration.Round(time.Millisecond), cfg.Feather.Duration)
 		}
-		judgment.Message = fmt.Sprintf("gRPC health check in %s (exceeds feather %s)",
-			duration.Round(time.Millisecond), cfg.Feather.Duration)
 	}
 
 	return judgment, nil

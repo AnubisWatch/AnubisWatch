@@ -12,6 +12,7 @@
 - [Storage Configuration](#storage-configuration)
 - [Cluster Configuration (Necropolis)](#cluster-configuration-necropolis)
 - [Authentication](#authentication)
+- [Outgoing Mail](#outgoing-mail)
 - [Dashboard](#dashboard)
 - [Souls (Monitored Targets)](#souls-monitored-targets)
 - [Alert Channels](#alert-channels)
@@ -65,6 +66,7 @@ storage:
 | `trusted_proxies` | string[] | `[]` | No | Proxy IPs whose `X-Forwarded-For` is trusted for the real client IP (REST + WebSocket rate limiting). Empty = trust none (use `RemoteAddr`) |
 | `grpc_reflection` | boolean | `false` | No | Enable gRPC server reflection (leave off in production) |
 | `metrics_auth` | boolean | `false` | No | Require a bearer token on `/metrics`. Default is open for Prometheus scraping; enable in multi-tenant or internet-exposed deployments, since `/metrics` exposes monitor names/latencies across all workspaces |
+| `public_url` | string | `""` | With `mail` | Externally reachable base URL (e.g. `https://status.example.com`) used for links in emails: subscription confirm/unsubscribe and password reset. Absolute http(s), no query or fragment |
 
 > **Note on `environment`:** setting the top-level `environment: "production"` rejects any config with TLS disabled. When HTTP TLS is terminated upstream (ingress/reverse proxy), use `environment: "production-proxied"` so the instance may serve plain HTTP behind the proxy.
 >
@@ -139,7 +141,7 @@ silently falling back.
 | Field | Type | Default | Required | Description |
 |-------|------|---------|----------|-------------|
 | `enabled` | boolean | `false` | No | Enable AES-256 encryption |
-| `key` | string | - | Conditional | 32-byte encryption key (use env var) |
+| `key` | string | - | Conditional | Encryption key (use env var). Used verbatim as key material (hex is not decoded); at least 16 bytes, 32+ recommended, e.g. `openssl rand -hex 32`. A wrong key or a missing key for an encrypted data directory stops startup (`encryption.keycheck`). |
 
 ### `storage.timeseries.compaction` Block
 
@@ -349,6 +351,59 @@ necropolis:
 
 ---
 
+## Outgoing Mail
+
+The root `mail` block configures one SMTP relay used by the server itself:
+
+- **Status page subscriptions.** Visitors subscribe by email from a public
+  status page. Double opt-in: the confirmation link is single use and expires
+  after 48 hours; nothing else is sent until it is confirmed. Confirmed
+  subscribers are emailed when an alert incident for one of the page's souls
+  opens, is acknowledged or resolves, and when an operator posts, updates or
+  resolves an incident on the page. Every email carries an unsubscribe link and
+  `List-Unsubscribe` / `List-Unsubscribe-Post` (RFC 8058 one-click) headers.
+  The subscribe endpoint is rate limited (10 requests per 10 minutes per client
+  IP, 3 confirmation emails per address per day) and answers identically
+  whether an address is new or already subscribed. In a cluster only the
+  leader sends incident notifications.
+- **Password reset.** `POST /api/v1/auth/reset-password` emails a link to
+  `<public_url>/reset-password?token=...` (valid one hour, at most 3 emails per
+  address per hour), and the login page offers "Forgot password?".
+
+Without `mail.host` both stay off: `POST /status/subscribe` answers `503
+subscriptions unavailable`, pages show no form (`subscriptions_available:
+false` in the page JSON), and password recovery is `anubis admin
+reset-password`. Alert email channels keep their own per-channel SMTP settings.
+
+| Field | Type | Default | Required | Description |
+|-------|------|---------|----------|-------------|
+| `host` | string | `""` | Yes (to enable) | SMTP relay host. Dialed through the SSRF policy like probes and alert channels: a private or loopback relay needs `security.allow_private_targets` or `security.allowed_networks` |
+| `port` | integer | `587` (`465` for `implicit`) | No | SMTP port |
+| `username` | string | `""` | No | AUTH PLAIN user. Credentials are only sent over TLS or to a localhost relay |
+| `password` | string | `""` | No | AUTH PLAIN password. Use `${ANUBIS_MAIL_PASSWORD}`; masked by `anubis config show` |
+| `from` | string | - | Yes | Sender, e.g. `AnubisWatch <status@example.com>` |
+| `tls` | string | `starttls` | No | `starttls` (required), `implicit` (TLS from connect, port 465) or `none` |
+| `timeout` | duration | `30s` | No | Per-delivery timeout (1s to 5m). Failed deliveries are retried after 30s, 2m and 10m |
+
+`server.public_url` is required when `mail.host` is set. The slugs `subscribe`
+and `subscriptions` are reserved for the subscription endpoints
+(`/status/subscribe`, `/status/subscriptions/confirm`,
+`/status/subscriptions/unsubscribe`).
+
+```yaml
+server:
+  public_url: "https://status.example.com"
+mail:
+  host: "smtp.example.com"
+  port: 587
+  username: "anubis@example.com"
+  password: "${ANUBIS_MAIL_PASSWORD}"
+  from: "AnubisWatch <status@example.com>"
+  tls: "starttls"
+```
+
+---
+
 ## Authentication
 
 ### Root `auth` Block
@@ -376,8 +431,36 @@ file after a restart. To recover a lost password, stop the server and run:
 anubis admin reset-password            # prompts; or --password-stdin
 ```
 
-This revokes all sessions. Password reset tokens from
-`POST /api/v1/auth/reset-password` are not delivered anywhere yet.
+This revokes all sessions. With [outgoing mail](#outgoing-mail) configured,
+`POST /api/v1/auth/reset-password` emails a reset link to any enabled local
+account.
+
+#### Members and invitations
+
+Local auth is multi-user. The configured admin is the owner of the `default`
+workspace (and cannot be disabled or deleted); further accounts are added from
+**Settings → Members** or the [members API](API.md#members-and-invitations):
+
+- **Invite** by email and role. With `mail.*` and `server.public_url` set, the
+  single-use `/accept-invite` link is emailed; without mail the API returns it
+  once for you to share. Links expire after 7 days; only a SHA-256 of the
+  token is stored.
+- **Create** an account with an initial password; the user must change it at
+  first sign-in.
+- Roles are per workspace: `owner`, `admin`, `editor`, `api`, `viewer`. Nobody
+  grants or manages a role above their own, and a workspace always keeps an
+  enabled owner.
+
+Accounts live in `<storage.path>/sessions.json` next to sessions (in a cluster,
+in the replicated authentication state, which is one Raft entry of at most
+192 KiB; hence at most 150 accounts, 25 pending invitations, 10 sessions per
+account and 200 in total (the oldest is signed out), and 20 reset tokens, one
+per account).
+Account emails are ASCII-only and compared with ASCII case folding only.
+OIDC and LDAP users are added to the same directory at their first sign-in as
+viewers of `default`; roles changed in the members list are applied on their
+next request. `tenants.default_quotas.max_team_members` caps members plus
+pending invitations per workspace when `tenants.enabled` is set.
 
 ### `auth.oidc` Block
 
@@ -388,6 +471,7 @@ This revokes all sessions. Password reset tokens from
 | `client_secret` | string | - | **Yes** | OAuth client secret |
 | `redirect_uri` | string | Auto-generated | No | Callback URL |
 | `scopes` | array | `["openid", "email", "profile"]` | No | OAuth scopes |
+| `allow_unverified_email` | boolean | `false` | No | Accept identities without `email_verified: true`. Accounts are matched by email, so leave this off unless the provider never sends the claim and verifies addresses itself |
 
 ### `auth.ldap` Block
 
@@ -486,13 +570,81 @@ Each soul represents a monitored target.
 |-------|------|---------|----------|-------------|
 | `name` | string | - | **Yes** | Human-readable name |
 | `type` | string | - | **Yes** | Check type (see below) |
-| `target` | string | - | **Yes** | Target URL/host |
-| `weight` | duration | `60s` | No | Check interval |
+| `target` | string | - | **Yes** (not for `heartbeat`) | Target URL/host |
+| `weight` | duration | `60s` | No | Check interval (`heartbeat`: expected ping period) |
 | `timeout` | duration | `10s` | No | Check timeout |
 | `enabled` | boolean | `true` | No | Enable/disable check |
 | `tags` | array | - | No | Tags for filtering/alerting |
 | `regions` | array | - | No | Regions to run checks from |
+| `retries` | integer | `0` | No | Confirmation retries (0–5) before a failure is recorded |
+| `retry_interval` | duration | `5s` | No | Pause between retries (≥ 100ms, shorter than `weight`) |
+| `flap_detection` | object | inherit | No | Per-soul override of `probe.flap_detection` |
 | `<type>` | object | - | Conditional | Protocol-specific config |
+
+### Confirmation Retries and Flap Detection
+
+**Retries.** With `retries: N`, a failed check (error or `dead`) is re-run up
+to N more times, `retry_interval` apart, before the soul is recorded `dead`.
+Exactly one judgment is stored per scheduled check — the final outcome — with
+the number of attempts in `details.attempts`, so history and uptime count one
+check, not N. The concurrency slot (`probe.max_concurrent_checks`) is released
+while a retry waits; a retry that would start after the next scheduled check
+is skipped; cancelling the assignment (soul removed, ownership moved) stops
+the retries without recording anything. `retries: 0` (default) is the old
+behaviour. Heartbeat souls ignore retries, and manual "check now" runs a
+single attempt.
+
+**Flap detection.** A soul whose status changes at least `threshold` times
+within `window` is *flapping*. Its judgments keep being recorded with
+`details.flapping: true`, and soul payloads (REST, WebSocket `soul_update`,
+MCP) carry `"flapping": true` beside the unchanged `status`. While flapping,
+alert rules do not fire or auto-resolve for the soul; instead each enabled
+rule that covers it sends one `flapping_started` notice (warning). Flapping
+ends once fewer than half the threshold (rounded up) changes remain in the
+window, or as soon as the status has held for `threshold` consecutive checks
+(so a soul that goes hard down while flagged is not muted for a whole
+window). Each rule then sends one `flapping_stopped` notice (info) and is
+evaluated against the status the soul had **before** flapping started: a soul
+that was up and stabilizes down fires the normal down alert and opens an
+incident; one that was down and stabilizes up resolves (auto-resolve) and
+fires `recovery` rules. The notices use the rule's channels and its cooldown
+as dedup window (separate from status alerts) and do not open incidents. Flap
+state is evaluated by the node that owns the soul; a new runner (interval
+change, ownership move, restart) restores it from the soul's latest stored
+judgment (`details.flapping`, `details.flap_baseline`), so the flag and the
+single "stopped" notice survive the handover.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `false` | Turn flap detection on |
+| `threshold` | integer | `5` | Status changes that start flapping (2–50; 0 = inherit) |
+| `window` | duration | `10m` | Sliding window (10s–24h; unset = inherit) |
+
+Set the default for every soul under `probe`, and override it per soul
+(a soul block replaces `enabled`; zero `threshold`/`window` inherit):
+
+```yaml
+probe:
+  flap_detection:
+    enabled: true
+    threshold: 5
+    window: 10m
+
+souls:
+  - name: Flaky API
+    type: http
+    target: https://api.example.com/health
+    weight: 30s
+    retries: 2
+    retry_interval: 5s
+    flap_detection:
+      enabled: true
+      threshold: 4
+      window: 15m
+```
+
+`anubis watch <target> --retries 2 --retry-interval 5s` sets the retry fields
+from the CLI.
 
 ### Supported Types
 
@@ -508,6 +660,7 @@ Each soul represents a monitored target.
 | `grpc` | gRPC | `grpc` |
 | `websocket` | WebSocket | `websocket` |
 | `tls` | TLS Cert | `tls` |
+| `heartbeat` | Push / cron (inbound pings) | `heartbeat` |
 
 ### `http` Block
 
@@ -714,6 +867,67 @@ souls:
       privileged: true
 ```
 
+### `heartbeat` Block
+
+A heartbeat soul is a push monitor for cron jobs, batch workers and backups:
+nothing is probed, the job calls AnubisWatch. It needs no `target`; `weight`
+is how often the job is expected to ping (at most 31 days).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `grace` | duration | half of `weight` | How late a ping may be before the soul is judged dead (1s to 7d) |
+| `token` | string | generated | Secret ping token, 32-128 characters of `A-Z a-z 0-9 - _`. Souls created through the API, dashboard, MCP, gRPC or `anubis watch --type heartbeat` get a generated 256-bit token (ignored if supplied); a soul in the config file must set one, e.g. `openssl rand -hex 32` |
+
+Ping endpoints (no session or API key; the token is the credential, so keep
+the URL secret and rotate it from the soul's page if it leaks):
+
+| Request | Effect |
+|---------|--------|
+| `GET\|POST /api/v1/heartbeat/<token>` | Success: an `alive` judgment (duration = time since the last `/start`) |
+| `GET\|POST /api/v1/heartbeat/<token>/start` | Run started; no judgment, used to measure the run time |
+| `GET\|POST /api/v1/heartbeat/<token>/fail` | Failure: a `dead` judgment; the POST body (any content type) or `?msg=` is the message, first 1KB kept |
+
+Each answers a plain-text `OK`, `404` for an unknown token, `429` past 30
+pings per token per minute (on top of the per-IP API limit), `503` while a
+cluster has no leader. When no ping arrives within `weight + grace` the soul
+is judged `dead`, and again every `weight` until a ping arrives, so uptime and
+alert rules work exactly as for pulled checks; maintenance windows suppress
+its alerts and show it embalmed like any soul. "Test now" does not apply
+(`POST /souls/{id}/check` answers 409). The ping URL is shown on the soul's
+page in the dashboard and by `GET /api/v1/souls/{id}/heartbeat` (editors and
+above); soul list/get responses return the token as `[REDACTED]`, while
+backups and `anubis souls export` keep it, like other soul credentials.
+
+In a cluster a ping may hit any node: it is stored in the soul's replicated
+ping record (`{workspace}/heartbeats/{soul}`) through Raft, and only the
+soul's owner turns it into judgments and evaluates the deadline, so each ping
+or missed deadline yields one judgment cluster-wide.
+
+#### Heartbeat Example
+
+```yaml
+souls:
+  - name: "Nightly backup"
+    type: heartbeat
+    weight: 24h
+    heartbeat:
+      grace: 1h
+      token: "${BACKUP_HEARTBEAT_TOKEN}"
+```
+
+```bash
+# crontab: ping on success only (curl -f: no ping when the job fails)
+0 3 * * * /usr/local/bin/backup.sh && curl -fsS -m 10 --retry 3 https://anubis.example.com/api/v1/heartbeat/$TOKEN
+
+# measure run time and report failures with the job's output
+curl -fsS -m 10 https://anubis.example.com/api/v1/heartbeat/$TOKEN/start
+if /usr/local/bin/backup.sh > /tmp/backup.log 2>&1; then
+  curl -fsS -m 10 --retry 3 https://anubis.example.com/api/v1/heartbeat/$TOKEN
+else
+  curl -fsS -m 10 --retry 3 --data-binary @/tmp/backup.log https://anubis.example.com/api/v1/heartbeat/$TOKEN/fail
+fi
+```
+
 ---
 
 ## Alert Channels
@@ -893,6 +1107,17 @@ channels:
 ```
 
 ---
+
+### `alerting` Block
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `proxy` | string | `""` | `http://` or `https://` proxy for HTTP alert channels (webhook, Slack, Discord, Teams, PagerDuty, OpsGenie, ntfy, Telegram, Twilio). Email is unaffected. |
+
+Alert channels never read `HTTP_PROXY`/`HTTPS_PROXY`: an implicit proxy connects
+to the target itself and would bypass the SSRF policy. With `alerting.proxy` set,
+targets are still checked against the policy before each send, but the proxy
+resolves names itself, so DNS-rebinding protection is the proxy's responsibility.
 
 ## Alert Rules (Verdicts)
 

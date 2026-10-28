@@ -317,6 +317,24 @@ export function SoulProtocolFields({ formData, setFormData }: SoulProtocolFields
           </div>
         </div>
       )}
+
+      {formData.type === 'heartbeat' && (
+        <div className="space-y-2">
+          <label htmlFor="heartbeat-grace" className="block text-sm font-medium text-gray-300 mb-2">Grace Period (seconds)</label>
+          <input
+            id="heartbeat-grace"
+            type="number"
+            min="0"
+            value={formData.heartbeatGrace}
+            onChange={(e) => setFormData({ ...formData, heartbeatGrace: parseInt(e.target.value) || 0 })}
+            className="w-full bg-gray-950 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-amber-500/50"
+          />
+          <p className="text-xs text-gray-500">
+            How late a ping may be before the soul is judged dead. 0 uses half the interval.
+            The interval below is how often the job is expected to ping.
+          </p>
+        </div>
+      )}
     </div>
   )
 }

@@ -65,7 +65,7 @@ func TestMultiNodeClusterSharesWork(t *testing.T) {
 
 	nodes := make([]*clusterTestNode, nodeCount)
 	for i := range nodes {
-		configPath := writeClusterNodeConfig(t, i, nodeIDs, raftAddrs, httpPorts[i], adminEmail, adminPassword)
+		configPath := writeClusterNodeConfig(t, i, nodeIDs, raftAddrs, httpPorts[i], adminEmail, adminPassword, "hash")
 		nodeID := nodeIDs[i]
 		newProbeRegistry = func() *probe.CheckerRegistry {
 			registry := probe.NewCheckerRegistry()
@@ -374,7 +374,7 @@ func bootClusterNode(t *testing.T, id, configPath string, port int) *clusterTest
 	return node
 }
 
-func writeClusterNodeConfig(t *testing.T, index int, ids, raftAddrs []string, httpPort int, email, password string) string {
+func writeClusterNodeConfig(t *testing.T, index int, ids, raftAddrs []string, httpPort int, email, password, strategy string) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), ids[index])
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -400,7 +400,7 @@ func writeClusterNodeConfig(t *testing.T, index int, ids, raftAddrs []string, ht
 			"advertise_addr": raftAddrs[index],
 			"cluster_secret": "multinode-test-cluster-secret",
 			"discovery":      map[string]any{"mode": "manual"},
-			"distribution":   map[string]any{"strategy": "hash"},
+			"distribution":   map[string]any{"strategy": strategy},
 			"raft": map[string]any{
 				"node_id":           ids[index],
 				"bind_addr":         raftAddrs[index],

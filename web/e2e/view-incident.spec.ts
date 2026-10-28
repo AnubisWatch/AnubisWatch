@@ -85,7 +85,7 @@ test.describe("View Incident journey", () => {
 
 		// --- Poll API until incident exists, then load the UI ---
 		// The Incidents page fetches only on mount (no auto-refresh).
-		await waitForIncident(page, server, token);
+		await waitForIncident(page, server, token, soul.id);
 
 		await page.goto(`${server.baseURL}/incidents`);
 		await page.getByText("Leave the Temple").waitFor({ timeout: 10_000 });

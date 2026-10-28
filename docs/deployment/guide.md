@@ -1,5 +1,11 @@
 # Deployment Guide
 
+For the current standalone binary/Docker installation and recovery procedure,
+use [Binary and Docker installation](binary-and-docker.md). The examples below
+are historical and include optional cluster/Kubernetes paths; they are not the
+current release acceptance contract. Code defaults and generated configs may
+use different ports, so read the selected config.
+
 ## Table of Contents
 
 1. [Quick Start](#quick-start)
@@ -328,11 +334,11 @@ For an operator-focused deployment, smoke-test, and rollback flow, use the
 # Create encrypted backup
 kubectl exec -it anubiswatch-0 -n anubiswatch -- /bin/anubis backup --encrypt
 
-# Restore backup (key stored at backups/.backup_key)
+# Restore backup (generated key stored at <data dir>/backup.key, outside backups/)
 kubectl exec -it anubiswatch-0 -n anubiswatch -- /bin/anubis restore --input backup.db
 
 # Set backup encryption key (via env var)
-ANUBIS_BACKUP_ENCRYPTION_KEY=your-32-byte-key
+ANUBIS_BACKUP_ENCRYPTION_KEY=$(openssl rand -hex 32)   # 64-char hex, or a raw key
 ```
 
 ### CORS Configuration
@@ -353,27 +359,24 @@ If not configured, CORS defaults to deny all (production-safe default).
 
 ### Log Rotation
 
-AnubisWatch outputs JSON logs to stdout. For production, configure log rotation:
+`logging.output` decides where logs go: `stdout` (the config default), `stderr`,
+`file`, or `both` (stdout plus a file; `anubis init` writes `both`). The file is
+`logging.file`, by default `<storage.path>/logs/anubis.log`.
 
-**Via Docker:**
-```bash
-docker run ... -v /var/lib/anubis/logs:/var/log/anubis \
-  anubis serve --single 2>&1 | rotatelogs -f -p 7D /var/log/anubis/anubis.%Y%m%d.log
+AnubisWatch rotates that file itself — no logrotate needed:
+
+```yaml
+logging:
+  output: both
+  max_size_mb: 100   # rotate at this size (default 100)
+  max_backups: 5     # keep anubis.log.1 … anubis.log.5 (default 5)
 ```
 
-**Via logrotate:**
-```bash
-# /etc/logrotate.d/anubis
-/var/log/anubis/*.log {
-    daily
-    rotate 14
-    compress
-    delaycompress
-    missingok
-    notifempty
-    copytruncate
-}
-```
+`anubis logs --follow` keeps following across a rotation. Do not also point
+logrotate at this file: `copytruncate` races the built-in rotation.
+
+**Via Docker:** keep `output: stdout` and let Docker's logging driver rotate,
+e.g. `--log-opt max-size=50m --log-opt max-file=5`.
 
 **In Kubernetes:** Use a sidecar or log collector (Fluentd, Fluent Bit, Vector).
 

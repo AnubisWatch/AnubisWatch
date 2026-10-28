@@ -50,6 +50,7 @@ func NewCheckerRegistry() *CheckerRegistry {
 	r.Register(NewGRPCChecker())
 	r.Register(NewWebSocketChecker())
 	r.Register(NewTLSChecker())
+	r.Register(NewHeartbeatChecker(nil))
 
 	return r
 }

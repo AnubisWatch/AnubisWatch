@@ -105,7 +105,7 @@ type Soul struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Id        string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
 	Name      string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
-	Type      string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"` // http, tcp, udp, dns, smtp, imap, icmp, grpc, websocket, tls
+	Type      string                 `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"` // http, tcp, udp, dns, smtp, imap, icmp, grpc, websocket, tls, heartbeat
 	Target    string                 `protobuf:"bytes,4,opt,name=target,proto3" json:"target,omitempty"`
 	Interval  int32                  `protobuf:"varint,5,opt,name=interval,proto3" json:"interval,omitempty"`
 	Timeout   int32                  `protobuf:"varint,6,opt,name=timeout,proto3" json:"timeout,omitempty"`

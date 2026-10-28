@@ -368,12 +368,12 @@ func TestCobaltDBStableStore_SetUint64_GetUint64(t *testing.T) {
 
 	store := NewCobaltDBStableStore(db)
 
-	err := store.SetUint64("test-key", 12345)
+	err := store.SetUint64("test-key-0123456789abcdef", 12345)
 	if err != nil {
 		t.Fatalf("SetUint64 failed: %v", err)
 	}
 
-	val, err := store.GetUint64("test-key")
+	val, err := store.GetUint64("test-key-0123456789abcdef")
 	if err != nil {
 		t.Fatalf("GetUint64 failed: %v", err)
 	}
@@ -401,12 +401,12 @@ func TestCobaltDBStableStore_Set_Get(t *testing.T) {
 	store := NewCobaltDBStableStore(db)
 
 	data := []byte("test stable data")
-	err := store.Set("test-key", data)
+	err := store.Set("test-key-0123456789abcdef", data)
 	if err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
 
-	retrieved, err := store.Get("test-key")
+	retrieved, err := store.Get("test-key-0123456789abcdef")
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}

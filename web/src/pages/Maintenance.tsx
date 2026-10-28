@@ -19,25 +19,10 @@ import {
   Check
 } from 'lucide-react'
 import { ConfirmDialog } from '../components/ConfirmDialog'
-import { api } from '../api/client'
+import { api, type MaintenanceWindow, type MaintenanceWindowCreate, type MaintenanceWindowUpdate } from '../api/client'
 import { useSouls } from '../api/hooks'
 import { useCan } from '../utils/permissions'
 import { formatDateTime, useDisplayTimeZone } from '../utils/date'
-
-interface MaintenanceWindow {
-  id: string
-  name: string
-  description: string
-  workspace_id?: string
-  soul_ids: string[]
-  tags: string[]
-  start_time: string
-  end_time: string
-  recurring: string
-  enabled: boolean
-  created_at?: string
-  updated_at?: string
-}
 
 function toLocalDateTime(value: string) {
   const date = new Date(value)
@@ -65,12 +50,12 @@ function useMaintenance() {
 
   useEffect(() => { fetch() }, [fetch])
 
-  const create = async (w: Omit<MaintenanceWindow, 'id'>) => {
+  const create = async (w: MaintenanceWindowCreate) => {
     await api.post<MaintenanceWindow>('/maintenance', w)
     await fetch()
   }
 
-  const update = async (id: string, w: Partial<MaintenanceWindow>) => {
+  const update = async (id: string, w: MaintenanceWindowUpdate) => {
     await api.put<MaintenanceWindow>(`/maintenance/${id}`, w)
     await fetch()
   }
@@ -131,7 +116,9 @@ export function Maintenance() {
   const handleOpenEdit = (w: MaintenanceWindow) => {
     setEditing(w)
     setFormName(w.name)
-    setFormDescription(w.description)
+    // The API always sends description ("" when unset); an older server
+    // omitted an empty one, so fall back to "" rather than undefined.
+    setFormDescription(w.description ?? '')
     setFormStartTime(toLocalDateTime(w.start_time))
     setFormEndTime(toLocalDateTime(w.end_time))
     setFormRecurring(w.recurring || 'none')
@@ -165,7 +152,7 @@ export function Maintenance() {
         description: formDescription,
         start_time: new Date(formStartTime).toISOString(),
         end_time: new Date(formEndTime).toISOString(),
-        recurring: formRecurring === 'none' ? '' : formRecurring,
+        recurring: (formRecurring === 'none' ? '' : formRecurring) as MaintenanceWindowCreate['recurring'],
         enabled: formEnabled,
         tags: formAllServices ? [] : tags,
         soul_ids: formAllServices ? [] : formSelectedSouls

@@ -24,8 +24,8 @@ This project and everyone participating in it is governed by our commitment to:
 
 ### Prerequisites
 
-- Go 1.26 or later
-- Node.js 20 or later (for dashboard)
+- Go 1.27.3, selected by `go.mod`'s toolchain directive (module language minimum: Go 1.26)
+- Node.js 22 and pnpm 10 for the dashboard, matching CI
 - Git
 
 ### Building
@@ -55,14 +55,17 @@ make test
 cd web
 
 # Install dependencies
-npm install
+pnpm install --frozen-lockfile
 
 # Run dev server
-npm run dev
+pnpm run dev
 
 # Build for production
-npm run build
+pnpm run build:embed
 ```
+
+`build:embed` builds the dashboard and copies its assets into the Go embed
+directory. Use `pnpm run build` when only `web/dist` is needed.
 
 ## Project Structure
 
@@ -91,7 +94,7 @@ AnubisWatch/
 ### Go Code
 
 - Follow standard Go conventions (gofmt, govet)
-- Use `golangci-lint` for linting: `make lint`
+- Match CI's pinned `golangci-lint` v2.15.0 and temporary config migration/verification in `.github/workflows/ci.yml`; the checked-in config uses the legacy format, so invoking a v2 linter with that file directly is insufficient
 - Keep functions focused and small
 - Document exported types and functions
 - Use meaningful variable names
@@ -116,7 +119,8 @@ if err != nil {
 ### Testing
 
 - Write unit tests for new functionality
-- Aim for >70% coverage
+- Enforce the 80% backend statement gate with `make test-coverage`; it runs race-enabled tests for `cmd` and `internal`, excluding generated protobuf bindings
+- Run dashboard coverage with `pnpm --dir web run test:coverage`; its statements, branches, functions and lines thresholds are all 80%
 - Use table-driven tests where appropriate
 - Mock external dependencies
 
@@ -211,8 +215,18 @@ make test
 ### Integration Tests
 
 ```bash
-make test-integration
+# Offline Kubernetes drill regressions; no cluster access
+bash scripts/k8s-drill/k8s-drill_test.sh
+
+# Chart rendering tests require the CI-pinned Helm 3.14.4
+go test -count=1 ./deploy/helm/anubiswatch/tests
 ```
+
+For the live eight-scenario drill, use an explicitly owned disposable cluster,
+kubeconfig, context and candidate image. Follow
+[the drill guide](docs/deployment/k8s-acceptance-drill.md); the runner's
+`--help` lists the required arguments. A successful offline test is not a live
+deployment result. Chaos and load suites require their explicit opt-ins in CI.
 
 ### Manual Testing
 
@@ -237,7 +251,7 @@ make test-integration
 ## Release Process
 
 Releases are managed by maintainers:
-1. Version bump in version.go
+1. Choose the release version; build metadata lives in `cmd/anubis/main.go` and is injected through linker flags by the Makefile/release workflow
 2. Update CHANGELOG.md
 3. Create git tag: `git tag v0.x.x`
 4. Push tag: `git push origin v0.x.x`

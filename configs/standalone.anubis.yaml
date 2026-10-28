@@ -1,0 +1,40 @@
+# Standalone binary configuration. Run with --single.
+# Set ANUBIS_ADMIN_PASSWORD before loading this explicit authenticated config.
+environment: production-proxied
+server:
+  host: "127.0.0.1"
+  port: 8080
+  grpc_port: 0
+  metrics_auth: true
+  allowed_origins:
+    - "http://localhost:8080"
+    - "http://127.0.0.1:8080"
+  tls:
+    enabled: false
+storage:
+  path: "${ANUBIS_DATA_DIR:-./data}"
+  timeseries:
+    retention:
+      raw: "168h"
+auth:
+  enabled: true
+  type: local
+  local:
+    admin_email: "admin@anubis.watch"
+    admin_password: "${ANUBIS_ADMIN_PASSWORD}"
+dashboard:
+  enabled: true
+necropolis:
+  enabled: false
+security:
+  allow_insecure_skip_verify: false
+  allow_private_targets: false
+  # Add only the private CIDRs this instance must monitor.
+  allowed_networks: []
+logging:
+  level: info
+  format: json
+  output: stdout
+souls: []
+channels: []
+journeys: []

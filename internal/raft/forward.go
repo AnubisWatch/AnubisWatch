@@ -160,7 +160,12 @@ func (n *Node) sendForward(req core.ForwardRequest, timeout time.Duration) (*cor
 			switch {
 			case err != nil:
 				lastErr = fmt.Errorf("forward to leader %s: %w", leader, err)
-			case isRaftCode(forwardResponseError(resp), core.ErrNotLeader, core.ErrLeadershipLost):
+			case isRaftCode(forwardResponseError(resp), core.ErrNotLeader):
+				// The node reached never accepted the request: safe to retry.
+				// ErrLeadershipLost is different -- the leader appended the
+				// entry and lost leadership before it committed, so it may
+				// still commit or be discarded. That uncertain outcome goes
+				// back to the caller as a failure instead of being retried.
 				lastErr = forwardResponseError(resp)
 			default:
 				return resp, nil
@@ -197,6 +202,18 @@ func (n *Node) WaitForApplied(index uint64, timeout time.Duration) error {
 	}
 }
 
+// entryTerm returns the term of the log entry at index, if it is still in
+// the in-memory log.
+func (n *Node) entryTerm(index uint64) (uint64, bool) {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if index <= n.logBase {
+		return 0, false
+	}
+	entry, ok := n.logEntry(index)
+	return entry.Term, ok
+}
+
 // ApplyOrForward commits cmd through consensus from any node. On the leader it
 // is Apply; on a follower the command is forwarded to the leader over the Raft
 // transport and the call returns only once this node has applied the entry, so
@@ -204,7 +221,9 @@ func (n *Node) WaitForApplied(index uint64, timeout time.Duration) error {
 // within the no-leader budget it returns a RaftError with ErrNoLeader.
 //
 // A forward whose response is lost may be retried and so applied twice; every
-// command the application submits is an idempotent keyed write.
+// command the application submits is an idempotent keyed write. A command the
+// leader appended but lost leadership over fails with ErrLeadershipLost: its
+// outcome is unknown, and it is never reported as applied.
 func (n *Node) ApplyOrForward(cmd core.FSMCommand, timeout time.Duration) (uint64, uint64, error) {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -237,11 +256,18 @@ func (n *Node) ApplyOrForward(cmd core.FSMCommand, timeout time.Duration) (uint6
 		if err := n.WaitForApplied(resp.Index, time.Until(deadline)); err != nil {
 			return resp.Index, resp.Term, err
 		}
+		// The leader reports success only when the entry it appended is the
+		// one that committed at that index; cross-check against the entry
+		// this node applied there while it is still in the log.
+		if term, ok := n.entryTerm(resp.Index); ok && term != resp.Term {
+			return resp.Index, resp.Term, &core.RaftError{Code: core.ErrLeadershipLost,
+				Message: fmt.Sprintf("forwarded entry %d (term %d) was replaced by a term %d entry", resp.Index, resp.Term, term)}
+		}
 		return resp.Index, resp.Term, nil
 	}
 }
 
-// AddPeerOrForward adds a peer through the leader's joint-consensus change,
+// AddPeerOrForward adds a peer through the leader's single-server membership change,
 // forwarding the request when this node is a follower.
 func (n *Node) AddPeerOrForward(peer core.RaftPeer, timeout time.Duration) error {
 	if n.IsLeader() {
@@ -254,7 +280,7 @@ func (n *Node) AddPeerOrForward(peer core.RaftPeer, timeout time.Duration) error
 	return forwardResponseError(resp)
 }
 
-// RemovePeerOrForward removes a peer through the leader's joint-consensus
+// RemovePeerOrForward removes a peer through the leader's single-server
 // change, forwarding the request when this node is a follower.
 func (n *Node) RemovePeerOrForward(peerID string, timeout time.Duration) error {
 	if n.IsLeader() {

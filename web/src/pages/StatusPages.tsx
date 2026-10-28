@@ -19,8 +19,10 @@ import {
   Palette,
   X,
   Check,
+  AlertTriangle,
 } from 'lucide-react'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { StatusPageIncidents } from '../components/StatusPageIncidents'
 import { useStatusPages, useSouls } from '../api/hooks'
 import type { StatusPage, StatusPageVisibility } from '../api/client'
 import { useCan } from '../utils/permissions'
@@ -77,6 +79,8 @@ export function StatusPages() {
   const saveGeneration = useRef(0)
   useEffect(() => () => { saveGeneration.current += 1 }, [])
   const [editingPage, setEditingPage] = useState<StatusPage | null>(null)
+  // The page whose incidents and maintenance panel is open.
+  const [incidentsPageId, setIncidentsPageId] = useState<string | null>(null)
 
   // Create form state
   const [formName, setFormName] = useState('')
@@ -151,10 +155,16 @@ export function StatusPages() {
     try {
       // PUT replaces the whole page: start from the stored page so groups,
       // incidents, logo, favicon, custom colours and uptime_days survive.
-      const { id: _id, password_set: _passwordSet, ...stored } = editingPage ?? ({} as Partial<StatusPage>)
+      // Incidents and announcements are left out: they have their own
+      // endpoints, and echoing a stale copy would drop updates posted since
+      // the page was loaded. The server keeps fields a PUT omits.
+      const { id: _id, password_set: _passwordSet, incidents: _incidents, announcements: _announcements, subscriber_count: _subscriberCount, ...stored } = editingPage ?? ({} as Partial<StatusPage>)
       void _id
+      void _subscriberCount
       void _passwordSet
-      const payload: Omit<StatusPage, 'id'> = {
+      void _incidents
+      void _announcements
+      const payload: Omit<StatusPage, 'id' | 'subscriber_count'> = {
         ...stored,
         name: formName,
         slug: formSlug,
@@ -165,9 +175,8 @@ export function StatusPages() {
         domain: editingPage?.domain,
         custom_domain: editingPage?.custom_domain,
         souls: formSelectedSouls,
-        subscribers: editingPage?.subscribers || 0,
         uptime_days: editingPage?.uptime_days || 90
-      } as Omit<StatusPage, 'id'>
+      } as Omit<StatusPage, 'id' | 'subscriber_count'>
       // The API reads a present-but-empty "password" as "clear it", so only send
       // the field when the operator changed or cleared it. Sending it on every
       // edit would silently wipe the stored password.
@@ -247,7 +256,8 @@ export function StatusPages() {
   const stats = {
     total: pages.length,
     active: pages.filter(p => p.enabled).length,
-    subscribers: pages.reduce((acc, p) => acc + (p.subscribers || 0), 0),
+    // Confirmed email subscribers, counted by the server per page.
+    subscribers: pages.reduce((acc, p) => acc + (p.subscriber_count ?? 0), 0),
     domains: pages.filter(p => p.domain || p.custom_domain).length
   }
 
@@ -461,7 +471,7 @@ export function StatusPages() {
               <div className="grid grid-cols-3 gap-4 pt-4 border-t border-gray-700/50">
                 <div>
                   <p className="text-xs text-gray-500 mb-1">Subscribers</p>
-                  <p className="text-lg font-semibold text-blue-400">{page.subscribers || 0}</p>
+                  <p className="text-lg font-semibold text-blue-400">{page.subscriber_count ?? 0}</p>
                 </div>
                 <div>
                   <p className="text-xs text-gray-500 mb-1">Theme</p>
@@ -500,6 +510,9 @@ export function StatusPages() {
               <div className="flex items-center gap-1">
                 <button hidden={!can('settings:write')} onClick={() => handleOpenEditPage(page)} className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" aria-label={`Edit status page ${page.name}`} title="Edit">
                   <Edit className="w-4 h-4" />
+                </button>
+                <button onClick={() => setIncidentsPageId(page.id)} className="p-2 text-gray-400 hover:text-amber-300 hover:bg-gray-700 rounded-lg transition-colors" aria-label={`Incidents for status page ${page.name}`} title="Incidents & maintenance">
+                  <AlertTriangle className="w-4 h-4" />
                 </button>
                 <button onClick={() => { void handleShareUrl(page) }} className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" aria-label={`Share status page ${page.name}`} title="Share">
                   <Share2 className="w-4 h-4" />
@@ -732,6 +745,13 @@ export function StatusPages() {
       )}
     </div>
   
+      {incidentsPageId && pages.find((p) => p.id === incidentsPageId) && (
+        <StatusPageIncidents
+          page={pages.find((p) => p.id === incidentsPageId) as StatusPage}
+          souls={souls.map((soul) => ({ id: soul.id, name: soul.name }))}
+          onClose={() => setIncidentsPageId(null)}
+        />
+      )}
       <ConfirmDialog
         open={deletingPage !== null}
         title="Delete Status Page"

@@ -438,10 +438,10 @@ func TestSaveSessionsLocked_MkdirError(t *testing.T) {
 	// Use an invalid path that will cause MkdirAll to fail
 	auth := newTestLocalAuth(t, "/invalid_path_that_cannot_be_created/sessions.json", "admin@anubis.watch", "TestPass1234!")
 
-	// Login should still work even if persistence fails
+	// Login must not report a durable session when persistence fails
 	_, _, err := auth.Login("admin@anubis.watch", "TestPass1234!")
-	if err != nil {
-		t.Fatalf("Login should work even if persistence fails: %v", err)
+	if err == nil {
+		t.Fatal("Login reported success despite persistence failure")
 	}
 }
 

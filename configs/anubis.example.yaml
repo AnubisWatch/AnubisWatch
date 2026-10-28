@@ -55,7 +55,9 @@ storage:
 #     election_timeout: 1000ms
 #     heartbeat_timeout: 300ms
 
-# Multi-tenant (SaaS mode)
+# Multi-tenant (SaaS mode). Quotas apply per workspace only while enabled is
+# true; 0 or unset means unlimited. Creates past a limit are refused (HTTP 409,
+# gRPC RESOURCE_EXHAUSTED); existing resources stay editable.
 # tenants:
 #   enabled: true
 #   isolation: "strict"
@@ -63,7 +65,9 @@ storage:
 #     max_souls: 100
 #     max_journeys: 20
 #     max_alert_channels: 10
-#     max_team_members: 25
+#     check_interval_min: 30s   # shortest soul/journey interval
+#     retention_days: 90        # caps every time-series retention tier
+#     max_team_members: 25      # members plus pending invitations
 
 # Authentication
 auth:
@@ -398,3 +402,9 @@ logging:
   format: "json"     # json | text
   output: "stdout"   # stdout | file
   file: "/var/log/anubis/anubis.log"
+
+# Probe engine tuning
+probe:
+  # Checks (scheduled and manual) allowed to run at once on this node.
+  # 0 or unset = 100; valid range 1-10000.
+  max_concurrent_checks: 100

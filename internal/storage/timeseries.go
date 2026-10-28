@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -98,35 +99,36 @@ func NewTimeSeriesStore(db *CobaltDB, config core.TimeSeriesConfig, logger *slog
 
 // SaveJudgment saves a judgment and updates summaries
 func (ts *TimeSeriesStore) SaveJudgment(ctx context.Context, j *core.Judgment) error {
-	// Save raw judgment first
-	if err := ts.db.SaveJudgment(ctx, j); err != nil {
+	values, idxKey, err := ts.db.prepareJudgment(ctx, j)
+	if err != nil {
 		return err
 	}
-
-	// Update 1-minute summary
-	if err := ts.updateSummary(ctx, j, Resolution1Min); err != nil {
-		ts.logger.Warn("failed to update 1min summary", "err", err)
+	ts.summaryMu.Lock()
+	defer ts.summaryMu.Unlock()
+	for _, resolution := range []TimeResolution{Resolution1Min, Resolution1Hour, Resolution1Day} {
+		key, data, err := ts.prepareSummary(ctx, j, resolution)
+		if err != nil {
+			return err
+		}
+		values[key] = data
 	}
-
-	// Keep the hour's and the day's summaries current too. Compaction would
-	// only roll them up weeks later; uptime over hours and days needs them
-	// now (TallyChecks, GetUptimeHistory).
-	if err := ts.updateSummary(ctx, j, Resolution1Hour); err != nil {
-		ts.logger.Warn("failed to update 1hour summary", "err", err)
+	marker := liveSinceKey(j.WorkspaceID, j.SoulID)
+	if _, cached := ts.liveMarked.Load(marker); !cached {
+		if _, err := ts.db.Get(marker); err != nil {
+			var missing *core.NotFoundError
+			if !errors.As(err, &missing) {
+				return err
+			}
+			// Use ingestion time: a backdated result must not certify older rollups.
+			values[marker] = []byte(time.Now().UTC().Format(time.RFC3339Nano))
+		}
 	}
-	if err := ts.updateSummary(ctx, j, Resolution1Day); err != nil {
-		ts.logger.Warn("failed to update 1day summary", "err", err)
+	if err := ts.db.putMany(values); err != nil {
+		return err
 	}
-	ts.markLiveSince(summaryWorkspace(ctx, j), j.SoulID)
-
+	ts.db.recordJudgmentIndex(j, idxKey)
+	ts.liveMarked.Store(marker, struct{}{})
 	return nil
-}
-
-func summaryWorkspace(ctx context.Context, j *core.Judgment) string {
-	if j.WorkspaceID != "" {
-		return j.WorkspaceID
-	}
-	return core.WorkspaceIDFromContext(ctx)
 }
 
 // liveSinceKey records when a soul's results started being counted into its
@@ -139,29 +141,8 @@ func liveSinceKey(workspaceID, soulID string) string {
 	return fmt.Sprintf("%s/ts/%s/live-since", workspaceID, soulID)
 }
 
-// markLiveSince records the current time, not the judgment's: a backdated
-// first judgment must not mark earlier days as fully counted.
-func (ts *TimeSeriesStore) markLiveSince(workspaceID, soulID string) {
-	key := liveSinceKey(workspaceID, soulID)
-	if _, done := ts.liveMarked.Load(key); done {
-		return
-	}
-	ts.summaryMu.Lock()
-	defer ts.summaryMu.Unlock()
-	if _, err := ts.db.Get(key); err != nil {
-		if err := ts.db.Put(key, []byte(time.Now().UTC().Format(time.RFC3339Nano))); err != nil {
-			ts.logger.Warn("failed to record live summary start", "soul", soulID, "err", err)
-			return
-		}
-	}
-	ts.liveMarked.Store(key, struct{}{})
-}
-
-// updateSummary updates the aggregated summary for a judgment
-func (ts *TimeSeriesStore) updateSummary(ctx context.Context, j *core.Judgment, resolution TimeResolution) error {
-	ts.summaryMu.Lock()
-	defer ts.summaryMu.Unlock()
-
+// prepareSummary builds an update without publishing it; caller holds summaryMu.
+func (ts *TimeSeriesStore) prepareSummary(ctx context.Context, j *core.Judgment, resolution TimeResolution) (string, []byte, error) {
 	workspaceID := j.WorkspaceID
 	if workspaceID == "" {
 		workspaceID = core.WorkspaceIDFromContext(ctx)
@@ -178,7 +159,12 @@ func (ts *TimeSeriesStore) updateSummary(ctx context.Context, j *core.Judgment, 
 	if err == nil {
 		// Update existing
 		if err := json.Unmarshal(data, &summary); err != nil {
-			ts.logger.Warn("failed to unmarshal summary", "err", err)
+			return "", nil, fmt.Errorf("failed to unmarshal summary: %w", err)
+		}
+	} else {
+		var missing *core.NotFoundError
+		if !errors.As(err, &missing) {
+			return "", nil, err
 		}
 	}
 
@@ -221,10 +207,9 @@ func (ts *TimeSeriesStore) updateSummary(ctx context.Context, j *core.Judgment, 
 	// Save updated summary
 	newData, err := json.Marshal(summary)
 	if err != nil {
-		return fmt.Errorf("failed to marshal summary: %w", err)
+		return "", nil, fmt.Errorf("failed to marshal summary: %w", err)
 	}
-
-	return ts.db.Put(key, newData)
+	return key, newData, nil
 }
 
 // QuerySummaries retrieves aggregated summaries for a time range

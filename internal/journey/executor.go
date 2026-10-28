@@ -5,7 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"math"
+	"math/big"
 	"net/http"
 	"net/http/cookiejar"
 	"regexp"
@@ -40,7 +43,9 @@ type Executor struct {
 
 	// saveRun persists a finished run; nil means e.db.SaveJourneyRun. Cluster
 	// mode replaces it so runs replicate to every node.
-	saveRun func(ctx context.Context, run *core.JourneyRun) error
+	saveRun                 func(ctx context.Context, run *core.JourneyRun) error
+	saveRunOnce             func(ctx context.Context, run *core.JourneyRun) error
+	allowInsecureSkipVerify bool
 }
 
 // SetRunSaver replaces how finished runs are persisted (default: the local
@@ -48,6 +53,23 @@ type Executor struct {
 func (e *Executor) SetRunSaver(fn func(ctx context.Context, run *core.JourneyRun) error) {
 	e.mu.Lock()
 	e.saveRun = fn
+	e.mu.Unlock()
+}
+
+// SetRunOnceSaver overrides persistence for manual runs only. Clustered manual
+// calls wait for consensus, while scheduled runs can retain their batch saver.
+// A nil override falls back to SetRunSaver or the local database.
+func (e *Executor) SetRunOnceSaver(fn func(ctx context.Context, run *core.JourneyRun) error) {
+	e.mu.Lock()
+	e.saveRunOnce = fn
+	e.mu.Unlock()
+}
+
+// SetAllowInsecureSkipVerify sets the process TLS override for journey checks.
+// The secure default matches the probe engine's process policy.
+func (e *Executor) SetAllowInsecureSkipVerify(allow bool) {
+	e.mu.Lock()
+	e.allowInsecureSkipVerify = allow
 	e.mu.Unlock()
 }
 
@@ -226,7 +248,10 @@ func (e *Executor) RunOnce(ctx context.Context, journey *core.JourneyConfig) (*c
 		return nil, fmt.Errorf("journey %s has no steps", journey.ID)
 	}
 
-	run := e.executeJourneyRun(ctx, journey, false)
+	run, err := e.executeJourneyRunResult(ctx, journey, false)
+	if err != nil {
+		return run, err
+	}
 	if run == nil {
 		return nil, fmt.Errorf("journey %s execution skipped", journey.ID)
 	}
@@ -245,6 +270,14 @@ func (e *Executor) executeJourney(ctx context.Context, journey *core.JourneyConf
 }
 
 func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyConfig, allowDedupSkip bool) *core.JourneyRun {
+	run, _ := e.executeJourneyRunResult(ctx, journey, allowDedupSkip)
+	return run
+}
+
+// executeJourneyRunResult keeps the completed check separate from its storage
+// outcome. Manual callers need both; scheduled failures are logged and retried
+// by later executions without advancing dedup state.
+func (e *Executor) executeJourneyRunResult(ctx context.Context, journey *core.JourneyConfig, allowDedupSkip bool) (*core.JourneyRun, error) {
 	startTime := time.Now()
 
 	e.logger.Debug("executing journey", "journey_id", journey.ID, "name", journey.Name)
@@ -273,10 +306,26 @@ func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyC
 		CookieJar: jar,
 	}
 
+	// Share one execution budget across all steps. Keep the caller's context
+	// for persistence so an expired check can still be recorded as a failure.
+	executionCtx := ctx
+	if journey.Timeout.Duration > 0 {
+		var cancel context.CancelFunc
+		executionCtx, cancel = context.WithTimeout(ctx, journey.Timeout.Duration)
+		defer cancel()
+	}
+
 	// Execute each step
-	allSuccess := true
+	anyFailed := false
+	anyDegraded := false
 	for i, step := range journey.Steps {
-		stepResult := e.executeStep(ctx, journeyCtx, step, i)
+		stepResult := e.executeStep(executionCtx, journeyCtx, step, i)
+		// Scheduled work loses ownership when stopped or reassigned. Do not
+		// publish its interrupted check as downtime. A journey-budget timeout
+		// cancels executionCtx only and must still be recorded.
+		if allowDedupSkip && ctx.Err() != nil {
+			return nil, nil
+		}
 		run.Steps = append(run.Steps, stepResult)
 
 		// Merge extracted variables
@@ -285,9 +334,16 @@ func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyC
 			journeyCtx.Variables[k] = v
 		}
 
-		// Check if we should continue
-		if stepResult.Status != core.SoulAlive {
-			allSuccess = false
+		// Check if we should continue. A degraded step is a partial failure --
+		// the target answered but missed a budget -- and the platform treats it
+		// as a distinct, non-failed state (uptime counts it as healthy, the
+		// status page shows degraded performance, alerting has its own
+		// "degraded" condition). It must not abort the remaining steps, and the
+		// journey must not be reported as dead because of it.
+		if stepResult.Status == core.SoulDegraded {
+			anyDegraded = true
+		} else if stepResult.Status != core.SoulAlive {
+			anyFailed = true
 			if !journey.ContinueOnFailure {
 				e.logger.Debug("stopping journey due to step failure",
 					"journey_id", journey.ID, "step", step.Name)
@@ -307,10 +363,16 @@ func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyC
 		run.Duration = 1
 	}
 
-	if allSuccess {
-		run.Status = core.SoulAlive
-	} else {
+	// A degraded step degrades the journey but does not fail it. A failed step
+	// always wins: a journey that mixed a degraded step with a failed one is
+	// still a failure.
+	switch {
+	case anyFailed:
 		run.Status = core.SoulDead
+	case anyDegraded:
+		run.Status = core.SoulDegraded
+	default:
+		run.Status = core.SoulAlive
 	}
 
 	// Deduplicate before saving; the hash represents the last persisted run.
@@ -320,14 +382,17 @@ func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyC
 		lastHash := e.lastHash[journey.ID]
 		e.mu.RUnlock()
 		if lastHash == hash {
-			e.logger.Debug("skipping journey run save - extracted values unchanged", "journey_id", journey.ID)
-			return nil
+			e.logger.Debug("skipping journey run save - health and extracted values unchanged", "journey_id", journey.ID)
+			return nil, nil
 		}
 	}
 
 	// Save the journey run with retry. Failed saves must remain retryable.
 	e.mu.RLock()
 	save := e.saveRun
+	if !allowDedupSkip && e.saveRunOnce != nil {
+		save = e.saveRunOnce
+	}
 	e.mu.RUnlock()
 	if save == nil {
 		save = e.db.SaveJourneyRun
@@ -336,10 +401,15 @@ func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyC
 		return save(ctx, run)
 	}); err != nil {
 		e.logger.Error("failed to save journey run after retries", "journey_id", journey.ID, "err", err)
-		// Continue - don't fail the journey execution due to storage issues
+		return run, fmt.Errorf("save journey run: %w", err)
 	} else if hash != "" {
 		e.mu.Lock()
-		e.lastHash[journey.ID] = hash
+		// Assign/Stop cancel a retired scheduled generation under this lock.
+		// Its already in-flight saver may finish after the successor saved;
+		// that late completion must not replace the successor's dedup hash.
+		if !allowDedupSkip || ctx.Err() == nil {
+			e.lastHash[journey.ID] = hash
+		}
 		e.mu.Unlock()
 	}
 
@@ -348,7 +418,7 @@ func (e *Executor) executeJourneyRun(ctx context.Context, journey *core.JourneyC
 		"status", run.Status,
 		"duration_ms", run.Duration)
 
-	return run
+	return run, nil
 }
 
 // executeStep executes a single journey step
@@ -370,9 +440,21 @@ func (e *Executor) executeStep(ctx context.Context, jctx *JourneyContext, step c
 		Timeout: step.Timeout, // correct: Timeout controls check timeout
 	}
 
-	// Interpolate and set HTTP config fields
-	if step.HTTP != nil {
-		httpCopy := *step.HTTP
+	// Interpolate and set HTTP config fields. Default-config HTTP steps still
+	// need the shared jar for cookies and temporary response extraction.
+	if step.HTTP != nil || step.Type == core.CheckHTTP {
+		httpCopy := core.HTTPConfig{Method: http.MethodGet, ValidStatus: []int{http.StatusOK}}
+		if step.HTTP != nil {
+			httpCopy = *step.HTTP
+		}
+		// An HTTP check with no valid_status accepts only 200. The probe skips
+		// the status assertion entirely when the list is empty, so a step that
+		// omitted valid_status treated every status code as healthy. Souls get
+		// this default from core.Soul.ApplyDefaults; journey steps must apply
+		// it themselves.
+		if len(httpCopy.ValidStatus) == 0 {
+			httpCopy.ValidStatus = []int{http.StatusOK}
+		}
 		httpCopy.Method = e.interpolateVariables(httpCopy.Method, jctx.Variables)
 		httpCopy.Body = e.interpolateVariables(httpCopy.Body, jctx.Variables)
 		httpCopy.BodyContains = e.interpolateVariables(httpCopy.BodyContains, jctx.Variables)
@@ -459,6 +541,11 @@ func (e *Executor) executeStep(ctx context.Context, jctx *JourneyContext, step c
 		return result
 	}
 
+	e.mu.RLock()
+	allowInsecure := e.allowInsecureSkipVerify
+	e.mu.RUnlock()
+	soul = probe.ApplySecurityPolicy(soul, allowInsecure, e.logger)
+
 	if err := checker.Validate(soul); err != nil {
 		result.Status = core.SoulDead
 		result.Message = fmt.Sprintf("validation failed: %v", err)
@@ -507,12 +594,14 @@ func (e *Executor) executeStep(ctx context.Context, jctx *JourneyContext, step c
 	return result
 }
 
-// interpolateVariables replaces ${variable} placeholders with values
+// interpolateVariables replaces original placeholders without reinterpreting
+// inserted values as template syntax.
 func (e *Executor) interpolateVariables(s string, variables map[string]string) string {
+	replacements := make([]string, 0, 2*len(variables))
 	for k, v := range variables {
-		s = strings.ReplaceAll(s, "${"+k+"}", v)
+		replacements = append(replacements, "${"+k+"}", v)
 	}
-	return s
+	return strings.NewReplacer(replacements...).Replace(s)
 }
 
 // extractVariables extracts variables from a judgment result
@@ -533,7 +622,8 @@ func (e *Executor) extractVariables(judgment *core.Judgment, rules map[string]co
 
 		if value != "" {
 			extracted[name] = value
-			e.logger.Debug("extracted variable", "name", name, "value", value)
+			// Response values may contain credentials; log only extraction metadata.
+			e.logger.Debug("extracted variable", "name", name)
 		}
 	}
 
@@ -588,9 +678,12 @@ func (e *Executor) extractFromCookie(headers map[string]string, rule core.Extrac
 	// Parse cookie
 	cookies := strings.Split(setCookie, ";")
 	for _, cookie := range cookies {
-		parts := strings.SplitN(strings.TrimSpace(cookie), "=", 2)
-		if len(parts) == 2 && parts[0] == rule.Path {
-			return parts[1]
+		parsed, err := http.ParseSetCookie(strings.TrimSpace(cookie))
+		if err == nil && parsed.Name == rule.Path {
+			if rule.Regex != "" {
+				return e.extractRegex(parsed.Value, rule.Regex)
+			}
+			return parsed.Value
 		}
 	}
 
@@ -599,47 +692,67 @@ func (e *Executor) extractFromCookie(headers map[string]string, rule core.Extrac
 
 // extractJSONPath extracts a value using JSON path with proper JSON parsing
 func (e *Executor) extractJSONPath(body, path string) string {
+	value, _ := e.lookupJSONPath(body, path)
+	return value
+}
+
+// lookupJSONPath distinguishes failed resolution from a valid empty/null value.
+func (e *Executor) lookupJSONPath(body, path string) (string, bool) {
 	if !strings.HasPrefix(path, "$.") {
-		return ""
+		return "", false
 	}
 
 	keys := strings.Split(strings.TrimPrefix(path, "$."), ".")
 
 	var data interface{}
-	if err := json.Unmarshal([]byte(body), &data); err != nil {
-		return ""
+	decoder := json.NewDecoder(strings.NewReader(body))
+	decoder.UseNumber() // Keep integer IDs exact, including inside objects and arrays.
+	if err := decoder.Decode(&data); err != nil {
+		return "", false
+	}
+	var trailing interface{}
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return "", false
 	}
 
 	current := data
 	for _, key := range keys {
 		obj, ok := current.(map[string]interface{})
 		if !ok {
-			return ""
+			return "", false
 		}
 		v, exists := obj[key]
 		if !exists {
-			return ""
+			return "", false
 		}
 		current = v
 	}
 
 	switch v := current.(type) {
 	case string:
-		return v
-	case float64:
-		return strconv.FormatFloat(v, 'f', -1, 64)
+		return v, true
+	case json.Number:
+		if !strings.ContainsAny(v.String(), ".eE") {
+			return v.String(), true
+		}
+		// Preserve the existing formatting of fractional and exponent values.
+		number, err := v.Float64()
+		if err != nil {
+			return "", false
+		}
+		return strconv.FormatFloat(number, 'f', -1, 64), true
 	case bool:
-		return strconv.FormatBool(v)
+		return strconv.FormatBool(v), true
 	case nil:
-		return ""
+		return "", true
 	default:
 		b, _ := json.Marshal(v)
-		return string(b)
+		return string(b), true
 	}
 }
 
-// computeDedupHashFromRun computes a deduplication hash from the actual
-// extracted variable values in a completed journey run. Returns empty string
+// computeDedupHashFromRun hashes the health outcomes and extracted variable
+// values in a completed journey run. Returns empty string
 // if no JSONPath extraction rules are configured (dedup disabled).
 func (e *Executor) computeDedupHashFromRun(journey *core.JourneyConfig, run *core.JourneyRun) string {
 	// Check if any step has JSONPath extraction rules
@@ -656,9 +769,13 @@ func (e *Executor) computeDedupHashFromRun(journey *core.JourneyConfig, run *cor
 		return ""
 	}
 
-	// Hash the actual extracted values — if they haven't changed,
-	// the response content is the same and we can dedup.
+	// Unchanged variables alone do not imply unchanged health: a response can
+	// keep its JSON values while failing a status or assertion check.
 	h := sha256.New()
+	fmt.Fprintf(h, "%s\n%d\n", run.Status, len(run.Steps))
+	for _, step := range run.Steps {
+		fmt.Fprintf(h, "%d:%s\n", step.StepIndex, step.Status)
+	}
 	// Sort variable keys for deterministic hashing
 	keys := make([]string, 0, len(run.Variables))
 	for k := range run.Variables {
@@ -666,10 +783,9 @@ func (e *Executor) computeDedupHashFromRun(journey *core.JourneyConfig, run *cor
 	}
 	sort.Strings(keys)
 	for _, k := range keys {
-		h.Write([]byte(k))
-		h.Write([]byte("="))
-		h.Write([]byte(run.Variables[k]))
-		h.Write([]byte("\n"))
+		// Frame both fields: extracted strings may contain '=' and newlines.
+		v := run.Variables[k]
+		fmt.Fprintf(h, "%d:%s%d:%s", len(k), k, len(v), v)
 	}
 	return fmt.Sprintf("%x", h.Sum(nil))
 }
@@ -682,15 +798,13 @@ func (e *Executor) extractRegex(s, pattern string) string {
 	}
 
 	matches := re.FindStringSubmatch(s)
+	// A match without a capturing group extracts nothing (pinned by
+	// TestExtractRegex and the cookie-regex regression); only a capturing
+	// group yields a value.
 	if len(matches) < 2 {
 		return ""
 	}
-
-	// Return first capturing group, or full match if no groups
-	if len(matches) > 1 {
-		return matches[1]
-	}
-	return matches[0]
+	return matches[1]
 }
 
 // getChecker returns a checker for the given type
@@ -761,8 +875,9 @@ func (e *Executor) runAssertion(judgment *core.Judgment, assertion core.Assertio
 
 	case "json_path":
 		if judgment.Details != nil && assertion.Target != "" {
-			actual = e.extractJSONPath(judgment.Details.ResponseBody, assertion.Target)
-			passed = e.compareValues(actual, assertion.Operator, assertion.Expected)
+			var found bool
+			actual, found = e.lookupJSONPath(judgment.Details.ResponseBody, assertion.Target)
+			passed = found && e.compareValues(actual, assertion.Operator, assertion.Expected)
 		}
 
 	case "regex":
@@ -798,25 +913,53 @@ func (e *Executor) compareValues(actual, operator, expected string) bool {
 		return actual != expected
 	case "contains":
 		return strings.Contains(actual, expected)
+	case "regex":
+		re, err := regexp.Compile(expected)
+		return err == nil && re.MatchString(actual)
 	case "greater_than", "gt", ">":
-		actualNum, actualErr := strconv.ParseFloat(actual, 64)
-		expectedNum, expectedErr := strconv.ParseFloat(expected, 64)
-		return actualErr == nil && expectedErr == nil && actualNum > expectedNum
+		cmp, ok := compareNumericValues(actual, expected)
+		return ok && cmp > 0
 	case "less_than", "lt", "<":
-		actualNum, actualErr := strconv.ParseFloat(actual, 64)
-		expectedNum, expectedErr := strconv.ParseFloat(expected, 64)
-		return actualErr == nil && expectedErr == nil && actualNum < expectedNum
+		cmp, ok := compareNumericValues(actual, expected)
+		return ok && cmp < 0
 	case "greater_equals", "ge", ">=":
-		actualNum, actualErr := strconv.ParseFloat(actual, 64)
-		expectedNum, expectedErr := strconv.ParseFloat(expected, 64)
-		return actualErr == nil && expectedErr == nil && actualNum >= expectedNum
+		cmp, ok := compareNumericValues(actual, expected)
+		return ok && cmp >= 0
 	case "less_equals", "le", "<=":
-		actualNum, actualErr := strconv.ParseFloat(actual, 64)
-		expectedNum, expectedErr := strconv.ParseFloat(expected, 64)
-		return actualErr == nil && expectedErr == nil && actualNum <= expectedNum
+		cmp, ok := compareNumericValues(actual, expected)
+		return ok && cmp <= 0
 	default:
 		return actual == expected
 	}
+}
+
+// compareNumericValues retains float64 validation and resolves finite rounding
+// ties with precision scaled to the source operands instead of assuming equality.
+func compareNumericValues(actual, expected string) (int, bool) {
+	a, aErr := strconv.ParseFloat(actual, 64)
+	b, bErr := strconv.ParseFloat(expected, 64)
+	if aErr != nil || bErr != nil || math.IsNaN(a) || math.IsNaN(b) {
+		return 0, false
+	}
+	if a < b {
+		return -1, true
+	}
+	if a > b {
+		return 1, true
+	}
+	if math.IsInf(a, 0) {
+		return 0, true // Same signed infinities; preserve existing behavior.
+	}
+
+	// Four bits per input character exceeds the precision of decimal/hex digits.
+	// Keep exponent notation compact rather than expanding it into a big integer.
+	precision := uint(len(actual)+len(expected))*4 + 64
+	exactA, _, aErr := big.ParseFloat(actual, 0, precision, big.ToNearestEven)
+	exactB, _, bErr := big.ParseFloat(expected, 0, precision, big.ToNearestEven)
+	if aErr != nil || bErr != nil {
+		return 0, false
+	}
+	return exactA.Cmp(exactB), true
 }
 
 // retryWithBackoff retries an operation with exponential backoff
@@ -833,6 +976,9 @@ func retryWithBackoff(ctx context.Context, maxRetries int, initialDelay time.Dur
 		// Don't retry on context cancellation
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if i == maxRetries-1 {
+			break
 		}
 
 		// Wait before retrying, but respect context cancellation

@@ -2,7 +2,9 @@ package probe
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"hash/fnv"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -15,8 +17,16 @@ import (
 type EngineConfig struct {
 	MaxConcurrentChecks int // Maximum concurrent checks (default: 100)
 	CircuitBreaker      CircuitBreakerConfig
-	NodeID              string
-	Region              string
+
+	// StartJitter bounds the deterministic offset applied to the first check
+	// of souls started together by a bulk AssignSouls (process start, cluster
+	// rebalance). Each soul waits hash(soulID) mod min(interval, StartJitter)
+	// before its first check, so a restart does not fire every soul at once.
+	// Zero disables the offset. Single-soul starts (API create via UpsertSoul,
+	// an interval change, a takeover of one soul) are never delayed.
+	StartJitter time.Duration
+	NodeID      string
+	Region      string
 
 	// AllowInsecureSkipVerify is the K7 master switch. When false (the
 	// default), every probe checker refuses to honour per-soul
@@ -27,9 +37,19 @@ type EngineConfig struct {
 	// keep this false; enabling it disables TLS verification for any
 	// check that requests it, which is a MITM vector.
 	AllowInsecureSkipVerify bool
+
+	// FlapDetection is the global flap-detection policy (probe.flap_detection);
+	// a soul's own flap_detection block overrides it.
+	FlapDetection core.FlapDetectionConfig
 }
 
-// CircuitBreakerConfig configures circuit breaker behavior
+// CircuitBreakerConfig configures circuit breaker behavior.
+//
+// The breaker tracks per-soul failure streaks and open/half-open/closed state,
+// but it never suppresses a scheduled check: an uptime monitor that skipped
+// probes while a target was down left gaps in history, under-weighted the
+// outage in up/checks uptime, and noticed recovery up to Timeout late. Every
+// tick therefore produces a real judgment; the state is kept for diagnostics.
 type CircuitBreakerConfig struct {
 	Enabled          bool          // Enable circuit breaker
 	FailureThreshold int           // Failures before opening (default: 5)
@@ -37,10 +57,15 @@ type CircuitBreakerConfig struct {
 	Timeout          time.Duration // Time before attempting again (default: 30s)
 }
 
+// DefaultStartJitter is the production cap on the first-check offset of a
+// bulk-assigned soul. Short intervals use their own interval as the window.
+const DefaultStartJitter = 30 * time.Second
+
 // DefaultEngineConfig returns default engine configuration
 func DefaultEngineConfig() EngineConfig {
 	return EngineConfig{
 		MaxConcurrentChecks: 100,
+		StartJitter:         DefaultStartJitter,
 		CircuitBreaker: CircuitBreakerConfig{
 			Enabled:          true,
 			FailureThreshold: 5,
@@ -83,6 +108,33 @@ type Engine struct {
 	checksRunning atomic.Int64
 	totalChecks   atomic.Int64
 	failedChecks  atomic.Int64
+
+	// lastJudgmentAt is the wall-clock UnixNano at which the most recent
+	// judgment (scheduled or manual) was completed and published; 0 = never.
+	lastJudgmentAt atomic.Int64
+	// startedAt is when the engine was built; readiness measures staleness
+	// from here until the first judgment lands.
+	startedAt time.Time
+
+	// now and retryWait are the clock used by confirmation retries and flap
+	// detection; tests replace them to stay deterministic.
+	now       func() time.Time
+	retryWait func(ctx context.Context, d time.Duration) error
+}
+
+// EngineLiveness is a cheap snapshot for readiness probes and metrics.
+type EngineLiveness struct {
+	// LastJudgmentAt is when the engine last completed a judgment (zero if
+	// it has not completed one since start).
+	LastJudgmentAt time.Time
+	// ScheduledSouls is the number of souls with an active runner.
+	ScheduledSouls int
+	// ChecksRunning is the number of checks currently in flight.
+	ChecksRunning int64
+	// LongestInterval is the longest check interval among scheduled souls.
+	LongestInterval time.Duration
+	// StartedAt is when the engine was created.
+	StartedAt time.Time
 }
 
 // Storage is the interface the probe engine uses to persist judgments
@@ -132,6 +184,19 @@ type soulRunner struct {
 	ticker     *time.Ticker
 	cancel     context.CancelFunc
 	lastStatus core.SoulStatus
+	// startDelay is the offset before the first check; set once at start.
+	startDelay time.Duration
+	// kick requests an out-of-schedule evaluation (heartbeat pings); it is
+	// buffered so a burst of pings coalesces into one evaluation.
+	kick chan struct{}
+	// Flap detection state, guarded by mu: the times of the most recent
+	// status transitions inside the window, and whether the soul flaps.
+	flapTransitions []time.Time
+	flapping        bool
+	// flapBaseline is the status before flapping started; flapSteady counts
+	// consecutive judgments without a status change.
+	flapBaseline core.SoulStatus
+	flapSteady   int
 }
 
 func (r *soulRunner) getSoul() *core.Soul {
@@ -155,6 +220,10 @@ var minSoulInterval = core.MinSoulInterval
 const defaultSoulInterval = 60 * time.Second
 
 func soulInterval(s *core.Soul) time.Duration {
+	if s.Type == core.CheckHeartbeat {
+		// A heartbeat soul is evaluated against its deadline, not probed.
+		return heartbeatEvalInterval(s)
+	}
 	if s.Weight.Duration >= minSoulInterval {
 		return s.Weight.Duration
 	}
@@ -195,13 +264,17 @@ func NewEngine(opts EngineOptions) *Engine {
 
 	// Apply defaults
 	if opts.Config.MaxConcurrentChecks <= 0 {
-		opts.Config.MaxConcurrentChecks = 100
+		opts.Config.MaxConcurrentChecks = core.DefaultMaxConcurrentChecks
+	}
+	if opts.Config.StartJitter < 0 {
+		opts.Config.StartJitter = 0
 	}
 	if !opts.Config.CircuitBreaker.Enabled {
 		opts.Config.CircuitBreaker.FailureThreshold = 0 // Disabled
 	}
 
 	e := &Engine{
+		startedAt:       time.Now(),
 		registry:        opts.Registry,
 		store:           opts.Store,
 		alerter:         opts.Alerter,
@@ -214,6 +287,8 @@ func NewEngine(opts EngineOptions) *Engine {
 		logger:          opts.Logger.With("component", "probe-engine"),
 		semaphore:       make(chan struct{}, opts.Config.MaxConcurrentChecks),
 		circuitBreakers: make(map[string]*circuitBreaker),
+		now:             time.Now,
+		retryWait:       sleepContext,
 	}
 
 	// Seed the judgment callback atomically so the very first check
@@ -261,9 +336,21 @@ func (e *Engine) AssignSouls(souls []*core.Soul) {
 			// (held above) also guards e.circuitBreakers — keep the
 			// two maps' lifecycles in sync.
 			delete(e.circuitBreakers, id)
+			e.forgetSoul(id)
 			e.logger.Info("soul unassigned", "soul", id)
 		}
 	}
+
+	// Spread first checks only when this call starts several runners at once
+	// (process start, rebalance). A lone new runner — a soul created through
+	// the API in cluster mode, an interval change — is checked immediately.
+	starting := 0
+	for id, soul := range newMap {
+		if existing, exists := e.souls[id]; !exists || existing.interval != soulInterval(soul) {
+			starting++
+		}
+	}
+	jitter := starting > 1
 
 	// Start new or updated souls
 	for _, soul := range souls {
@@ -288,8 +375,28 @@ func (e *Engine) AssignSouls(souls []*core.Soul) {
 			existing.ticker.Stop()
 			delete(e.souls, soul.ID)
 		}
-		e.startSoul(soul)
+		var delay time.Duration
+		if jitter {
+			delay = soulStartOffset(soul.ID, soulInterval(soul), e.config.StartJitter)
+		}
+		e.startSoul(soul, delay)
 	}
+}
+
+// soulStartOffset returns a deterministic first-check offset in
+// [0, min(interval, maxJitter)) derived from an FNV-1a hash of the soul ID, so
+// the same soul lands on the same slot across restarts and tests.
+func soulStartOffset(soulID string, interval, maxJitter time.Duration) time.Duration {
+	window := interval
+	if maxJitter < window {
+		window = maxJitter
+	}
+	if window <= 0 {
+		return 0
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(soulID))
+	return time.Duration(h.Sum64() % uint64(window))
 }
 
 // UpsertSoul adds or updates one assignment without treating it as a complete
@@ -309,6 +416,7 @@ func (e *Engine) UpsertSoul(soul *core.Soul) {
 			existing.ticker.Stop()
 			delete(e.souls, soul.ID)
 			delete(e.circuitBreakers, soul.ID)
+			e.forgetSoul(soul.ID)
 		}
 		return
 	}
@@ -322,7 +430,7 @@ func (e *Engine) UpsertSoul(soul *core.Soul) {
 		existing.ticker.Stop()
 		delete(e.souls, soul.ID)
 	}
-	e.startSoul(soul)
+	e.startSoul(soul, 0)
 }
 
 // RemoveSoul removes exactly one assignment and leaves every other workspace's
@@ -337,6 +445,37 @@ func (e *Engine) RemoveSoul(soulID string) {
 		delete(e.souls, soulID)
 	}
 	delete(e.circuitBreakers, soulID)
+	e.forgetSoul(soulID)
+}
+
+// forgetSoul drops per-soul checker state (heartbeat progress) for a soul
+// this engine no longer runs.
+func (e *Engine) forgetSoul(soulID string) {
+	if e.registry == nil {
+		return
+	}
+	if c, ok := e.registry.Get(core.CheckHeartbeat); ok {
+		if f, ok := c.(soulForgetter); ok {
+			f.Forget(soulID)
+		}
+	}
+}
+
+// EvaluateSoul asks the runner of an assigned soul to evaluate it now, out of
+// schedule. It never blocks and reports whether the soul is assigned here.
+// Heartbeat pings use it so a ping is judged as soon as it is stored.
+func (e *Engine) EvaluateSoul(soulID string) bool {
+	e.mu.RLock()
+	runner, ok := e.souls[soulID]
+	e.mu.RUnlock()
+	if !ok || runner.kick == nil {
+		return false
+	}
+	select {
+	case runner.kick <- struct{}{}:
+	default:
+	}
+	return true
 }
 
 // regionMatches returns true if the probe's region is in the list of regions
@@ -352,17 +491,21 @@ func (e *Engine) regionMatches(regions []string) bool {
 	return false
 }
 
-// startSoul starts a goroutine for checking a soul
-func (e *Engine) startSoul(soul *core.Soul) {
+// startSoul starts a goroutine for checking a soul. The first check runs
+// after startDelay (0 = immediately); later checks follow every interval
+// from that first check.
+func (e *Engine) startSoul(soul *core.Soul, startDelay time.Duration) {
 	ctx, cancel := context.WithCancel(e.ctx)
 
 	interval := soulInterval(soul)
 
 	runner := &soulRunner{
-		soul:     soul,
-		interval: interval,
-		ticker:   time.NewTicker(interval),
-		cancel:   cancel,
+		soul:       soul,
+		interval:   interval,
+		ticker:     time.NewTicker(interval),
+		cancel:     cancel,
+		startDelay: startDelay,
+		kick:       make(chan struct{}, 1),
 	}
 	e.souls[soul.ID] = runner
 
@@ -371,7 +514,23 @@ func (e *Engine) startSoul(soul *core.Soul) {
 		defer e.wg.Done()
 		defer runner.ticker.Stop()
 
-		// Immediate first check
+		// Carry flap state over from the last stored judgment (a previous
+		// runner, owner or process) before the first check.
+		e.restoreRunnerFlap(ctx, runner)
+
+		if startDelay > 0 {
+			timer := time.NewTimer(startDelay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			// Re-phase the ticker on the offset slot.
+			runner.ticker.Reset(interval)
+		}
+
+		// First check
 		e.judgeSoul(ctx, runner)
 
 		for {
@@ -379,6 +538,8 @@ func (e *Engine) startSoul(soul *core.Soul) {
 			case <-ctx.Done():
 				return
 			case <-runner.ticker.C:
+				e.judgeSoul(ctx, runner)
+			case <-runner.kick:
 				e.judgeSoul(ctx, runner)
 			}
 		}
@@ -389,6 +550,7 @@ func (e *Engine) startSoul(soul *core.Soul) {
 		"id", soul.ID,
 		"type", soul.Type,
 		"interval", interval,
+		"start_delay", startDelay,
 	)
 }
 
@@ -400,26 +562,32 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 	soul := runner.getSoul()
 	assignedSoul := soul
 
-	// Check circuit breaker first
-	if cb := e.getCircuitBreaker(soul.ID); cb != nil && cb.isOpen(e.Config().CircuitBreaker) {
-		e.logger.Debug("circuit breaker open, skipping check",
-			"soul", soul.Name, "id", soul.ID)
-		return
-	}
+	// The circuit breaker deliberately does not gate scheduled checks (see
+	// CircuitBreakerConfig): every tick must yield a real judgment so outages
+	// leave no gaps and recovery is seen on the next interval.
 
-	// Acquire semaphore (concurrency limiting)
+	// Acquire semaphore (concurrency limiting). The slot is released while a
+	// confirmation retry waits, so a slow-failing soul does not hold capacity
+	// it is not using; release is idempotent for the deferred call.
 	select {
 	case e.semaphore <- struct{}{}:
 		// Acquired
 	case <-ctx.Done():
 		return
 	}
-	defer func() { <-e.semaphore }()
+	held := true
+	release := func() {
+		if held {
+			held = false
+			e.checksRunning.Add(-1)
+			<-e.semaphore
+		}
+	}
+	defer release()
 
 	// Increment stats
 	e.checksRunning.Add(1)
 	e.totalChecks.Add(1)
-	defer e.checksRunning.Add(-1)
 
 	// K7: apply the master security gate before dispatching the check.
 	// If the soul requests InsecureSkipVerify but the process is not
@@ -441,15 +609,47 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 	// why it never turns alive and alert rules can fire.
 	var judgment *core.Judgment
 	var err error
+	attempts := 0
 	if err = checker.Validate(soul); err != nil {
 		e.logger.Warn("soul failed validation", "soul", soul.Name, "err", err)
 	} else {
-		checkCtx, cancel := context.WithTimeout(ctx, soulTimeout(soul))
-		defer cancel()
-		judgment, err = checker.Judge(checkCtx, soul)
+		// Confirmation retries: a failed attempt is re-run up to
+		// soul.Retries times, retry_interval apart, while the retry still
+		// starts before the next scheduled check. Only the final outcome
+		// is recorded below.
+		retries := soul.EffectiveRetries()
+		deadline := e.now().Add(runner.interval)
+		for {
+			attempts++
+			judgment, err = runAttempt(ctx, checker, soul)
+			if attempts > retries || !attemptFailed(judgment, err) || ctx.Err() != nil {
+				break
+			}
+			wait := soul.EffectiveRetryInterval()
+			if !e.now().Add(wait).Before(deadline) {
+				break
+			}
+			release()
+			if e.retryWait(ctx, wait) != nil {
+				return
+			}
+			select {
+			case e.semaphore <- struct{}{}:
+				held = true
+				e.checksRunning.Add(1)
+			case <-ctx.Done():
+				return
+			}
+		}
 	}
 	// The assignment may have been canceled or updated while the check ran.
 	if ctx.Err() != nil || runner.getSoul() != assignedSoul {
+		return
+	}
+	if errors.Is(err, ErrNoJudgment) {
+		// Nothing due (a heartbeat soul inside its deadline): the
+		// evaluation itself is engine progress, but nothing is recorded.
+		e.markJudgment()
 		return
 	}
 	if err != nil {
@@ -477,6 +677,10 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 	if judgment.ID == "" {
 		judgment.ID = core.GenerateID()
 	}
+	if soul.EffectiveRetries() > 0 && attempts > 0 {
+		judgmentDetails(judgment).Attempts = attempts
+	}
+	e.applyFlapState(runner, soul, judgment)
 
 	// Persist with retry
 	if e.store != nil {
@@ -503,6 +707,7 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 	if e.alerter != nil {
 		e.alerter.ProcessJudgment(soul, prevStatus, judgment)
 	}
+	e.markJudgment()
 
 	e.logger.Debug("judgment complete",
 		"soul", soul.Name,
@@ -575,6 +780,9 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 	if err == nil {
 		judgment, err = checker.Judge(checkCtx, checkSoul)
 	}
+	if errors.Is(err, ErrNoJudgment) {
+		return nil, err
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -602,6 +810,9 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 	if judgment.Timestamp.IsZero() {
 		judgment.Timestamp = time.Now().UTC()
 	}
+	// A manual check is a single attempt (no confirmation retries) but
+	// still counts toward flap detection.
+	e.applyFlapState(runner, soul, judgment)
 
 	if e.store != nil {
 		if err := retryWithBackoff(ctx, 3, 100*time.Millisecond, func() error {
@@ -620,8 +831,50 @@ func (e *Engine) TriggerImmediate(ctx context.Context, soulID string) (*core.Jud
 	if e.alerter != nil {
 		e.alerter.ProcessJudgment(soul, prevStatus, judgment)
 	}
+	e.markJudgment()
 
 	return judgment, nil
+}
+
+// markJudgment records that a judgment was completed now. Monotonic: a
+// slower concurrent check finishing later never moves the time backwards.
+func (e *Engine) markJudgment() {
+	now := time.Now().UnixNano()
+	for {
+		prev := e.lastJudgmentAt.Load()
+		if now <= prev || e.lastJudgmentAt.CompareAndSwap(prev, now) {
+			return
+		}
+	}
+}
+
+// Liveness reports when the engine last completed a judgment and how many
+// souls it is scheduling. A readiness check can treat "souls scheduled but no
+// judgment for several intervals" as a stalled engine.
+func (e *Engine) Liveness() EngineLiveness {
+	e.mu.RLock()
+	scheduled := len(e.souls)
+	var longest time.Duration
+	for _, r := range e.souls {
+		r.mu.Lock()
+		if r.interval > longest {
+			longest = r.interval
+		}
+		r.mu.Unlock()
+	}
+	e.mu.RUnlock()
+
+	var last time.Time
+	if ns := e.lastJudgmentAt.Load(); ns != 0 {
+		last = time.Unix(0, ns).UTC()
+	}
+	return EngineLiveness{
+		LastJudgmentAt:  last,
+		ScheduledSouls:  scheduled,
+		ChecksRunning:   e.checksRunning.Load(),
+		LongestInterval: longest,
+		StartedAt:       e.startedAt,
+	}
 }
 
 // ForceCheck triggers an immediate check (REST API compatible)
@@ -729,7 +982,13 @@ func (e *Engine) Config() EngineConfig {
 // Soul.HTTP.InsecureSkipVerify to false and add an explicit deny
 // rule in the dispatch layer.
 func (e *Engine) applySecurityGate(soul *core.Soul) *core.Soul {
-	if e.config.AllowInsecureSkipVerify {
+	return ApplySecurityPolicy(soul, e.config.AllowInsecureSkipVerify, e.logger)
+}
+
+// ApplySecurityPolicy applies the process TLS policy without mutating the caller's
+// Soul. Both scheduled probes and journey steps must use this execution boundary.
+func ApplySecurityPolicy(soul *core.Soul, allowInsecure bool, logger *slog.Logger) *core.Soul {
+	if soul == nil || allowInsecure {
 		return soul
 	}
 
@@ -777,13 +1036,15 @@ func (e *Engine) applySecurityGate(soul *core.Soul) *core.Soul {
 		c.WebSocket.InsecureSkipVerify = false
 	}
 
-	e.logger.Warn("soul requested InsecureSkipVerify but process has it disabled; running with TLS verification",
-		"event", "k7_insecure_skip_overridden",
-		"soul", c.Name,
-		"soul_id", c.ID,
-		"override_flag", "--insecure-skip-verify",
-		"env_var", "ANUBIS_ALLOW_INSECURE_TLS",
-	)
+	if logger != nil {
+		logger.Warn("soul requested InsecureSkipVerify but process has it disabled; running with TLS verification",
+			"event", "k7_insecure_skip_overridden",
+			"soul", c.Name,
+			"soul_id", c.ID,
+			"override_flag", "--insecure-skip-verify",
+			"env_var", "ANUBIS_ALLOW_INSECURE_TLS",
+		)
+	}
 
 	return &c
 }
@@ -859,42 +1120,6 @@ func (e *Engine) recordFailure(soulID string) {
 		cb.state = "open"
 		cb.lastStateChange = time.Now()
 	}
-}
-
-// isOpen returns true if the circuit breaker should block checks
-func (cb *circuitBreaker) isOpen(cfg CircuitBreakerConfig) bool {
-	if !cfg.Enabled {
-		return false
-	}
-
-	cb.mu.RLock()
-	state := cb.state
-	lastChange := cb.lastStateChange
-	cb.mu.RUnlock()
-
-	if state == "closed" {
-		return false
-	}
-
-	if state == "open" {
-		// Check if timeout has elapsed to transition to half-open
-		if time.Since(lastChange) >= cfg.Timeout {
-			// Try to transition to half-open
-			cb.mu.Lock()
-			// Double-check state after acquiring lock
-			if cb.state == "open" {
-				cb.state = "half-open"
-				cb.successes = 0
-				cb.lastStateChange = time.Now()
-			}
-			cb.mu.Unlock()
-			return false
-		}
-		return true
-	}
-
-	// half-open: allow checks but monitor results
-	return false
 }
 
 // retryWithBackoff retries an operation with exponential backoff

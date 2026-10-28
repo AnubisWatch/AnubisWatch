@@ -23,6 +23,13 @@ import { Judgment } from '../api/client'
 import { useSafeTimeout } from '../hooks/useSafeTimeout'
 import { formatDateTime, useDisplayTimeZone } from '../utils/date'
 
+// Nearest-rank percentile of latencies in milliseconds; 0 for no samples.
+function percentile(values: number[], p: number): number {
+  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b)
+  if (sorted.length === 0) return 0
+  const rank = Math.max(1, Math.ceil((p / 100) * sorted.length))
+  return Math.round(sorted[rank - 1])
+}
 
 export function Judgments() {
   // Dates follow Settings → Timezone; re-render when it changes.
@@ -69,14 +76,14 @@ export function Judgments() {
   }
 
   const handleExport = () => {
-    const header = ['id', 'soul_id', 'soul_name', 'status', 'latency_ms', 'purity', 'region', 'timestamp', 'error']
+    const header = ['id', 'soul_id', 'soul_name', 'status', 'latency_ms', 'status_code', 'region', 'timestamp', 'error']
     const rows = filteredJudgments.map(j => [
       j.id,
       j.soul_id,
       j.soul_name || '',
       j.status,
       j.latency,
-      j.purity || 0,
+      j.status_code ?? '',
       j.region || '',
       j.timestamp,
       j.error || '',
@@ -103,24 +110,19 @@ export function Judgments() {
     avgLatency: judgments.length > 0
       ? Math.round(judgments.reduce((acc, j) => acc + j.latency, 0) / judgments.length)
       : 0,
-    avgPurity: judgments.length > 0
-      ? Math.round(judgments.reduce((acc, j) => acc + (j.purity || 0), 0) / judgments.length)
-      : 0,
+    p95Latency: percentile(judgments.map(j => j.latency), 95),
     successRate: judgments.length > 0
       ? Math.round((judgments.filter(j => j.status === 'passed').length / judgments.length) * 100)
       : 0
   }
 
-  const getPurityColor = (score: number) => {
-    if (score >= 90) return 'bg-emerald-500'
-    if (score >= 70) return 'bg-amber-500'
-    return 'bg-rose-500'
-  }
-
-  const getPurityTextColor = (score: number) => {
-    if (score >= 90) return 'text-emerald-400'
-    if (score >= 70) return 'text-amber-400'
-    return 'text-rose-400'
+  // HTTP-style codes: 2xx/3xx green, 4xx amber, 5xx red. Other protocols'
+  // codes (DNS rcode, ...) are shown neutral.
+  const getStatusCodeColor = (code: number) => {
+    if (code >= 200 && code < 400) return 'text-emerald-400'
+    if (code >= 400 && code < 500) return 'text-amber-400'
+    if (code >= 500 && code < 600) return 'text-rose-400'
+    return 'text-gray-300'
   }
 
   return (
@@ -215,8 +217,8 @@ export function Judgments() {
         <div className="bg-gradient-to-br from-gray-900 to-gray-800 border border-gray-700/50 rounded-2xl p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm font-medium">Avg Purity</p>
-              <p className="text-2xl font-bold text-purple-400 mt-1">{stats.avgPurity}%</p>
+              <p className="text-gray-400 text-sm font-medium">P95 Latency</p>
+              <p className="text-2xl font-bold text-purple-400 mt-1">{stats.p95Latency}ms</p>
             </div>
             <div className="w-10 h-10 bg-purple-500/10 rounded-xl flex items-center justify-center">
               <Activity className="w-5 h-5 text-purple-400" />
@@ -306,7 +308,7 @@ export function Judgments() {
                 <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-4">Status</th>
                 <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-4">Soul</th>
                 <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-4">Latency</th>
-                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-4">Purity</th>
+                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-4">Code</th>
                 <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-4">Region</th>
                 <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wider px-6 py-4">Time</th>
               </tr>
@@ -359,17 +361,13 @@ export function Judgments() {
                       </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-20 h-2 bg-gray-800 rounded-full overflow-hidden">
-                          <div
-                            className={`h-full rounded-full ${getPurityColor(judgment.purity || 0)}`}
-                            style={{ width: `${judgment.purity || 0}%` }}
-                          />
-                        </div>
-                        <span className={`text-sm font-semibold ${getPurityTextColor(judgment.purity || 0)}`}>
-                          {judgment.purity || 0}
+                      {judgment.status_code ? (
+                        <span className={`font-mono text-sm font-semibold ${getStatusCodeColor(judgment.status_code)}`}>
+                          {judgment.status_code}
                         </span>
-                      </div>
+                      ) : (
+                        <span className="text-sm text-gray-500" title="Not applicable to this check type">—</span>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2 text-gray-400">

@@ -109,7 +109,7 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 
 	// Wrap dial with SSRF DNS-rebinding protection (re-resolves hostname before each connection)
 	dialer := &net.Dialer{Timeout: timeout}
-	dialCtx := DefaultValidator.WrapDialerContext(dialer.DialContext)
+	dialCtx := DefaultValidator.Load().WrapDialerContext(dialer.DialContext)
 
 	// Connect
 	start := time.Now()
@@ -123,7 +123,7 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 		// SSRF: dial the pinned literal IP via WrapDialerContext, then perform
 		// the TLS handshake with the original hostname for SNI/verification.
 		// This closes the DNS-rebinding TOCTOU between Validate() and Judge().
-		pinnedWSSDial := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+		pinnedWSSDial := DefaultValidator.Load().WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
 		rawWSSConn, wssErr := pinnedWSSDial(opCtx, "tcp", host)
 		if wssErr != nil {
 			return failJudgment(soul, fmt.Errorf("WSS connection failed: %w", wssErr)), nil
@@ -214,7 +214,8 @@ func (c *WebSocketChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Ju
 		return judgment, nil
 	}
 
-	if resp.Header.Get("Upgrade") != "websocket" {
+	// RFC 6455 §4.2.2: the Upgrade value is compared ASCII case-insensitively.
+	if !strings.EqualFold(strings.TrimSpace(resp.Header.Get("Upgrade")), "websocket") {
 		judgment.Status = core.SoulDead
 		judgment.Message = "Server did not accept WebSocket upgrade"
 		return judgment, nil

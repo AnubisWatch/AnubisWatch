@@ -70,7 +70,8 @@ func TestNodeLeaderInitializesPeerCursors(t *testing.T) {
 			choices := make(chan regressionLeaderCursorsChoice, tc.peers)
 			n.snapshot = &regressionLeaderCursorsSnapshots{SnapshotStore: NewInMemorySnapshotStore(), choices: choices}
 			n.SetTransport(&regressionLeaderCursorsTransport{mockTransport: &mockTransport{}, choices: choices})
-			n.becomeLeader()
+			n.state.Store(core.StateCandidate)
+			n.becomeLeader(n.currentTerm)
 			seen := make(map[string]bool)
 			for i := 0; i < tc.peers; i++ {
 				choice := <-choices

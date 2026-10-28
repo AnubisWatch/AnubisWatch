@@ -4,6 +4,9 @@ metadata:
   name: {{ include "anubiswatch.fullname" . }}
   labels:
     {{- include "anubiswatch.labels" . | nindent 4 }}
+    # Only this Service is scraped; the headless one shares the pod selector,
+    # and matching both would scrape every pod twice.
+    app.kubernetes.io/component: api
 spec:
   type: {{ .Values.service.type }}
   ports:

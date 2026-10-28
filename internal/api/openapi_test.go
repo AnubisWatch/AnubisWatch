@@ -24,6 +24,13 @@ var routesNotInSpec = map[string]string{
 // see them. They are documented and must stay documented.
 var prefixMountedRoutes = []string{
 	"GET /status/{slug}",
+	// Email subscription endpoints, served by the status page handler
+	// under the /status/ prefix.
+	"POST /status/subscribe",
+	"GET /status/subscriptions/confirm",
+	"POST /status/subscriptions/confirm",
+	"GET /status/subscriptions/unsubscribe",
+	"POST /status/subscriptions/unsubscribe",
 }
 
 var handleRe = regexp.MustCompile(`s\.router\.Handle\("([A-Z]+)",\s*"([^"]+)"`)

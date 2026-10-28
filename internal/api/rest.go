@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -102,6 +103,11 @@ func (m *maxDepthReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
+type rateLimitClientState struct {
+	count     int
+	resetTime time.Time
+}
+
 // RESTServer implements the HTTP REST API
 // The scribes record the judgments on papyrus scrolls
 type RESTServer struct {
@@ -111,8 +117,11 @@ type RESTServer struct {
 	router     *Router
 	http       *http.Server
 	logger     *slog.Logger
+	audit      *AuditLogger
 	mcp        *MCPServer
 	ws         *WebSocketServer
+	// resetMail delivers password reset links; nil when mail is not configured.
+	resetMail *resetMailer
 
 	// Dependencies
 	store      Storage
@@ -126,7 +135,11 @@ type RESTServer struct {
 
 	// Prometheus-style counters (in-memory, reset on restart)
 	metricsMu        sync.RWMutex
+	buildVersion     string
+	buildCommit      string
+	buildDate        string
 	judgmentsTotal   uint64
+	runtimeStats     func() RuntimeStats // see SetRuntimeStats; nil until wired
 	verdictsFired    uint64
 	verdictsResolved uint64
 	// Settings (see settings.go): presentation overrides persisted through
@@ -136,9 +149,17 @@ type RESTServer struct {
 	settingsStore SettingsStore
 	storagePath   string
 	retention     time.Duration
+	// retentionPolicy bounds report periods and exports (reports.go).
+	retentionPolicy *core.RetentionConfig
+	// exports limits concurrent judgment exports (export_limit.go).
+	exports exportLimiter
 
-	// Rate limiter cleanup channel
-	rateLimitStopCh chan struct{}
+	// Rate limiter state is shared by every route wrapper on this server.
+	rateLimitMu          sync.Mutex
+	rateLimitIPClients   map[string]*rateLimitClientState
+	rateLimitUserClients map[string]*rateLimitClientState
+	rateLimitInitOnce    sync.Once
+	rateLimitStopCh      chan struct{}
 	// stopRateLimitOnce guards the close of rateLimitStopCh so Stop is
 	// idempotent.
 	stopRateLimitOnce sync.Once
@@ -146,8 +167,42 @@ type RESTServer struct {
 	// Trusted proxies for X-Forwarded-For validation (nil/empty = trust none)
 	trustedProxies []string
 
-	// realIP resolves the client IP, checking trusted proxies before XFF
-	realIP func(r *http.Request) string
+	proxyMatcherOnce sync.Once
+	proxyMatcher     trustedProxyMatcher
+
+	// sessions tracks live WebSocket/SSE streams by the session token that
+	// opened them (shared with ws), so logout and password changes can close
+	// them; sessionRevalidateInterval (default 30s) is how often an SSE stream
+	// re-checks its token.
+	sessions                  *liveSessionRegistry
+	sessionRevalidateInterval time.Duration
+
+	// apiKeys authenticates "anb_" bearer tokens and backs /api/v1/api-keys
+	// (nil: API keys disabled). See apikeys.go.
+	apiKeys APIKeyManager
+
+	// heartbeat serves the push-monitor ping endpoints (nil: every token is
+	// unknown). See heartbeat.go.
+	heartbeat *heartbeatService
+}
+
+// trustedProxyMatcher parses server.trusted_proxies once.
+func (s *RESTServer) trustedProxyMatcher() trustedProxyMatcher {
+	s.proxyMatcherOnce.Do(func() { s.proxyMatcher = newTrustedProxyMatcher(s.trustedProxies) })
+	return s.proxyMatcher
+}
+
+// realIP resolves the client IP, honouring X-Forwarded-For only as far as
+// trusted proxies vouch for it (see resolveClientIP).
+func (s *RESTServer) realIP(r *http.Request) string {
+	return resolveClientIP(r, s.trustedProxyMatcher())
+}
+
+// SetBuildInfo publishes the same linker-injected identity reported by the CLI.
+func (s *RESTServer) SetBuildInfo(version, commit, date string) {
+	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
+	s.buildVersion, s.buildCommit, s.buildDate = version, commit, date
 }
 
 // Router handles HTTP routing
@@ -164,11 +219,14 @@ type Router struct {
 	// kept in most-specific-first order. Go map iteration is randomized, so
 	// resolving parameterized routes by ranging over `routes` would pick a
 	// non-deterministic winner whenever two patterns match the same path.
-	paramRoutes    map[int][]string
-	middleware     []Middleware
-	dashboard      http.Handler
-	statusPage     http.Handler
-	allowedOrigins []string // Allowed CORS origins from config
+	paramRoutes map[int][]string
+	middleware  []Middleware
+	// fallbackMiddleware wraps requests no route matched (dashboard, status
+	// pages, 404), which never reach the per-route middleware chain.
+	fallbackMiddleware []Middleware
+	dashboard          http.Handler
+	statusPage         http.Handler
+	allowedOrigins     []string // Allowed CORS origins from config
 }
 
 // moreSpecificRoute reports whether pattern a must be tried before b.
@@ -193,6 +251,24 @@ func moreSpecificRoute(a, b string) bool {
 
 // Handler is an HTTP handler function
 type Handler func(ctx *Context) error
+
+// deprecatedAlias marks a route kept only for compatibility: responses carry
+// `Deprecation: true` (RFC 9745) and a Link to the canonical route computed
+// from the request path, so clients can find and switch to it.
+func deprecatedAlias(successor func(path string) string, next Handler) Handler {
+	return func(ctx *Context) error {
+		h := ctx.Response.Header()
+		h.Set("Deprecation", "true")
+		h.Set("Link", "<"+successor(ctx.Request.URL.Path)+`>; rel="successor-version"`)
+		return next(ctx)
+	}
+}
+
+// alertsAliasSuccessor maps /api/v1/alerts/{channels,rules}... to the
+// canonical /api/v1/{channels,rules}....
+func alertsAliasSuccessor(path string) string {
+	return strings.Replace(path, "/api/v1/alerts/", "/api/v1/", 1)
+}
 
 type hostAwareStatusPageHandler interface {
 	http.Handler
@@ -343,6 +419,13 @@ type workspaceSwitcher interface {
 	SwitchWorkspace(token, workspace string) (*User, error)
 }
 
+// clientAwareLogin is implemented by authenticators whose brute-force
+// protection keys failed attempts by the caller's address, so a flood of
+// wrong passwords from one address cannot lock the account out everywhere.
+type clientAwareLogin interface {
+	LoginFrom(email, password, clientIP string) (*User, string, error)
+}
+
 // OIDCAuth extends Authenticator with OIDC methods
 type OIDCAuth interface {
 	Authenticator
@@ -383,7 +466,17 @@ type User struct {
 	Role      string    `json:"role"`
 	Workspace string    `json:"workspace"`
 	CreatedAt time.Time `json:"created_at"`
+	// APIKeyID is set when the request authenticated with an API key rather
+	// than an interactive session; ID is then "apikey:<APIKeyID>".
+	APIKeyID string `json:"api_key_id,omitempty"`
+	// MustChangePassword is set for an account created with an initial
+	// password by an administrator; until it is changed, requireAuth admits
+	// only the endpoints needed to change it.
+	MustChangePassword bool `json:"must_change_password,omitempty"`
 }
+
+// IsAPIKey reports whether u authenticated with an API key.
+func (u *User) IsAPIKey() bool { return u != nil && u.APIKeyID != "" }
 
 // NewRESTServer creates a new REST server
 func NewRESTServer(config core.ServerConfig, authConfig core.AuthConfig, store Storage, probe ProbeEngine, alert AlertManager, auth Authenticator, cluster ClusterManager, journey JourneyExecutor, dashboard http.Handler, statusPage http.Handler, mcp *MCPServer, logger *slog.Logger) *RESTServer {
@@ -400,6 +493,7 @@ func NewRESTServer(config core.ServerConfig, authConfig core.AuthConfig, store S
 			allowedOrigins: config.AllowedOrigins, // Store allowed origins in router for CORS preflight
 		},
 		logger:          logger.With("component", "rest_server"),
+		audit:           &AuditLogger{logger: logger, backend: &structuredAuditBackend{logger: logger}},
 		store:           store,
 		probe:           probe,
 		alert:           alert,
@@ -413,6 +507,7 @@ func NewRESTServer(config core.ServerConfig, authConfig core.AuthConfig, store S
 		uiConfig:        make(map[string]interface{}),
 		rateLimitStopCh: make(chan struct{}),
 		trustedProxies:  config.TrustedProxies,
+		sessions:        wsServer.sessions,
 	}
 
 	s.setupRoutes()
@@ -431,6 +526,16 @@ func (s *RESTServer) setupRoutes() {
 	s.router.Use(s.validateJSONMiddleware)
 	s.router.Use(s.validatePathParams) // Validate path parameters
 	s.router.Use(s.rateLimitMiddleware)
+
+	// Requests no API route matches (the embedded dashboard, status pages,
+	// 404s) bypass the route chain above, but still need the browser
+	// security headers. They are not rate limited: one dashboard load fetches
+	// dozens of static assets.
+	s.router.fallbackMiddleware = []Middleware{
+		s.requestIDMiddleware,
+		s.securityHeadersMiddleware,
+		s.recoveryMiddleware,
+	}
 
 	// Health
 	s.router.Handle("GET", "/health", s.handleHealth)
@@ -451,8 +556,8 @@ func (s *RESTServer) setupRoutes() {
 	s.router.Handle("GET", "/api/docs", s.handleOpenAPIDocs)
 
 	// Public Status Pages (no auth required)
-	s.router.Handle("GET", "/status", s.handleStatusPage)
-	s.router.Handle("GET", "/status.html", s.handleStatusPageHTML)
+	s.router.Handle("GET", "/status", s.requireAuth(s.handleStatusPage))
+	s.router.Handle("GET", "/status.html", s.requireAuth(s.handleStatusPageHTML))
 	s.router.Handle("GET", "/public/status", s.handlePublicStatus)
 
 	// Auth
@@ -481,6 +586,20 @@ func (s *RESTServer) setupRoutes() {
 	s.router.Handle("POST", "/api/v1/souls/:id/check", s.requireRole(s.handleForceCheck, "souls:*"))
 	s.router.Handle("GET", "/api/v1/souls/:id/judgments", s.requireAuth(s.handleListJudgments))
 	s.router.Handle("GET", "/api/v1/souls/:id/uptime", s.requireAuth(s.handleSoulUptime))
+	s.router.Handle("GET", "/api/v1/souls/:id/judgments/export", s.requireRole(s.handleExportJudgments, "judgments:read"))
+	// SLA reports (reports.go)
+	s.router.Handle("GET", "/api/v1/reports/sla", s.requireRole(s.handleSLAReport, "judgments:read"))
+	s.router.Handle("GET", "/api/v1/reports/sla.csv", s.requireRole(s.handleSLAReportCSV, "judgments:read"))
+	// Heartbeat (push) monitors (heartbeat.go): the ping URL reveal/rotate
+	// routes, and the public pings, authenticated by their token alone.
+	s.router.Handle("GET", "/api/v1/souls/:id/heartbeat", s.requireAuth(s.handleGetSoulHeartbeat))
+	s.router.Handle("POST", "/api/v1/souls/:id/heartbeat/rotate", s.requireRole(s.handleRotateHeartbeatToken, "souls:*"))
+	s.router.Handle("GET", "/api/v1/heartbeat/:token", s.handleHeartbeatPing(core.HeartbeatSuccess))
+	s.router.Handle("POST", "/api/v1/heartbeat/:token", s.handleHeartbeatPing(core.HeartbeatSuccess))
+	s.router.Handle("GET", "/api/v1/heartbeat/:token/start", s.handleHeartbeatPing(core.HeartbeatStart))
+	s.router.Handle("POST", "/api/v1/heartbeat/:token/start", s.handleHeartbeatPing(core.HeartbeatStart))
+	s.router.Handle("GET", "/api/v1/heartbeat/:token/fail", s.handleHeartbeatPing(core.HeartbeatFail))
+	s.router.Handle("POST", "/api/v1/heartbeat/:token/fail", s.handleHeartbeatPing(core.HeartbeatFail))
 
 	// Judgments
 	s.router.Handle("GET", "/api/v1/judgments/:id", s.requireAuth(s.handleGetJudgment))
@@ -507,6 +626,7 @@ func (s *RESTServer) setupRoutes() {
 	s.router.Handle("GET", "/api/v1/workspaces/:id", s.requireAuth(s.handleGetWorkspace))
 	s.router.Handle("PUT", "/api/v1/workspaces/:id", s.requireRole(s.handleUpdateWorkspace, "settings:write"))
 	s.router.Handle("DELETE", "/api/v1/workspaces/:id", s.requireRole(s.handleDeleteWorkspace, "members:*"))
+	s.router.Handle("GET", "/api/v1/quota", s.requireAuth(s.handleGetQuota))
 
 	// Stats
 	s.router.Handle("GET", "/api/v1/stats", s.requireAuth(s.handleStats))
@@ -533,26 +653,56 @@ func (s *RESTServer) setupRoutes() {
 	s.router.Handle("GET", "/api/v1/status-pages/:id", s.requireAuth(s.handleGetStatusPage))
 	s.router.Handle("PUT", "/api/v1/status-pages/:id", s.requireRole(s.handleUpdateStatusPage, "settings:write"))
 	s.router.Handle("DELETE", "/api/v1/status-pages/:id", s.requireRole(s.handleDeleteStatusPage, "settings:write"))
+	// Status page incidents and scheduled maintenance (statuspage_incidents.go)
+	s.router.Handle("GET", "/api/v1/status-pages/:id/incidents", s.requireAuth(s.handleListStatusPageIncidents))
+	s.router.Handle("POST", "/api/v1/status-pages/:id/incidents", s.requireRole(s.handleCreateStatusPageIncident, "settings:write"))
+	s.router.Handle("PATCH", "/api/v1/status-pages/:id/incidents/:incidentId", s.requireRole(s.handlePatchStatusPageIncident, "settings:write"))
+	s.router.Handle("DELETE", "/api/v1/status-pages/:id/incidents/:incidentId", s.requireRole(s.handleDeleteStatusPageIncident, "settings:write"))
+	s.router.Handle("POST", "/api/v1/status-pages/:id/incidents/:incidentId/updates", s.requireRole(s.handlePostStatusPageIncidentUpdate, "settings:write"))
+	s.router.Handle("POST", "/api/v1/status-pages/:id/incidents/:incidentId/resolve", s.requireRole(s.handleResolveStatusPageIncident, "settings:write"))
+	s.router.Handle("GET", "/api/v1/status-pages/:id/announcements", s.requireAuth(s.handleListStatusPageAnnouncements))
+	s.router.Handle("POST", "/api/v1/status-pages/:id/announcements", s.requireRole(s.handleCreateStatusPageAnnouncement, "settings:write"))
+	s.router.Handle("PATCH", "/api/v1/status-pages/:id/announcements/:announcementId", s.requireRole(s.handlePatchStatusPageAnnouncement, "settings:write"))
+	s.router.Handle("DELETE", "/api/v1/status-pages/:id/announcements/:announcementId", s.requireRole(s.handleDeleteStatusPageAnnouncement, "settings:write"))
 
 	// MCP (Model Context Protocol)
 	s.router.Handle("POST", "/api/v1/mcp", s.requireAuth(s.handleMCP))
 
-	// Alerts aliases for frontend compatibility
-	s.router.Handle("GET", "/api/v1/alerts/channels", s.requireAuth(s.handleListChannels))
-	s.router.Handle("POST", "/api/v1/alerts/channels", s.requireRole(s.handleCreateChannel, "channels:*"))
-	s.router.Handle("GET", "/api/v1/alerts/channels/:id", s.requireAuth(s.handleGetChannel))
-	s.router.Handle("PUT", "/api/v1/alerts/channels/:id", s.requireRole(s.handleUpdateChannel, "channels:*"))
-	s.router.Handle("DELETE", "/api/v1/alerts/channels/:id", s.requireRole(s.handleDeleteChannel, "channels:*"))
-	s.router.Handle("POST", "/api/v1/alerts/channels/:id/test", s.requireRole(s.handleTestChannel, "channels:*"))
+	// API keys (automation credentials). Managed by interactive users only;
+	// a key cannot list, create or revoke keys (see apikeys.go).
+	s.router.Handle("GET", "/api/v1/api-keys", s.requireRole(s.handleListAPIKeys, "apikeys:*"))
+	s.router.Handle("POST", "/api/v1/api-keys", s.requireRole(s.handleCreateAPIKey, "apikeys:*"))
+	s.router.Handle("DELETE", "/api/v1/api-keys/:id", s.requireRole(s.handleRevokeAPIKey, "apikeys:*"))
 
-	s.router.Handle("GET", "/api/v1/alerts/rules", s.requireAuth(s.handleListRules))
-	s.router.Handle("POST", "/api/v1/alerts/rules", s.requireRole(s.handleCreateRule, "rules:*"))
-	s.router.Handle("GET", "/api/v1/alerts/rules/:id", s.requireAuth(s.handleGetRule))
-	s.router.Handle("PUT", "/api/v1/alerts/rules/:id", s.requireRole(s.handleUpdateRule, "rules:*"))
-	s.router.Handle("DELETE", "/api/v1/alerts/rules/:id", s.requireRole(s.handleDeleteRule, "rules:*"))
+	// Members and invitations (interactive users only; see members.go)
+	s.router.Handle("GET", "/api/v1/members", s.requireRole(s.handleListMembers, "members:*"))
+	s.router.Handle("POST", "/api/v1/members", s.requireRole(s.handleCreateMember, "members:*"))
+	s.router.Handle("PATCH", "/api/v1/members/:id", s.requireRole(s.handleUpdateMember, "members:*"))
+	s.router.Handle("DELETE", "/api/v1/members/:id", s.requireRole(s.handleRemoveMember, "members:*"))
+	s.router.Handle("DELETE", "/api/v1/users/:id", s.requireRole(s.handleDeleteUser, "members:*"))
+	s.router.Handle("GET", "/api/v1/invitations", s.requireRole(s.handleListInvitations, "members:*"))
+	s.router.Handle("POST", "/api/v1/invitations", s.requireRole(s.handleCreateInvitation, "members:*"))
+	s.router.Handle("DELETE", "/api/v1/invitations/:id", s.requireRole(s.handleRevokeInvitation, "members:*"))
+	s.router.Handle("POST", "/api/v1/auth/accept-invite", s.handleAcceptInvitation)
 
-	// Users alias
-	s.router.Handle("GET", "/api/v1/users/me", s.requireAuth(s.handleMe))
+	// Deprecated aliases: /alerts/channels|rules duplicate /channels and /rules,
+	// /users/me duplicates /auth/me. They keep working but answer with
+	// Deprecation and a Link to the canonical route; nothing in the dashboard
+	// calls them.
+	s.router.Handle("GET", "/api/v1/alerts/channels", deprecatedAlias(alertsAliasSuccessor, s.requireAuth(s.handleListChannels)))
+	s.router.Handle("POST", "/api/v1/alerts/channels", deprecatedAlias(alertsAliasSuccessor, s.requireRole(s.handleCreateChannel, "channels:*")))
+	s.router.Handle("GET", "/api/v1/alerts/channels/:id", deprecatedAlias(alertsAliasSuccessor, s.requireAuth(s.handleGetChannel)))
+	s.router.Handle("PUT", "/api/v1/alerts/channels/:id", deprecatedAlias(alertsAliasSuccessor, s.requireRole(s.handleUpdateChannel, "channels:*")))
+	s.router.Handle("DELETE", "/api/v1/alerts/channels/:id", deprecatedAlias(alertsAliasSuccessor, s.requireRole(s.handleDeleteChannel, "channels:*")))
+	s.router.Handle("POST", "/api/v1/alerts/channels/:id/test", deprecatedAlias(alertsAliasSuccessor, s.requireRole(s.handleTestChannel, "channels:*")))
+
+	s.router.Handle("GET", "/api/v1/alerts/rules", deprecatedAlias(alertsAliasSuccessor, s.requireAuth(s.handleListRules)))
+	s.router.Handle("POST", "/api/v1/alerts/rules", deprecatedAlias(alertsAliasSuccessor, s.requireRole(s.handleCreateRule, "rules:*")))
+	s.router.Handle("GET", "/api/v1/alerts/rules/:id", deprecatedAlias(alertsAliasSuccessor, s.requireAuth(s.handleGetRule)))
+	s.router.Handle("PUT", "/api/v1/alerts/rules/:id", deprecatedAlias(alertsAliasSuccessor, s.requireRole(s.handleUpdateRule, "rules:*")))
+	s.router.Handle("DELETE", "/api/v1/alerts/rules/:id", deprecatedAlias(alertsAliasSuccessor, s.requireRole(s.handleDeleteRule, "rules:*")))
+
+	s.router.Handle("GET", "/api/v1/users/me", deprecatedAlias(func(string) string { return "/api/v1/auth/me" }, s.requireAuth(s.handleMe)))
 
 	// Journeys endpoints
 	s.router.Handle("GET", "/api/v1/journeys", s.requireAuth(s.handleListJourneys))
@@ -591,6 +741,12 @@ func (s *RESTServer) setupRoutes() {
 
 	// SSE (Server-Sent Events) endpoint - better fallback support
 	s.router.Handle("GET", "/api/v1/events", s.requireAuth(s.handleSSE))
+}
+
+// Handler returns the server's HTTP handler (routing plus the full
+// middleware chain), for embedding the API in another server or test.
+func (s *RESTServer) Handler() http.Handler {
+	return s.router
 }
 
 // Start starts the REST server
@@ -635,6 +791,12 @@ func (s *RESTServer) Start() error {
 // close of rateLimitStopCh would panic, and shutdown paths are exactly where
 // a duplicate call is likely (signal handler racing a component failure).
 func (s *RESTServer) Stop(ctx context.Context) error {
+	// NewRESTServer starts the WebSocket broadcast loop, so RESTServer owns its
+	// shutdown even when the HTTP listener was never started.
+	if s.ws != nil {
+		s.ws.Stop()
+	}
+
 	// Stop rate limiter cleanup goroutine
 	s.stopRateLimitOnce.Do(func() {
 		if s.rateLimitStopCh != nil {
@@ -669,6 +831,15 @@ func (s *RESTServer) handleReady(ctx *Context) error {
 			if err := pinger.Ping(); err != nil {
 				checks["storage"] = fmt.Sprintf("error: %v", err)
 			}
+		}
+	}
+
+	// A probe engine that stopped producing judgments while souls are
+	// scheduled is the one failure a monitor cannot report about itself.
+	if rs, ok := s.currentRuntimeStats(); ok {
+		checks["scheduler"] = "ok"
+		if problem := schedulerProblem(rs, time.Now()); problem != "" {
+			checks["scheduler"] = problem
 		}
 	}
 
@@ -796,7 +967,16 @@ func (s *RESTServer) handleLogin(ctx *Context) error {
 		return ctx.Error(http.StatusBadRequest, "invalid request body")
 	}
 
-	user, token, err := s.auth.Login(req.Email, req.Password)
+	var (
+		user  *User
+		token string
+		err   error
+	)
+	if login, ok := s.auth.(clientAwareLogin); ok {
+		user, token, err = login.LoginFrom(req.Email, req.Password, s.realIP(ctx.Request))
+	} else {
+		user, token, err = s.auth.Login(req.Email, req.Password)
+	}
 	if err != nil {
 		return ctx.Error(http.StatusUnauthorized, "invalid credentials")
 	}
@@ -825,6 +1005,9 @@ func (s *RESTServer) handleLogout(ctx *Context) error {
 	if err := s.auth.Logout(token); err != nil {
 		return ctx.Error(http.StatusInternalServerError, "logout failed")
 	}
+	// Live streams authenticated with this token only at their handshake;
+	// close them now rather than at their next revalidation.
+	s.sessions.revokeToken(token)
 
 	// SECURITY: Clear the httpOnly cookie (VULN-004 fix)
 	// #nosec G124 -- Matches the login cookie Secure policy so local HTTP logout can clear it.
@@ -847,6 +1030,9 @@ func (s *RESTServer) handleMe(ctx *Context) error {
 }
 
 func (s *RESTServer) handleSwitchWorkspace(ctx *Context) error {
+	if done, err := rejectAPIKey(ctx); done {
+		return err
+	}
 	var req struct {
 		Workspace string `json:"workspace"`
 	}
@@ -869,7 +1055,7 @@ func (s *RESTServer) handleSwitchWorkspace(ctx *Context) error {
 	if ws == nil {
 		return ctx.Error(http.StatusNotFound, "workspace not found")
 	}
-	if !canAccessWorkspace(ctx, ws) {
+	if !canAccessWorkspace(ctx, ws) && !s.isWorkspaceMember(ctx, ws.ID) {
 		return ctx.Error(http.StatusForbidden, "access denied")
 	}
 
@@ -890,6 +1076,9 @@ func (s *RESTServer) handleSwitchWorkspace(ctx *Context) error {
 // Password management handlers (HIGH-04)
 
 func (s *RESTServer) handleChangePassword(ctx *Context) error {
+	if done, err := rejectAPIKey(ctx); done {
+		return err
+	}
 	var req struct {
 		CurrentPassword string `json:"current_password"`
 		NewPassword     string `json:"new_password"`
@@ -912,6 +1101,8 @@ func (s *RESTServer) handleChangePassword(ctx *Context) error {
 		s.logger.Error("change password failed", "error", err)
 		return ctx.Error(http.StatusInternalServerError, "failed to change password")
 	}
+	// A password change ends the user's sessions; end their live streams too.
+	s.revokeInvalidLiveSessions()
 
 	return ctx.JSON(http.StatusOK, map[string]string{
 		"message": "password changed successfully, please login again",
@@ -934,6 +1125,9 @@ func (s *RESTServer) handleAuthMethods(ctx *Context) error {
 		"local": !ldap,
 		"oidc":  oidc,
 		"ldap":  ldap,
+		// password_reset: "Forgot password?" can email a reset link to the
+		// local account (outgoing mail is configured).
+		"password_reset": s.resetMail != nil && !ldap,
 	})
 }
 
@@ -945,15 +1139,15 @@ func (s *RESTServer) handleRequestPasswordReset(ctx *Context) error {
 		return ctx.Error(http.StatusBadRequest, "invalid request body")
 	}
 
-	_, err := s.auth.RequestPasswordReset(req.Email)
-	if err != nil {
-		s.logger.Error("password reset request failed", "error", err)
-		return ctx.Error(http.StatusInternalServerError, "failed to request password reset")
+	if s.resetMail != nil {
+		return s.requestPasswordResetByEmail(ctx, req.Email)
 	}
 
-	// Always return success (even for unknown emails) to prevent enumeration
+	// Without outgoing mail nothing can deliver a reset token, so none is
+	// issued: each one would only grow the (in a cluster, replicated)
+	// authentication state for an unauthenticated caller.
 	return ctx.JSON(http.StatusOK, map[string]string{
-		"message": "if the email exists, a reset token has been generated; this server has no delivery channel for it, so ask an administrator to run `anubis admin reset-password`",
+		"message": "this server cannot email reset links; ask an administrator to reset your password (`anubis admin reset-password` for the configured admin)",
 	})
 }
 
@@ -976,6 +1170,7 @@ func (s *RESTServer) handleConfirmPasswordReset(ctx *Context) error {
 		s.logger.Error("password reset confirm failed", "error", err)
 		return ctx.Error(http.StatusInternalServerError, "failed to reset password")
 	}
+	s.revokeInvalidLiveSessions()
 
 	return ctx.JSON(http.StatusOK, map[string]string{
 		"message": "password reset successfully, please login with your new password",
@@ -983,6 +1178,48 @@ func (s *RESTServer) handleConfirmPasswordReset(ctx *Context) error {
 }
 
 // OIDC handlers
+
+// oidcFlowCookieMaxAge bounds the oidc_state/oidc_nonce cookies to the
+// authenticator's 10-minute login-state lifetime.
+const oidcFlowCookieMaxAge = 600
+
+// oidcLoginFailedPath is where a browser lands when SSO fails; the login
+// page shows a generic error for the sso_error parameter.
+const oidcLoginFailedPath = "/login?sso_error=1"
+
+// setOIDCFlowCookie sets (or, with an empty value, clears) one of the
+// short-lived cookies binding an OIDC login to the browser that started it.
+//
+// They are SameSite=Lax, not Strict: the IdP returns the browser to
+// /oidc/callback with a cross-site top-level GET, and a Strict cookie is
+// withheld from exactly that request, so the callback never saw them. Lax
+// still withholds them from cross-site subrequests and POSTs. They are Secure
+// whenever the client is on HTTPS -- TLS here, or X-Forwarded-Proto from a
+// trusted proxy -- and plain only for local HTTP development.
+func (s *RESTServer) setOIDCFlowCookie(ctx *Context, name, value string) {
+	maxAge := oidcFlowCookieMaxAge
+	if value == "" {
+		maxAge = -1
+	}
+	// #nosec G124 -- Secure follows the client's scheme (requestIsHTTPS); plain HTTP is local development only.
+	http.SetCookie(ctx.Response, &http.Cookie{
+		Name:     name,
+		Value:    value,
+		Path:     "/api/v1/auth/oidc/",
+		HttpOnly: true,
+		Secure:   requestIsHTTPS(ctx.Request, s.trustedProxyMatcher()),
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   maxAge,
+	})
+}
+
+// oidcCallbackWantsBrowserRedirect reports whether the callback was reached
+// by a browser navigation (Accept names text/html), which must end on a
+// page, rather than by an API client expecting JSON.
+func oidcCallbackWantsBrowserRedirect(r *http.Request) bool {
+	accept := strings.ToLower(r.Header.Get("Accept"))
+	return strings.Contains(accept, "text/html") || strings.Contains(accept, "application/xhtml+xml")
+}
 
 func (s *RESTServer) handleOIDCLogin(ctx *Context) error {
 	oidcAuth, ok := s.auth.(OIDCAuth)
@@ -996,28 +1233,12 @@ func (s *RESTServer) handleOIDCLogin(ctx *Context) error {
 		return ctx.Error(http.StatusInternalServerError, "OIDC login failed: "+err.Error())
 	}
 
-	// Store nonce in secure cookie for CSRF protection
-	// The nonce binds the callback to this specific authentication flow
-	http.SetCookie(ctx.Response, &http.Cookie{
-		Name:     "oidc_nonce",
-		Value:    nonce,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   600, // 10 minutes
-	})
-
-	// Store state in cookie for verification
-	http.SetCookie(ctx.Response, &http.Cookie{
-		Name:     "oidc_state",
-		Value:    state,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   600, // 10 minutes
-	})
+	// The nonce and state cookies bind the callback to the browser that
+	// started this flow (CSRF / login-fixation protection). The PKCE verifier
+	// stays server-side with the login state.
+	s.setOIDCFlowCookie(ctx, "oidc_nonce", nonce)
+	s.setOIDCFlowCookie(ctx, "oidc_state", state)
+	ctx.Response.Header().Set("Cache-Control", "no-store")
 
 	// Redirect to OIDC provider
 	ctx.Response.Header().Set("Location", loginURL)
@@ -1031,57 +1252,57 @@ func (s *RESTServer) handleOIDCCallback(ctx *Context) error {
 		return ctx.Error(http.StatusBadRequest, "OIDC not configured")
 	}
 
-	code := ctx.Request.URL.Query().Get("code")
-	state := ctx.Request.URL.Query().Get("state")
-
-	if code == "" || state == "" {
-		return ctx.Error(http.StatusBadRequest, "missing code or state")
+	browser := oidcCallbackWantsBrowserRedirect(ctx.Request)
+	ctx.Response.Header().Set("Cache-Control", "no-store")
+	// fail answers an API client with JSON and sends a browser back to the
+	// login page; the reason is logged, never reflected.
+	fail := func(status int, message string) error {
+		if browser {
+			http.Redirect(ctx.Response, ctx.Request, oidcLoginFailedPath, http.StatusSeeOther)
+			return nil
+		}
+		return ctx.Error(status, message)
 	}
+
+	// The flow cookies are single-use whatever the outcome.
+	s.setOIDCFlowCookie(ctx, "oidc_nonce", "")
+	s.setOIDCFlowCookie(ctx, "oidc_state", "")
 
 	// Do not reflect provider-controlled query values. Besides being untrusted,
 	// error descriptions can contain user identifiers or token fragments.
 	if ctx.Request.URL.Query().Get("error") != "" {
-		return ctx.Error(http.StatusBadRequest, "OIDC provider rejected authentication (access_denied)")
+		return fail(http.StatusBadRequest, "OIDC provider rejected authentication (access_denied)")
 	}
 
-	// Retrieve nonce from secure cookie for CSRF protection
+	code := ctx.Request.URL.Query().Get("code")
+	state := ctx.Request.URL.Query().Get("state")
+	if code == "" || state == "" {
+		return fail(http.StatusBadRequest, "missing code or state")
+	}
+
+	// The callback must come from the browser that started the flow: it
+	// carries the state it was sent to the IdP with, and the nonce.
 	nonceCookie, err := ctx.Request.Cookie("oidc_nonce")
-	if err != nil {
-		s.logger.Error("OIDC callback missing nonce cookie", "error", err)
-		return ctx.Error(http.StatusBadRequest, "missing nonce cookie: possible CSRF attack")
+	if err != nil || nonceCookie.Value == "" {
+		s.logger.Error("OIDC callback missing nonce cookie")
+		return fail(http.StatusBadRequest, "missing nonce cookie: possible CSRF attack")
 	}
-	nonce := nonceCookie.Value
+	stateCookie, err := ctx.Request.Cookie("oidc_state")
+	if err != nil || subtle.ConstantTimeCompare([]byte(stateCookie.Value), []byte(state)) != 1 {
+		s.logger.Error("OIDC callback state does not match the state cookie")
+		return fail(http.StatusBadRequest, "state mismatch: possible CSRF attack")
+	}
 
-	// Clear the nonce cookie after use
-	http.SetCookie(ctx.Response, &http.Cookie{
-		Name:     "oidc_nonce",
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   -1, // Delete cookie
-	})
-
-	// Clear the state cookie
-	http.SetCookie(ctx.Response, &http.Cookie{
-		Name:     "oidc_state",
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-		MaxAge:   -1, // Delete cookie
-	})
-
-	user, token, err := oidcAuth.OIDCCallback(code, state, nonce)
+	user, token, err := oidcAuth.OIDCCallback(code, state, nonceCookie.Value)
 	if err != nil {
 		s.logger.Error("OIDC callback failed", "error", err)
-		return ctx.Error(http.StatusUnauthorized, "OIDC authentication failed: "+err.Error())
+		return fail(http.StatusUnauthorized, "OIDC authentication failed")
 	}
 
 	// Use the same HttpOnly session cookie policy as local login. Keeping the
-	// token out of JSON prevents browser JavaScript from reading it.
+	// token out of JSON prevents browser JavaScript from reading it. Strict is
+	// fine here even though this response answers a cross-site navigation:
+	// the dashboard's own same-origin requests carry it.
 	// #nosec G124 -- Secure is enabled for TLS/proxied HTTPS; local HTTP dev and E2E need non-Secure cookies.
 	http.SetCookie(ctx.Response, &http.Cookie{
 		Name:     "auth_token",
@@ -1093,6 +1314,11 @@ func (s *RESTServer) handleOIDCCallback(ctx *Context) error {
 		MaxAge:   86400 * 7,
 	})
 
+	if browser {
+		// The dashboard detects the session through /api/v1/auth/me.
+		http.Redirect(ctx.Response, ctx.Request, "/", http.StatusSeeOther)
+		return nil
+	}
 	return ctx.JSON(http.StatusOK, map[string]interface{}{
 		"user": user,
 	})
@@ -1161,6 +1387,7 @@ func (s *RESTServer) soulWithLatestJudgmentAt(soul *core.Soul, windows []*core.M
 		response.Status = soulMonitorStatus(latest.Status)
 		response.LastCheck = &latest.Timestamp
 		response.Latency = latest.Duration.Milliseconds()
+		response.Flapping = judgmentFlapping(latest)
 	}
 	if core.SoulInMaintenance(windows, soul, now) {
 		response.Status = string(core.SoulEmbalmed)
@@ -1229,6 +1456,10 @@ func (s *RESTServer) handleCreateSoul(ctx *Context) error {
 	soul.ID = core.GenerateID()
 	soul.CreatedAt = time.Now()
 	soul.UpdatedAt = time.Now()
+	if soul.Heartbeat != nil {
+		// Ping tokens are always generated server-side.
+		soul.Heartbeat.Token = ""
+	}
 	soul.ApplyDefaults()
 
 	if err := soul.Validate(); err != nil {
@@ -1301,9 +1532,12 @@ func (s *RESTServer) handleUpdateSoul(ctx *Context) error {
 	}
 
 	if err := s.store.SaveSoul(ctx.Request.Context(), &soul); err != nil {
+		if refused, werr := quotaExceeded(ctx, err); refused {
+			return werr
+		}
 		s.logger.Error("failed to update soul", "error", err, "soul_id", id)
-		if unavailable := s.leaderUnavailable(ctx, err); unavailable != nil {
-			return unavailable
+		if handled, werr := s.leaderUnavailable(ctx, err); handled {
+			return werr
 		}
 		return ctx.Error(http.StatusInternalServerError, "failed to update soul")
 	}
@@ -1326,8 +1560,8 @@ func (s *RESTServer) handleDeleteSoul(ctx *Context) error {
 	}
 
 	if err := s.store.DeleteSoul(ctx.Request.Context(), id); err != nil {
-		if unavailable := s.leaderUnavailable(ctx, err); unavailable != nil {
-			return unavailable
+		if handled, werr := s.leaderUnavailable(ctx, err); handled {
+			return werr
 		}
 		s.logger.Error("failed to delete soul", "error", err, "soul_id", id)
 		return ctx.Error(http.StatusInternalServerError, "failed to delete soul")
@@ -1363,6 +1597,9 @@ func (s *RESTServer) handleForceCheck(ctx *Context) error {
 
 	if s.probe == nil {
 		return ctx.Error(http.StatusServiceUnavailable, "probe engine unavailable")
+	}
+	if soul.Type == core.CheckHeartbeat {
+		return ctx.Error(http.StatusConflict, "heartbeat souls are judged by their pings and deadline; there is nothing to check")
 	}
 
 	judgment, err := s.probe.ForceCheck(id)
@@ -1590,8 +1827,11 @@ func (s *RESTServer) handleCreateChannel(ctx *Context) error {
 	channel.UpdatedAt = time.Now()
 
 	if err := s.alert.RegisterChannel(&channel); err != nil {
-		if unavailable := s.leaderUnavailable(ctx, err); unavailable != nil {
-			return unavailable
+		if handled, werr := s.leaderUnavailable(ctx, err); handled {
+			return werr
+		}
+		if refused, werr := quotaExceeded(ctx, err); refused {
+			return werr
 		}
 		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
@@ -1646,8 +1886,11 @@ func (s *RESTServer) handleUpdateChannel(ctx *Context) error {
 	}
 
 	if err := s.alert.RegisterChannel(&channel); err != nil {
-		if unavailable := s.leaderUnavailable(ctx, err); unavailable != nil {
-			return unavailable
+		if handled, werr := s.leaderUnavailable(ctx, err); handled {
+			return werr
+		}
+		if refused, werr := quotaExceeded(ctx, err); refused {
+			return werr
 		}
 		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
@@ -1840,7 +2083,7 @@ func (s *RESTServer) handleListWorkspaces(ctx *Context) error {
 		if ws == nil {
 			continue
 		}
-		if sameWorkspace(ws.ID, workspace) || canAccessWorkspace(ctx, ws) {
+		if sameWorkspace(ws.ID, workspace) || canAccessWorkspace(ctx, ws) || s.isWorkspaceMember(ctx, ws.ID) {
 			filtered = append(filtered, ws)
 		}
 	}
@@ -1886,7 +2129,7 @@ func (s *RESTServer) handleCreateWorkspace(ctx *Context) error {
 	if ctx.User != nil {
 		ws.OwnerID = ctx.User.ID
 	}
-	ws.Quotas = defaultWorkspaceQuotas()
+	ws.Quotas = s.workspaceQuotaLimits(workspace)
 	ws.Features = defaultWorkspaceFeatures()
 	ws.Status = core.WorkspaceActive
 	ws.CreatedAt = now
@@ -2202,8 +2445,8 @@ func (s *RESTServer) membershipError(ctx *Context, err error) error {
 	case errors.Is(err, ErrClusterNodeUnreachable):
 		return ctx.Error(http.StatusBadGateway, err.Error())
 	}
-	if unavailable := s.leaderUnavailable(ctx, err); unavailable != nil {
-		return unavailable
+	if handled, werr := s.leaderUnavailable(ctx, err); handled {
+		return werr
 	}
 	s.logger.Error("cluster membership change failed", "error", err, "path", ctx.Request.URL.Path)
 	return ctx.Error(http.StatusInternalServerError, "cluster membership change failed")
@@ -2415,15 +2658,50 @@ func defaultWorkspaceFeatures() core.FeatureFlags {
 	}
 }
 
-func defaultWorkspaceQuotas() core.QuotaConfig {
-	return core.QuotaConfig{
-		MaxSouls:         100,
-		MaxJourneys:      20,
-		MaxAlertChannels: 10,
-		MaxTeamMembers:   25,
-		RetentionDays:    90,
-		CheckIntervalMin: core.Duration{Duration: 30 * time.Second},
+// quotaUsageReporter is implemented by the server's storage adapter, which
+// also enforces the quotas, so the reported limits are the enforced ones.
+type quotaUsageReporter interface {
+	QuotaUsage(workspace string) (*core.WorkspaceQuotaUsage, error)
+}
+
+// quotaUsage reports the workspace's usage against its quotas. A store that
+// does not enforce quotas reports nothing as limited.
+func (s *RESTServer) quotaUsage(workspace string) (*core.WorkspaceQuotaUsage, error) {
+	if reporter, ok := s.store.(quotaUsageReporter); ok {
+		return reporter.QuotaUsage(workspace)
 	}
+	return &core.WorkspaceQuotaUsage{Workspace: workspace}, nil
+}
+
+// workspaceQuotaLimits is the quota record stamped on a new workspace: the
+// limits currently enforced (all 0, unlimited, when tenants are disabled).
+func (s *RESTServer) workspaceQuotaLimits(workspace string) core.QuotaConfig {
+	usage, err := s.quotaUsage(workspace)
+	if err != nil || usage == nil {
+		return core.QuotaConfig{}
+	}
+	return core.QuotaConfig{
+		MaxSouls:         usage.Souls.Limit,
+		MaxJourneys:      usage.Journeys.Limit,
+		MaxAlertChannels: usage.AlertChannels.Limit,
+		MaxTeamMembers:   usage.TeamMembers.Limit,
+		RetentionDays:    usage.RetentionDays,
+		CheckIntervalMin: usage.CheckIntervalMin,
+	}
+}
+
+// handleGetQuota reports the caller's workspace usage against its quotas.
+func (s *RESTServer) handleGetQuota(ctx *Context) error {
+	usage, err := s.quotaUsage(contextWorkspace(ctx))
+	if err != nil {
+		return s.internalError(ctx, err, "failed to compute quota usage")
+	}
+	if dir := s.userDirectory(); dir != nil {
+		if n, err := dir.CountMembers(contextWorkspace(ctx)); err == nil {
+			usage.TeamMembers.Used = n
+		}
+	}
+	return ctx.JSON(http.StatusOK, usage)
 }
 
 // statusPageRequest carries an optional plaintext password alongside the page. The
@@ -2451,6 +2729,53 @@ func jsonHasTopLevelKey(raw []byte, key string) bool {
 		}
 	}
 	return false
+}
+
+// statusPageKeepOmittedFields restores the stored value of every optional field
+// the request body did not mention.
+//
+// A PUT body is a partial update: the StatusPageCreate schema in openapi.yaml
+// requires only "name" and "slug", and documents the same "omit to keep the
+// stored password" rule for "password" that "enabled" and "visibility" already
+// follow. Binding the body into a fresh core.StatusPage cannot tell an omitted
+// field from an explicit zero value, so every omitted field was overwritten
+// with its zero value: the description, logo, favicon, custom domain and
+// uptime window were cleared, the theme was reset to the default, and the
+// soul list, groups and incidents were dropped.
+//
+// A field the body does mention stays authoritative, so an explicit "" or []
+// still clears it, exactly as an empty password clears the password.
+func statusPageKeepOmittedFields(raw []byte, page *core.StatusPage, existing *core.StatusPage) {
+	if !jsonHasTopLevelKey(raw, "description") {
+		page.Description = existing.Description
+	}
+	if !jsonHasTopLevelKey(raw, "logo_url") {
+		page.LogoURL = existing.LogoURL
+	}
+	if !jsonHasTopLevelKey(raw, "favicon_url") {
+		page.FaviconURL = existing.FaviconURL
+	}
+	if !jsonHasTopLevelKey(raw, "custom_domain") {
+		page.CustomDomain = existing.CustomDomain
+	}
+	if !jsonHasTopLevelKey(raw, "theme") {
+		page.Theme = existing.Theme
+	}
+	if !jsonHasTopLevelKey(raw, "uptime_days") {
+		page.UptimeDays = existing.UptimeDays
+	}
+	if !jsonHasTopLevelKey(raw, "souls") {
+		page.Souls = existing.Souls
+	}
+	if !jsonHasTopLevelKey(raw, "groups") {
+		page.Groups = existing.Groups
+	}
+	// Incidents and announcements are read-only here: they are written only
+	// through /status-pages/:id/incidents and /announcements, which validate
+	// them and keep the page within its size budget. A GET-then-PUT client
+	// echoes a stale copy, so the stored value always wins.
+	page.Incidents = existing.Incidents
+	page.Announcements = existing.Announcements
 }
 
 // applyStatusPagePassword sets, clears or preserves the page password. A body that
@@ -2491,12 +2816,39 @@ func redactedStatusPage(page *core.StatusPage) *core.StatusPage {
 	return &copied
 }
 
-func redactedStatusPages(pages []*core.StatusPage) []*core.StatusPage {
-	out := make([]*core.StatusPage, 0, len(pages))
-	for _, page := range pages {
-		out = append(out, redactedStatusPage(page))
+// statusPageSubscriberCounter is optionally implemented by Storage: it returns
+// the number of confirmed email subscribers per status page ID.
+type statusPageSubscriberCounter interface {
+	ConfirmedSubscriberCounts() (map[string]int, error)
+}
+
+// statusPageResponse is a redacted status page plus its confirmed subscriber
+// count. The count is derived on read and never stored with the page; no
+// subscriber address is exposed.
+type statusPageResponse struct {
+	*core.StatusPage
+	SubscriberCount int `json:"subscriber_count"`
+}
+
+// subscriberCounts returns the confirmed subscriber count per page ID, or nil
+// when the store cannot count (the count then reads 0). Subscriptions are
+// keyed by page ID and callers only pass pages of the caller's workspace, so
+// the counts are workspace-scoped through the page.
+func (s *RESTServer) subscriberCounts() map[string]int {
+	counter, ok := s.store.(statusPageSubscriberCounter)
+	if !ok {
+		return nil
 	}
-	return out
+	counts, err := counter.ConfirmedSubscriberCounts()
+	if err != nil {
+		s.logger.Warn("failed to count status page subscribers", "err", err)
+		return nil
+	}
+	return counts
+}
+
+func (s *RESTServer) statusPageResponse(page *core.StatusPage, counts map[string]int) statusPageResponse {
+	return statusPageResponse{StatusPage: redactedStatusPage(page), SubscriberCount: counts[page.ID]}
 }
 
 func normalizeStatusPageForSave(page *core.StatusPage) error {
@@ -2513,6 +2865,11 @@ func normalizeStatusPageForSave(page *core.StatusPage) error {
 	}
 	if len(page.Slug) > 100 || !isValidStatusPageSlug(page.Slug) {
 		return fmt.Errorf("status page slug must contain only lowercase letters, numbers, and hyphens")
+	}
+	if page.Slug == "subscribe" || page.Slug == "subscriptions" {
+		// /status/subscribe and /status/subscriptions/... are the email
+		// subscription endpoints.
+		return fmt.Errorf("status page slug %q is reserved", page.Slug)
 	}
 	if page.Visibility == "" {
 		page.Visibility = core.VisibilityPublic
@@ -2593,7 +2950,44 @@ func (s *RESTServer) handleListStatusPages(ctx *Context) error {
 			filtered = append(filtered, page)
 		}
 	}
-	return ctx.JSON(http.StatusOK, redactedStatusPages(filtered))
+	counts := map[string]int(nil)
+	if len(filtered) > 0 {
+		counts = s.subscriberCounts()
+	}
+	out := make([]statusPageResponse, 0, len(filtered))
+	for _, page := range filtered {
+		out = append(out, s.statusPageResponse(page, counts))
+	}
+	return ctx.JSON(http.StatusOK, out)
+}
+
+// statusPageSlugInUse reports whether slug is already claimed by another
+// published status page.
+//
+// The public /status/{slug} URL carries no workspace and Storage resolves a
+// slug on its own, so the slug namespace is global: two published pages
+// sharing one slug make that URL ambiguous, and the lookup answers with
+// whichever page it reaches first. A password-protected page's URL can then
+// serve another page's content without asking for the password.
+//
+// Only published pages occupy the URL -- a disabled page is not reachable
+// there -- so a page that will not be published cannot shadow one that is.
+// A page that will be published may not take a slug another published page
+// already holds; a page that is being updated is excluded, because it
+// re-sends its own slug.
+func statusPageSlugInUse(pages []*core.StatusPage, slug, ownID string, published bool) bool {
+	if !published {
+		return false
+	}
+	for _, page := range pages {
+		if page == nil || page.ID == ownID {
+			continue
+		}
+		if page.Enabled && page.Slug == slug {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *RESTServer) handleCreateStatusPage(ctx *Context) error {
@@ -2615,11 +3009,26 @@ func (s *RESTServer) handleCreateStatusPage(ctx *Context) error {
 	if !enabledExplicit {
 		page.Enabled = true
 	}
+	// A new page starts without incidents or announcements; they are posted
+	// through their own validated endpoints (statuspage_incidents.go).
+	page.Incidents = nil
+	page.Announcements = nil
 	if err := applyStatusPagePassword(&page, raw, req.Password, ""); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 	if err := normalizeStatusPageForSave(&page); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
+
+	// A slug names one public URL, so it may name one status page. The
+	// namespace is global because the public /status/{slug} URL carries no
+	// workspace and Storage resolves a slug on its own.
+	pages, err := s.store.ListStatusPagesNoCtx()
+	if err != nil {
+		return s.internalError(ctx, err, "internal server error")
+	}
+	if statusPageSlugInUse(pages, page.Slug, "", page.Enabled) {
+		return ctx.Error(http.StatusConflict, "status page slug already in use")
 	}
 
 	page.ID = core.GenerateID()
@@ -2635,7 +3044,8 @@ func (s *RESTServer) handleCreateStatusPage(ctx *Context) error {
 		return s.internalError(ctx, err, "internal server error")
 	}
 
-	return ctx.JSON(http.StatusCreated, redactedStatusPage(&page))
+	// A new page has no subscribers yet.
+	return ctx.JSON(http.StatusCreated, s.statusPageResponse(&page, nil))
 }
 
 func (s *RESTServer) handleGetStatusPage(ctx *Context) error {
@@ -2647,15 +3057,20 @@ func (s *RESTServer) handleGetStatusPage(ctx *Context) error {
 	if !sameWorkspace(page.WorkspaceID, contextWorkspace(ctx)) {
 		return ctx.Error(http.StatusForbidden, "access denied")
 	}
-	return ctx.JSON(http.StatusOK, redactedStatusPage(page))
+	return ctx.JSON(http.StatusOK, s.statusPageResponse(page, s.subscriberCounts()))
 }
 
 func (s *RESTServer) handleUpdateStatusPage(ctx *Context) error {
 	id := ctx.Params["id"]
+	// Serialise with the incident and announcement endpoints, which
+	// read-modify-write the same stored page.
+	unlock := lockStatusPage(id)
+	defer unlock()
 
 	raw, _ := io.ReadAll(ctx.Request.Body)
 	ctx.Request.Body = io.NopCloser(bytes.NewReader(raw))
 	enabledExplicit := jsonHasTopLevelKey(raw, "enabled")
+	visibilityExplicit := jsonHasTopLevelKey(raw, "visibility")
 
 	var req statusPageRequest
 	if err := ctx.Bind(&req); err != nil {
@@ -2678,11 +3093,34 @@ func (s *RESTServer) handleUpdateStatusPage(ctx *Context) error {
 	if !enabledExplicit {
 		page.Enabled = existing.Enabled
 	}
+	// The same rule applies to "visibility": binding the zero value would let
+	// normalizeStatusPageForSave default the page to public, so an update that
+	// omits the field would silently publish a protected page's contents at
+	// the public /status/{slug} URL without its password.
+	if !visibilityExplicit {
+		page.Visibility = existing.Visibility
+	}
+	// The same rule applies to the remaining optional fields: a PUT body is a
+	// partial update, so a field it does not mention must keep its stored
+	// value instead of being overwritten with the zero value binding produced.
+	statusPageKeepOmittedFields(raw, &page, existing)
 	if err := applyStatusPagePassword(&page, raw, req.Password, existing.PasswordHash); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
 	}
 	if err := normalizeStatusPageForSave(&page); err != nil {
 		return ctx.Error(http.StatusBadRequest, err.Error())
+	}
+
+	// A slug names one public URL, so it may name one status page. The
+	// namespace is global because the public /status/{slug} URL carries no
+	// workspace and Storage resolves a slug on its own. This page is excluded
+	// by ID: an update re-sends its own slug, and that is not a collision.
+	pages, err := s.store.ListStatusPagesNoCtx()
+	if err != nil {
+		return s.internalError(ctx, err, "internal server error")
+	}
+	if statusPageSlugInUse(pages, page.Slug, id, page.Enabled) {
+		return ctx.Error(http.StatusConflict, "status page slug already in use")
 	}
 
 	page.ID = id
@@ -2698,7 +3136,7 @@ func (s *RESTServer) handleUpdateStatusPage(ctx *Context) error {
 		return s.internalError(ctx, err, "internal server error")
 	}
 
-	return ctx.JSON(http.StatusOK, redactedStatusPage(&page))
+	return ctx.JSON(http.StatusOK, s.statusPageResponse(&page, s.subscriberCounts()))
 }
 
 func (s *RESTServer) handleDeleteStatusPage(ctx *Context) error {
@@ -2764,6 +3202,16 @@ func (s *RESTServer) handleSSE(ctx *Context) error {
 	}
 	w.Header().Set("Vary", "Origin")
 
+	// The stream authenticated once, in requireAuth. End it when its session
+	// is revoked (logout, password change) or stops authenticating.
+	streamCtx, endStream := context.WithCancel(ctx.Request.Context())
+	defer endStream()
+	if token := requestAuthToken(ctx.Request); s.authConfig.IsEnabled() && token != "" && ctx.User != nil {
+		unregister := s.sessions.add(token, ctx.User.ID, endStream)
+		defer unregister()
+		watchSession(streamCtx, s.tokenAuth(), token, s.liveSessionRevalidateInterval(), endStream)
+	}
+
 	// Send initial connection message
 	fmt.Fprintf(w, "data: %s\n\n", `{"type":"connected","timestamp":`+fmt.Sprintf("%d", time.Now().Unix())+`}`)
 	w.(http.Flusher).Flush()
@@ -2778,10 +3226,32 @@ func (s *RESTServer) handleSSE(ctx *Context) error {
 			// Send heartbeat
 			fmt.Fprintf(w, "data: %s\n\n", `{"type":"heartbeat","timestamp":`+fmt.Sprintf("%d", time.Now().Unix())+`}`)
 			w.(http.Flusher).Flush()
-		case <-ctx.Request.Context().Done():
+		case <-streamCtx.Done():
 			return nil
 		}
 	}
+}
+
+// liveSessionRevalidateInterval is how often an SSE stream re-checks its
+// session token.
+func (s *RESTServer) liveSessionRevalidateInterval() time.Duration {
+	if s.sessionRevalidateInterval > 0 {
+		return s.sessionRevalidateInterval
+	}
+	return defaultSessionRevalidateInterval
+}
+
+// revokeInvalidLiveSessions closes every live WebSocket/SSE stream whose
+// session token no longer authenticates. Password changes and resets end
+// sessions in bulk, so the affected tokens are found by re-checking them.
+func (s *RESTServer) revokeInvalidLiveSessions() {
+	if s.auth == nil {
+		return
+	}
+	s.sessions.revoke(func(st liveStream) bool {
+		_, err := s.tokenAuth().Authenticate(st.token)
+		return err != nil
+	})
 }
 
 // Middleware
@@ -2827,15 +3297,36 @@ func (s *RESTServer) requireAuth(handler Handler) Handler {
 			return ctx.Error(http.StatusUnauthorized, "missing authorization token")
 		}
 
-		user, err := s.auth.Authenticate(token)
+		user, err := s.tokenAuth().Authenticate(token)
 		if err != nil {
 			return ctx.Error(http.StatusUnauthorized, "invalid token")
 		}
 
 		ctx.User = user
 		ctx.Workspace = user.Workspace
+		// Per-user quotas need the identity, which rateLimitMiddleware
+		// (running before this) does not have yet.
+		if s.userRateLimited(ctx) {
+			return ctx.Error(http.StatusTooManyRequests, "Rate limit exceeded for this account")
+		}
+		if user.MustChangePassword && !passwordChangeAllowed(ctx.Request) {
+			return ctx.JSON(http.StatusForbidden, map[string]string{
+				"error": "password change required: set a new password with PUT /api/v1/auth/change-password",
+				"code":  "password_change_required",
+			})
+		}
 		return handler(ctx)
 	}
+}
+
+// passwordChangeAllowed lists what an account that must change its initial
+// password may still do: read who it is and change the password.
+func passwordChangeAllowed(r *http.Request) bool {
+	switch r.Method + " " + r.URL.Path {
+	case "GET /api/v1/auth/me", "GET /api/v1/users/me", "PUT /api/v1/auth/change-password", "GET /api/v1/auth/methods":
+		return true
+	}
+	return false
 }
 
 // requireRole wraps requireAuth and additionally checks that the authenticated user
@@ -2855,20 +3346,22 @@ func (s *RESTServer) requireRole(handler Handler, permission string) Handler {
 
 func (s *RESTServer) loggingMiddleware(handler Handler) Handler {
 	return func(ctx *Context) error {
-		// Strip sensitive query params before logging/tracing
-		sanitizedURL := sanitizeURL(ctx.Request.URL.String())
+		// Strip sensitive query params before logging/tracing; heartbeat
+		// ping URLs carry their secret in the path.
+		logReq := redactHeartbeatRequest(ctx.Request)
+		sanitizedURL := sanitizeURL(logReq.URL.String())
 
 		// Extract trace context from incoming headers
 		propagator := otel.GetTextMapPropagator()
 		parentCtx := propagator.Extract(ctx.Request.Context(), propagation.HeaderCarrier(ctx.Request.Header))
 
 		// Start span for this request
-		spanName := fmt.Sprintf("%s %s", ctx.Request.Method, ctx.Request.URL.Path)
+		spanName := fmt.Sprintf("%s %s", ctx.Request.Method, logReq.URL.Path)
 		ctxSpan, span := otel.Tracer("anubiswatch/http").Start(parentCtx, spanName,
 			trace.WithAttributes(
 				attribute.String("http.method", ctx.Request.Method),
 				attribute.String("http.url", sanitizedURL),
-				attribute.String("http.route", ctx.Request.URL.Path),
+				attribute.String("http.route", logReq.URL.Path),
 				attribute.String("http.request_id", ctx.RequestID),
 			),
 		)
@@ -2878,6 +3371,8 @@ func (s *RESTServer) loggingMiddleware(handler Handler) Handler {
 		ctx.Request = ctx.Request.WithContext(ctxSpan)
 
 		ctx.StartTime = time.Now()
+		recorder := &responseRecorder{ResponseWriter: ctx.Response, statusCode: http.StatusOK}
+		ctx.Response = recorder
 		err := handler(ctx)
 		duration := time.Since(ctx.StartTime)
 
@@ -2886,13 +3381,21 @@ func (s *RESTServer) loggingMiddleware(handler Handler) Handler {
 			span.SetAttributes(attribute.String("error", err.Error()))
 		}
 		span.SetAttributes(
-			attribute.Int("http.status_code", statusCodeFromError(err)),
+			attribute.Int("http.status_code", recorder.statusCode),
 			attribute.Int64("http.duration_ms", duration.Milliseconds()),
 		)
 
+		userID := ""
+		if ctx.User != nil {
+			userID = ctx.User.ID
+		}
+		if s.audit != nil {
+			s.audit.LogRequest(redactHeartbeatRequest(ctx.Request), userID, recorder.statusCode, duration, ctx.RequestID)
+		}
+
 		s.logger.Info("HTTP request",
 			"method", ctx.Request.Method,
-			"path", ctx.Request.URL.Path,
+			"path", logReq.URL.Path,
 			"query", sanitizeQueryString(ctx.Request.URL.RawQuery), // sanitized — masks tokens
 			"duration", duration,
 			"error", err,
@@ -2901,14 +3404,6 @@ func (s *RESTServer) loggingMiddleware(handler Handler) Handler {
 
 		return err
 	}
-}
-
-func statusCodeFromError(err error) int {
-	if err == nil {
-		return 200
-	}
-	// Extract status code from context error if available
-	return 500
 }
 
 // sanitizeURL returns a copy of urlStr with the values of sensitive query
@@ -3011,7 +3506,7 @@ func (s *RESTServer) corsMiddleware(handler Handler) Handler {
 		// Always set Vary: Origin to prevent cache poisoning
 		ctx.Response.Header().Set("Vary", "Origin")
 
-		ctx.Response.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		ctx.Response.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		ctx.Response.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
 		ctx.Response.Header().Set("Access-Control-Max-Age", "86400") // 24 hours
 
@@ -3048,7 +3543,11 @@ func resolveAllowedOrigins(configured []string) []string {
 	}
 	// Priority 2: Environment variable
 	if allowed := os.Getenv("ANUBIS_CORS_ORIGINS"); allowed != "" {
-		return strings.Split(allowed, ",")
+		origins := strings.Split(allowed, ",")
+		for i := range origins {
+			origins[i] = strings.TrimSpace(origins[i])
+		}
+		return origins
 	}
 	// Priority 3: Default localhost for development
 	return []string{
@@ -3089,6 +3588,11 @@ func (s *RESTServer) recoveryMiddleware(handler Handler) Handler {
 // validateJSONMiddleware validates Content-Type and JSON body for POST/PUT requests
 func (s *RESTServer) validateJSONMiddleware(handler Handler) Handler {
 	return func(ctx *Context) error {
+		// Heartbeat pings come from cron jobs and scripts with arbitrary
+		// (or no) Content-Type; the handler reads at most 1KB itself.
+		if isHeartbeatPingPath(ctx.Request.URL.Path) {
+			return handler(ctx)
+		}
 		if ctx.Request.Method == "POST" || ctx.Request.Method == "PUT" || ctx.Request.Method == "PATCH" {
 			// Check Content-Length for pre-negotiated-size check
 			if ctx.Request.ContentLength > maxRequestBodySize {
@@ -3176,6 +3680,14 @@ func containsInjectionPatterns(input string) bool {
 	return false
 }
 
+// defaultContentSecurityPolicy covers the API, the embedded dashboard and the
+// public status pages. Scripts load only from this origin and never inline:
+// the dashboard's index.html references its Vite bundles by URL and status
+// pages ship no script at all. Inline styles stay allowed because status
+// pages embed their (sanitized) theme CSS in a <style> block and use style
+// attributes.
+const defaultContentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws: wss:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
+
 // securityHeadersMiddleware adds security headers to all responses
 func (s *RESTServer) securityHeadersMiddleware(handler Handler) Handler {
 	return func(ctx *Context) error {
@@ -3184,7 +3696,7 @@ func (s *RESTServer) securityHeadersMiddleware(handler Handler) Handler {
 		ctx.Response.Header().Set("X-Frame-Options", "DENY")
 		ctx.Response.Header().Set("X-XSS-Protection", "1; mode=block")
 		ctx.Response.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
-		ctx.Response.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self' ws: wss:; font-src 'self'; base-uri 'self'; form-action 'self'")
+		ctx.Response.Header().Set("Content-Security-Policy", defaultContentSecurityPolicy)
 		// HSTS: force HTTPS — only set when TLS is actually enabled
 		if s.config.TLS.Enabled {
 			ctx.Response.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
@@ -3227,155 +3739,174 @@ func (s *RESTServer) validatePathParams(handler Handler) Handler {
 	}
 }
 
-// rateLimitMiddleware implements rate limiting per IP and per user
+// Rate limits, per minute. Authenticated users additionally get twice these
+// budgets across all of their addresses (userRateLimited).
+const (
+	rateLimitDefault   = 100
+	rateLimitAuth      = 10
+	rateLimitSensitive = 20
+	rateLimitWindow    = time.Minute
+)
+
+// rateLimitClass returns the extra, smaller budget a request draws from on
+// top of the shared one. Credential operations have their own budget;
+// ordinary dashboard reads must not consume it. The bucket names are fixed
+// classes, never caller-controlled URL paths.
+func rateLimitClass(r *http.Request) (string, int) {
+	path := r.URL.Path
+	authPath := strings.HasPrefix(path, "/api/v1/auth/") || strings.HasPrefix(path, "/auth/") || path == "/login" || path == "/register"
+	if authPath && (r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions || strings.HasSuffix(path, "/oidc/login") || strings.HasSuffix(path, "/oidc/callback")) {
+		return "auth", rateLimitAuth
+	}
+	if strings.HasPrefix(path, "/api/v1/souls") && (r.Method == http.MethodPut || r.Method == http.MethodPatch || r.Method == http.MethodDelete || strings.Contains(path, "delete") || strings.Contains(path, "update")) {
+		return "sensitive", rateLimitSensitive
+	}
+	return "", rateLimitDefault
+}
+
+type rateLimitQuota struct {
+	state *rateLimitClientState
+	limit int
+}
+
+// takeRateLimitQuotas charges one request to every quota named by keys, or
+// to none of them if any is exhausted, in which case it returns that quota.
+// On success it returns the quota with the least headroom left. Caller holds
+// s.rateLimitMu.
+func takeRateLimitQuotas(clients map[string]*rateLimitClientState, now time.Time, keys []string, limits []int) (rateLimitQuota, bool) {
+	quotas := make([]rateLimitQuota, 0, len(keys))
+	for i, key := range keys {
+		state := clients[key]
+		if state == nil || !state.resetTime.After(now) {
+			state = &rateLimitClientState{resetTime: now.Add(rateLimitWindow)}
+			clients[key] = state
+		}
+		quotas = append(quotas, rateLimitQuota{state, limits[i]})
+	}
+	for _, q := range quotas {
+		if q.state.count >= q.limit {
+			return q, false
+		}
+	}
+	selected := quotas[0]
+	for _, q := range quotas {
+		q.state.count++
+		if q.limit-q.state.count < selected.limit-selected.state.count {
+			selected = q
+		}
+	}
+	return selected, true
+}
+
+func setRateLimitHeaders(ctx *Context, q rateLimitQuota, now time.Time, ok bool) {
+	h := ctx.Response.Header()
+	h.Set("X-RateLimit-Limit", strconv.Itoa(q.limit))
+	if !ok {
+		h.Set("Retry-After", strconv.Itoa(max(1, int(q.state.resetTime.Sub(now)/time.Second))))
+		h.Set("X-RateLimit-Remaining", "0")
+		return
+	}
+	h.Set("X-RateLimit-Remaining", strconv.Itoa(q.limit-q.state.count))
+	h.Set("X-RateLimit-Reset", strconv.FormatInt(q.state.resetTime.Unix(), 10))
+}
+
+// rateLimitMiddleware implements rate limiting per client IP. It runs before
+// authentication, so per-user quotas are applied by requireAuth
+// (userRateLimited) once the user is known; each request is charged to each
+// quota exactly once.
 func (s *RESTServer) rateLimitMiddleware(handler Handler) Handler {
-	type clientState struct {
-		count     int
-		resetTime time.Time
-	}
-
-	var (
-		mu          sync.RWMutex
-		ipClients   = make(map[string]*clientState)
-		userClients = make(map[string]*clientState) // Per-user rate limiting
-		// Different limits for different types of endpoints
-		defaultLimit   = 100 // requests per minute for regular endpoints
-		authLimit      = 10  // stricter limit for auth endpoints
-		sensitiveLimit = 20  // limit for sensitive operations
-		window         = time.Minute
-	)
-
-	// Determine limit based on endpoint
-	getLimit := func(path string) int {
-		switch {
-		case strings.HasPrefix(path, "/api/v1/auth/") || strings.HasPrefix(path, "/auth/") || path == "/login" || path == "/register":
-			return authLimit
-		case strings.HasPrefix(path, "/api/v1/souls") && (strings.Contains(path, "delete") || strings.Contains(path, "update")):
-			return sensitiveLimit
-		default:
-			return defaultLimit
+	s.rateLimitInitOnce.Do(func() {
+		if s.rateLimitStopCh == nil {
+			s.rateLimitStopCh = make(chan struct{})
 		}
-	}
+		s.rateLimitMu.Lock()
+		s.rateLimitIPClients = make(map[string]*rateLimitClientState)
+		s.rateLimitUserClients = make(map[string]*rateLimitClientState)
+		s.rateLimitMu.Unlock()
 
-	// Cleanup old entries periodically
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-s.rateLimitStopCh:
-				return
-			case <-ticker.C:
-				mu.Lock()
-				now := time.Now()
-				for ip, state := range ipClients {
-					if state.resetTime.Before(now) {
-						delete(ipClients, ip)
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-s.rateLimitStopCh:
+					return
+				case <-ticker.C:
+					s.rateLimitMu.Lock()
+					now := time.Now()
+					for ip, state := range s.rateLimitIPClients {
+						if state.resetTime.Before(now) {
+							delete(s.rateLimitIPClients, ip)
+						}
 					}
-				}
-				for user, state := range userClients {
-					if state.resetTime.Before(now) {
-						delete(userClients, user)
+					for user, state := range s.rateLimitUserClients {
+						if state.resetTime.Before(now) {
+							delete(s.rateLimitUserClients, user)
+						}
 					}
-				}
-				mu.Unlock()
-			}
-		}
-	}()
-
-	// realIP returns the real client IP, respecting trusted proxies.
-	// When no trusted proxies are configured, RemoteAddr is always used.
-	// When trusted proxies are set, X-Forwarded-For is used only when the
-	// connection comes from a trusted proxy.
-	s.realIP = func(r *http.Request) string {
-		if len(s.trustedProxies) == 0 {
-			return r.RemoteAddr
-		}
-		remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			return r.RemoteAddr
-		}
-		for _, proxy := range s.trustedProxies {
-			if remoteHost == proxy {
-				if forwarded := r.Header.Get("X-Forwarded-For"); forwarded != "" {
-					return strings.Split(forwarded, ",")[0]
+					s.rateLimitMu.Unlock()
 				}
 			}
-		}
-		return r.RemoteAddr
-	}
+		}()
+	})
 
 	return func(ctx *Context) error {
-		if strings.HasPrefix(ctx.Request.URL.Path, "/health") ||
-			strings.HasPrefix(ctx.Request.URL.Path, "/ready") {
+		if strings.HasPrefix(ctx.Request.URL.Path, "/health") || strings.HasPrefix(ctx.Request.URL.Path, "/ready") {
 			return handler(ctx)
 		}
 
-		// Get client IP — only trust X-Forwarded-For when the direct connection
-		// is from a known/trusted proxy. Without trusted proxies configured, XFF
-		// is client-supplied and trivially spoofed.
 		ip := s.realIP(ctx.Request)
-
-		// Get user ID if authenticated
-		userID := ""
-		if ctx.User != nil {
-			userID = ctx.User.ID
+		class, classLimit := rateLimitClass(ctx.Request)
+		keys, limits := []string{ip}, []int{rateLimitDefault}
+		if class != "" {
+			keys, limits = append(keys, ip+"\x00"+class), append(limits, classLimit)
 		}
-
-		limit := getLimit(ctx.Request.URL.Path)
 		now := time.Now()
-
-		mu.Lock()
-
-		// Check IP-based rate limit
-		ipState, ipExists := ipClients[ip]
-		if !ipExists || ipState.resetTime.Before(now) {
-			ipClients[ip] = &clientState{
-				count:     1,
-				resetTime: now.Add(window),
-			}
-		} else if ipState.count >= limit {
-			mu.Unlock()
-			ctx.Response.Header().Set("Retry-After", strconv.Itoa(int(ipState.resetTime.Sub(now).Seconds())))
-			ctx.Response.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit))
-			ctx.Response.Header().Set("X-RateLimit-Remaining", "0")
-			return ctx.Error(http.StatusTooManyRequests, fmt.Sprintf("Rate limit exceeded (%d requests/minute)", limit))
-		} else {
-			ipState.count++
+		s.rateLimitMu.Lock()
+		q, ok := takeRateLimitQuotas(s.rateLimitIPClients, now, keys, limits)
+		setRateLimitHeaders(ctx, q, now, ok)
+		s.rateLimitMu.Unlock()
+		if !ok {
+			return ctx.Error(http.StatusTooManyRequests, fmt.Sprintf("Rate limit exceeded (%d requests/minute)", q.limit))
 		}
-
-		// Check user-based rate limit (if authenticated)
-		if userID != "" {
-			userState, userExists := userClients[userID]
-			if !userExists || userState.resetTime.Before(now) {
-				userClients[userID] = &clientState{
-					count:     1,
-					resetTime: now.Add(window),
-				}
-			} else if userState.count >= limit*2 { // User limit is 2x IP limit (shared across IPs)
-				mu.Unlock()
-				ctx.Response.Header().Set("Retry-After", strconv.Itoa(int(userState.resetTime.Sub(now).Seconds())))
-				ctx.Response.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit*2))
-				ctx.Response.Header().Set("X-RateLimit-Remaining", "0")
-				return ctx.Error(http.StatusTooManyRequests, "User rate limit exceeded")
-			} else {
-				userState.count++
-			}
-		}
-
-		// Set rate limit headers
-		ipState = ipClients[ip]
-		remaining := limit - ipState.count
-		if remaining < 0 {
-			remaining = 0
-		}
-		ctx.Response.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit))
-		ctx.Response.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
-		ctx.Response.Header().Set("X-RateLimit-Reset", strconv.Itoa(int(ipState.resetTime.Unix())))
-
-		mu.Unlock()
 		return handler(ctx)
 	}
+}
+
+// userRateLimited charges an authenticated request to its user's quotas
+// and reports whether one of them is exhausted. Those quotas bound a user
+// spreading requests over many addresses. Routes not behind
+// rateLimitMiddleware, and anonymous access with auth disabled, are not
+// charged.
+func (s *RESTServer) userRateLimited(ctx *Context) bool {
+	if ctx.User == nil || ctx.User.ID == "" || !s.authConfig.IsEnabled() {
+		return false
+	}
+	if strings.HasPrefix(ctx.Request.URL.Path, "/health") || strings.HasPrefix(ctx.Request.URL.Path, "/ready") {
+		return false
+	}
+	class, classLimit := rateLimitClass(ctx.Request)
+	keys, limits := []string{ctx.User.ID}, []int{rateLimitDefault * 2}
+	if class != "" {
+		keys, limits = append(keys, ctx.User.ID+"\x00"+class), append(limits, classLimit*2)
+	}
+	now := time.Now()
+	s.rateLimitMu.Lock()
+	defer s.rateLimitMu.Unlock()
+	if s.rateLimitUserClients == nil {
+		return false
+	}
+	q, ok := takeRateLimitQuotas(s.rateLimitUserClients, now, keys, limits)
+	if !ok {
+		setRateLimitHeaders(ctx, q, now, false)
+		return true
+	}
+	// Report the user quota when it is tighter than the IP quota already
+	// announced by rateLimitMiddleware.
+	if remaining, err := strconv.Atoi(ctx.Response.Header().Get("X-RateLimit-Remaining")); err != nil || q.limit-q.state.count < remaining {
+		setRateLimitHeaders(ctx, q, now, true)
+	}
+	return false
 }
 
 // Router methods
@@ -3438,7 +3969,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 		}
 		w.Header().Set("Vary", "Origin")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
 		w.Header().Set("Access-Control-Max-Age", "86400")
 		w.WriteHeader(http.StatusNoContent)
@@ -3479,12 +4010,12 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	// Status page routes (before dashboard fallback)
 	if r.statusPage != nil && strings.HasPrefix(path, "/status/") {
-		r.statusPage.ServeHTTP(w, req)
+		r.serveFallback(w, req, statusPageFallback(r.statusPage))
 		return
 	}
 
 	if handler, ok := r.statusPage.(hostAwareStatusPageHandler); ok && handler.CanServeHost(req.Host) {
-		handler.ServeHTTP(w, req)
+		r.serveFallback(w, req, statusPageFallback(handler))
 		return
 	}
 
@@ -3498,14 +4029,43 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		path == "/status.html" ||
 		strings.HasPrefix(path, "/public/")
 	if r.dashboard != nil && !isExcluded {
-		r.dashboard.ServeHTTP(w, req)
+		r.serveFallback(w, req, func(ctx *Context) error {
+			r.dashboard.ServeHTTP(ctx.Response, ctx.Request)
+			return nil
+		})
 		return
 	}
 
 	// No route found
-	w.WriteHeader(http.StatusNotFound)
-	if err := json.NewEncoder(w).Encode(map[string]string{"error": "not found"}); err != nil {
-		slog.Warn("failed to encode 404 response", "err", err)
+	r.serveFallback(w, req, func(ctx *Context) error {
+		ctx.Response.WriteHeader(http.StatusNotFound)
+		if err := json.NewEncoder(ctx.Response).Encode(map[string]string{"error": "not found"}); err != nil {
+			slog.Warn("failed to encode 404 response", "err", err)
+		}
+		return nil
+	})
+}
+
+// serveFallback runs handler, wrapped in the router's fallback middleware,
+// for a request no route matched.
+func (r *Router) serveFallback(w http.ResponseWriter, req *http.Request, handler Handler) {
+	for i := len(r.fallbackMiddleware) - 1; i >= 0; i-- {
+		handler = r.fallbackMiddleware[i](handler)
+	}
+	ctx := &Context{Request: req, Response: w, Params: make(map[string]string)}
+	if err := handler(ctx); err != nil {
+		slog.Error("handler error", "path", req.URL.Path, "method", req.Method, "err", err)
+	}
+}
+
+// statusPageFallback serves a public status page. Status pages may be framed
+// by the same origin (as the embeddable widget always allowed) but not by
+// other sites; everything else keeps the default security headers.
+func statusPageFallback(page http.Handler) Handler {
+	return func(ctx *Context) error {
+		ctx.Response.Header().Set("X-Frame-Options", "SAMEORIGIN")
+		page.ServeHTTP(ctx.Response, ctx.Request)
+		return nil
 	}
 }
 
@@ -3548,11 +4108,37 @@ func (c *Context) Error(status int, message string) error {
 // InternalError logs the actual error and returns a generic internal server error
 // Use this for 500 errors to prevent information leakage (CWE-209)
 func (s *RESTServer) internalError(ctx *Context, err error, context string) error {
-	if unavailable := s.leaderUnavailable(ctx, err); unavailable != nil {
-		return unavailable
+	if handled, werr := s.leaderUnavailable(ctx, err); handled {
+		return werr
+	}
+	if refused, werr := quotaExceeded(ctx, err); refused {
+		return werr
 	}
 	s.logger.Error("internal server error", "context", context, "error", err, "path", ctx.Request.URL.Path)
 	return ctx.Error(http.StatusInternalServerError, "internal server error")
+}
+
+// quotaExceeded answers 409 Conflict when err is a workspace quota refusal,
+// naming the quota and its limit so clients can say which one was hit. It
+// reports false (writing nothing) for any other error.
+func quotaExceeded(ctx *Context, err error) (bool, error) {
+	qe, ok := core.AsQuotaExceeded(err)
+	if !ok {
+		return false, nil
+	}
+	body := map[string]interface{}{
+		"error":     qe.Error(),
+		"code":      "quota_exceeded",
+		"quota":     qe.Quota,
+		"workspace": qe.Workspace,
+	}
+	if qe.Quota == core.QuotaCheckIntervalMin {
+		body["limit"] = qe.Floor.String()
+	} else {
+		body["limit"] = qe.Limit
+		body["current"] = qe.Current
+	}
+	return true, ctx.JSON(http.StatusConflict, body)
 }
 
 // leaderRetryAfterSeconds is the Retry-After sent with a 503 for a write the
@@ -3562,11 +4148,14 @@ const leaderRetryAfterSeconds = 2
 // leaderUnavailable answers 503 with Retry-After when err says the write could
 // not reach a Raft leader -- an election is in progress or this node is cut off
 // from the majority. Such a write was not applied and is safe to retry, unlike
-// a 500. It returns nil (writing nothing) for any other error.
-func (s *RESTServer) leaderUnavailable(ctx *Context, err error) error {
+// a 500. handled reports whether it wrote that response; for any other error
+// it writes nothing and returns false. (It used to return ctx.JSON's result,
+// which is nil on success, so callers fell through and appended a second
+// "internal server error" body to the 503.)
+func (s *RESTServer) leaderUnavailable(ctx *Context, err error) (bool, error) {
 	raftErr, unavailable := core.LeaderUnavailable(err)
 	if !unavailable {
-		return nil
+		return false, nil
 	}
 	s.logger.Warn("write refused: no cluster leader", "error", err, "path", ctx.Request.URL.Path)
 	ctx.Response.Header().Set("Retry-After", strconv.Itoa(leaderRetryAfterSeconds))
@@ -3574,7 +4163,7 @@ func (s *RESTServer) leaderUnavailable(ctx *Context, err error) error {
 	if raftErr.NodeID != "" {
 		body["leader"] = raftErr.NodeID
 	}
-	return ctx.JSON(http.StatusServiceUnavailable, body)
+	return true, ctx.JSON(http.StatusServiceUnavailable, body)
 }
 
 // Bind parses JSON request body with size limits to prevent DoS

@@ -72,7 +72,7 @@ func (m *mockStorage) ListSoulsNoCtx(ws string, offset, limit int) ([]*core.Soul
 		return []*core.Soul{}, nil
 	}
 	end := offset + limit
-	if end > len(souls) {
+	if limit <= 0 || end > len(souls) {
 		end = len(souls)
 	}
 	return souls[offset:end], nil
@@ -2460,7 +2460,7 @@ func TestCORSMiddleware(t *testing.T) {
 	if w.Header().Get("Access-Control-Allow-Origin") != "http://localhost:3000" {
 		t.Errorf("Expected CORS header Access-Control-Allow-Origin: http://localhost:3000, got %s", w.Header().Get("Access-Control-Allow-Origin"))
 	}
-	if w.Header().Get("Access-Control-Allow-Methods") != "GET, POST, PUT, DELETE, OPTIONS" {
+	if w.Header().Get("Access-Control-Allow-Methods") != "GET, POST, PUT, PATCH, DELETE, OPTIONS" {
 		t.Error("Expected CORS header Access-Control-Allow-Methods")
 	}
 }
@@ -3496,8 +3496,10 @@ func TestHandleCreateWorkspace(t *testing.T) {
 	if created.Name != "New Workspace" {
 		t.Fatalf("expected trimmed name, got %q", created.Name)
 	}
-	if created.Quotas.MaxSouls != 100 {
-		t.Fatalf("expected server default quota, got %#v", created.Quotas)
+	// The client's quota is ignored; the record carries the enforced limits,
+	// which are all 0 (unlimited) for a store that does not enforce quotas.
+	if created.Quotas != (core.QuotaConfig{}) {
+		t.Fatalf("expected the server's quota limits, got %#v", created.Quotas)
 	}
 	if created.Features.SSO {
 		t.Fatal("client-controlled SSO feature flag should not be persisted")
@@ -5796,10 +5798,20 @@ func TestHandleSSE_RequiresAuth(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: "auth_token", Value: "valid-token"})
 	req = req.WithContext(ctx)
 	w = httptest.NewRecorder()
-	go router.ServeHTTP(w, req)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		router.ServeHTTP(w, req)
+	}()
 	time.Sleep(50 * time.Millisecond) // let handler start and write headers
 	cancel()
-	time.Sleep(50 * time.Millisecond) // let handler exit
+	// Wait for the handler to return before reading the recorder; a sleep
+	// gives no happens-before edge and the race detector flagged the read.
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SSE handler did not return after its context was cancelled")
+	}
 	if w.Code != http.StatusOK {
 		t.Errorf("expected 200 with valid cookie auth, got %d", w.Code)
 	}
@@ -6744,8 +6756,11 @@ func TestHandleRequestPasswordReset_GenericError(t *testing.T) {
 
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("expected status 500, got %d: %s", w.Code, w.Body.String())
+	// Without outgoing mail no token is issued (nothing could deliver it, and
+	// each one would grow the authentication state), so the authenticator's
+	// failure is never reached.
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

@@ -1461,7 +1461,8 @@ func TestNode_BecomeLeader(t *testing.T) {
 	node.log = []core.RaftLogEntry{{}} // sentinel
 	node.mu.Unlock()
 
-	node.becomeLeader()
+	node.state.Store(core.StateCandidate)
+	node.becomeLeader(node.currentTerm)
 
 	if node.state.Load().(core.RaftState) != core.StateLeader {
 		t.Errorf("Expected StateLeader, got %s", node.state)
@@ -1745,9 +1746,10 @@ func TestNode_HandleAppendEntriesResponse_Conflict(t *testing.T) {
 
 	node.handleAppendEntriesResponse(peer, req, resp)
 
-	// ConflictIndex=3, then code sets nextIndex=ConflictIndex(3), then decrements to 2
-	if node.nextIndex["node-2"] != 2 {
-		t.Errorf("Expected nextIndex to be decremented to 2, got %d", node.nextIndex["node-2"])
+	// Fast backup (§5.3): the leader holds no entry of the conflicting term,
+	// so it resumes at the follower's first index of that term.
+	if node.nextIndex["node-2"] != 3 {
+		t.Errorf("Expected nextIndex to jump to ConflictIndex 3, got %d", node.nextIndex["node-2"])
 	}
 }
 
@@ -1870,7 +1872,9 @@ func TestNode_HandleAppendEntriesResponse_OutOfOrderFailureAfterBackoffIgnored(t
 	newerReq := &core.AppendEntriesRequest{Term: 3, PrevLogIndex: 8}
 	node.handleAppendEntriesResponse(peer, newerReq, &core.AppendEntriesResponse{Term: 3, Success: false})
 
-	olderReq := &core.AppendEntriesRequest{Term: 3, PrevLogIndex: 7}
+	// Without a hint the leader backs off to nextIndex 8 (probe prev=7). A
+	// late rejection of an even older probe must not move it.
+	olderReq := &core.AppendEntriesRequest{Term: 3, PrevLogIndex: 6}
 	node.handleAppendEntriesResponse(peer, olderReq, &core.AppendEntriesResponse{
 		Term:          3,
 		Success:       false,
@@ -1881,11 +1885,11 @@ func TestNode_HandleAppendEntriesResponse_OutOfOrderFailureAfterBackoffIgnored(t
 	if got := node.matchIndex[peer.ID]; got != 2 {
 		t.Errorf("out-of-order failure changed matchIndex: got %d, want 2", got)
 	}
-	if got := node.nextIndex[peer.ID]; got != 7 {
-		t.Errorf("out-of-order failure changed nextIndex: got %d, want 7", got)
+	if got := node.nextIndex[peer.ID]; got != 8 {
+		t.Errorf("out-of-order failure changed nextIndex: got %d, want 8", got)
 	}
-	if peer.matchIndex != 2 || peer.nextIndex != 7 {
-		t.Errorf("out-of-order failure changed peer progress: matchIndex=%d nextIndex=%d, want 2/7", peer.matchIndex, peer.nextIndex)
+	if peer.matchIndex != 2 || peer.nextIndex != 8 {
+		t.Errorf("out-of-order failure changed peer progress: matchIndex=%d nextIndex=%d, want 2/8", peer.matchIndex, peer.nextIndex)
 	}
 }
 
@@ -2292,79 +2296,23 @@ func TestContainsString(t *testing.T) {
 	}
 }
 
-// TestNode_checkJointConsensusCommit tests joint consensus commit checking
-func TestNode_checkJointConsensusCommit(t *testing.T) {
-	node := createTestNode(t)
-	node.Start()
-	defer node.Stop()
-
-	// Test when not in joint consensus (should use standard commit)
-	if !node.checkJointConsensusCommit(0) {
-		t.Error("Should return true for index 0 when not in joint consensus")
+// TestNode_checkStandardCommit_VoterMajority checks the commit quorum is a
+// majority of the configuration's voters.
+func TestNode_checkStandardCommit_VoterMajority(t *testing.T) {
+	cfg := newTestRaftNodeConfig()
+	cfg.Peers = []core.RaftPeer{{ID: "node-2", Address: "127.0.0.1:7002"}, {ID: "node-3", Address: "127.0.0.1:7003"}}
+	node, err := NewNode(cfg, NewInMemoryLogStore(), NewInMemorySnapshotStore(), NewStorageFSM(NewInMemoryStorage()), newTestRaftLogger())
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// Set up joint consensus state
-	node.membership.mu.Lock()
-	node.membership.jointState = true
-	node.membership.oldConfig = []string{"node-1", "node-2", "node-3"}
-	node.membership.newConfig = []string{"node-1", "node-4", "node-5"}
-	node.membership.mu.Unlock()
-
-	// Set up peers
-	peer2 := &Peer{ID: "node-2", nextIndex: 1, matchIndex: 5}
-	peer3 := &Peer{ID: "node-3", nextIndex: 1, matchIndex: 5}
-	peer4 := &Peer{ID: "node-4", nextIndex: 1, matchIndex: 5}
-	peer5 := &Peer{ID: "node-5", nextIndex: 1, matchIndex: 5}
-
-	node.peerMu.Lock()
-	node.peers["node-2"] = peer2
-	node.peers["node-3"] = peer3
-	node.peers["node-4"] = peer4
-	node.peers["node-5"] = peer5
+	node.mu.Lock()
+	defer node.mu.Unlock()
+	if node.checkStandardCommit(5) {
+		t.Error("leader alone is not a majority of three voters")
+	}
 	node.matchIndex["node-2"] = 5
-	node.matchIndex["node-3"] = 5
-	node.matchIndex["node-4"] = 5
-	node.matchIndex["node-5"] = 5
-	node.peerMu.Unlock()
-
-	// Both old and new config need majority
-	if !node.checkJointConsensusCommit(5) {
-		t.Error("Should commit when both configs have majority")
-	}
-
-	// Reduce old config matches
-	node.peerMu.Lock()
-	node.matchIndex["node-2"] = 0
-	node.matchIndex["node-3"] = 0
-	node.peerMu.Unlock()
-
-	if node.checkJointConsensusCommit(5) {
-		t.Error("Should not commit when old config lacks majority")
-	}
-}
-
-// TestNode_checkJointConsensusCommit_NotJoint tests when not in joint state
-func TestNode_checkJointConsensusCommit_NotJoint(t *testing.T) {
-	node := createTestNode(t)
-	node.Start()
-	defer node.Stop()
-
-	node.membership.mu.Lock()
-	node.membership.jointState = false
-	node.membership.mu.Unlock()
-
-	peer2 := &Peer{ID: "node-2", nextIndex: 1, matchIndex: 5}
-	peer3 := &Peer{ID: "node-3", nextIndex: 1, matchIndex: 5}
-
-	node.peerMu.Lock()
-	node.peers["node-2"] = peer2
-	node.peers["node-3"] = peer3
-	node.matchIndex["node-2"] = 5
-	node.matchIndex["node-3"] = 5
-	node.peerMu.Unlock()
-
-	if !node.checkJointConsensusCommit(5) {
-		t.Error("Should commit with standard rules when not in joint consensus")
+	if !node.checkStandardCommit(5) {
+		t.Error("leader plus one of two peers is a majority of three voters")
 	}
 }
 
@@ -2387,11 +2335,9 @@ func TestNode_applyMembershipChange_Joint(t *testing.T) {
 
 	node.applyMembershipChange(change, 10)
 
-	node.membership.mu.RLock()
-	if !node.membership.jointState {
-		t.Error("Should be in joint state")
+	if memberPosition(node.membershipBase(), "node-3") < 0 {
+		t.Error("node-3 should be in the committed configuration")
 	}
-	node.membership.mu.RUnlock()
 
 	node.peerMu.RLock()
 	if node.peers["node-3"] == nil {
@@ -2432,12 +2378,6 @@ func TestNode_applyMembershipChange_Final_RemovePeer(t *testing.T) {
 		},
 	}
 	node.applyMembershipChange(finalChange, 11)
-
-	node.membership.mu.RLock()
-	if node.membership.jointState {
-		t.Error("Should not be in joint state after final phase")
-	}
-	node.membership.mu.RUnlock()
 
 	node.peerMu.RLock()
 	if node.peers["node-3"] != nil {
@@ -2500,47 +2440,6 @@ func TestNode_maybeTakeSnapshot_Threshold(t *testing.T) {
 
 	node.maybeTakeSnapshot()
 	time.Sleep(50 * time.Millisecond)
-}
-
-// TestNode_transitionToFinalConfig_NotLeader tests that transitionToFinalConfig returns early when not leader
-func TestNode_transitionToFinalConfig_NotLeader(t *testing.T) {
-	node := createTestNode(t)
-	node.Start()
-	defer node.Stop()
-
-	// Ensure not leader
-	node.mu.Lock()
-	node.state.Store(core.StateFollower)
-	node.mu.Unlock()
-
-	change := core.MembershipChange{
-		Type: core.MembershipAddPeer,
-		Peer: core.RaftPeer{ID: "node-2", Address: "127.0.0.1:7002"},
-	}
-
-	// Should return immediately without error
-	node.transitionToFinalConfig(change, 1)
-}
-
-// TestNode_transitionToFinalConfig_AsLeader tests transitionToFinalConfig when node is leader
-func TestNode_transitionToFinalConfig_AsLeader(t *testing.T) {
-	node := createTestNode(t)
-	node.Start()
-	defer node.Stop()
-
-	// Set as leader
-	node.mu.Lock()
-	node.state.Store(core.StateLeader)
-	node.currentTerm = 1
-	node.mu.Unlock()
-
-	change := core.MembershipChange{
-		Type: core.MembershipAddPeer,
-		Peer: core.RaftPeer{ID: "node-2", Address: "127.0.0.1:7002"},
-	}
-
-	// Should not panic even without peers
-	node.transitionToFinalConfig(change, 1)
 }
 
 // TestNode_maybeTakeSnapshot_AsLeader tests snapshot when node is leader and threshold met
@@ -2641,36 +2540,20 @@ func TestNode_proposeMembershipChange_Committed(t *testing.T) {
 	node.currentTerm = 1
 	node.mu.Unlock()
 
-	applied := make(chan struct{})
-	go func() {
-		defer close(applied)
-		for {
-			node.mu.Lock()
-			if len(node.log) > 1 {
-				node.lastApplied = uint64(len(node.log) - 1)
-				node.mu.Unlock()
-				return
-			}
-			node.mu.Unlock()
-			time.Sleep(time.Millisecond)
-		}
-	}()
-
+	// A non-voter does not change the quorum, so the leader alone commits it.
 	change := core.MembershipChange{
-		Type:      core.MembershipAddPeer,
-		Peer:      core.RaftPeer{ID: "node-2", Address: "127.0.0.1:7002"},
-		OldConfig: []string{"node-1"},
-		NewConfig: []string{"node-1", "node-2"},
-		Phase:     "joint",
+		Type: core.MembershipAddPeer,
+		Peer: core.RaftPeer{ID: "node-2", Address: "127.0.0.1:7002", Role: core.RoleNonVoter},
 	}
 
-	// The centralized commit/apply path owns membership mutation; the proposer
-	// only waits until that path has advanced lastApplied.
+	// The proposer waits until the commit/apply path has committed the entry.
 	err := node.proposeMembershipChange(change)
 	if err != nil {
 		t.Fatalf("proposeMembershipChange failed: %v", err)
 	}
-	<-applied
+	if memberPosition(node.membershipBase(), "node-2") < 0 {
+		t.Error("committed change did not reach the committed configuration")
+	}
 
 	// Verify the log entry was appended
 	node.mu.RLock()
@@ -2765,11 +2648,6 @@ func TestNode_AddPeer_DuplicatePeer(t *testing.T) {
 		Address: "127.0.0.1:7002",
 	}
 	node.peerMu.Unlock()
-
-	// Also add to membership config
-	node.membership.mu.Lock()
-	node.membership.config = []string{"test-node-1", "existing-peer"}
-	node.membership.mu.Unlock()
 
 	err := node.AddPeer(core.RaftPeer{ID: "existing-peer", Address: "127.0.0.1:7002"})
 	if err == nil {
@@ -3110,7 +2988,11 @@ func TestNode_SingleNode_Election(t *testing.T) {
 
 	// Give election timer a chance to fire
 	// In single-node mode, node should become leader without any peer communication
-	time.Sleep(200 * time.Millisecond)
+	// The timer fires within 1-2 election timeouts (100-200ms); poll with
+	// slack so a loaded -race run does not flake.
+	for deadline := time.Now().Add(2 * time.Second); !node.IsLeader() && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	// Verify node became leader
 	if !node.IsLeader() {

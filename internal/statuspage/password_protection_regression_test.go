@@ -3,6 +3,7 @@ package statuspage
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -92,33 +93,25 @@ func passwordRegressionHash(t *testing.T, password string) string {
 }
 
 // TestProtectedPageUnlocksWithTheStoredPassword pins the fixed behaviour through
-// both credentials the handler accepts: the ?password= query and the cookie.
+// the page-bound signed cookie issued after a password POST.
 func TestProtectedPageUnlocksWithTheStoredPassword(t *testing.T) {
 	correct, _ := passwordRegressionSecrets()
 	hash := passwordRegressionHash(t, correct)
-
-	for _, tc := range []struct {
-		name   string
-		mutate func(*http.Request)
-	}{
-		{"query", func(r *http.Request) {
-			q := r.URL.Query()
-			q.Set("password", correct)
-			r.URL.RawQuery = q.Encode()
-		}},
-		{"cookie", func(r *http.Request) {
-			r.AddCookie(&http.Cookie{Name: "anubis_page_pass", Value: correct})
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			rec := passwordRegressionRequest(t, hash, tc.mutate)
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d, want 200 (body: %.120s)", rec.Code, rec.Body.String())
-			}
-			if !strings.Contains(rec.Body.String(), sessionRegressionComponent) {
-				t.Errorf("the unlocked page does not show its data: %.200s", rec.Body.String())
-			}
-		})
+	handler := NewHandler(&passwordRegressionRepo{page: passwordRegressionPage(hash)})
+	req := httptest.NewRequest(http.MethodPost, "/status/"+passwordRegressionSlug, strings.NewReader(url.Values{"password": {correct}}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	post := httptest.NewRecorder()
+	handler.ServeHTTP(post, req)
+	if post.Code != http.StatusSeeOther {
+		t.Fatalf("POST status=%d", post.Code)
+	}
+	cookies := post.Result().Cookies()
+	if len(cookies) != 1 || cookies[0].Value == correct || !cookies[0].HttpOnly {
+		t.Fatal("missing safe cookie")
+	}
+	rec := passwordRegressionRequest(t, hash, func(r *http.Request) { r.AddCookie(cookies[0]) })
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), sessionRegressionComponent) {
+		t.Fatal("signed cookie did not unlock page")
 	}
 }
 

@@ -11,7 +11,17 @@ spec:
       interval: {{ .Values.monitoring.serviceMonitor.interval }}
       scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout }}
       path: /metrics
+      {{- with .Values.monitoring.serviceMonitor.bearerTokenSecret }}
+      {{- if .name }}
+      authorization:
+        type: Bearer
+        credentials:
+          name: {{ .name | quote }}
+          key: {{ .key | default "token" | quote }}
+      {{- end }}
+      {{- end }}
   selector:
     matchLabels:
       {{- include "anubiswatch.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
 {{- end }}

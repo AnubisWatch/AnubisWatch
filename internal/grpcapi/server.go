@@ -307,6 +307,7 @@ func soulToPB(soul *core.Soul) *v1.Soul {
 		Target:    soul.Target,
 		Interval:  int32(soul.Weight.Seconds()),
 		Timeout:   int32(soul.Timeout.Seconds()),
+		Retries:   int32(soul.Retries),
 		Enabled:   soul.Enabled,
 		Tags:      soul.Tags,
 		Workspace: soul.WorkspaceID,
@@ -390,6 +391,7 @@ func journeyRunToPB(run *core.JourneyRun) *v1.JourneyRun {
 	if run == nil {
 		return nil
 	}
+	run = api.RedactJourneyRun(run)
 	var startedAt, completedAt *timestamppb.Timestamp
 	if run.StartedAt > 0 {
 		startedAt = timestamppb.New(time.UnixMilli(run.StartedAt))
@@ -428,6 +430,7 @@ func journeyToPB(j *core.JourneyConfig) *v1.Journey {
 	if j == nil {
 		return nil
 	}
+	j = api.RedactJourney(j)
 	steps := make([]*v1.JourneyStep, 0, len(j.Steps))
 	for _, step := range j.Steps {
 		steps = append(steps, &v1.JourneyStep{
@@ -497,6 +500,7 @@ func pbToSoulConfig(req *v1.CreateSoulRequest) *core.Soul {
 		Target:  req.Target,
 		Weight:  core.Duration{Duration: time.Duration(req.Interval) * time.Second},
 		Timeout: core.Duration{Duration: time.Duration(req.Timeout) * time.Second},
+		Retries: int(req.Retries),
 		Enabled: req.Enabled,
 		Tags:    req.Tags,
 	}
@@ -845,6 +849,9 @@ func applySoulUpdates(soul *core.Soul, req *v1.UpdateSoulRequest) {
 	if req.Enabled != nil {
 		soul.Enabled = *req.Enabled
 	}
+	if req.Retries != nil {
+		soul.Retries = int(*req.Retries)
+	}
 	if req.Tags != nil {
 		soul.Tags = req.Tags
 	}
@@ -1137,9 +1144,14 @@ func (s *Server) DeleteSoul(ctx context.Context, req *v1.DeleteSoulRequest) (*em
 // writeError maps a failed store write onto a gRPC status. A write refused
 // because no Raft leader could take it (core.LeaderUnavailable -- the same
 // predicate the REST API answers with 503) is codes.Unavailable, which
-// clients treat as retryable; anything else is codes.Internal. Every mutating
-// RPC reports its store failure through here.
+// clients treat as retryable; a workspace quota refusal is
+// codes.ResourceExhausted naming the quota and its limit (REST answers 409);
+// anything else is codes.Internal. Every mutating RPC reports its store
+// failure through here.
 func writeError(err error, what string) error {
+	if qe, ok := core.AsQuotaExceeded(err); ok {
+		return status.Error(codes.ResourceExhausted, what+": "+qe.Error())
+	}
 	if raftErr, unavailable := core.LeaderUnavailable(err); unavailable {
 		msg := what + ": cluster leader unavailable; retry shortly"
 		if raftErr.NodeID != "" {
@@ -1852,8 +1864,12 @@ func (s *Server) UpdateJourney(ctx context.Context, req *v1.UpdateJourneyRequest
 		return nil, status.Error(codes.PermissionDenied, "access denied: journey belongs to another workspace")
 	}
 
-	applyJourneyUpdates(existing, req)
-	if err := s.store.SaveJourneyNoCtx(existing); err != nil {
+	incoming := *api.RedactJourney(existing)
+	applyJourneyUpdates(&incoming, req)
+	if err := api.MergeJourneySecrets(existing, &incoming); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if err := s.store.SaveJourneyNoCtx(&incoming); err != nil {
 		return nil, writeError(err, "failed to update journey")
 	}
 
@@ -2010,14 +2026,37 @@ func (s *Server) StreamJudgments(req *v1.StreamRequest, stream v1.AnubisWatchSer
 	seen := make(map[string]bool)
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
+	guard := s.newStreamGuard(stream.Context(), "judgments:read", workspace)
 
 	for {
 		select {
 		case <-stream.Context().Done():
 			return nil
 		case <-ticker.C:
+			if err := guard.tick(); err != nil {
+				return err
+			}
 			s.mu.RLock()
-			judgments, err := s.store.ListJudgmentsNoCtx(soulID, time.Now().Add(-5*time.Minute), time.Now(), 50)
+			var judgments []*core.Judgment
+			var err error
+			if soulID != "" {
+				judgments, err = s.store.ListJudgmentsNoCtx(soulID, time.Now().Add(-5*time.Minute), time.Now(), 50)
+			} else {
+				// No soul filter: stream the caller's workspace, as
+				// ListJudgments does. The store resolves an empty soul ID
+				// against the default workspace only, so every other
+				// workspace's stream would stay empty.
+				var souls []*core.Soul
+				if souls, err = s.store.ListSoulsNoCtx(workspace, 0, 0); err == nil {
+					for _, soul := range souls {
+						var soulJudgments []*core.Judgment
+						if soulJudgments, err = s.store.ListJudgmentsNoCtx(soul.ID, time.Now().Add(-5*time.Minute), time.Now(), 50); err != nil {
+							break
+						}
+						judgments = append(judgments, soulJudgments...)
+					}
+				}
+			}
 			s.mu.RUnlock()
 
 			if err != nil {
@@ -2032,6 +2071,9 @@ func (s *Server) StreamJudgments(req *v1.StreamRequest, stream v1.AnubisWatchSer
 					if !seen[id] {
 						seen[id] = true
 						if pb := judgmentToPB(j); pb != nil {
+							if err := guard.beforeSend(); err != nil {
+								return err
+							}
 							if err := stream.Send(pb); err != nil {
 								return err
 							}
@@ -2068,12 +2110,16 @@ func (s *Server) StreamVerdicts(req *v1.StreamRequest, stream v1.AnubisWatchServ
 	seen := make(map[string]bool)
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
+	guard := s.newStreamGuard(stream.Context(), "souls:read", workspace)
 
 	for {
 		select {
 		case <-stream.Context().Done():
 			return nil
 		case <-ticker.C:
+			if err := guard.tick(); err != nil {
+				return err
+			}
 			s.mu.RLock()
 			events, err := s.store.ListEvents(soulID, 50)
 			s.mu.RUnlock()
@@ -2090,6 +2136,9 @@ func (s *Server) StreamVerdicts(req *v1.StreamRequest, stream v1.AnubisWatchServ
 					if !seen[id] {
 						seen[id] = true
 						if pb := eventToVerdict(e); pb != nil {
+							if err := guard.beforeSend(); err != nil {
+								return err
+							}
 							if err := stream.Send(pb); err != nil {
 								return err
 							}
@@ -2162,8 +2211,10 @@ func (s *Server) authStreamInterceptor(srv interface{}, ss grpc.ServerStream, in
 		return status.Error(codes.Unauthenticated, "invalid token")
 	}
 
-	// Add user to context
+	// Add user to context, and the token so the stream can re-check it
+	// (streamGuard): a stream outlives the moment it was authenticated.
 	ctx = context.WithValue(ctx, userContextKey, user)
+	ctx = context.WithValue(ctx, streamTokenKey{}, token)
 
 	// Wrap the stream with the new context
 	wrapped := &wrappedStream{ServerStream: ss, ctx: ctx}

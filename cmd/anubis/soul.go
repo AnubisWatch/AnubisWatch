@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 
 func quickWatch() {
 	if len(os.Args) < 3 {
-		fmt.Fprintf(os.Stderr, "Usage: anubis watch <target> [--name <name>] [--interval <duration>] [--type <http|tcp|icmp>]\n")
+		fmt.Fprintf(os.Stderr, "Usage: anubis watch <target> [--name <name>] [--interval <duration>] [--type <http|tcp|icmp|dns|smtp|grpc|websocket|tls|heartbeat>] [--retries <0-5>] [--retry-interval <duration>]\n")
 		os.Exit(1)
 	}
 
@@ -24,6 +25,8 @@ func quickWatch() {
 	name := target
 	interval := 60 * time.Second
 	checkType := "http"
+	retries := 0
+	var retryInterval time.Duration
 
 	// Parse flags
 	for i := 3; i < len(os.Args); i++ {
@@ -46,6 +49,26 @@ func quickWatch() {
 		case "--type", "-t":
 			if i+1 < len(os.Args) {
 				checkType = os.Args[i+1]
+				i++
+			}
+		case "--retries":
+			if i+1 < len(os.Args) {
+				n, err := strconv.Atoi(os.Args[i+1])
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error: invalid retries: %v\n", err)
+					os.Exit(1)
+				}
+				retries = n
+				i++
+			}
+		case "--retry-interval":
+			if i+1 < len(os.Args) {
+				d, err := time.ParseDuration(os.Args[i+1])
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "Error: invalid retry interval: %v\n", err)
+					os.Exit(1)
+				}
+				retryInterval = d
 				i++
 			}
 		}
@@ -86,22 +109,27 @@ func quickWatch() {
 		soulType = core.CheckWebSocket
 	case "tls":
 		soulType = core.CheckTLS
+	case "heartbeat":
+		// A push monitor: <target> is only its name; the job pings us.
+		soulType = core.CheckHeartbeat
 	default:
 		soulType = core.CheckHTTP
 	}
 
 	soul := &core.Soul{
-		ID:          core.GenerateID(),
-		Name:        name,
-		Type:        soulType,
-		Target:      target,
-		Weight:      core.Duration{Duration: interval},
-		Timeout:     core.Duration{Duration: 10 * time.Second},
-		Enabled:     true,
-		WorkspaceID: "default",
-		Tags:        []string{"cli-added"},
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+		ID:            core.GenerateID(),
+		Name:          name,
+		Type:          soulType,
+		Target:        target,
+		Weight:        core.Duration{Duration: interval},
+		Timeout:       core.Duration{Duration: 10 * time.Second},
+		Retries:       retries,
+		RetryInterval: core.Duration{Duration: retryInterval},
+		Enabled:       true,
+		WorkspaceID:   "default",
+		Tags:          []string{"cli-added"},
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
 	}
 	switch soulType {
 	case core.CheckHTTP:
@@ -120,6 +148,17 @@ func quickWatch() {
 		soul.WebSocket = &core.WebSocketConfig{}
 	case core.CheckTLS:
 		soul.TLS = &core.TLSConfig{ExpiryWarnDays: 30, ExpiryCriticalDays: 7, MinProtocol: "TLS1.2"}
+	case core.CheckHeartbeat:
+		soul.Target = ""
+		_ = soul.EnsureHeartbeatToken()
+	}
+	if retries != 0 || retryInterval != 0 {
+		// Reject out-of-range retry settings before the storage fallback
+		// can save them.
+		if err := soul.Validate(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	// Use the same Soul schema for the API and direct storage.
@@ -131,6 +170,10 @@ func quickWatch() {
 		if err == nil && resp.StatusCode == http.StatusCreated {
 			resp.Body.Close()
 			fmt.Println("✓ Soul added successfully via API")
+			if soulType == core.CheckHeartbeat {
+				fmt.Println("  Its ping URL is shown on the soul's page in the dashboard")
+				fmt.Println("  (or GET /api/v1/souls/<id>/heartbeat).")
+			}
 			return
 		}
 		if resp != nil {
@@ -155,6 +198,9 @@ func quickWatch() {
 	}
 
 	fmt.Printf("✓ Soul added successfully (ID: %s)\n", soul.ID)
+	if soulType == core.CheckHeartbeat {
+		fmt.Printf("  Ping URL: %s/api/v1/heartbeat/%s\n", apiURL, soul.Heartbeat.Token)
+	}
 	fmt.Println("\nNote: The new soul will be picked up on next server restart,")
 	fmt.Println("      or immediately if the server is running with hot-reload.")
 }
@@ -364,6 +410,8 @@ func importSouls(store *storage.CobaltDB, ctx context.Context) {
 		if soul.WorkspaceID == "" {
 			soul.WorkspaceID = "default"
 		}
+		// A heartbeat soul needs a ping token; keep one the file carries.
+		_ = soul.EnsureHeartbeatToken()
 		soul.UpdatedAt = time.Now()
 		if soul.CreatedAt.IsZero() {
 			soul.CreatedAt = time.Now()
@@ -443,6 +491,8 @@ func soulsAdd(store *storage.CobaltDB, ctx context.Context) {
 		if soul.WorkspaceID == "" {
 			soul.WorkspaceID = "default"
 		}
+		// A heartbeat soul needs a ping token; keep one the file carries.
+		_ = soul.EnsureHeartbeatToken()
 		soul.UpdatedAt = time.Now()
 		if soul.CreatedAt.IsZero() {
 			soul.CreatedAt = time.Now()

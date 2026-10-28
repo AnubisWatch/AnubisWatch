@@ -35,7 +35,7 @@ func DefaultConfig() Config {
 		Enabled:        false, // Disabled by default
 		Endpoint:       os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		ServiceName:    "anubiswatch",
-		ServiceVersion: "1.0.0",
+		ServiceVersion: "dev",
 		Environment:    os.Getenv("OTEL_ENVIRONMENT"),
 		Insecure:       os.Getenv("OTEL_INSECURE") == "true",
 		SampleRate:     1.0,

@@ -1,6 +1,9 @@
 # AnubisWatch Deployment
 
-Production deployment configurations for AnubisWatch.
+Current release target: standalone binary or Docker with persistent storage.
+Use [Binary and Docker installation](../docs/deployment/binary-and-docker.md).
+The cluster/Kubernetes examples below have separate prerequisites and are not
+required for the standalone completion target.
 
 ## Directory Structure
 

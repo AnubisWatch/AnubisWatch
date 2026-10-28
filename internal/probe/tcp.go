@@ -59,7 +59,7 @@ func (c *TCPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 	// SSRF: wrap dialer with DNS-rebinding protection (re-resolves hostname
 	// and dials the validated literal IP, preventing TOCTOU attacks)
 	start := time.Now()
-	dialCtx := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+	dialCtx := DefaultValidator.Load().WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
 	conn, err := dialCtx(ctx, "tcp", soul.Target)
 	duration := time.Since(start)
 
@@ -89,9 +89,15 @@ func (c *TCPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 
 	// Banner grab / send-expect
 	if cfg.BannerMatch != "" || cfg.ExpectRegex != "" || cfg.Send != "" {
-		// Deadline is a hint; a failed set surfaces via the read below.
-		_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		reader := bufio.NewReader(conn)
+		stopDeadline, deadlineErr := bindConnDeadline(ctx, conn, 5*time.Second)
+		if deadlineErr != nil {
+			return failJudgment(soul, fmt.Errorf("TCP I/O deadline failed: %w", deadlineErr)), nil
+		}
+		defer stopDeadline()
+		// Cap everything read from the peer at maxBannerSize: ReadString has no
+		// limit of its own, so a newline-less or endless stream would otherwise
+		// be buffered whole into memory for the duration of the deadline.
+		reader := bufio.NewReader(io.LimitReader(conn, maxBannerSize))
 
 		// Send payload if configured
 		if cfg.Send != "" {
@@ -211,7 +217,7 @@ func (c *UDPChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 		return failJudgment(soul, fmt.Errorf("failed to resolve address: %w", err)), nil
 	}
 	if !addr.IP.IsUnspecified() {
-		if err := DefaultValidator.ValidateAddress(net.JoinHostPort(addr.IP.String(), "0")); err != nil {
+		if err := DefaultValidator.Load().ValidateAddress(net.JoinHostPort(addr.IP.String(), "0")); err != nil {
 			return failJudgment(soul, fmt.Errorf("UDP SSRF validation failed: %w", err)), nil
 		}
 	}

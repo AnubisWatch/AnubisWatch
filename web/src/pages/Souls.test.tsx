@@ -274,7 +274,8 @@ describe("Souls page", () => {
 		fireEvent.click(screen.getByRole("button", { name: /add soul/i }));
 		fireEvent.change(screen.getByPlaceholderText("e.g., Production API"), { target: { value: "API" } });
 		fireEvent.change(screen.getByTestId("soul-target"), { target: { value: "https://example.com" } });
-		const numericInputs = screen.getByRole("dialog").querySelectorAll<HTMLInputElement>('input[type="number"]');
+		// Interval and timeout: the last number inputs outside the Advanced disclosure.
+		const numericInputs = Array.from(screen.getByRole("dialog").querySelectorAll<HTMLInputElement>('input[type="number"]')).filter((input) => !input.closest('[data-testid="soul-advanced"]'));
 		fireEvent.change(numericInputs[numericInputs.length - 2], { target: { value: "30" } });
 		fireEvent.change(numericInputs[numericInputs.length - 1], { target: { value: "5" } });
 		fireEvent.click(screen.getByLabelText("Enable monitoring immediately"));

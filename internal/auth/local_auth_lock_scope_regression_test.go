@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime/debug"
@@ -123,47 +124,23 @@ func TestLoginRejectionPathsDoNotHoldAuthLock(t *testing.T) {
 // comparison does not hold the auth lock, since every authenticated request needs
 // it. The bcrypt cost is raised so a held lock is unambiguous.
 func TestLoginVerifiesPasswordOutsideAuthLock(t *testing.T) {
-	if raceDetectorActive() {
-		t.Skip("needs a deliberately slow bcrypt; the race detector inflates it by orders of magnitude")
-	}
-
-	oldCost := bcryptCost
-	bcryptCost = 16
-	t.Cleanup(func() { bcryptCost = oldCost })
-
-	const (
-		adminEmail    = "admin@example.com"
-		adminPassword = "TestPass1234!"
-	)
-
-	a := newTestLocalAuth(t, filepath.Join(t.TempDir(), "sessions.json"), adminEmail, adminPassword)
-
-	loginDone := make(chan struct{})
-	go func() {
-		_, _, _ = a.Login(adminEmail, "wrong-password")
-		close(loginDone)
-	}()
-
-	time.Sleep(150 * time.Millisecond) // let the login reach its comparison
-
+	const adminEmail = "admin@example.com"
+	a := newTestLocalAuth(t, filepath.Join(t.TempDir(), "sessions.json"), adminEmail, "TestPass1234!")
+	entered, release, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	a.comparePassword = func([]byte, []byte) error { close(entered); <-release; return errors.New("wrong password") }
+	go func() { defer close(done); a.Login(adminEmail, "wrong-password") }()
+	<-entered
 	acquired := make(chan struct{})
-	go func() {
-		a.mu.Lock()
-		close(acquired)
-		a.mu.Unlock()
-	}()
-
+	go func() { a.mu.Lock(); a.mu.Unlock(); close(acquired) }()
 	select {
 	case <-acquired:
-	case <-time.After(300 * time.Millisecond):
-		t.Fatal("the auth lock is held while the password is verified")
+	case <-time.After(lockScopeCompletionBudget):
+		close(release)
+		<-done
+		t.Fatal("auth lock held during password comparison")
 	}
-
-	select {
-	case <-loginDone:
-	case <-time.After(10 * time.Second):
-		t.Fatal("the login never completed")
-	}
+	close(release)
+	<-done
 }
 
 // TestLoginBehaviourUnchanged is the neighbouring control: moving the
@@ -193,7 +170,8 @@ func TestLoginBehaviourUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the correct password was rejected: %v", err)
 	}
-	if token == "" || user == nil || user.Role != "admin" {
+	// The configured admin is the owner of the default workspace.
+	if token == "" || user == nil || user.Role != "owner" {
 		t.Fatalf("unexpected login result: user=%+v tokenSet=%t", user, token != "")
 	}
 	a.attemptsMu.RLock()

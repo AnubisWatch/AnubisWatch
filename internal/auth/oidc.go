@@ -49,6 +49,16 @@ type oidcState struct {
 	Email     string    `json:"email"`
 	Nonce     string    `json:"nonce"` // CSRF protection: binds state to session
 	ExpiresAt time.Time `json:"expires_at"`
+	// CodeVerifier is the PKCE (RFC 7636) secret whose S256 challenge went
+	// out with the authorization request. It never leaves this process, so
+	// an intercepted authorization code cannot be redeemed by anyone else.
+	CodeVerifier string `json:"-"`
+}
+
+// pkceChallengeS256 derives the RFC 7636 S256 code_challenge of verifier.
+func pkceChallengeS256(verifier string) string {
+	sum := sha256.Sum256([]byte(verifier))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 type oidcConfig struct {
@@ -217,7 +227,7 @@ func NewOIDCAuthenticator(cfg core.OIDCAuth, localPath, adminEmail, adminPasswor
 		localAuth.Shutdown() // stop its janitor; nothing will own it
 		return nil, fmt.Errorf("failed to generate state HMAC key: %w", err)
 	}
-	return &OIDCAuthenticator{
+	o := &OIDCAuthenticator{
 		config:    cfg,
 		local:     localAuth,
 		state:     make(map[string]*oidcState),
@@ -226,7 +236,33 @@ func NewOIDCAuthenticator(cfg core.OIDCAuth, localPath, adminEmail, adminPasswor
 		stopCh:    make(chan struct{}),
 		stateHMAC: stateHMAC,
 		jwksTTL:   24 * time.Hour, // Cache JWKs for 24 hours
-	}, nil
+	}
+	localAuth.mu.Lock()
+	localAuth.onRevokeUser = o.revokeUserTokens
+	localAuth.mu.Unlock()
+	return o, nil
+}
+
+// revokeUserTokens ends the OIDC sessions of userID. The local directory
+// calls it (holding its own lock) when the account is disabled, deleted,
+// removed or downgraded.
+func (o *OIDCAuthenticator) revokeUserTokens(userID string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for token, sess := range o.tokens {
+		if sess != nil && sess.UserID == userID {
+			delete(o.tokens, token)
+		}
+	}
+}
+
+// UserDirectory exposes the persisted directory OIDC accounts are
+// provisioned into, for the members API.
+func (o *OIDCAuthenticator) UserDirectory() api.UserDirectory { return o.local }
+
+// SetMemberQuota installs the max_team_members check.
+func (o *OIDCAuthenticator) SetMemberQuota(check func(workspace string, current int) error) {
+	o.local.SetMemberQuota(check)
 }
 
 // signState creates an HMAC-signed state token for cluster compatibility.
@@ -273,6 +309,11 @@ func (o *OIDCAuthenticator) OIDCLoginURL() (string, string, string, error) {
 	if err != nil {
 		return "", "", "", err
 	}
+	// 64 hex characters: within RFC 7636's 43..128 unreserved-character range.
+	codeVerifier, err := generateToken()
+	if err != nil {
+		return "", "", "", err
+	}
 	now := time.Now()
 	expiresAt := now.Add(10 * time.Minute)
 
@@ -287,8 +328,9 @@ func (o *OIDCAuthenticator) OIDCLoginURL() (string, string, string, error) {
 		}
 	}
 	o.state[state] = &oidcState{
-		Nonce:     nonce,
-		ExpiresAt: expiresAt,
+		Nonce:        nonce,
+		ExpiresAt:    expiresAt,
+		CodeVerifier: codeVerifier,
 	}
 	o.mu.Unlock()
 
@@ -300,11 +342,13 @@ func (o *OIDCAuthenticator) OIDCLoginURL() (string, string, string, error) {
 	// and a provider can only pass through a value it received (OIDC Core §3.1.2.1).
 	redirectURL := cfg.AuthURL + "?" +
 		"response_type=code" +
-		"&client_id=" + o.config.ClientID +
-		"&redirect_uri=" + o.config.RedirectURL +
+		"&client_id=" + url.QueryEscape(o.config.ClientID) +
+		"&redirect_uri=" + url.QueryEscape(o.config.RedirectURL) +
 		"&scope=openid+profile+email" +
 		"&nonce=" + url.QueryEscape(nonce) +
-		"&state=" + url.QueryEscape(signedState)
+		"&state=" + url.QueryEscape(signedState) +
+		"&code_challenge=" + url.QueryEscape(pkceChallengeS256(codeVerifier)) +
+		"&code_challenge_method=S256"
 
 	return redirectURL, signedState, nonce, nil
 }
@@ -332,6 +376,7 @@ func (o *OIDCAuthenticator) OIDCCallback(code, state, nonce string) (*api.User, 
 	}
 	// Verify nonce matches (binds callback to original session)
 	expectedNonce := csrfState.Nonce
+	codeVerifier := csrfState.CodeVerifier
 	if csrfState.Nonce != nonce {
 		delete(o.state, rawState)
 		o.mu.Unlock()
@@ -342,7 +387,7 @@ func (o *OIDCAuthenticator) OIDCCallback(code, state, nonce string) (*api.User, 
 	o.mu.Unlock()
 
 	// Exchange code for token
-	tokenResp, err := o.exchangeCode(code)
+	tokenResp, err := o.exchangeCodePKCE(code, codeVerifier)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to exchange code: %w", err)
 	}
@@ -369,27 +414,29 @@ func (o *OIDCAuthenticator) OIDCCallback(code, state, nonce string) (*api.User, 
 	if userInfo.Email == "" {
 		return nil, "", fmt.Errorf("no email in OIDC response")
 	}
-
-	// Create or find user
-	o.mu.Lock()
-	user, exists := o.users[userInfo.Email]
-	if !exists {
-		newID, err := generateID()
-		if err != nil {
-			o.mu.Unlock()
-			return nil, "", err
-		}
-		user = &api.User{
-			ID:        newID,
-			Email:     userInfo.Email,
-			Name:      userInfo.Name,
-			Role:      "viewer", // Default role for OIDC users
-			Workspace: "default",
-			CreatedAt: time.Now(),
-		}
-		o.users[user.ID] = user
-		o.users[user.Email] = user // Index by email for lookup
+	// Accounts are matched by email, so the address must be one the
+	// provider vouches for: email_verified=true, unless the operator opted
+	// out for a provider that never sends the claim.
+	if !o.config.AllowUnverifiedEmail && (userInfo.EmailVerified == nil || !*userInfo.EmailVerified) {
+		return nil, "", fmt.Errorf("OIDC email is not verified by the provider (set auth.oidc.allow_unverified_email for providers that omit email_verified)")
 	}
+
+	// Find or create the account in the persisted directory: a first sign-in
+	// is a viewer of the default workspace, later ones keep the roles an
+	// administrator gave it, and a disabled account is refused.
+	provisioned, err := o.local.ProvisionExternalUser(userInfo.Email, userInfo.Name, SourceOIDC)
+	if err != nil {
+		return nil, "", fmt.Errorf("OIDC account: %w", err)
+	}
+	o.mu.Lock()
+	user, exists := o.users[provisioned.ID]
+	if !exists {
+		user = provisioned
+	} else {
+		user.Email, user.Name = provisioned.Email, provisioned.Name
+	}
+	o.users[user.ID] = user
+	o.users[user.Email] = user // Index by email for lookup
 	o.mu.Unlock()
 
 	// Generate session token
@@ -463,8 +510,9 @@ func (o *OIDCAuthenticator) fetchOIDCConfig() (*oidcConfig, error) {
 	return &cfg, nil
 }
 
-// exchangeCode exchanges an authorization code for tokens
-func (o *OIDCAuthenticator) exchangeCode(code string) (*tokenResponse, error) {
+// exchangeCodePKCE exchanges an authorization code for tokens, proving
+// possession of the PKCE code_verifier when one was used for the request.
+func (o *OIDCAuthenticator) exchangeCodePKCE(code, codeVerifier string) (*tokenResponse, error) {
 	cfg, err := o.fetchOIDCConfig()
 	if err != nil {
 		return nil, err
@@ -477,6 +525,9 @@ func (o *OIDCAuthenticator) exchangeCode(code string) (*tokenResponse, error) {
 	data.Set("redirect_uri", o.config.RedirectURL)
 	data.Set("client_id", o.config.ClientID)
 	data.Set("client_secret", o.config.ClientSecret)
+	if codeVerifier != "" {
+		data.Set("code_verifier", codeVerifier)
+	}
 
 	issuerURL, _, err := normalizedIssuer(o.config.Issuer)
 	if err != nil {
@@ -939,12 +990,14 @@ func (o *OIDCAuthenticator) Authenticate(token string) (*api.User, error) {
 			o.mu.RUnlock()
 			return nil, fmt.Errorf("token expired")
 		}
-		user := o.users[sess.UserID]
+		user := copyUser(o.users[sess.UserID])
 		o.mu.RUnlock()
 		if user == nil {
 			return nil, fmt.Errorf("user not found")
 		}
-		return copyUser(user), nil
+		// The directory decides the role and whether the account may still
+		// sign in.
+		return o.local.ResolveExternalUser(user)
 	}
 	o.mu.RUnlock()
 
@@ -955,6 +1008,12 @@ func (o *OIDCAuthenticator) Authenticate(token string) (*api.User, error) {
 // Login validates credentials and creates a session (local fallback)
 func (o *OIDCAuthenticator) Login(email, password string) (*api.User, string, error) {
 	return o.local.Login(email, password)
+}
+
+// LoginFrom is Login with the caller's address, which keys the local
+// fallback's brute-force protection.
+func (o *OIDCAuthenticator) LoginFrom(email, password, clientIP string) (*api.User, string, error) {
+	return o.local.LoginFrom(email, password, clientIP)
 }
 
 // Logout invalidates a token
@@ -1021,8 +1080,13 @@ func (o *OIDCAuthenticator) GetUsers() []*api.User {
 	o.mu.RLock()
 	defer o.mu.RUnlock()
 
-	users := make([]*api.User, 0, len(o.users))
-	for _, user := range o.users {
+	// o.users indexes every account twice (by ID and by email), so list each
+	// account once, keyed by its ID.
+	users := make([]*api.User, 0, len(o.users)/2+1)
+	for key, user := range o.users {
+		if user == nil || key != user.ID {
+			continue
+		}
 		users = append(users, copyUser(user))
 	}
 	return users
@@ -1049,4 +1113,14 @@ func (o *OIDCAuthenticator) AddUser(email, name, role string) (*api.User, error)
 	o.users[user.ID] = user
 	o.users[user.Email] = user
 	return copyUser(user), nil
+}
+
+// CheckKeyOwner checks an API key's owner against the local directory.
+func (o *OIDCAuthenticator) CheckKeyOwner(ownerID, workspace string, role core.MemberRole) error {
+	return o.local.CheckKeyOwner(ownerID, workspace, role)
+}
+
+// RequestPasswordResetTo delegates to the local authenticator.
+func (o *OIDCAuthenticator) RequestPasswordResetTo(email string) (string, string, error) {
+	return o.local.RequestPasswordResetTo(email)
 }

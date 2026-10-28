@@ -220,12 +220,17 @@ func TestBuildServerDependencies_InvalidStoragePath(t *testing.T) {
 		Logger:     logger,
 	}
 
-	_, err := BuildServerDependencies(opts)
+	deps, err := BuildServerDependencies(opts)
 	// On Windows, this might succeed due to different permission model
 	// On Unix, it should fail
 	if err != nil {
 		t.Logf("BuildServerDependencies failed as expected on invalid path: %v", err)
+		return
 	}
+	// It can succeed (ANUBIS_DATA_DIR from TestMain overrides storage.path);
+	// then it holds the package's shared data-directory lock, so release it or
+	// every later test that opens storage fails with "data directory is in use".
+	deps.Store.Close()
 }
 
 func TestServer_Start_WithDashboardEnabled(t *testing.T) {

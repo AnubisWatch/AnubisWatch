@@ -1871,11 +1871,11 @@ func TestCobaltDB_SaveSystemConfig(t *testing.T) {
 	ctx := context.Background()
 	configValue := []byte(`{"key": "value"}`)
 
-	if err := db.SaveSystemConfig(ctx, "test-key", configValue); err != nil {
+	if err := db.SaveSystemConfig(ctx, "test-key-0123456789abcdef", configValue); err != nil {
 		t.Fatalf("SaveSystemConfig failed: %v", err)
 	}
 
-	retrieved, err := db.GetSystemConfig(ctx, "test-key")
+	retrieved, err := db.GetSystemConfig(ctx, "test-key-0123456789abcdef")
 	if err != nil {
 		t.Fatalf("GetSystemConfig failed: %v", err)
 	}
@@ -2793,7 +2793,7 @@ func TestCobaltDB_Get_Closed(t *testing.T) {
 	db := newTestDB(t)
 	db.Close()
 
-	_, err := db.Get("test-key")
+	_, err := db.Get("test-key-0123456789abcdef")
 	if err == nil {
 		t.Error("Expected error for closed database")
 	}
@@ -2804,7 +2804,7 @@ func TestCobaltDB_Put_Closed(t *testing.T) {
 	db := newTestDB(t)
 	db.Close()
 
-	err := db.Put("test-key", []byte("test-value"))
+	err := db.Put("test-key-0123456789abcdef", []byte("test-value"))
 	if err == nil {
 		t.Error("Expected error for closed database")
 	}
@@ -2815,7 +2815,7 @@ func TestCobaltDB_Delete_Closed(t *testing.T) {
 	db := newTestDB(t)
 	db.Close()
 
-	err := db.Delete("test-key")
+	err := db.Delete("test-key-0123456789abcdef")
 	if err == nil {
 		t.Error("Expected error for closed database")
 	}
@@ -7753,11 +7753,11 @@ func TestCobaltDBStableStore_SetUint64AndGetUint64(t *testing.T) {
 
 	store := NewCobaltDBStableStore(db)
 
-	if err := store.SetUint64("test-key", 12345); err != nil {
+	if err := store.SetUint64("test-key-0123456789abcdef", 12345); err != nil {
 		t.Fatalf("SetUint64 failed: %v", err)
 	}
 
-	val, err := store.GetUint64("test-key")
+	val, err := store.GetUint64("test-key-0123456789abcdef")
 	if err != nil {
 		t.Fatalf("GetUint64 failed: %v", err)
 	}
@@ -7774,11 +7774,11 @@ func TestCobaltDBStableStore_SetAndGet(t *testing.T) {
 	store := NewCobaltDBStableStore(db)
 
 	testData := []byte("test-value")
-	if err := store.Set("test-key", testData); err != nil {
+	if err := store.Set("test-key-0123456789abcdef", testData); err != nil {
 		t.Fatalf("Set failed: %v", err)
 	}
 
-	val, err := store.Get("test-key")
+	val, err := store.Get("test-key-0123456789abcdef")
 	if err != nil {
 		t.Fatalf("Get failed: %v", err)
 	}
@@ -7988,7 +7988,7 @@ func TestWAL_Truncate(t *testing.T) {
 	defer db.Close()
 
 	// Write some data to the WAL
-	_ = db.Put("test-key", []byte("test-value"))
+	_ = db.Put("test-key-0123456789abcdef", []byte("test-value"))
 
 	// Truncate the WAL
 	err = db.wal.Truncate()
@@ -7997,7 +7997,7 @@ func TestWAL_Truncate(t *testing.T) {
 	}
 
 	// Verify the data is still in memory after WAL truncate
-	val, err := db.Get("test-key")
+	val, err := db.Get("test-key-0123456789abcdef")
 	if err != nil {
 		t.Fatalf("Get after WAL truncate failed: %v", err)
 	}

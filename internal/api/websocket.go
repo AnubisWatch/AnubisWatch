@@ -37,10 +37,18 @@ type WebSocketServer struct {
 	allowedOrigins []string      // Allowed origins for WebSocket connections (CSRF protection)
 	trustedProxies []string      // proxies whose X-Forwarded-For may be trusted for client IP
 
+	// sessions tracks each connection by the session token that opened it,
+	// so logout and password changes can close it (see liveSessionRegistry).
+	// revalidateInterval is how often a connection re-checks its token; zero
+	// disables the periodic check.
+	sessions           *liveSessionRegistry
+	revalidateInterval time.Duration
+
 	// Rate limiting
 	ipLimits         map[string]*connectionLimiter // IP -> limiter state
 	maxConnsPerIP    int                           // maximum concurrent connections per IP
 	maxConnsPerUser  int                           // maximum concurrent connections per user
+	userHandshakes   map[string]int                // user ID -> handshakes holding a slot (guarded by mu)
 	connRateLimit    int                           // max connection attempts per window per IP
 	rateLimitWindow  time.Duration                 // rate limit window duration
 	messageRateLimit int                           // max messages per window per client
@@ -83,21 +91,24 @@ func NewWebSocketServer(logger *slog.Logger, authenticator Authenticator, allowe
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &WebSocketServer{
-		clients:          make(map[string]*WSClient),
-		rooms:            make(map[string]map[string]bool),
-		logger:           logger.With("component", "websocket"),
-		broadcast:        make(chan WSMessage, 256),
-		authenticator:    authenticator,
-		allowedOrigins:   allowedOrigins,
-		ipLimits:         make(map[string]*connectionLimiter),
-		maxConnsPerIP:    10,          // max 10 concurrent connections per IP
-		maxConnsPerUser:  5,           // max 5 concurrent connections per user
-		connRateLimit:    60,          // max 60 connection attempts per minute per IP
-		rateLimitWindow:  time.Minute, // 1 minute window
-		messageRateLimit: 60,          // max 60 messages per minute per client (VULN-005 fix)
-		messageWindow:    time.Minute, // 1 minute window for message rate limiting
-		ctx:              ctx,
-		cancel:           cancel,
+		clients:            make(map[string]*WSClient),
+		rooms:              make(map[string]map[string]bool),
+		logger:             logger.With("component", "websocket"),
+		broadcast:          make(chan WSMessage, 256),
+		authenticator:      authenticator,
+		allowedOrigins:     allowedOrigins,
+		ipLimits:           make(map[string]*connectionLimiter),
+		maxConnsPerIP:      10, // max 10 concurrent connections per IP
+		maxConnsPerUser:    5,  // max 5 concurrent connections per user
+		userHandshakes:     make(map[string]int),
+		connRateLimit:      60,          // max 60 connection attempts per minute per IP
+		rateLimitWindow:    time.Minute, // 1 minute window
+		messageRateLimit:   60,          // max 60 messages per minute per client (VULN-005 fix)
+		messageWindow:      time.Minute, // 1 minute window for message rate limiting
+		sessions:           newLiveSessionRegistry(),
+		revalidateInterval: defaultSessionRevalidateInterval,
+		ctx:                ctx,
+		cancel:             cancel,
 	}
 }
 
@@ -150,25 +161,10 @@ func (s *WebSocketServer) Stop() {
 
 // realIP returns the client IP used for rate/connection limiting. It honours
 // X-Forwarded-For only when the connection originates from a configured trusted
-// proxy; otherwise it uses RemoteAddr. This prevents an attacker from spoofing
-// X-Forwarded-For to bypass the per-IP DoS limits (matching the REST path).
+// proxy, and then only the hops trusted proxies appended (resolveClientIP), so
+// a client cannot spoof it to bypass the per-IP DoS limits.
 func (s *WebSocketServer) realIP(r *http.Request) string {
-	if len(s.trustedProxies) > 0 {
-		if remoteHost, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-			for _, proxy := range s.trustedProxies {
-				if remoteHost == proxy {
-					if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-						return strings.TrimSpace(strings.Split(fwd, ",")[0])
-					}
-					break
-				}
-			}
-		}
-	}
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
-	}
-	return r.RemoteAddr
+	return resolveClientIP(r, newTrustedProxyMatcher(s.trustedProxies))
 }
 
 // HandleConnection handles new WebSocket connections
@@ -191,6 +187,16 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "Too Many Requests: rate limit or connection limit exceeded", http.StatusTooManyRequests)
 		return
 	}
+	// The reservation is now live. Every rejection below must release it, or
+	// failed handshakes (bad token, disallowed origin) permanently consume the
+	// per-IP concurrent-connection budget. Once the client is registered,
+	// removeClient owns the slot instead.
+	registered := false
+	defer func() {
+		if !registered {
+			s.decrementConnectionCount(clientIP)
+		}
+	}()
 
 	// Extract token from Authorization header or httpOnly auth cookie.
 	// Browser WebSocket clients cannot set Authorization headers, so the dashboard
@@ -236,6 +242,23 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 		workspace = "default"
 	}
 
+	// Per-user concurrent connection cap. The slot is reserved before the
+	// upgrade: the client sees the handshake succeed before the connection is
+	// registered, so a check on registered clients alone lets a quick next
+	// handshake of the same user through.
+	if !s.reserveUserSlot(user.ID) {
+		s.logger.Warn("WebSocket connection rejected: per-user connection limit exceeded",
+			"user_id", user.ID, "remote_addr", r.RemoteAddr)
+		http.Error(w, "Too Many Requests: per-user connection limit exceeded", http.StatusTooManyRequests)
+		return
+	}
+	userSlotHeld := true
+	defer func() {
+		if userSlotHeld {
+			s.releaseUserSlot(user.ID)
+		}
+	}()
+
 	// Upgrade HTTP to WebSocket with origin checking
 	opts := &websocket.AcceptOptions{
 		OriginPatterns: s.allowedOrigins,
@@ -263,10 +286,26 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 		cancel:    cancel,
 	}
 
-	// Register client
+	// Register client. The reserved user slot becomes the registered client
+	// under the same lock, so the count never drops in between.
 	s.mu.Lock()
 	s.clients[client.ID] = client
+	s.releaseUserSlotLocked(user.ID)
+	userSlotHeld = false
 	s.mu.Unlock()
+	registered = true // removeClient now owns the slot
+
+	// The handshake is the only place the token is presented, so track the
+	// connection by it: logout/password change close it through s.sessions,
+	// and the watcher closes it once the token stops authenticating.
+	evict := func() { s.removeClient(client.ID) }
+	unregister := s.sessions.add(token, user.ID, evict)
+	revalidated := watchSession(ctx, s.authenticator, token, s.revalidateInterval, evict)
+	go func() {
+		<-revalidated
+		<-ctx.Done()
+		unregister()
+	}()
 
 	// Subscribe to workspace room
 	client.JoinRoom(fmt.Sprintf("workspace:%s", workspace))
@@ -283,7 +322,7 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 		},
 	}
 	data, _ := json.Marshal(welcome)
-	client.send <- data
+	client.reply(data)
 
 	s.logger.Info("Client connected",
 		"client_id", client.ID,
@@ -295,6 +334,59 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 	// so it exits when the connection is closed (via client.cancel in Stop()).
 	go client.writePump(ctx)
 	go client.readPump(ctx)
+}
+
+// countUserClientsLocked counts the live clients of a user. Caller holds s.mu.
+func (s *WebSocketServer) countUserClientsLocked(userID string) int {
+	n := 0
+	for _, c := range s.clients {
+		if c.UserID == userID {
+			n++
+		}
+	}
+	return n
+}
+
+// reserveUserSlot claims one of the user's maxConnsPerUser slots for a
+// handshake in progress, counting registered clients and other handshakes.
+// A non-positive limit disables the cap.
+func (s *WebSocketServer) reserveUserSlot(userID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.maxConnsPerUser > 0 && s.countUserClientsLocked(userID)+s.userHandshakes[userID] >= s.maxConnsPerUser {
+		return false
+	}
+	if s.userHandshakes == nil {
+		s.userHandshakes = make(map[string]int)
+	}
+	s.userHandshakes[userID]++
+	return true
+}
+
+// releaseUserSlot returns a slot claimed by reserveUserSlot.
+func (s *WebSocketServer) releaseUserSlot(userID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.releaseUserSlotLocked(userID)
+}
+
+// releaseUserSlotLocked is releaseUserSlot for a caller holding s.mu.
+func (s *WebSocketServer) releaseUserSlotLocked(userID string) {
+	if s.userHandshakes[userID] <= 1 {
+		delete(s.userHandshakes, userID)
+		return
+	}
+	s.userHandshakes[userID]--
+}
+
+// reply queues a server-to-client message without blocking and without
+// panicking. removeClient closes c.send from whichever goroutine evicts the
+// client, while the read pump may still be answering a message; a bare
+// `c.send <- msg` on the closed channel panics there, on a goroutine nothing
+// recovers, and takes the process down. A full buffer drops the reply, as
+// broadcasts to a slow client already do.
+func (c *WSClient) reply(data []byte) {
+	_ = safeSend(c.ctx, c.send, data)
 }
 
 // JoinRoom subscribes a client to a room
@@ -371,13 +463,13 @@ func (c *WSClient) handleMessage(data []byte) {
 		c.server.logger.Warn("WebSocket message rejected: rate limit exceeded",
 			"client_id", c.ID,
 			"ip", c.IP)
-		c.send <- c.createErrorMessage("rate_limited", "Too many messages - rate limit exceeded")
+		c.reply(c.createErrorMessage("rate_limited", "Too many messages - rate limit exceeded"))
 		return
 	}
 
 	var msg ClientMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
-		c.send <- c.createErrorMessage("invalid_message", "Failed to parse message")
+		c.reply(c.createErrorMessage("invalid_message", "Failed to parse message"))
 		return
 	}
 
@@ -387,27 +479,27 @@ func (c *WSClient) handleMessage(data []byte) {
 		for _, event := range msg.Events {
 			c.JoinRoom(workspaceEventRoom(c.Workspace, event))
 		}
-		c.send <- c.createSuccessMessage("subscribed", msg.Events)
+		c.reply(c.createSuccessMessage("subscribed", msg.Events))
 
 	case "unsubscribe":
 		// Unsubscribe from events
 		for _, event := range msg.Events {
 			c.LeaveRoom(workspaceEventRoom(c.Workspace, event))
 		}
-		c.send <- c.createSuccessMessage("unsubscribed", msg.Events)
+		c.reply(c.createSuccessMessage("unsubscribed", msg.Events))
 
 	case "ping":
 		// Respond with pong
-		c.send <- c.createMessage("pong", map[string]interface{}{
+		c.reply(c.createMessage("pong", map[string]interface{}{
 			"timestamp": time.Now().UTC().Unix(),
-		})
+		}))
 
 	case "join_workspace":
 		// Reject workspace switching - users are bound to their authenticated workspace
-		c.send <- c.createErrorMessage("forbidden", "workspace switching not supported")
+		c.reply(c.createErrorMessage("forbidden", "workspace switching not supported"))
 
 	default:
-		c.send <- c.createErrorMessage("unknown_type", fmt.Sprintf("Unknown message type: %s", msg.Type))
+		c.reply(c.createErrorMessage("unknown_type", fmt.Sprintf("Unknown message type: %s", msg.Type)))
 	}
 }
 

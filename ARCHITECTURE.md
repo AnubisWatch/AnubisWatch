@@ -133,10 +133,10 @@ Supported check families include:
 
 - HTTP/HTTPS
 - TCP
-- UDP data model support
+- UDP checks
 - DNS
 - SMTP
-- IMAP data model support
+- IMAP checks
 - ICMP
 - gRPC
 - WebSocket

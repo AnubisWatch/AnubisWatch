@@ -20,6 +20,16 @@
 *.key
 *.crt
 *.p12
+# The same secrets anywhere below the root, not just at it: a bare
+# pattern only matches top-level paths.
+**/.env
+**/.env.*
+**/*.env
+**/*.pem
+**/*.key
+**/*.crt
+**/*.p12
+**/*.pfx
 # local config with secrets
 anubis.json
 configs/anubis.yaml

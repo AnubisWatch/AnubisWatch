@@ -50,8 +50,9 @@ We implemented the **Raft consensus algorithm** for cluster coordination.
 ### Positive
 - Strong consistency guarantees
 - Automatic leader election
-- Fault tolerance (N/2-1 failures)
-- Linearizable reads and writes
+- Fault tolerance of floor((N-1)/2) unavailable voters
+- Quorum-committed mutations and shared-auth barriers; ordinary follower reads
+  are not a blanket linearizability guarantee
 
 ### Negative
 - Increased complexity

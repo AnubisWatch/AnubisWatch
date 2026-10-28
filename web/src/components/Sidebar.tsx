@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Ghost, Scale, Bell, Route, Network, Globe, Settings, LogOut, LayoutGrid, AlertOctagon, Wrench, X } from 'lucide-react'
+import { LayoutDashboard, Ghost, Scale, Bell, Route, Network, Globe, Settings, LogOut, LayoutGrid, AlertOctagon, Wrench, X, ScrollText } from 'lucide-react'
 import { useEffect, useMemo } from 'react'
 import { useAuth } from '../api/hooks'
 
@@ -16,6 +16,7 @@ const navItems = [
   { path: '/alerts', icon: Bell, label: 'Divine Warnings' },
   { path: '/incidents', icon: AlertOctagon, label: 'Cries of Chaos' },
   { path: '/maintenance', icon: Wrench, label: 'Sacred Rest' },
+  { path: '/reports', icon: ScrollText, label: "Scrolls of Ma'at" },
   { path: '/journeys', icon: Route, label: 'Voyages' },
   { path: '/dashboards', icon: LayoutGrid, label: 'Sacred Charts' },
   { path: '/cluster', icon: Network, label: 'Necropolis' },

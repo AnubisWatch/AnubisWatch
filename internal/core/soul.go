@@ -34,8 +34,19 @@ type Soul struct {
 	GRPC        *GRPCConfig      `json:"grpc,omitempty" yaml:"grpc,omitempty"`
 	WebSocket   *WebSocketConfig `json:"websocket,omitempty" yaml:"websocket,omitempty"`
 	TLS         *TLSConfig       `json:"tls,omitempty" yaml:"tls,omitempty"`
-	CreatedAt   time.Time        `json:"created_at" yaml:"-"`
-	UpdatedAt   time.Time        `json:"updated_at" yaml:"-"`
+	Heartbeat   *HeartbeatConfig `json:"heartbeat,omitempty" yaml:"heartbeat,omitempty"`
+	// Retries is how many times a failed check is re-run (retry_interval
+	// apart) before the soul is judged dead; 0..MaxSoulRetries, 0 = no
+	// confirmation. Only the final attempt is recorded. See flap.go.
+	Retries int `json:"retries,omitempty" yaml:"retries,omitempty"`
+	// RetryInterval is the pause between confirmation attempts; zero means
+	// DefaultRetryInterval.
+	RetryInterval Duration `json:"retry_interval,omitzero" yaml:"retry_interval,omitempty"`
+	// FlapDetection overrides probe.flap_detection for this soul; nil
+	// inherits the global setting.
+	FlapDetection *FlapDetectionConfig `json:"flap_detection,omitempty" yaml:"flap_detection,omitempty"`
+	CreatedAt     time.Time            `json:"created_at" yaml:"-"`
+	UpdatedAt     time.Time            `json:"updated_at" yaml:"-"`
 }
 
 // CheckType identifies the protocol checker to use
@@ -52,6 +63,9 @@ const (
 	CheckGRPC      CheckType = "grpc"
 	CheckWebSocket CheckType = "websocket"
 	CheckTLS       CheckType = "tls"
+	// CheckHeartbeat is a push monitor: the monitored job pings AnubisWatch
+	// and the soul dies when no ping arrives within weight + grace.
+	CheckHeartbeat CheckType = "heartbeat"
 )
 
 // SoulStatus represents the weighed verdict of a soul
@@ -185,6 +199,10 @@ func (s *Soul) ApplyDefaults() {
 		if s.TLS == nil {
 			s.TLS = &TLSConfig{}
 		}
+	case CheckHeartbeat:
+		// crypto/rand does not fail on supported platforms; a soul left
+		// without a token is still refused by Validate.
+		_ = s.EnsureHeartbeatToken()
 	}
 }
 
@@ -199,7 +217,7 @@ func (s Soul) validateFields(prefix string) error {
 	if s.Name == "" {
 		return &ConfigError{Field: prefix + "name", Message: "name is required"}
 	}
-	if s.Target == "" {
+	if s.Target == "" && s.Type != CheckHeartbeat {
 		return &ConfigError{Field: prefix + "target", Message: "target is required"}
 	}
 	if s.Type == "" {
@@ -210,7 +228,7 @@ func (s Soul) validateFields(prefix string) error {
 	validTypes := map[CheckType]bool{
 		CheckHTTP: true, CheckTCP: true, CheckUDP: true, CheckDNS: true,
 		CheckSMTP: true, CheckIMAP: true, CheckICMP: true, CheckGRPC: true,
-		CheckWebSocket: true, CheckTLS: true,
+		CheckWebSocket: true, CheckTLS: true, CheckHeartbeat: true,
 	}
 	if !validTypes[s.Type] {
 		return &ConfigError{Field: prefix + "type", Message: fmt.Sprintf("invalid type: %s", s.Type)}
@@ -236,6 +254,13 @@ func (s Soul) validateFields(prefix string) error {
 		return &ConfigError{Field: prefix + "timeout", Message: fmt.Sprintf("timeout must be at least %s (got %s; use a duration string such as \"10s\")", MinSoulTimeout, s.Timeout.Duration)}
 	}
 
+	if err := s.validateRetries(prefix); err != nil {
+		return err
+	}
+	if err := s.FlapDetection.validate(prefix + "flap_detection"); err != nil {
+		return err
+	}
+
 	// Type-specific validation
 	switch s.Type {
 	case CheckHTTP:
@@ -251,6 +276,11 @@ func (s Soul) validateFields(prefix string) error {
 		}
 		if len(s.HTTP.ValidStatus) == 0 {
 			return &ConfigError{Field: prefix + "http.valid_status", Message: "at least one valid status code is required"}
+		}
+		for _, status := range s.HTTP.ValidStatus {
+			if status < 100 || status > 599 {
+				return &ConfigError{Field: prefix + "http.valid_status", Message: fmt.Sprintf("HTTP status code must be between 100 and 599: %d", status)}
+			}
 		}
 	case CheckTCP:
 		if s.TCP == nil {
@@ -312,6 +342,10 @@ func (s Soul) validateFields(prefix string) error {
 		}
 		if s.TLS.ExpiryWarnDays > 0 && s.TLS.ExpiryCriticalDays > s.TLS.ExpiryWarnDays {
 			return &ConfigError{Field: prefix + "tls.expiry_critical_days", Message: "TLS critical threshold cannot exceed warning threshold"}
+		}
+	case CheckHeartbeat:
+		if err := s.validateHeartbeat(prefix); err != nil {
+			return err
 		}
 	}
 

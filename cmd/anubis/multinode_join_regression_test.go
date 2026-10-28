@@ -12,6 +12,19 @@ import (
 	"github.com/AnubisWatch/anubiswatch/internal/probe"
 )
 
+// joinClusterStrategy is the ownership strategy the join test's cluster uses.
+//
+// The test asserts that the joining member receives a share of the souls. The
+// default "hash" strategy cannot promise that: rendezvous hashing gives a
+// member only the souls it outranks, and with a dozen souls over four
+// members a member can win none of them -- the join then succeeds, the
+// cluster is consistent, and the new member simply idles while the others
+// keep every soul. The documented even strategies ("round-robin",
+// "load-based") give every member an equal share, which is what this test
+// needs to observe. The other cluster test keeps "hash", so both strategies
+// stay covered.
+const joinClusterStrategy = "load-based"
+
 // TestMultiNodeClusterJoinByAddress grows a running three-node cluster by a
 // fourth node that knows nothing but one member's Raft address
 // (anubis serve --join <addr>). The joiner used to list that address as a peer
@@ -62,7 +75,7 @@ func TestMultiNodeClusterJoinByAddress(t *testing.T) {
 	}()
 	for i := range ids {
 		useCountingRegistry(ids[i])
-		nodes = append(nodes, bootClusterNode(t, ids[i], writeClusterNodeConfig(t, i, ids, raftAddrs, httpPorts[i], adminEmail, adminPassword), httpPorts[i]))
+		nodes = append(nodes, bootClusterNode(t, ids[i], writeClusterNodeConfig(t, i, ids, raftAddrs, httpPorts[i], adminEmail, adminPassword, joinClusterStrategy), httpPorts[i]))
 	}
 	leader := waitForClusterLeader(t, nodes, 15*time.Second)
 	client, _ := loginAsAdmin(t, leader.baseURL, adminEmail, adminPassword)
@@ -84,7 +97,7 @@ func TestMultiNodeClusterJoinByAddress(t *testing.T) {
 	joinerID := "jackal-3"
 	joinerRaft := fmt.Sprintf("127.0.0.1:%d", freeLoopbackPort(t))
 	joinerHTTP := freeLoopbackPort(t)
-	configPath := writeJoinNodeConfig(t, joinerID, joinerRaft, joinerHTTP, raftAddrs[indexOf(ids, follower.id)], adminEmail, adminPassword)
+	configPath := writeJoinNodeConfig(t, joinerID, joinerRaft, joinerHTTP, raftAddrs[indexOf(ids, follower.id)], adminEmail, adminPassword, joinClusterStrategy)
 	useCountingRegistry(joinerID)
 	joiner := bootClusterNode(t, joinerID, configPath, joinerHTTP)
 	nodes = append(nodes, joiner)
@@ -179,9 +192,9 @@ func TestMultiNodeClusterJoinByAddress(t *testing.T) {
 
 // writeJoinNodeConfig writes the config of a node that has no peers, does not
 // bootstrap, and joins through joinAddr.
-func writeJoinNodeConfig(t *testing.T, id, raftAddr string, httpPort int, joinAddr, email, password string) string {
+func writeJoinNodeConfig(t *testing.T, id, raftAddr string, httpPort int, joinAddr, email, password, strategy string) string {
 	t.Helper()
-	path := writeClusterNodeConfig(t, 0, []string{id}, []string{raftAddr}, httpPort, email, password)
+	path := writeClusterNodeConfig(t, 0, []string{id}, []string{raftAddr}, httpPort, email, password, strategy)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

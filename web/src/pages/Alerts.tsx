@@ -31,6 +31,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog'
 import { useCan } from '../utils/permissions'
 import { useSafeTimeout } from '../hooks/useSafeTimeout'
 import { formatDate, formatDateTime, useDisplayTimeZone } from '../utils/date'
+import { describeApiError } from '../utils/quota'
 
 type Severity = 'critical' | 'warning' | 'info'
 type ChannelType = 'slack' | 'email' | 'pagerduty' | 'webhook' | 'discord' | 'telegram' | 'opsgenie' | 'ntfy' | 'sms'
@@ -359,7 +360,7 @@ export function Alerts() {
       resetChannelForm()
     } catch (err) {
       if (generation !== saveGeneration.current) return
-      setChannelFormError(err instanceof Error ? err.message : 'Failed to save channel')
+      setChannelFormError(describeApiError(err, 'Failed to save channel'))
     } finally {
       if (generation === saveGeneration.current) setSaving(false)
     }

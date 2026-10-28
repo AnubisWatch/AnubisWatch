@@ -13,7 +13,8 @@
 | **CHANGELOG.md** | Release notes and version history | [Root](../CHANGELOG.md) |
 | **CONTRIBUTING.md** | How to contribute to AnubisWatch | [Root](../CONTRIBUTING.md) |
 | **ARCHITECTURE.md** | System architecture and design | [Root](../ARCHITECTURE.md) |
-| **deployment/guide.md** | Deployment guides (Docker, K8s, systemd) | [docs/deployment/](deployment/guide.md) |
+| **deployment/binary-and-docker.md** | Supported standalone binary and Docker installation | [docs/deployment/](deployment/binary-and-docker.md) |
+| **deployment/guide.md** | Historical deployment examples (Docker, K8s, systemd) | [docs/deployment/](deployment/guide.md) |
 | **deployment/production-runbook.md** | Production deploy, smoke, and rollback runbook | [docs/deployment/](deployment/production-runbook.md) |
 
 ---

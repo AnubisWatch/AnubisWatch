@@ -118,6 +118,16 @@ func dedupKey(ruleID, soulID string, status core.SoulStatus) string {
 	return fmt.Sprintf("dedup:%s:%s:%s", ruleID, soulID, status)
 }
 
+// dedupStatus is the status component of an event's dedup key: the soul
+// status for rule alerts, the kind for flap notifications, so a "flapping
+// started" notice neither suppresses nor is suppressed by a status alert.
+func dedupStatus(event *core.AlertEvent) core.SoulStatus {
+	if event.Kind != "" {
+		return core.SoulStatus(event.Kind)
+	}
+	return event.Status
+}
+
 // persistDedup shares the dedup record isDuplicate just created or renewed for
 // event.
 func (m *Manager) persistDedup(event *core.AlertEvent) {
@@ -125,7 +135,7 @@ func (m *Manager) persistDedup(event *core.AlertEvent) {
 	if !ok {
 		return
 	}
-	key := dedupKey(event.RuleID, event.SoulID, event.Status)
+	key := dedupKey(event.RuleID, event.SoulID, dedupStatus(event))
 	m.history.Mu.Lock()
 	entry, exists := m.history.Entries[key]
 	var snapshot core.AlertHistoryEntry
@@ -184,8 +194,13 @@ func (m *Manager) LoadDedupState(entry *core.AlertHistoryEntry) {
 	}
 	m.history.Mu.Lock()
 	defer m.history.Mu.Unlock()
-	if existing, ok := m.history.Entries[entry.Key]; ok && existing.LastSent.After(entry.LastSent) {
-		return
+	if existing, ok := m.history.Entries[entry.Key]; ok {
+		if existing.LastSent.After(entry.LastSent) {
+			return
+		}
+		if existing.LastSent.Before(entry.LastSent) {
+			delete(m.dedupClaims, entry.Key)
+		}
 	}
 	copied := *entry
 	m.history.Entries[entry.Key] = &copied
@@ -195,17 +210,27 @@ func (m *Manager) LoadDedupState(entry *core.AlertHistoryEntry) {
 func (m *Manager) UnloadDedupState(key string) {
 	m.history.Mu.Lock()
 	delete(m.history.Entries, key)
+	delete(m.dedupClaims, key)
 	m.history.Mu.Unlock()
 }
 
-// SeedFromJudgments primes the per-soul evaluation state of a soul this node
-// has just started evaluating -- it took the soul over from another node, or
-// restarted -- from the soul's recent judgments (any order), so the
-// consecutive_failures streak and the status_for clock continue where the
-// previous owner left them instead of starting from zero. State this node
-// already holds for the soul is left alone.
+// SeedFromJudgments initializes missing per-soul evaluation state from recent
+// judgments in any order, preserving live state already held here. Ownership
+// acquisition uses SeedOwnedSoul to replace state from an earlier tenure.
 func (m *Manager) SeedFromJudgments(soulID string, judgments []*core.Judgment) {
-	if soulID == "" || len(judgments) == 0 {
+	m.seedFromJudgments(soulID, judgments, false)
+}
+
+// SeedOwnedSoul reconstructs evaluation state when this node acquires a soul,
+// including a return after another owner observed a recovery or new outage.
+// Call before scheduling the acquired soul. Shared notification cooldowns and
+// channel rate limits are retained.
+func (m *Manager) SeedOwnedSoul(soulID string, judgments []*core.Judgment) {
+	m.seedFromJudgments(soulID, judgments, true)
+}
+
+func (m *Manager) seedFromJudgments(soulID string, judgments []*core.Judgment, replace bool) {
+	if soulID == "" {
 		return
 	}
 	ordered := make([]*core.Judgment, 0, len(judgments))
@@ -214,10 +239,19 @@ func (m *Manager) SeedFromJudgments(soulID string, judgments []*core.Judgment) {
 			ordered = append(ordered, j)
 		}
 	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Timestamp.Before(ordered[j].Timestamp) })
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if replace {
+		delete(m.statusSince, soulID)
+		for ruleID := range m.rules {
+			delete(m.failureStreak, ruleID+":"+soulID)
+		}
+	}
 	if len(ordered) == 0 {
 		return
 	}
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Timestamp.Before(ordered[j].Timestamp) })
 
 	latest := ordered[len(ordered)-1]
 	streak := 0
@@ -232,8 +266,6 @@ func (m *Manager) SeedFromJudgments(soulID string, judgments []*core.Judgment) {
 		streak = 1_000_000
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.statusSince == nil {
 		m.statusSince = make(map[string]statusHold)
 	}

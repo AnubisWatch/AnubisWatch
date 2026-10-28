@@ -18,6 +18,7 @@ import (
 //	logging.output: stdout (default) | stderr | file | both (stdout + file)
 //	logging.format: json (default) | text
 //	logging.file:   path for file output (default <storage.path>/logs/anubis.log)
+//	logging.max_size_mb / logging.max_backups: file rotation (default 100 MB, 5 files)
 func newServerLogger(cfg *core.Config) (*slog.Logger, io.Closer, error) {
 	level := getLogLevel()
 	if os.Getenv("ANUBIS_LOG_LEVEL") == "" && cfg != nil {
@@ -47,8 +48,7 @@ func newServerLogger(cfg *core.Config) (*slog.Logger, io.Closer, error) {
 		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 			return nil, nil, fmt.Errorf("logging.file: %w", err)
 		}
-		// #nosec G304 -- operator-configured log path.
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+		f, err := openRotatingFile(path, cfg.Logging.MaxSizeMB, cfg.Logging.MaxBackups)
 		if err != nil {
 			return nil, nil, fmt.Errorf("logging.file: %w", err)
 		}

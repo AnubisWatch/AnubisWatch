@@ -32,17 +32,50 @@ func NewLDAPAuthenticator(cfg core.LDAPAuth, localPath, adminEmail, adminPasswor
 	if err != nil {
 		return nil, fmt.Errorf("local authenticator init: %w", err)
 	}
-	return &LDAPAuthenticator{
+	l := &LDAPAuthenticator{
 		cfg:    cfg,
 		local:  localAuth,
 		users:  make(map[string]*api.User),
 		tokens: make(map[string]*session),
 		stopCh: make(chan struct{}),
-	}, nil
+	}
+	localAuth.mu.Lock()
+	localAuth.onRevokeUser = l.revokeUserTokens
+	localAuth.mu.Unlock()
+	return l, nil
+}
+
+// revokeUserTokens ends the LDAP sessions of userID. The local directory
+// calls it (holding its own lock) when the account is disabled, deleted,
+// removed or downgraded.
+func (l *LDAPAuthenticator) revokeUserTokens(userID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for token, sess := range l.tokens {
+		if sess != nil && sess.UserID == userID {
+			delete(l.tokens, token)
+		}
+	}
+}
+
+// UserDirectory exposes the persisted directory LDAP accounts are
+// provisioned into, for the members API.
+func (l *LDAPAuthenticator) UserDirectory() api.UserDirectory { return l.local }
+
+// SetMemberQuota installs the max_team_members check.
+func (l *LDAPAuthenticator) SetMemberQuota(check func(workspace string, current int) error) {
+	l.local.SetMemberQuota(check)
 }
 
 // Login validates credentials against LDAP and creates a session
 func (l *LDAPAuthenticator) Login(email, password string) (*api.User, string, error) {
+	return l.LoginFrom(email, password, "")
+}
+
+// LoginFrom is Login with the caller's address. The directory enforces its
+// own lockout policy; the address keys the local fallback's brute-force
+// protection.
+func (l *LDAPAuthenticator) LoginFrom(email, password, clientIP string) (*api.User, string, error) {
 	// Try LDAP first
 	user, err := l.ldapLogin(email, password)
 	if err != nil {
@@ -51,7 +84,7 @@ func (l *LDAPAuthenticator) Login(email, password string) (*api.User, string, er
 		// fall back — this prevents a misconfigured LDAP server (e.g. anonymous
 		// bind) from silently delegating to the local account.
 		if l.isConnectionFailure(err) {
-			return l.local.Login(email, password)
+			return l.local.LoginFrom(email, password, clientIP)
 		}
 		return nil, "", err
 	}
@@ -61,14 +94,30 @@ func (l *LDAPAuthenticator) Login(email, password string) (*api.User, string, er
 	if err != nil {
 		return nil, "", err
 	}
+	now := time.Now()
 	l.mu.Lock()
+	// Reclaim expired sessions on insert (same discipline as the OIDC state
+	// store): entries are otherwise deleted only when their own token is
+	// presented again, so logins that are never repeated grew this map for
+	// the process lifetime.
+	l.sweepExpiredTokensLocked(now)
 	l.tokens[token] = &session{
 		UserID:    user.ID,
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: now.Add(24 * time.Hour),
 	}
 	l.mu.Unlock()
 
 	return copyUser(user), token, nil
+}
+
+// sweepExpiredTokensLocked drops expired sessions. Caller must hold l.mu for
+// writing.
+func (l *LDAPAuthenticator) sweepExpiredTokensLocked(now time.Time) {
+	for token, sess := range l.tokens {
+		if sess == nil || now.After(sess.ExpiresAt) {
+			delete(l.tokens, token)
+		}
+	}
 }
 
 // ldapLogin authenticates against LDAP server
@@ -141,37 +190,21 @@ func (l *LDAPAuthenticator) ldapLogin(email, password string) (*api.User, error)
 		name = email
 	}
 
-	// Find or create user
-	l.mu.Lock()
-	var existing *api.User
-	for _, u := range l.users {
-		if u.Email == email {
-			existing = u
-			break
-		}
-	}
-
-	if existing != nil {
-		l.mu.Unlock()
-		return existing, nil
-	}
-
-	newID, err := generateID()
+	// Find or create the account in the persisted directory: a first sign-in
+	// is a viewer of the default workspace, later ones keep the roles an
+	// administrator gave it, and a disabled account is refused.
+	provisioned, err := l.local.ProvisionExternalUser(email, name, SourceLDAP)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("LDAP account: %w", err)
 	}
-	user := &api.User{
-		ID:        newID,
-		Email:     email,
-		Name:      name,
-		Role:      "viewer",
-		Workspace: "default",
-		CreatedAt: time.Now(),
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if user, ok := l.users[provisioned.ID]; ok {
+		user.Email, user.Name = provisioned.Email, provisioned.Name
+		return user, nil
 	}
-	l.users[user.ID] = user
-	l.mu.Unlock()
-
-	return user, nil
+	l.users[provisioned.ID] = provisioned
+	return provisioned, nil
 }
 
 // buildUserDN constructs the DN for a user from email
@@ -219,14 +252,25 @@ func (l *LDAPAuthenticator) Authenticate(token string) (*api.User, error) {
 	if ok {
 		if time.Now().After(sess.ExpiresAt) {
 			l.mu.RUnlock()
+			// Reclaim the rejected entry: nothing else deletes expired
+			// tokens, so leaving it here grew the map for the process
+			// lifetime (LocalAuthenticator and the OIDC state store both
+			// reclaim their expired entries).
+			l.mu.Lock()
+			if s, ok := l.tokens[token]; ok && time.Now().After(s.ExpiresAt) {
+				delete(l.tokens, token)
+			}
+			l.mu.Unlock()
 			return nil, fmt.Errorf("token expired")
 		}
-		user := l.users[sess.UserID]
+		user := copyUser(l.users[sess.UserID])
 		l.mu.RUnlock()
 		if user == nil {
 			return nil, fmt.Errorf("user not found")
 		}
-		return copyUser(user), nil
+		// The directory decides the role and whether the account may still
+		// sign in.
+		return l.local.ResolveExternalUser(user)
 	}
 	l.mu.RUnlock()
 
@@ -360,4 +404,14 @@ func (l *LDAPAuthenticator) AddUser(email, name, role string) (*api.User, error)
 	}
 	l.users[user.ID] = user
 	return copyUser(user), nil
+}
+
+// CheckKeyOwner checks an API key's owner against the local directory.
+func (l *LDAPAuthenticator) CheckKeyOwner(ownerID, workspace string, role core.MemberRole) error {
+	return l.local.CheckKeyOwner(ownerID, workspace, role)
+}
+
+// RequestPasswordResetTo delegates to the local authenticator.
+func (l *LDAPAuthenticator) RequestPasswordResetTo(email string) (string, string, error) {
+	return l.local.RequestPasswordResetTo(email)
 }

@@ -31,10 +31,13 @@ func backupCommand() {
 		fmt.Println("  delete <file>       Delete a backup file")
 		fmt.Println("  info <file>         Show backup information")
 		fmt.Println()
+		fmt.Println("create and restore open the data directory directly: stop the server first.")
+		fmt.Println()
 		fmt.Println("Options for create:")
 		fmt.Println("  --compress          Compress the backup (default: true)")
 		fmt.Println("  --no-compress       Do not compress the backup")
-		fmt.Println("  --include-history   Include judgment history")
+		fmt.Println("  --include-history   Include the last 7 days of judgments, uptime summaries,")
+		fmt.Println("                      journey runs and alert events")
 		fmt.Println("  --output <path>     Custom output path")
 		fmt.Println()
 		fmt.Println("Examples:")
@@ -141,10 +144,24 @@ func backupCreate() {
 	fmt.Printf("  Journeys:       %d\n", backup.Metadata.Journeys)
 }
 
+// openLocalBackupManager validates the selected configuration even for
+// commands that operate on backup files without opening the database.
+func openLocalBackupManager() (*backup.Manager, error) {
+	cfg, err := loadLocalCLIConfig()
+	if err != nil {
+		return nil, err
+	}
+	mgr := backup.NewManager(nil, dataDirForConfig(cfg), errorLogger())
+	if err := mgr.Init(); err != nil {
+		return nil, err
+	}
+	return mgr, nil
+}
+
 // backupList lists available backups
 func backupList() {
-	mgr := backup.NewManager(nil, getDataDir(), errorLogger())
-	if err := mgr.Init(); err != nil {
+	mgr, err := openLocalBackupManager()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing backup manager: %v\n", err)
 		os.Exit(1)
 	}
@@ -190,8 +207,8 @@ func backupDelete() {
 
 	fmt.Printf("⚖️  Deleting backup: %s\n", filename)
 
-	mgr := backup.NewManager(nil, getDataDir(), errorLogger())
-	if err := mgr.Init(); err != nil {
+	mgr, err := openLocalBackupManager()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing backup manager: %v\n", err)
 		os.Exit(1)
 	}
@@ -213,8 +230,8 @@ func backupInfo() {
 
 	filename := os.Args[3]
 
-	mgr := backup.NewManager(nil, getDataDir(), errorLogger())
-	if err := mgr.Init(); err != nil {
+	mgr, err := openLocalBackupManager()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error initializing backup manager: %v\n", err)
 		os.Exit(1)
 	}
@@ -304,7 +321,8 @@ func restoreCommand() {
 
 	// Confirm with user
 	if !force {
-		fmt.Println("⚠️  Warning: This will overwrite existing data!")
+		fmt.Println("⚠️  Warning: records and user accounts in the backup replace the current ones")
+		fmt.Println("   with the same IDs; everyone is signed out. Other existing records are kept.")
 		fmt.Print("Continue? [y/N]: ")
 		var response string
 		// A scan failure (EOF, no input) leaves response empty, which
@@ -339,6 +357,7 @@ func restoreCommand() {
 		IncludeStatusPages:  !skipStatusPages,
 		IncludeJourneys:     !skipJourneys,
 		IncludeSystemConfig: true,
+		IncludeUsers:        true,
 		ContinueOnError:     force,
 	}
 

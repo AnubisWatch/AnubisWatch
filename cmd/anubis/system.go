@@ -235,14 +235,21 @@ func exportCommand() {
 		fmt.Println("Subcommands:")
 		fmt.Println("  souls        Export all souls to JSON")
 		fmt.Println("  config       Export server configuration")
+		fmt.Println("  judgments    Export a soul's judgments from the server (CSV/NDJSON)")
 		fmt.Println()
 		fmt.Println("Examples:")
 		fmt.Println("  anubis export souls > souls.json")
 		fmt.Println("  anubis export config > config.json")
+		fmt.Println("  anubis export judgments --soul ID --from 7d > judgments.csv")
 		return
 	}
 
 	subcmd := os.Args[2]
+	if subcmd == "judgments" {
+		// Judgments come from the running server, not the local data dir.
+		exportJudgmentsCommand(os.Args[3:])
+		return
+	}
 
 	store, err := openLocalStorage()
 	if err != nil {
@@ -377,8 +384,13 @@ func followLogFile(ctx context.Context, logPath string, offset int64, out io.Wri
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() { file.Close() }()
 
+	// A rotation between the initial read and this open leaves a new, shorter
+	// file at logPath; follow it from its start instead of past its end.
+	if info, err := file.Stat(); err == nil && info.Size() < offset {
+		offset = 0
+	}
 	if _, err := file.Seek(offset, io.SeekStart); err != nil {
 		return err
 	}
@@ -406,7 +418,36 @@ func followLogFile(ctx context.Context, logPath string, offset int64, out io.Wri
 			return nil
 		case <-ticker.C:
 		}
+
+		// The server rotates the log by renaming it; once the path names a
+		// different file, print what was written to the old one before the
+		// rename, then continue with the new file from its start.
+		if rotated(file, logPath) {
+			next, err := os.Open(logPath)
+			if err != nil {
+				continue // mid-rotation: the new file isn't there yet
+			}
+			if _, err := io.Copy(out, file); err != nil {
+				next.Close()
+				return err
+			}
+			file.Close()
+			file = next
+		}
 	}
+}
+
+// rotated reports whether logPath now names a different file than f.
+func rotated(f *os.File, logPath string) bool {
+	cur, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	now, err := os.Stat(logPath)
+	if err != nil {
+		return false
+	}
+	return !os.SameFile(cur, now)
 }
 
 // configCommand handles configuration management
@@ -618,15 +659,86 @@ var configSecretPattern = regexp.MustCompile(`(?im)((?:^|[\s{,])"?(?:[a-z0-9_]*(
 // Environment references such as "${ANUBIS_ADMIN_PASSWORD}" and empty values
 // are left visible because they reveal nothing.
 func redactConfigSecrets(text string) string {
-	return configSecretPattern.ReplaceAllStringFunc(text, func(match string) string {
-		parts := configSecretPattern.FindStringSubmatch(match)
-		value := strings.Trim(parts[2], `"'`)
-		if value == "" || strings.HasPrefix(value, "${") {
-			return match
+	var out strings.Builder
+	last := 0
+	for _, m := range configSecretPattern.FindAllStringSubmatchIndex(text, -1) {
+		start, end := m[0], m[1]
+		if start < last {
+			continue // inside a value an earlier match already masked
 		}
-		return parts[1] + `"********"`
-	})
+		out.WriteString(text[last:start])
+		last = end
+		prefix, raw := text[m[2]:m[3]], text[m[4]:m[5]]
+		value := strings.Trim(raw, `"'`)
+		if value == "" || strings.HasPrefix(value, "${") {
+			out.WriteString(text[start:end])
+			continue
+		}
+		out.WriteString(prefix + `"********"`)
+		if raw[0] == '"' || raw[0] == '\'' {
+			continue
+		}
+
+		// The pattern's unquoted branch stops at the first space, but a YAML
+		// plain scalar runs to the end of the line and a block scalar
+		// (`key: |`) to the end of its indented body. Mask the rest too.
+		keyStart := m[2]
+		if strings.ContainsRune(" \t\r\n{,", rune(text[keyStart])) {
+			keyStart++
+		}
+		lineStart := strings.LastIndexByte(text[:keyStart], '\n') + 1
+		lineEnd := len(text)
+		if i := strings.IndexByte(text[end:], '\n'); i >= 0 {
+			lineEnd = end + i
+		}
+		if strings.ContainsAny(text[lineStart:keyStart], "{[") {
+			continue // flow context: `,` and `}` already end the value
+		}
+		if configBlockScalarIndicator.MatchString(raw) {
+			out.WriteString(text[end:lineEnd])
+			indent := keyStart - lineStart
+			lastContent := lineEnd
+			for pos := lineEnd; pos < len(text); {
+				ls := pos + 1
+				le := len(text)
+				if i := strings.IndexByte(text[ls:], '\n'); i >= 0 {
+					le = ls + i
+				}
+				line := text[ls:le]
+				if strings.TrimSpace(line) != "" {
+					if len(line)-len(strings.TrimLeft(line, " \t")) <= indent {
+						break
+					}
+					lastContent = le
+				}
+				pos = le
+			}
+			last = lastContent
+			continue
+		}
+		rest := text[end:lineEnd]
+		if rest == "" || (rest[0] != ' ' && rest[0] != '\t') {
+			continue
+		}
+		words := rest
+		for i := 1; i < len(rest); i++ {
+			if rest[i] == '#' && (rest[i-1] == ' ' || rest[i-1] == '\t') {
+				words = rest[:i]
+				break
+			}
+		}
+		words = strings.TrimRight(words, " \t\r")
+		if t := strings.TrimLeft(words, " \t"); t != "" && !strings.ContainsRune(",}]", rune(t[0])) {
+			last = end + len(words)
+		}
+	}
+	out.WriteString(text[last:])
+	return out.String()
 }
+
+// configBlockScalarIndicator matches a YAML block scalar header: | or >, with
+// optional chomping (+/-) and indentation digit.
+var configBlockScalarIndicator = regexp.MustCompile(`^[|>](?:[+-][0-9]?|[0-9][+-]?)?$`)
 
 func hasArg(args []string, flag string) bool {
 	for _, a := range args {

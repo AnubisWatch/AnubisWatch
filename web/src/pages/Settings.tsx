@@ -16,30 +16,24 @@ import {
   RefreshCw,
   Loader2,
   AlertCircle,
+  Users,
   X
 } from 'lucide-react'
-import { api } from '../api/client'
+import { api, type UIConfig } from '../api/client'
 import { useAuth, useStats } from '../api/hooks'
 import { ChangePasswordForm } from '../components/ChangePasswordForm'
+import { WorkspaceQuotaPanel } from '../components/WorkspaceQuotaPanel'
+import { ApiKeysPanel } from '../components/ApiKeysPanel'
+import { MembersPanel } from '../components/MembersPanel'
 import { useCan } from '../utils/permissions'
 import { listTimeZones, setDisplayTimeZone } from '../utils/date'
 import { useThemeStore, applyTheme } from '../stores/themeStore'
 import { Link } from 'react-router-dom'
 import { useSafeTimeout } from '../hooks/useSafeTimeout'
 
-type TabId = 'general' | 'security' | 'notifications' | 'storage' | 'integrations'
+type TabId = 'general' | 'security' | 'members' | 'notifications' | 'storage' | 'integrations'
 
-interface ConfigData {
-  instance_name?: string
-  timezone?: string
-  theme?: 'dark' | 'light' | 'system'
-  retention_days?: number
-  storage_path?: string
-  auth_enabled?: boolean
-  mcp_enabled?: boolean
-  websocket_enabled?: boolean
-  read_only_keys?: string[]
-}
+type ConfigData = UIConfig
 
 // The only settings PUT /config accepts; everything else comes from the
 // config file and is shown read-only.
@@ -140,6 +134,7 @@ export function Settings() {
   const tabs = [
     { id: 'general' as TabId, label: 'General', icon: SettingsIcon, description: 'Basic configuration' },
     { id: 'security' as TabId, label: 'Security', icon: Shield, description: 'Authentication & access' },
+    { id: 'members' as TabId, label: 'Members', icon: Users, description: 'People & invitations' },
     { id: 'notifications' as TabId, label: 'Notifications', icon: Bell, description: 'Alerts & channels' },
     { id: 'storage' as TabId, label: 'Storage', icon: Database, description: 'Data & retention' },
     { id: 'integrations' as TabId, label: 'Integrations', icon: Globe, description: 'API & webhooks' },
@@ -346,6 +341,10 @@ export function Settings() {
                 <h2 className="text-lg font-semibold text-white mb-4">Current User</h2>
                 <div className="space-y-3">
                   <div className="flex items-center justify-between py-2">
+                    <span className="text-gray-400">Name</span>
+                    <span className="text-white">{user?.name || '—'}</span>
+                  </div>
+                  <div className="flex items-center justify-between py-2">
                     <span className="text-gray-400">Email</span>
                     <span className="text-white">{user?.email || 'Not logged in'}</span>
                   </div>
@@ -361,6 +360,14 @@ export function Settings() {
               </div>
 
               <ChangePasswordForm />
+            </div>
+          )}
+
+          {activeTab === 'members' && (
+            <div className="space-y-6" role="tabpanel" id="settings-panel-members" aria-labelledby="settings-tab-members">
+              <div className="bg-gradient-to-br from-gray-900 to-gray-800/50 border border-gray-700/50 rounded-2xl p-6">
+                <MembersPanel />
+              </div>
             </div>
           )}
 
@@ -410,6 +417,7 @@ export function Settings() {
 
           {activeTab === 'storage' && (
             <div className="space-y-6" role="tabpanel" id="settings-panel-storage" aria-labelledby="settings-tab-storage">
+              <WorkspaceQuotaPanel />
               <div className="bg-gradient-to-br from-gray-900 to-gray-800/50 border border-gray-700/50 rounded-2xl p-6">
                 <h2 className="text-lg font-semibold text-white mb-1">Storage Settings</h2>
                 <p className="text-gray-400 text-sm mb-6">Manage data retention and storage configuration</p>
@@ -479,12 +487,7 @@ export function Settings() {
                 <p className="text-gray-400 text-sm mb-6">Review API authentication and external integration endpoints</p>
 
                 <div className="space-y-6">
-                  <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4">
-                    <p className="font-medium text-white">API authentication</p>
-                    <p className="mt-1 text-sm text-gray-400">
-                      This installation authenticates browser and API requests with the active session cookie or bearer token. It does not issue standalone API keys.
-                    </p>
-                  </div>
+                  <ApiKeysPanel />
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <div>

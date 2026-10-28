@@ -7,6 +7,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -26,7 +27,49 @@ type Config struct {
 	Logging     LoggingConfig    `yaml:"logging"`
 	Telemetry   TelemetryConfig  `yaml:"telemetry"`
 	Security    SecurityConfig   `yaml:"security"`
+	Probe       ProbeConfig      `yaml:"probe" json:"probe"`
+	Mail        MailConfig       `yaml:"mail" json:"mail"` // outgoing SMTP for subscriptions and password resets
+	Alerting    AlertingConfig   `yaml:"alerting" json:"alerting"`
 	Environment string           `yaml:"environment"`
+}
+
+// DefaultMaxConcurrentChecks is the probe engine's concurrency limit when
+// probe.max_concurrent_checks is unset (0).
+const DefaultMaxConcurrentChecks = 100
+
+// MaxMaxConcurrentChecks bounds probe.max_concurrent_checks. Each in-flight
+// check holds a goroutine and usually a socket; beyond this a typo (an extra
+// zero or two) would exhaust file descriptors long before it helped.
+const MaxMaxConcurrentChecks = 10000
+
+// ProbeConfig tunes the local probe engine (the Jackal).
+type ProbeConfig struct {
+	// MaxConcurrentChecks caps how many checks (scheduled and manual) run at
+	// once on this node. 0 means DefaultMaxConcurrentChecks (100); the valid
+	// explicit range is 1..MaxMaxConcurrentChecks.
+	MaxConcurrentChecks int `yaml:"max_concurrent_checks" json:"max_concurrent_checks"`
+	// FlapDetection is the default flap-detection policy; a soul's own
+	// flap_detection block overrides it. Disabled unless enabled here or per soul.
+	FlapDetection FlapDetectionConfig `yaml:"flap_detection" json:"flap_detection"`
+}
+
+// EffectiveMaxConcurrentChecks returns the configured limit, or the default
+// when unset.
+func (c ProbeConfig) EffectiveMaxConcurrentChecks() int {
+	if c.MaxConcurrentChecks <= 0 {
+		return DefaultMaxConcurrentChecks
+	}
+	return c.MaxConcurrentChecks
+}
+
+func (c ProbeConfig) validate() error {
+	if c.MaxConcurrentChecks < 0 || c.MaxConcurrentChecks > MaxMaxConcurrentChecks {
+		return &ConfigError{
+			Field:   "probe.max_concurrent_checks",
+			Message: fmt.Sprintf("must be between 1 and %d (or 0 for the default of %d), got %d", MaxMaxConcurrentChecks, DefaultMaxConcurrentChecks, c.MaxConcurrentChecks),
+		}
+	}
+	return c.FlapDetection.validate("probe.flap_detection")
 }
 
 // SecurityConfig controls process-wide security gates. Every per-soul
@@ -101,12 +144,22 @@ func LoadConfig(path string) (*Config, error) {
 	return &config, nil
 }
 
-// expandEnvVars expands ${VAR} and ${VAR:-default} syntax in config
+// expandEnvVars expands ${VAR}, ${VAR:-default}, and ${VAR:+alternate} syntax in config.
 var envVarRegex = regexp.MustCompile(`\$\{([^}]+)\}`)
 
 func expandEnvVars(s string) string {
 	return envVarRegex.ReplaceAllStringFunc(s, func(match string) string {
 		inner := match[2 : len(match)-1] // strip ${ and }
+		defaultIndex := strings.Index(inner, ":-")
+		alternateIndex := strings.Index(inner, ":+")
+		if alternateIndex >= 0 && (defaultIndex < 0 || alternateIndex < defaultIndex) {
+			key := inner[:alternateIndex]
+			if _, set := os.LookupEnv(key); set {
+				return inner[alternateIndex+2:]
+			}
+			return ""
+		}
+
 		parts := strings.SplitN(inner, ":-", 2)
 		key := parts[0]
 		val := os.Getenv(key)
@@ -209,6 +262,9 @@ func (c *Config) setDefaults() {
 		// the hourly retention would have its first hours deleted first.
 		c.Storage.TimeSeries.Compaction.HourToDay.Duration = 30 * 24 * 60 * 60 * 1e9 // 30d
 	}
+	if c.Storage.TimeSeries.Retention.Raw.Duration == 0 && c.Storage.RetentionDays > 0 {
+		c.Storage.TimeSeries.Retention.Raw.Duration = time.Duration(c.Storage.RetentionDays) * 24 * time.Hour
+	}
 	if c.Storage.TimeSeries.Retention.Raw.Duration == 0 {
 		// 90d: status pages draw 90 days of uptime bars, and soul logs and
 		// dashboard queries read raw judgments too. A shorter default would
@@ -293,24 +349,10 @@ func (c *Config) setDefaults() {
 	if c.Tenants.Isolation == "" {
 		c.Tenants.Isolation = "strict"
 	}
-	if c.Tenants.DefaultQuotas.MaxSouls == 0 {
-		c.Tenants.DefaultQuotas.MaxSouls = 100
-	}
-	if c.Tenants.DefaultQuotas.MaxJourneys == 0 {
-		c.Tenants.DefaultQuotas.MaxJourneys = 20
-	}
-	if c.Tenants.DefaultQuotas.MaxAlertChannels == 0 {
-		c.Tenants.DefaultQuotas.MaxAlertChannels = 10
-	}
-	if c.Tenants.DefaultQuotas.MaxTeamMembers == 0 {
-		c.Tenants.DefaultQuotas.MaxTeamMembers = 25
-	}
-	if c.Tenants.DefaultQuotas.RetentionDays == 0 {
-		c.Tenants.DefaultQuotas.RetentionDays = 90
-	}
-	if c.Tenants.DefaultQuotas.CheckIntervalMin.Duration == 0 {
-		c.Tenants.DefaultQuotas.CheckIntervalMin.Duration = 30 * 1e9 // 30s
-	}
+	// Quotas are not defaulted: 0 means unlimited, and they apply only when
+	// tenants.enabled is set. They were filled with 100/20/10/... here while
+	// nothing enforced them; defaulting them now that they are enforced would
+	// suddenly block existing installs that turned tenants on.
 
 	// Logging defaults
 	if c.Logging.Level == "" {
@@ -401,6 +443,17 @@ func (c *Config) validate() error {
 
 	// Validate logging config
 	if err := c.Logging.validate(); err != nil {
+		return err
+	}
+
+	if err := c.Probe.validate(); err != nil {
+		return err
+	}
+
+	if err := c.validateMail(); err != nil {
+		return err
+	}
+	if err := c.Alerting.validate(); err != nil {
 		return err
 	}
 

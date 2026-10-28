@@ -26,12 +26,18 @@ func auditTimelineOrder(t *testing.T, history map[string][]core.UptimeDay, ids [
 	wantCounts := make(map[core.UptimeDay]int)
 	total := 0.0
 	count := 0
+	judged := 0
 	for _, id := range ids {
 		souls = append(souls, core.SoulStatusInfo{ID: id})
 		for _, day := range history[id] {
 			wantCounts[day]++
-			total += day.Uptime
 			count++
+			// Days without judgments ("unknown") are not part of the average.
+			if day.Status == "unknown" {
+				continue
+			}
+			total += day.Uptime
+			judged++
 		}
 	}
 	got := h.buildUptimeData(&core.StatusPage{UptimeDays: 2}, souls)
@@ -53,8 +59,8 @@ func auditTimelineOrder(t *testing.T, history map[string][]core.UptimeDay, ids [
 		t.Fatal("regression mismatch", "samples changed")
 	}
 	wantOverall := 0.0
-	if count > 0 {
-		wantOverall = total / float64(count)
+	if judged > 0 {
+		wantOverall = total / float64(judged)
 	}
 	if got.Overall != wantOverall {
 		t.Fatal("regression mismatch", "overall uptime changed")

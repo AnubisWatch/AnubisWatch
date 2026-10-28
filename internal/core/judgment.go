@@ -51,6 +51,19 @@ type JudgmentDetails struct {
 	// WebSocket
 	CloseCode int `json:"close_code,omitempty"`
 
+	// Confirmation retries: how many attempts produced this judgment (set
+	// only for souls with retries > 0).
+	Attempts int `json:"attempts,omitempty"`
+
+	// Flap detection: Flapping is true while the soul is flapping;
+	// FlapChange is FlapStarted/FlapStopped on the judgment that changed it.
+	Flapping   bool   `json:"flapping,omitempty"`
+	FlapChange string `json:"flap_change,omitempty"`
+	// FlapBaseline is the status the soul had when flapping started; it is
+	// set while flapping and on the judgment that stops it, so rules can
+	// compare the stabilized status against it.
+	FlapBaseline SoulStatus `json:"flap_baseline,omitempty"`
+
 	// Assertions
 	Assertions []AssertionResult `json:"assertions,omitempty"`
 }

@@ -145,6 +145,8 @@ func TestSoulUptimeSeriesFollowsTheRange(t *testing.T) {
 		{"24h", time.Hour, 24, 3},
 		{"7d", 24 * time.Hour, 7, 4},
 		{"30d", 24 * time.Hour, 30, 5},
+		{"90d", 24 * time.Hour, 90, 5},
+		{"1y", 24 * time.Hour, 365, 5},
 	}
 	for _, tc := range cases {
 		rec, got := getSoulUptime(t, server, "/api/v1/souls/s1/uptime?range="+tc.rng+"&tz_offset_minutes=330")
@@ -241,7 +243,7 @@ func TestSoulUptimeRejectsOtherWorkspacesAndBadOffsets(t *testing.T) {
 		"/api/v1/souls/missing/uptime":                    http.StatusNotFound,
 		"/api/v1/souls/ours/uptime?tz_offset_minutes=abc": http.StatusBadRequest,
 		"/api/v1/souls/ours/uptime?tz_offset_minutes=900": http.StatusBadRequest,
-		"/api/v1/souls/ours/uptime?range=90d":             http.StatusBadRequest,
+		"/api/v1/souls/ours/uptime?range=2y":              http.StatusBadRequest,
 	}
 	for path, want := range cases {
 		if rec, _ := getSoulUptime(t, server, path); rec.Code != want {

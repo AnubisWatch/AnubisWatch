@@ -8,26 +8,18 @@ This guide covers backup strategies, recovery procedures, and disaster recovery 
 
 ## What to Backup
 
-### Critical Data
+### Physical data and credentials
 
-| Data Type | Location | Priority | RPO |
-|-----------|----------|----------|-----|
-| Soul configurations | `data/*/souls/` | Critical | 24h |
-| Alert channels | `data/*/channels/` | Critical | 24h |
-| Alert rules | `data/*/rules/` | Critical | 24h |
-| Workspaces | `data/*/workspaces/` | Critical | 24h |
-| Status pages | `data/*/status-pages/` | High | 24h |
-| Judgment history | `data/*/judgments/` | Medium | 7d |
-| Time-series data | `data/*/timeseries/` | Low | 7d |
+CobaltDB stores its durable records in `<storage.path>/wal.log` and rebuilds an
+in-memory B+Tree from that log. Soul/history/alert keys are logical namespaces,
+not per-entity JSON directories. Back up the entire stopped data directory,
+including local session state, together with config and separately preserved
+encryption keys. Cluster recovery additionally needs coordinated Raft/auth
+state; it is not the standalone entity export procedure.
 
-### Configuration Files
-
-| File | Location | Priority |
-|------|----------|----------|
-| Main config | `/etc/anubis/anubis.yaml` or `./anubis.yaml` | Critical |
-| TLS certificates | `/etc/ssl/anubis/` or ingress/cert-manager secrets | Critical |
-| Session data | `data/sessions.json` | High |
-| Cluster state | `data/raft/` | Critical (clustered only) |
+See [Binary and Docker installation](deployment/binary-and-docker.md#backup-and-rollback)
+for the current cold-volume recovery and persisted-format rollback boundaries.
+RPO/RTO must be measured for the actual host and backup schedule.
 
 ---
 
@@ -48,7 +40,7 @@ TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 # Create backup directory
 mkdir -p "$BACKUP_DIR/$TIMESTAMP"
 
-# Stop AnubisWatch (optional, for consistent backup)
+# Stop the sole writer; required for a consistent filesystem copy
 systemctl stop anubis
 
 # Copy data directory
@@ -88,7 +80,7 @@ TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 # Initial sync (while running)
 rsync -av --delete "$DATA_DIR/" "$BACKUP_DIR/$TIMESTAMP/"
 
-# Quick pause for consistency (optional)
+# Required final sync with the writer stopped
 # Stop writes for 1-2 seconds
 systemctl stop anubis
 rsync -av "$DATA_DIR/" "$BACKUP_DIR/$TIMESTAMP/"

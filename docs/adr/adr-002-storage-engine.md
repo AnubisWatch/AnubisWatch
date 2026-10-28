@@ -26,19 +26,16 @@ We built **CobaltDB**, a custom embedded key-value storage engine using Go's sta
 
 ### Design Choices
 
-1. **File-Based Storage**: Data stored in JSON files under structured directories:
-   ```
-   data/
-   ├── default/
-   │   ├── souls/{id}.json
-   │   ├── judgments/{soul_id}/{timestamp}.json
-   │   ├── channels/{id}.json
-   │   └── rules/{id}.json
-   ```
+1. **WAL-backed persistence**: `wal.log` stores checksummed writes and atomic
+   compound batches. Recovery replays live values into an in-memory B+Tree;
+   background checkpointing bounds superseded log growth.
 
-2. **In-Memory Index**: Fast lookups via in-memory maps with file-backed persistence.
+2. **In-memory data and indexes**: retained values and resource/workspace lookup
+   indexes consume memory. Capacity and startup time grow with retained data.
 
-3. **Append-Only Judgments**: Check results are append-only for audit trail.
+3. **Judgment identity**: new keys are
+   `{workspace}/judgments/{soul}/{timestamp}/{judgmentID}` so results sharing a
+   clock instant coexist. Legacy timestamp-only records remain readable.
 
 4. **Namespace Isolation**: Workspace-based key prefixing for multi-tenancy.
 
@@ -47,7 +44,7 @@ We built **CobaltDB**, a custom embedded key-value storage engine using Go's sta
 ### Positive
 - Zero external dependencies
 - Simple deployment (single binary)
-- Easy backup (copy data directory)
+- Cold backup of the complete stopped data directory
 - Workspace isolation built-in
 - No database connection pooling needed
 
@@ -55,7 +52,7 @@ We built **CobaltDB**, a custom embedded key-value storage engine using Go's sta
 - Limited query capabilities (no SQL)
 - Memory usage grows with data size
 - No built-in replication (handled by Raft layer)
-- Manual compaction needed for old judgments
+- Retention and checkpoint policies require workload validation
 
 ## Alternatives Considered
 

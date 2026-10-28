@@ -178,7 +178,8 @@ describe('SoulEdit', () => {
     const { container } = render(<MemoryRouter><SoulEdit /></MemoryRouter>)
     const form = container.querySelector('form')!
     const textInputs = form.querySelectorAll<HTMLInputElement>('input[type="text"]')
-    const numberInputs = form.querySelectorAll<HTMLInputElement>('input[type="number"]')
+    // Interval and timeout: the last number inputs outside the Advanced disclosure.
+    const numberInputs = Array.from(form.querySelectorAll<HTMLInputElement>('input[type="number"]')).filter((input) => !input.closest('[data-testid="soul-advanced"]'))
     fireEvent.change(textInputs[0], { target: { value: 'Renamed Soul' } })
     fireEvent.change(screen.getByLabelText('Soul type'), { target: { value: 'tcp' } })
     fireEvent.change(container.querySelector('#edit-soul-target')!, { target: { value: 'host:443' } })

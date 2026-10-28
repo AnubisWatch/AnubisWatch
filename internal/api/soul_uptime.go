@@ -41,7 +41,7 @@ type SoulUptimeSummary struct {
 
 // uptimeSeriesLayout returns the first bucket start, the bucket length and
 // the bucket count for a range, aligned to zone: 5-minute buckets for 1h,
-// hours for 24h, calendar days for 7d and 30d. zone is a fixed offset, so
+// hours for 24h, calendar days for 7d, 30d, 90d and 1y. zone is a fixed offset, so
 // every bucket of a range has the same length.
 func uptimeSeriesLayout(rangeName string, now time.Time, zone *time.Location) (time.Time, time.Duration, int, bool) {
 	l := now.In(zone)
@@ -52,11 +52,8 @@ func uptimeSeriesLayout(rangeName string, now time.Time, zone *time.Location) (t
 	case "24h":
 		last := time.Date(l.Year(), l.Month(), l.Day(), l.Hour(), 0, 0, 0, zone)
 		return last.Add(-23 * time.Hour), time.Hour, 24, true
-	case "7d", "30d":
-		n := 7
-		if rangeName == "30d" {
-			n = 30
-		}
+	case "7d", "30d", "90d", "1y":
+		n := map[string]int{"7d": 7, "30d": 30, "90d": 90, "1y": 365}[rangeName]
 		today := time.Date(l.Year(), l.Month(), l.Day(), 0, 0, 0, 0, zone)
 		return today.AddDate(0, 0, -(n - 1)), 24 * time.Hour, n, true
 	}
@@ -89,7 +86,8 @@ func (t uptimeTally) window() UptimeWindow {
 
 // handleSoulUptime returns a soul's uptime over the last 24 hours, 7 days and
 // 30 days, plus a series of equal buckets over the requested range (1h, 24h,
-// 7d or 30d; default 7d). The dashboard used to derive these from the
+// 7d, 30d, 90d or 1y; default 7d). Long ranges are counted from hourly
+// rollups (TallyChecks), so they cost lookups rather than raw scans. The dashboard used to derive these from the
 // judgments endpoint, which returns at most 100 results of the last 24 hours,
 // so its 7- and 30-day figures covered at most a day.
 //
@@ -122,7 +120,7 @@ func (s *RESTServer) handleSoulUptime(ctx *Context) error {
 	now := time.Now()
 	first, step, buckets, ok := uptimeSeriesLayout(rangeName, now, zone)
 	if !ok {
-		return ctx.Error(http.StatusBadRequest, "range must be one of 1h, 24h, 7d, 30d")
+		return ctx.Error(http.StatusBadRequest, "range must be one of 1h, 24h, 7d, 30d, 90d, 1y")
 	}
 
 	// One range per window, then one per series bucket. End is just after

@@ -9,7 +9,7 @@ func auditAliasCase(t *testing.T, encrypted bool, mode string) {
 	t.Helper()
 	cfg := core.StorageConfig{Path: t.TempDir()}
 	cfg.Encryption.Enabled = encrypted
-	cfg.Encryption.Key = "test-only-key"
+	cfg.Encryption.Key = "test-only-key-0123456789"
 	db, err := NewEngine(cfg, newTestLogger())
 	if err != nil {
 		t.Fatal(err)

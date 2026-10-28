@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -24,22 +25,45 @@ var startTime = time.Now()
 // testDataDir is set by TestMain (testmain_test.go) to a temporary directory
 var testDataDir string
 
-// openLocalStorage opens storage directly for CLI operations
+// openLocalStorage opens storage directly for CLI operations. It uses the
+// server's storage settings (notably encryption) so data written here is
+// readable by the server and vice versa. It fails while the server is running,
+// because two engines on one directory lose writes.
 func openLocalStorage() (*storage.CobaltDB, error) {
-	dataDir := getDataDir()
+	c, err := loadLocalCLIConfig()
+	if err != nil {
+		return nil, err
+	}
+	return openLocalStorageWithConfig(c)
+}
 
-	cfg := core.StorageConfig{
-		Path: dataDir,
+func openLocalStorageWithConfig(c *core.Config) (*storage.CobaltDB, error) {
+	var cfg core.StorageConfig
+	if c != nil {
+		cfg = c.Storage
+	}
+	cfg.Path = dataDirForConfig(c)
+	if v := os.Getenv("ANUBIS_ENCRYPTION_KEY"); v != "" {
+		cfg.Encryption.Enabled = true
+		cfg.Encryption.Key = v
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelError,
 	}))
 
-	return storage.NewEngine(cfg, logger)
+	store, err := storage.NewEngine(cfg, logger)
+	if errors.Is(err, storage.ErrDataDirLocked) {
+		return nil, fmt.Errorf("%w; the server is running, so use the API instead (run `anubis login` first) or stop the server", err)
+	}
+	return store, err
 }
 
 func getDataDir() string {
+	return dataDirForConfig(loadCLIConfig())
+}
+
+func dataDirForConfig(cfg *core.Config) string {
 	// Check environment variable first
 	if dir := os.Getenv("ANUBIS_DATA_DIR"); dir != "" {
 		return dir
@@ -50,7 +74,7 @@ func getDataDir() string {
 	}
 	// Then the config file the server would use, so `anubis init` followed
 	// by client commands agrees on where the data lives.
-	if cfg := loadCLIConfig(); cfg != nil && cfg.Storage.Path != "" {
+	if cfg != nil && cfg.Storage.Path != "" {
 		return cfg.Storage.Path
 	}
 	return defaultDataDirForOS(runtime.GOOS)
@@ -60,15 +84,33 @@ func getDataDir() string {
 // findConfigFromArgs), or returns nil if there is none or it does not parse.
 // Client commands use it only for connection defaults; env vars still win.
 func loadCLIConfig() *core.Config {
+	cfg, _ := loadLocalCLIConfig()
+	return cfg
+}
+
+// Local writers must distinguish absent configuration from a selected file
+// that cannot be read or validated. Otherwise they may mutate another store
+// using fallback paths or encryption settings.
+func loadLocalCLIConfig() (*core.Config, error) {
+	if _, err := parseConfigPathFromArgs(os.Args[1:]); err != nil {
+		return nil, err
+	}
 	path := findConfigFromArgs(os.Args[1:])
-	if info, err := os.Stat(path); err != nil || info.IsDir() {
-		return nil
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) && configPathFromArgs(os.Args[1:]) == "" && os.Getenv("ANUBIS_CONFIG") == "" {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cannot inspect config %q: %w", path, err)
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("config %q is a directory", path)
 	}
 	cfg, err := core.LoadConfig(path)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("cannot load config %q: %w", path, err)
 	}
-	return cfg
+	return cfg, nil
 }
 
 // defaultDataDirForOS returns the platform-specific data directory.

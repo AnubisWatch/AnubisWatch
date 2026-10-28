@@ -102,7 +102,7 @@ describe("Settings", () => {
 		expect(screen.getByDisplayValue("/var/lib/anubis")).toHaveAttribute("readonly");
 
 		fireEvent.click(screen.getByRole("tab", { name: /integrations/i }));
-		expect(screen.getByText(/does not issue standalone API keys/i)).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "API Keys" })).toBeInTheDocument();
 		expect(screen.queryByDisplayValue(/anb_live_/i)).not.toBeInTheDocument();
 		expect(
 			screen.getByDisplayValue("https://anubis.watch/api/v1/mcp"),
@@ -137,9 +137,11 @@ describe("Settings", () => {
 		fireEvent.click(screen.getByRole("tab", { name: /storage/i }));
 		expect(screen.getByDisplayValue("30")).toHaveAttribute("readonly");
 		fireEvent.click(screen.getByRole("tab", { name: /integrations/i }));
-		expect(screen.getByText(/does not issue standalone API keys/i)).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "API Keys" })).toBeInTheDocument();
 		fireEvent.click(screen.getByLabelText("Refresh configuration"));
-		await waitFor(() => expect(mockGet).toHaveBeenCalledTimes(2));
+		// The storage tab also loads /quota; count the configuration reloads.
+		await waitFor(() => expect(mockGet.mock.calls.filter(([path]) => path === "/config")).toHaveLength(2));
+		expect(mockGet).toHaveBeenCalledWith("/quota");
 	});
 
 	it("handles anonymous users and non-Error load/save failures", async () => {
@@ -157,7 +159,7 @@ describe("Settings", () => {
 		expect(screen.getByText("Not logged in")).toBeInTheDocument();
 		expect(screen.getByText("Unknown")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("tab", { name: /integrations/i }));
-		expect(screen.getByText(/does not issue standalone API keys/i)).toBeInTheDocument();
+		expect(screen.getByRole("heading", { name: "API Keys" })).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("tab", { name: /general/i }));
 		fireEvent.change(screen.getByDisplayValue("AnubisWatch"), { target: { value: "Changed" } });
 		fireEvent.click(screen.getByRole("button", { name: /save changes/i }));

@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -41,16 +42,21 @@ func (c *TLSChecker) Validate(soul *core.Soul) error {
 		return configError("target", "target host:port is required")
 	}
 
-	// Strip scheme if present (e.g., "https://example.com:443" -> "example.com:443")
+	// Normalize URL-shaped targets to the TCP endpoint used for the handshake.
+	// Paths, queries, and fragments are HTTP concerns and must not become part
+	// of the port passed to the dialer.
 	target := soul.Target
-	if strings.HasPrefix(target, "https://") {
-		target = strings.TrimPrefix(target, "https://")
-	} else if strings.HasPrefix(target, "http://") {
-		target = strings.TrimPrefix(target, "http://")
-	}
-
-	// Ensure port is specified
-	if !strings.Contains(target, ":") {
+	if strings.HasPrefix(target, "https://") || strings.HasPrefix(target, "http://") {
+		parsed, err := url.Parse(target)
+		if err != nil || parsed.Hostname() == "" {
+			return configError("target", "target must be a valid HTTP(S) URL or host:port")
+		}
+		port := parsed.Port()
+		if port == "" {
+			port = "443"
+		}
+		target = net.JoinHostPort(parsed.Hostname(), port)
+	} else if !strings.Contains(target, ":") {
 		target += ":443"
 	}
 
@@ -114,7 +120,7 @@ func (c *TLSChecker) Judge(ctx context.Context, soul *core.Soul) (*core.Judgment
 	// SSRF protection: dial the pinned literal IP so DNS rebinding between
 	// Validate() and Judge() cannot redirect the connection, then perform
 	// the TLS handshake with the original ServerName for SNI/verification.
-	pinnedDial := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+	pinnedDial := DefaultValidator.Load().WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
 	rawConn, err := pinnedDial(opCtx, "tcp", soul.Target)
 	if err != nil {
 		return failJudgment(soul, fmt.Errorf("TLS connection failed: %w", err)), nil
@@ -387,7 +393,7 @@ func (c *TLSChecker) diagnoseTLSFailure(ctx context.Context, soul *core.Soul, di
 	// The handshake uses the original hostname for SNI.
 	tlsConfig.ServerName = tlsServerName(soul.Target)
 	var diagConn net.Conn
-	pinnedDiagDial := DefaultValidator.WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
+	pinnedDiagDial := DefaultValidator.Load().WrapDialerContext((&net.Dialer{Timeout: timeout}).DialContext)
 	rawDiagConn, dialDiagErr := pinnedDiagDial(ctx, "tcp", soul.Target)
 	if dialDiagErr != nil {
 		return failJudgment(soul, fmt.Errorf("TLS connection failed: %w", dialErr))

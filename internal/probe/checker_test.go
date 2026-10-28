@@ -68,8 +68,8 @@ func TestCheckerRegistry_List(t *testing.T) {
 
 	types := registry.List()
 
-	if len(types) != 10 {
-		t.Errorf("Expected 10 checkers, got %d", len(types))
+	if len(types) != 11 {
+		t.Errorf("Expected 11 checkers (10 pull protocols + heartbeat), got %d", len(types))
 	}
 }
 

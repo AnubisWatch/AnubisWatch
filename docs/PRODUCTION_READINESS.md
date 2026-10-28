@@ -1,5 +1,12 @@
 # Production Readiness Checklist
 
+Current deployment target: standalone binary or Docker. See
+[the installation and recovery contract](deployment/binary-and-docker.md) and
+[the completion review](audits/2026-10-26-project-completion-review.md).
+The dated checklist below is historical evidence, not an acceptance result for
+the current working tree. Its statement that the chart rejects HA predates the
+opt-in fixed three-voter/local-auth/mTLS chart implementation.
+
 **Date:** 2026-07-24  
 **Status:** Single-node production candidate; requires environment-specific preflight, backup/restore rehearsal, rollout smoke evidence, and capacity validation. Multi-node deployment is not supported by the production chart.
 

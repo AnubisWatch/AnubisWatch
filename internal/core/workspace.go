@@ -95,9 +95,9 @@ func (r MemberRole) Can(permission string) bool {
 	case RoleOwner:
 		return true
 	case RoleAdmin:
-		rolePerms = []string{"souls:*", "channels:*", "rules:*", "members:*", "settings:read", "settings:write"}
+		rolePerms = []string{"souls:*", "judgments:read", "channels:*", "rules:*", "members:*", "settings:read", "settings:write", "apikeys:*"}
 	case RoleEditor:
-		rolePerms = []string{"souls:*", "channels:read", "rules:read"}
+		rolePerms = []string{"souls:*", "judgments:read", "channels:read", "rules:read"}
 	case RoleViewer:
 		rolePerms = []string{"souls:read", "judgments:read", "channels:read", "rules:read"}
 	case RoleAPI:

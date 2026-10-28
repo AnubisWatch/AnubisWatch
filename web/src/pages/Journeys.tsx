@@ -22,30 +22,18 @@ import {
   X
 } from 'lucide-react'
 import { ConfirmDialog } from '../components/ConfirmDialog'
-import { api } from '../api/client'
+import { api, type Journey, type JourneyRun } from '../api/client'
 import { fetchAllArrayPages } from '../api/pagination'
 import { useCan } from '../utils/permissions'
 import { formatDateTime, formatTime, useDisplayTimeZone } from '../utils/date'
+import { describeApiError } from '../utils/quota'
 
-interface Journey {
-  id: string
-  name: string
-  enabled: boolean
-  weight: number
-  timeout: number
-  step_count: number
-  last_run?: string
-  last_status: 'passed' | 'failed' | 'pending' | 'unknown'
-  avg_duration: number
-  success_rate: number
-  description?: string
-  region?: string
-  workspace_id?: string
-  created_at?: string
-  updated_at?: string
-  steps?: JourneyStepForm[]
-  continue_on_failure?: boolean
-  variables?: Record<string, string>
+// What the form sends: the journey minus server-assigned fields, with the
+// edited steps (stored step fields kept, see stepBase) and the list
+// statistics of the journey being edited carried along as before.
+type JourneyPayload = Omit<Journey, 'id' | 'workspace_id' | 'created_at' | 'updated_at' | 'variables' | 'steps'> & {
+  variables?: Journey['variables']
+  steps: Array<Record<string, unknown>>
 }
 
 interface JourneyStepForm {
@@ -77,24 +65,6 @@ function stepBase(step: JourneyStepForm): Record<string, unknown> {
   }
   delete base.original
   return base
-}
-
-interface JourneyRun {
-  id: string
-  journey_id: string
-  status: 'alive' | 'dead' | 'degraded' | 'unknown' | 'embalmed'
-  started_at: number
-  completed_at: number
-  duration: number
-  steps: JourneyStepResult[]
-}
-
-interface JourneyStepResult {
-  name: string
-  step_index: number
-  status: 'alive' | 'dead' | 'degraded' | 'unknown'
-  duration: number
-  message: string
 }
 
 interface JourneyRunModalProps {
@@ -258,13 +228,13 @@ function useJourneys() {
     fetchJourneys()
   }, [fetchJourneys])
 
-  const createJourney = async (journey: Omit<Journey, 'id'>) => {
+  const createJourney = async (journey: JourneyPayload) => {
     const result = await api.post<Journey>('/journeys', journey)
     await fetchJourneys()
     return result
   }
 
-  const updateJourney = async (id: string, journey: Partial<Journey>) => {
+  const updateJourney = async (id: string, journey: Partial<JourneyPayload>) => {
     const result = await api.put<Journey>(`/journeys/${id}`, journey)
     await fetchJourneys()
     return result
@@ -411,7 +381,7 @@ export function Journeys() {
     const generation = saveGeneration.current
     setSaving(true)
     try {
-      const payload: Omit<Journey, 'id'> = {
+      const payload: JourneyPayload = {
         name: formName,
         description: formDescription,
         enabled: editingJourney?.enabled ?? true,
@@ -448,7 +418,7 @@ export function Journeys() {
       resetForm()
     } catch (err) {
       if (generation !== saveGeneration.current) return
-      alert('Failed to save journey: ' + (err instanceof Error ? err.message : 'Unknown error'))
+      alert('Failed to save journey: ' + describeApiError(err, 'Unknown error'))
     } finally {
       if (generation === saveGeneration.current) setSaving(false)
     }
@@ -790,8 +760,9 @@ export function Journeys() {
                     {journey.enabled ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                   </button>
                   <button
-                    onClick={() => handleOpenEditModal(journey)} className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" title="Edit" aria-label={`Edit journey ${journey.name}`}>
+                    onClick={() => handleOpenEditModal(journey)}
                     hidden={!can('souls:write')}
+                    className="p-2 text-gray-400 hover:text-white hover:bg-gray-700 rounded-lg transition-colors" title="Edit" aria-label={`Edit journey ${journey.name}`}>
                     <Edit className="w-4 h-4" />
                   </button>
                   <button

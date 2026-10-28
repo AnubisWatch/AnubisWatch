@@ -1,5 +1,7 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import { ConfirmDialog } from '../components/ConfirmDialog'
+import { HeartbeatPanel } from '../components/HeartbeatPanel'
+import { FlappingBadge } from '../components/SoulReliabilityFields'
 import {
   ArrowLeft,
   Activity,
@@ -30,7 +32,7 @@ import { useSoul, useSoulJudgments, useSoulUptime } from '../api/hooks'
 import type { Judgment, UptimeRange } from '../api/client'
 import type { LucideIcon } from 'lucide-react'
 import { useCan } from '../utils/permissions'
-import { formatDate, formatTime, useDisplayTimeZone } from '../utils/date'
+import { formatDate, formatInterval, formatTime, useDisplayTimeZone } from '../utils/date'
 
 interface UptimeData {
   key: string
@@ -247,7 +249,14 @@ export function SoulDetail() {
               }`}>
                 {soul.enabled ? 'Active' : 'Disabled'}
               </span>
+              <FlappingBadge flapping={soul.flapping} />
             </div>
+            {soul.type === 'heartbeat' ? (
+            <p className="text-gray-400 flex items-center gap-2 mt-1">
+              <Activity className="w-4 h-4 text-rose-300" />
+              <span>Heartbeat (push) monitor</span>
+            </p>
+            ) : (
             <p className="text-gray-400 flex items-center gap-2 mt-1">
               <Globe className="w-4 h-4 text-amber-400" />
               <span className="font-mono">{soul.target}</span>
@@ -260,6 +269,7 @@ export function SoulDetail() {
                 <Copy className="w-3 h-3" />
               </button>
             </p>
+            )}
           </div>
         </div>
 
@@ -289,7 +299,7 @@ export function SoulDetail() {
           </button>
           <button
             onClick={handleForceCheck}
-            hidden={!can('souls:write')}
+            hidden={!can('souls:write') || soul.type === 'heartbeat'}
             disabled={isChecking}
             className="flex items-center gap-2 px-4 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded-xl transition-all shadow-lg shadow-amber-600/20"
           >
@@ -307,6 +317,8 @@ export function SoulDetail() {
           </button>
         </div>
       </div>
+
+      {soul.type === 'heartbeat' && <HeartbeatPanel soulId={soul.id} canManage={can('souls:write')} />}
 
       {/* Stats Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -502,13 +514,15 @@ export function SoulDetail() {
                   <option value="24h">Last 24 Hours</option>
                   <option value="7d">Last 7 Days</option>
                   <option value="30d">Last 30 Days</option>
+                  <option value="90d">Last 90 Days</option>
+                  <option value="1y">Last Year</option>
                 </select>
               </div>
 
               {uptimeData.some(d => d.checks > 0) ? (
                 <>
                   {/* Chart Bars */}
-                  <div className="h-48 flex items-end justify-between gap-3">
+                  <div className={`h-48 flex items-end justify-between ${uptimeData.length > 60 ? 'gap-px' : uptimeData.length > 30 ? 'gap-1' : 'gap-3'}`}>
                     {uptimeData.map((day) => (
                       <div key={day.key} className="flex-1 flex flex-col items-center gap-2">
                         <div className="w-full flex flex-col gap-1">
@@ -632,10 +646,10 @@ export function SoulDetail() {
                   </span>
                 </ConfigRow>
                 <ConfigRow icon={Timer} label="Interval">
-                  <span className="text-white font-medium">{soul.interval || soul.weight}s</span>
+                  <span className="text-white font-medium">{formatInterval(soul.weight)}</span>
                 </ConfigRow>
                 <ConfigRow icon={Clock} label="Timeout">
-                  <span className="text-white font-medium">{soul.timeout}s</span>
+                  <span className="text-white font-medium">{formatInterval(soul.timeout)}</span>
                 </ConfigRow>
                 <ConfigRow icon={MapPin} label="Region">
                   <span className="text-white font-medium">{soul.region || 'global'}</span>
@@ -777,6 +791,8 @@ const RANGE_DESCRIPTIONS: Record<UptimeRange, string> = {
   '24h': 'the last 24 hours',
   '7d': 'the last 7 days',
   '30d': 'the last 30 days',
+  '90d': 'the last 90 days',
+  '1y': 'the last year',
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -793,6 +809,8 @@ function bucketLabel(start: string, range: UptimeRange): string {
     case '7d':
       return WEEKDAYS[t.getDay()]
     case '30d':
+    case '90d':
+    case '1y':
       return `${t.getMonth() + 1}/${t.getDate()}`
   }
 }
