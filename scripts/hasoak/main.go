@@ -120,7 +120,7 @@ func run(o options) (*result, error) {
 	binary := o.binary
 	if binary == "" {
 		binary = filepath.Join(out, "anubis")
-		build := exec.CommandContext(context.Background(), "go", "build", "-o", binary, "./cmd/anubis")
+		build := exec.CommandContext(context.Background(), "go", "build", "-o", binary, "./cmd/anubis") // #nosec G204 -- output path is inside this harness's own temp directory
 		build.Stdout, build.Stderr = os.Stderr, os.Stderr
 		if err := build.Run(); err != nil {
 			return res, fmt.Errorf("build: %w", err)
