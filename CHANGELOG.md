@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### HA soak can inject real network partitions
+
+- `scripts/hasoak -partition` (root only) cuts a running node's Raft traffic
+  in both directions with iptables while its HTTP port stays reachable; each
+  node then runs as its own uid so its outbound loopback traffic can be matched.
+  Rules are removed after every fault and on exit. Without root it refuses to
+  start. HA stays labelled experimental until this has passed.
+
 ### Shared escalation policies work
 
 - `verdicts.escalation` parsed but did nothing (startup only warned). A rule
