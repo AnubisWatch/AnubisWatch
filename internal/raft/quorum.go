@@ -186,6 +186,41 @@ func (n *Node) VerifyLeader(timeout time.Duration) error {
 // commit index to apply locally. It returns the read index.
 func (n *Node) ReadBarrier(timeout time.Duration) (uint64, error) {
 	deadline := time.Now().Add(timeout)
+	readIndex, err := n.readIndex(timeout)
+	if err != nil {
+		return 0, err
+	}
+	if err := n.WaitForApplied(readIndex, time.Until(deadline)); err != nil {
+		return 0, err
+	}
+	return readIndex, nil
+}
+
+// tableReadIndex narrows readIndex for a read of one command table: once
+// this leader has applied through readIndex, it is the last entry at or
+// below readIndex that carried a command for table. A follower that has
+// applied that far reads the same table state as at readIndex, so a node far
+// behind on unrelated writes (judgments, after a restart) no longer holds
+// every authenticated request until it has caught up on all of them.
+func (n *Node) tableReadIndex(readIndex uint64, table string, timeout time.Duration) (uint64, error) {
+	tables, ok := n.fsm.(interface{ TableIndex(string) uint64 })
+	if table == "" || !ok {
+		return readIndex, nil
+	}
+	if err := n.WaitForApplied(readIndex, timeout); err != nil {
+		return 0, err
+	}
+	n.mu.RLock()
+	floor := n.tableScopeFloor
+	n.mu.RUnlock()
+	return min(max(tables.TableIndex(table), floor), readIndex), nil
+}
+
+// readIndex is the leader half of ReadBarrier: once this term's first entry
+// has committed and a quorum confirmed this node still leads, every write
+// acknowledged before the call is at or below the returned commit index.
+func (n *Node) readIndex(timeout time.Duration) (uint64, error) {
+	deadline := time.Now().Add(timeout)
 	var readIndex uint64
 	for {
 		n.mu.RLock()
@@ -205,9 +240,6 @@ func (n *Node) ReadBarrier(timeout time.Duration) (uint64, error) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	if err := n.VerifyLeader(time.Until(deadline)); err != nil {
-		return 0, err
-	}
-	if err := n.WaitForApplied(readIndex, time.Until(deadline)); err != nil {
 		return 0, err
 	}
 	return readIndex, nil

@@ -352,3 +352,31 @@ func TestPrometheusRuleSelfMonitoring(t *testing.T) {
 		t.Error("cluster release lacks AnubisWatchNoLeader")
 	}
 }
+
+// ICMP souls need unprivileged ping sockets, which only work for groups in
+// net.ipv4.ping_group_range; Kubernetes runtimes often leave it closed.
+func TestPodsAllowUnprivilegedPing(t *testing.T) {
+	for _, tc := range []struct {
+		kind      string
+		overrides []string
+	}{
+		{"Deployment", nil},
+		{"StatefulSet", secureHA()},
+	} {
+		docs, err := render(t, tc.overrides...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pod := object(t, object(t, object(t, document(t, docs, tc.kind)["spec"])["template"])["spec"])
+		found := false
+		for _, item := range list(t, object(t, pod["securityContext"])["sysctls"]) {
+			sysctl := object(t, item)
+			if sysctl["name"] == "net.ipv4.ping_group_range" && sysctl["value"] == "0 2147483647" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s pod does not open net.ipv4.ping_group_range", tc.kind)
+		}
+	}
+}

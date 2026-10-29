@@ -232,10 +232,12 @@ write to a new empty database using a newly configured destination storage key.
    recovery objectives before promotion. Resume the source service if it is
    still the production instance.
 
-New Raft snapshots use an atomically published chunk manifest so images can
-exceed one WAL record. This version can read legacy snapshots. Older binaries
-cannot read the new snapshot format: keep a pre-upgrade backup and restore it
-to a separate data directory when rolling back across this change.
+Raft snapshots are files in `<data>/raft-snapshots/` (encrypted with the
+storage key when encryption is on), not CobaltDB records. This version reads
+snapshots that older versions stored inside the database and removes them
+after its first snapshot. Older binaries cannot read the file snapshots: keep
+a pre-upgrade backup of the whole data directory and restore it to a separate
+data directory when rolling back across this change.
 
 ## Protected monitoring endpoints
 

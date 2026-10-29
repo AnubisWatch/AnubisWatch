@@ -543,9 +543,12 @@ auth:
 
 | Field | Type | Default | Required | Description |
 |-------|------|---------|----------|-------------|
-| `title` | string | `"AnubisWatch"` | No | Browser title |
-| `logo` | string | - | No | Custom logo URL |
-| `theme` | string | `"auto"` | No | `auto`, `dark`, or `light` |
+| `title` | string | `"AnubisWatch"` | No | Dashboard, login page and browser title (at most 64 characters) |
+| `logo` | string | - | No | Logo image: an `https://` URL or a same-origin path starting with `/` |
+| `theme` | string | `"auto"` | No | `dark` or `light` sets the theme for viewers who have not picked one; `auto` keeps the dashboard's default |
+
+Branding is public — the login page shows it — and is served by
+`GET /api/v1/branding`. Changes apply after a restart.
 
 ### Example
 
@@ -554,7 +557,7 @@ dashboard:
   enabled: true
   branding:
     title: "My Company Monitoring"
-    logo: "/assets/logo.png"
+    logo: "https://cdn.example.com/logo.svg"
     theme: "dark"
 ```
 
@@ -612,7 +615,9 @@ as dedup window (separate from status alerts) and do not open incidents. Flap
 state is evaluated by the node that owns the soul; a new runner (interval
 change, ownership move, restart) restores it from the soul's latest stored
 judgment (`details.flapping`, `details.flap_baseline`), so the flag and the
-single "stopped" notice survive the handover.
+single "stopped" notice survive the handover. The lookup covers the flap
+`window`; a soul whose last judgment is older than that (an outage longer than
+the window) starts unflagged and gets no "stopped" notice.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -1126,7 +1131,7 @@ resolves names itself, so DNS-rebinding protection is the proxy's responsibility
 | Field | Type | Default | Required | Description |
 |-------|------|---------|----------|-------------|
 | `rules` | array | - | No | Alert rules list |
-| `escalation` | array | - | No | Escalation policies |
+| `escalation` | array | - | No | Shared escalation policies that rules name |
 
 ### `verdicts.rules[]` Block
 
@@ -1256,13 +1261,26 @@ verdicts:
 
 ### Escalation Policies
 
+A rule escalates when it has an `escalation` block: either its own `stages`,
+or the `name` of a shared policy declared under `verdicts.escalation`. Stage
+channels are channel names, like a rule's `channels`. Naming a policy that
+does not exist fails config validation. The rule's own `channels` are
+notified when the incident opens; each stage then fires once, `wait` after
+the previous stage (the first one: after the incident opened), as long as
+its `condition` holds: `not_acknowledged` (the default) stops at
+acknowledgement, `not_resolved` continues until the incident resolves. An
+omitted or zero `wait` means 15 minutes.
+
 ```yaml
 verdicts:
+  rules:
+    - name: "Service Down"
+      # ...conditions and channels...
+      escalation:
+        name: "production-escalation"
   escalation:
     - name: "production-escalation"
       stages:
-        - wait: 0s
-          channels: ["ops-slack", "ntfy-push"]
         - wait: 5m
           channels: ["pagerduty-oncall"]
           condition: "not_acknowledged"

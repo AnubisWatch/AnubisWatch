@@ -95,8 +95,9 @@ within 30 s of the key being revoked or expiring.
 - **Expiry:** optional, at most 366 days. Expired and revoked keys answer 401.
 - **Interactive-only endpoints:** a key can never list, create or revoke keys,
   change a password (`PUT /auth/change-password`) or switch workspace
-  (`POST /auth/workspace`); those answer 403. Private status pages still need
-  a browser session.
+  (`POST /auth/workspace`); those answer 403.
+- **Private status pages:** send a key of the page's workspace in
+  `X-API-Key: anb_...` (any role); a browser session cookie works too.
 - **Permission:** managing keys needs `apikeys:*`, held by `admin` and `owner`.
 - With `auth.enabled: false` nothing changes: requests stay anonymous and
   read-only, and the key endpoints answer 403.

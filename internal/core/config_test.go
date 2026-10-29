@@ -1843,3 +1843,63 @@ func TestValidate_ProductionRequiresTLS(t *testing.T) {
 		})
 	}
 }
+
+func TestDashboardBrandingValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		b    DashboardBranding
+		ok   bool
+	}{
+		{"defaults", DashboardBranding{}, true},
+		{"https logo", DashboardBranding{Title: "Acme Status", Logo: "https://cdn.example.com/logo.svg", Theme: "dark"}, true},
+		{"path logo", DashboardBranding{Logo: "/jackal-logo.svg", Theme: "auto"}, true},
+		{"http logo", DashboardBranding{Logo: "http://cdn.example.com/logo.svg"}, false},
+		{"javascript logo", DashboardBranding{Logo: "javascript:alert(1)"}, false},
+		{"protocol-relative logo", DashboardBranding{Logo: "//evil.example/logo.svg"}, false},
+		{"data logo", DashboardBranding{Logo: "data:image/svg+xml;base64,PHN2Zz4="}, false},
+		{"credentials in logo URL", DashboardBranding{Logo: "https://u:p@cdn.example.com/l.png"}, false},
+		{"unknown theme", DashboardBranding{Theme: "neon"}, false},
+		{"long title", DashboardBranding{Title: strings.Repeat("a", MaxBrandingTitleRunes+1)}, false},
+		{"control character in title", DashboardBranding{Title: "Acme\nStatus"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := tc.b.validate(); (err == nil) != tc.ok {
+				t.Fatalf("validate() = %v, want ok=%v", err, tc.ok)
+			}
+		})
+	}
+}
+
+func TestValidate_EscalationPolicies(t *testing.T) {
+	rule := func(esc *EscalationPolicy) AlertRule {
+		return AlertRule{Name: "r", Conditions: []AlertCondition{{Type: "consecutive_failures", Threshold: 3}}, Channels: []string{"c"}, Escalation: esc}
+	}
+	stage := []EscalationStage{{Channels: []string{"c"}}}
+	tests := []struct {
+		name    string
+		v       VerdictsConfig
+		wantErr string
+	}{
+		{"named policy", VerdictsConfig{Rules: []AlertRule{rule(&EscalationPolicy{Name: "p"})}, Escalation: []EscalationPolicy{{Name: "p", Stages: stage}}}, ""},
+		{"inline stages", VerdictsConfig{Rules: []AlertRule{rule(&EscalationPolicy{Stages: stage})}}, ""},
+		{"unknown policy", VerdictsConfig{Rules: []AlertRule{rule(&EscalationPolicy{Name: "nope"})}}, `unknown escalation policy "nope"`},
+		{"empty reference", VerdictsConfig{Rules: []AlertRule{rule(&EscalationPolicy{})}}, "set stages"},
+		{"policy without name", VerdictsConfig{Escalation: []EscalationPolicy{{Stages: stage}}}, "name is required"},
+		{"duplicate policy", VerdictsConfig{Escalation: []EscalationPolicy{{Name: "p", Stages: stage}, {Name: "p", Stages: stage}}}, "duplicate"},
+		{"policy without stages", VerdictsConfig{Escalation: []EscalationPolicy{{Name: "p"}}}, "at least one stage"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.v.validateEscalation()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}

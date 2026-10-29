@@ -174,6 +174,24 @@ systemctl start anubis-backup.timer
 
 ---
 
+## Logical Backups (`anubis backup create` / `anubis restore`)
+
+`anubis backup create` writes a JSON archive of workspaces, souls, alerts,
+status pages, journeys and users (`--include-history` adds judgments).
+Every archive is authenticated: an encrypted archive by its AES-GCM key, a
+plain one by an HMAC signature under the node's backup key
+(`<data>/backup.key`, or `ANUBIS_BACKUP_ENCRYPTION_KEY` when set).
+
+**Keep the backup key with your backups, separately from the data
+directory.** Restoring onto a replacement node needs it: put it in
+`<data>/backup.key` or export `ANUBIS_BACKUP_ENCRYPTION_KEY`. `anubis restore`
+refuses an archive it cannot verify (unsigned, signature removed, or no key
+on this node). `--allow-unsigned` restores it anyway; use it only for
+archives written before signed backups or whose source you trust. A wrong
+signature is always refused.
+
+---
+
 ## Recovery Procedures
 
 ### Full Recovery (Single Node)

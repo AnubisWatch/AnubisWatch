@@ -1,19 +1,14 @@
+version: "2"
+# golangci-lint v2 format (CI and `make lint` run v2.15.0 with this file).
 run:
-  timeout: 5m
   tests: false
-issues:
-  # Third-party code vendored for the web dashboard build; not ours to lint.
-  exclude-dirs:
-    - web/node_modules
 linters:
+  # v2's "standard" defaults stay on: govet, staticcheck, errcheck,
+  # ineffassign, unused.
   enable:
-    - govet
-    - staticcheck
     - bodyclose
-    - misspell
-    - gofmt
-    - errcheck
     - gosec
+    - misspell
     - noctx
     - predeclared
     # Note: exportloopref (the loop-variable-capture linter) used to live
@@ -23,71 +18,81 @@ linters:
     # would be a no-op against this codebase. If you ever downgrade
     # the go directive below 1.22, re-add `exportloopref` here.
     #
-    # Removed legacy linters (deadcode, varcheck, structcheck) are no
-    # longer listed in `disable` — golangci-lint v2 rejects unknown
-    # linter names, and the `unused` linter covers their function.
-linters-settings:
-  gosec:
-    # These rules are intentionally muted project-wide. Each one has
-    # a documented reason; per-line overrides are used where the
-    # exclusion isn't universal.
-    excludes:
-      # G304: file-inclusion via variable. Hit lines are operator-
-      # controlled paths (config load, backup, session storage);
-      # none take user input directly. Per-line nosec would be
-      # more precise but is bookkeeping-only.
-      - G304
-      # G301/G302/G306: file/dir permission expectations. Fixed
-      # where it mattered (config, WAL, backups, session files are
-      # 0600/0750). Listed for any remaining pre-fix hits.
-      - G301
-      - G302
-      - G306
-      # G505: SHA-1 import. Only call site is the WebSocket
-      # Sec-WebSocket-Accept handshake (RFC 6455 §4.2.2 mandates
-      # SHA-1) — not a security context.
-      - G505
-      # G103: unsafe-pointer usage. All hits are in
-      # google.golang.org/protobuf-generated code (internal/grpcapi/v1/),
-      # not ours.
-      - G103
-      # G104: unhandled errors. Overlaps with the errcheck linter,
-      # which is enabled and currently reports only 1 hit. The
-      # remaining gosec hits are defer Close(), best-effort w.Write,
-      # and similar — accepting these.
-      - G104
-      # G703: XSS. No hits today; if added in the future it
-      # belongs as a per-line nosec, not a project-wide exclusion.
-      - G703
-      # G118: was fixed — writePump now receives the client connection context
-      # so its write/ping operations are cancellable. The broadcastLoop
-      # now uses a server-scoped cancellable context, making it fully
-      # shut-down-able without relying on the broadcast channel close.
-      # Removed — keeping as documentation for future readers.
-      # G401: weak hash (MD5/SHA1). Same as G505 rationale above.
-      - G401
-      # G404: weak RNG. The only hit is the election-timer jitter in
-      # internal/raft/node.go newElectionTimer — thundering-herd
-      # avoidance, not a security primitive. Marked inline with
-      # #nosec G404 plus a comment.
-      - G404
-      # G402: TLS InsecureSkipVerify. Each hit is now marked inline
-      # with #nosec G402; the exclude is kept as a backstop so
-      # new hits don't fail the lint gate.
-      - G402
-      # G115: integer overflow conversions. All 13 hits are size
-      # conversions at protocol boundaries (int->uint32 length
-      # prefixes, uint64->int index math) where the value is bounded
-      # by construction. The standalone gosec gate in CI already
-      # excludes G115 with the same rationale; this aligns the two
-      # gates so they stop disagreeing.
-      - G115
-      # G704: SSRF via taint analysis. Single hit in
-      # internal/probe/ssrf.go; SSRFValidator is the gate. Tracked
-      # for follow-up.
-      - G704
-      # G123: TLS session resumption. Single hit in internal/probe/tls.go
-      # alongside a custom VerifyPeerCertificate — accepted.
-      - G123
-  gofmt:
-    simplify: true
+    # Removed legacy linters (deadcode, varcheck, structcheck) are not
+    # listed in `disable` — golangci-lint v2 rejects unknown linter
+    # names, and the `unused` linter covers their function.
+  settings:
+    gosec:
+      # These rules are intentionally muted project-wide. Each one has
+      # a documented reason; per-line overrides are used where the
+      # exclusion isn't universal.
+      excludes:
+        # G304: file-inclusion via variable. Hit lines are operator-
+        # controlled paths (config load, backup, session storage);
+        # none take user input directly. Per-line nosec would be
+        # more precise but is bookkeeping-only.
+        - G304
+        # G301/G302/G306: file/dir permission expectations. Fixed
+        # where it mattered (config, WAL, backups, session files are
+        # 0600/0750). Listed for any remaining pre-fix hits.
+        - G301
+        - G302
+        - G306
+        # G505: SHA-1 import. Only call site is the WebSocket
+        # Sec-WebSocket-Accept handshake (RFC 6455 §4.2.2 mandates
+        # SHA-1) — not a security context.
+        - G505
+        # G103: unsafe-pointer usage. All hits are in
+        # google.golang.org/protobuf-generated code (internal/grpcapi/v1/),
+        # not ours.
+        - G103
+        # G104: unhandled errors. Overlaps with the errcheck linter,
+        # which is enabled. The remaining gosec hits are defer Close(),
+        # best-effort w.Write, and similar — accepting these.
+        - G104
+        # G703: XSS. No hits today; if added in the future it
+        # belongs as a per-line nosec, not a project-wide exclusion.
+        - G703
+        # G401: weak hash (MD5/SHA1). Same as G505 rationale above.
+        - G401
+        # G404: weak RNG. The only hit is the election-timer jitter in
+        # internal/raft/node.go newElectionTimer — thundering-herd
+        # avoidance, not a security primitive. Marked inline with
+        # #nosec G404 plus a comment.
+        - G404
+        # G402: TLS InsecureSkipVerify. Each hit is marked inline
+        # with #nosec G402; the exclude is kept as a backstop so
+        # new hits don't fail the lint gate.
+        - G402
+        # G115: integer overflow conversions. All hits are size
+        # conversions at protocol boundaries (int->uint32 length
+        # prefixes, uint64->int index math) where the value is bounded
+        # by construction. The standalone gosec gate in CI excludes
+        # G115 with the same rationale; this keeps the two gates aligned.
+        - G115
+        # G704: SSRF via taint analysis. Single hit in
+        # internal/probe/ssrf.go; SSRFValidator is the gate.
+        - G704
+        # G123: TLS session resumption. Single hit in internal/probe/tls.go
+        # alongside a custom VerifyPeerCertificate — accepted.
+        - G123
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      # Third-party code vendored for the web dashboard build; not ours to lint.
+      - web/node_modules
+formatters:
+  enable:
+    - gofmt
+  settings:
+    gofmt:
+      simplify: true
+  exclusions:
+    generated: lax
+    paths:
+      - web/node_modules

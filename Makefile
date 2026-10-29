@@ -10,7 +10,7 @@ LDFLAGS   := -s -w \
   -X main.Commit=$(COMMIT) \
   -X main.BuildDate=$(DATE)
 
-.PHONY: all build clean test test-coverage test-short benchmark lint dashboard dashboard-coverage dashboard-api-types dashboard-check-api run docker preflight-production smoke-production capture-production-evidence help
+.PHONY: all build clean test test-coverage test-short benchmark lint dashboard dashboard-coverage dashboard-api-types dashboard-check-api run docker preflight-production smoke-production capture-production-evidence docs help
 
 all: dashboard build ## Build dashboard and binary
 
@@ -52,8 +52,10 @@ smoke-production: ## Run production smoke checks (requires ANUBIS_BASE_URL or BA
 capture-production-evidence: ## Capture deployment evidence for the current Kubernetes context
 	./scripts/capture-deployment-evidence.sh $(OUTPUT_DIR)
 
-lint: ## Run golangci-lint
-	golangci-lint run ./...
+GOLANGCI_LINT_VERSION ?= v2.15.0
+
+lint: ## Run golangci-lint (same version and config as CI)
+	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run --timeout=5m ./...
 
 fmt: ## Format Go code
 	go fmt ./...
@@ -168,11 +170,10 @@ tidy: ## Tidy go modules
 	go mod tidy
 
 # Documentation
-docs: ## Generate documentation
-	@echo "Documentation available in:"
-	@echo "  - .project/SPECIFICATION.md"
-	@echo "  - .project/IMPLEMENTATION.md"
-	@echo "  - .project/TASKS.md"
+docs: ## List the documentation
+	@echo "Documentation index: docs/INDEX.md"
+	@echo "API reference:       docs/API.md (OpenAPI: internal/api/openapi.yaml, served at /api/docs)"
+	@echo "Configuration:       docs/CONFIGURATION.md"
 
 # Help
 help: ## Show this help

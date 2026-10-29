@@ -77,6 +77,13 @@ type Node struct {
 	logBaseTerm uint64
 	commitIndex uint64
 	lastApplied uint64
+	// appliedDirty is set while lastApplied is ahead of the persisted hard
+	// state because writing it failed (see persistApplied).
+	appliedDirty bool
+	// tableScopeFloor is the applied index whose entries the FSM's per-table
+	// tracking does not cover: those applied before this process started or
+	// replaced by an installed snapshot (see tableReadIndex).
+	tableScopeFloor uint64
 	// restoring marks a snapshot restore in flight. The node must not
 	// campaign while its state is being replaced.
 	restoring bool
@@ -443,6 +450,7 @@ func (n *Node) Start() error {
 	if n.logHasMembershipLocked() {
 		n.refreshMembershipLocked()
 	}
+	n.tableScopeFloor = n.lastApplied
 	n.mu.Unlock()
 	if n.commitIndex > n.lastApplied {
 		n.processCommitted(n.commitIndex)
@@ -1696,6 +1704,9 @@ func (n *Node) handleInstallSnapshot(req *core.InstallSnapshotRequest) *core.Ins
 	if fsm, ok := n.fsm.(interface{ SetLastApplied(uint64) }); ok {
 		fsm.SetLastApplied(install.index)
 	}
+	if install.index > n.tableScopeFloor {
+		n.tableScopeFloor = install.index
+	}
 	// The restore ran without the node lock, so entries may have arrived
 	// and the commit index may have advanced while it was in flight. The
 	// snapshot supersedes only the entries at or below its boundary: keep
@@ -1992,15 +2003,34 @@ func (n *Node) checkStandardCommit(index uint64) bool {
 	return voters > 0 && votes > voters/2
 }
 
+// appliedPersistEvery bounds how many applied entries may share one
+// hard-state write.
+const appliedPersistEvery = 256
+
 // processCommitted applies committed entries to FSM.
 // lastApplied is advanced only after the entry has been applied successfully.
+//
+// The applied index is persisted once per pass (and every
+// appliedPersistEvery entries) rather than after each entry: that write is an
+// fsync of its own, and paying it per entry halved how fast a follower could
+// catch up. The FSM's own writes are durable when Apply returns, so a crash
+// can only leave the persisted index behind the store, and the entries after
+// it are applied again on restart. That replay is safe: plain sets and
+// deletes converge, command handlers must be idempotent, and the one
+// compare-and-set (shared authentication) is guarded by a revision that only
+// grows, so a replayed change is a no-op.
 func (n *Node) processCommitted(commitIndex uint64) {
 	n.applyMu.Lock()
 	defer n.applyMu.Unlock()
+	unpersisted := 0
 	for {
 		n.mu.RLock()
 		if n.lastApplied >= commitIndex {
+			dirty := n.appliedDirty
 			n.mu.RUnlock()
+			if (unpersisted > 0 || dirty) && !n.persistApplied() {
+				return
+			}
 			// Nothing left to apply: the pass succeeded, so the next
 			// failure starts from the initial backoff again.
 			n.resetApplyRetryBackoff()
@@ -2055,20 +2085,33 @@ func (n *Node) processCommitted(commitIndex uint64) {
 			return
 		}
 		n.mu.Lock()
-		old := n.lastApplied
 		n.lastApplied = nextIndex
-		if err := n.persistHardStateLocked(); err != nil {
-			n.lastApplied = old
-			n.mu.Unlock()
-			n.notifyApply(entry.Index, entry.Term, err)
-			// The entry reached the FSM but the applied index could not be
-			// persisted, so the pass must be repeated once storage recovers.
-			n.scheduleApplyRetry()
-			return
-		}
 		n.mu.Unlock()
 		n.notifyApply(entry.Index, entry.Term, nil)
+		if unpersisted++; unpersisted >= appliedPersistEvery {
+			if !n.persistApplied() {
+				return
+			}
+			unpersisted = 0
+		}
 	}
+}
+
+// persistApplied writes the hard state after entries were applied. On
+// failure the in-memory applied index stays where it is -- those entries are
+// in the store -- and the write is retried by the next pass. Caller holds
+// n.applyMu.
+func (n *Node) persistApplied() bool {
+	n.mu.Lock()
+	err := n.persistHardStateLocked()
+	n.appliedDirty = err != nil
+	n.mu.Unlock()
+	if err != nil {
+		n.logger.Error("Failed to persist the applied index", "error", err)
+		n.scheduleApplyRetry()
+		return false
+	}
+	return true
 }
 
 // skipCommittedEntry consumes a committed entry that can never be applied.
@@ -2373,6 +2416,17 @@ func (n *Node) restoreLatestSnapshot() error {
 	if meta.Index < n.logBase {
 		return nil
 	}
+	// A durable FSM that already applied past the snapshot holds its state
+	// and more: lastApplied is persisted only after an entry is applied.
+	// Rewriting the whole store from the snapshot on every restart took
+	// minutes for a real dataset and kept the node from rejoining.
+	if d, ok := n.fsm.(interface{ StateIsDurable() bool }); ok && d.StateIsDurable() && n.lastApplied >= meta.Index {
+		n.lastSnapshotIndex = meta.Index
+		if fsm, ok := n.fsm.(interface{ SetLastApplied(uint64) }); ok {
+			fsm.SetLastApplied(n.lastApplied)
+		}
+		return nil
+	}
 	source, err := n.snapshot.Open(meta.ID)
 	if err != nil {
 		return err
@@ -2505,12 +2559,28 @@ func (n *Node) maybeTakeSnapshot() {
 	n.compactLog(snapIndex)
 }
 
-// compactLog removes log entries that are included in the snapshot
+// compactLog removes log entries that are included in the snapshot. The
+// in-memory log and the persisted base change under n.mu; the stored entries
+// below the new base are deleted after it is released, because nothing reads
+// them any more and deleting thousands of keys must not stop heartbeats and
+// AppendEntries (it did, for close to a minute, in the HA soak).
 func (n *Node) compactLog(snapshotIndex uint64) {
+	oldBase, newBase, ok := n.compactLogLocked(snapshotIndex)
+	if !ok || n.storage == nil || oldBase+1 > newBase {
+		return
+	}
+	if err := n.storage.DeleteRange(oldBase+1, newBase); err != nil {
+		n.logger.Error("Failed to compact persistent log", "error", err)
+	}
+}
+
+// compactLogLocked moves the log base and reports the stored range that the
+// caller must delete.
+func (n *Node) compactLogLocked(snapshotIndex uint64) (uint64, uint64, bool) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if snapshotIndex <= n.logBase || snapshotIndex > n.lastLogIndexLocked() {
-		return
+		return 0, 0, false
 	}
 	// Keep the TrailingLogs entries up to and including the snapshot index,
 	// so a follower slightly behind can still catch up from the log instead
@@ -2525,12 +2595,12 @@ func (n *Node) compactLog(snapshotIndex uint64) {
 		}
 	}
 	if newBase <= n.logBase {
-		return
+		return 0, 0, false
 	}
 	newBaseTerm := n.getLogTerm(newBase)
 	pos, ok := n.logPosition(newBase)
 	if !ok {
-		return
+		return 0, 0, false
 	}
 	retained := make([]core.RaftLogEntry, 0, len(n.log)-pos)
 	retained = append(retained, core.RaftLogEntry{Index: newBase, Term: newBaseTerm})
@@ -2539,11 +2609,7 @@ func (n *Node) compactLog(snapshotIndex uint64) {
 	n.logBase, n.logBaseTerm, n.log = newBase, newBaseTerm, retained
 	if err := n.persistHardStateLocked(); err != nil {
 		n.logger.Error("Failed to persist compacted log base", "error", err)
-		return
+		return 0, 0, false
 	}
-	if n.storage != nil && oldBase+1 <= newBase {
-		if err := n.storage.DeleteRange(oldBase+1, newBase); err != nil {
-			n.logger.Error("Failed to compact persistent log", "error", err)
-		}
-	}
+	return oldBase, newBase, true
 }

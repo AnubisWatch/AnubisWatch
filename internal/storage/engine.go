@@ -37,6 +37,9 @@ type CobaltDB struct {
 	// and lets checkpointing snapshot a consistent live state with no write in
 	// flight.
 	writeMu sync.Mutex
+	// checkpointMu serializes checkpoints, which write their snapshot
+	// without writeMu.
+	checkpointMu sync.Mutex
 	// Shared by snapshot-store wrappers over this engine so readers cannot
 	// race publication and cleanup of immutable snapshot chunks.
 	snapshotMu sync.Mutex
@@ -165,6 +168,9 @@ type writeAheadLog struct {
 	// broken is set when a failed write or fsync could not be rolled back;
 	// every later write is refused so nothing is acknowledged after garbage.
 	broken error
+	// gen counts rewrites and truncations; a checkpoint that wrote its
+	// snapshot without the lock installs it only if gen is unchanged.
+	gen uint64
 }
 
 // NewEngine creates a new CobaltDB storage engine
@@ -506,6 +512,54 @@ func (db *CobaltDB) putMany(values map[string][]byte) error {
 	return nil
 }
 
+// walBatchBudget bounds the estimated raw size of one batched WAL frame.
+// A BATCH frame base64-encodes its values inside a JSON map, and that map is
+// base64-encoded again inside the WAL entry, so the encoded frame is roughly
+// 1.8x the raw bytes plus per-item overhead; this keeps it well under
+// maxWALEntryBytes.
+const walBatchBudget = 256 * 1024
+
+// walBatchCost estimates one key/value's share of walBatchBudget, including
+// JSON quoting and the encryption salt, nonce and tag.
+func walBatchCost(key string, value []byte) int {
+	return len(key) + len(value) + 96
+}
+
+// deleteMany removes keys in one WAL frame and one fsync. A batch frame with
+// nil values replays as tombstones, exactly like DELETE entries (older
+// versions replay it the same way).
+func (db *CobaltDB) deleteMany(keys []string) error {
+	db.closedMu.Lock()
+	closed := db.closed
+	db.closedMu.Unlock()
+	if closed {
+		return fmt.Errorf("database is closed")
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	tombstones := make(map[string][]byte, len(keys))
+	for _, key := range keys {
+		tombstones[key] = nil
+	}
+	sorted := append([]string(nil), keys...)
+	sort.Strings(sorted)
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	if err := db.wal.AppendBatch(tombstones); err != nil {
+		return fmt.Errorf("WAL batch delete failed: %w", err)
+	}
+	db.data.mu.Lock()
+	defer db.data.mu.Unlock()
+	for _, key := range sorted {
+		if err := db.data.insert(key, nil); err != nil {
+			return err
+		}
+	}
+	db.data.nextSeq++
+	return nil
+}
+
 // Delete removes a key-value pair
 func (db *CobaltDB) Delete(key string) error {
 	db.closedMu.Lock()
@@ -539,8 +593,10 @@ func (db *CobaltDB) Set(key string, value []byte) error {
 // live key/values, discarding superseded writes and delete tombstones. This
 // bounds the on-disk WAL (the sole durable store for the in-memory B+Tree) to
 // the live dataset instead of letting it grow unbounded at runtime. Reads run
-// concurrently; writes are briefly blocked while the consistent snapshot is
-// captured.
+// concurrently. Writes are blocked only while the snapshot is captured and
+// while the new log is installed: the snapshot is written and fsynced without
+// writeMu, and the writes made meanwhile are carried over from the old log's
+// tail.
 func (db *CobaltDB) Checkpoint() error {
 	db.closedMu.Lock()
 	if db.closed {
@@ -549,9 +605,10 @@ func (db *CobaltDB) Checkpoint() error {
 	}
 	db.closedMu.Unlock()
 
-	db.writeMu.Lock()
-	defer db.writeMu.Unlock()
+	db.checkpointMu.Lock()
+	defer db.checkpointMu.Unlock()
 
+	db.writeMu.Lock()
 	// Snapshot live entries with no write in flight. Tree values are stored
 	// exactly as Append writes them (encrypted when encryption is on), so they
 	// can be re-logged verbatim.
@@ -575,8 +632,33 @@ func (db *CobaltDB) Checkpoint() error {
 		node = node.next
 	}
 	db.data.mu.RUnlock()
+	db.wal.mu.Lock()
+	offset, gen, broken := db.wal.size, db.wal.gen, db.wal.broken
+	db.wal.mu.Unlock()
+	db.writeMu.Unlock()
+	if broken != nil {
+		return fmt.Errorf("WAL is unusable, checkpoint skipped: %w", broken)
+	}
 
-	if err := db.wal.rewrite(entries); err != nil {
+	// The expensive part — serializing and fsyncing the whole live dataset —
+	// runs while writes continue.
+	checkpointSnapshotSeam()
+	tmpPath, total, err := db.wal.writeCompact(entries)
+	if err != nil {
+		return err
+	}
+
+	db.writeMu.Lock()
+	defer db.writeMu.Unlock()
+	db.wal.mu.Lock()
+	if db.wal.gen != gen || db.wal.broken != nil {
+		db.wal.mu.Unlock()
+		os.Remove(tmpPath)
+		return fmt.Errorf("WAL changed during the checkpoint; it will be retried")
+	}
+	err = db.wal.installCompactLocked(tmpPath, total, offset)
+	db.wal.mu.Unlock()
+	if err != nil {
 		return err
 	}
 
@@ -1192,8 +1274,11 @@ func writeEntryLocked(f *os.File, entry walEntry) (int, error) {
 // walWriteSeam and walSyncSeam are overwritten by tests to inject short
 // writes and fsync failures.
 var (
-	walWriteSeam = func(f *os.File, b []byte) (int, error) { return f.Write(b) }
-	walSyncSeam  = func(f *os.File) error { return f.Sync() }
+	// checkpointSnapshotSeam runs after a checkpoint released writeMu and
+	// before it writes the snapshot.
+	checkpointSnapshotSeam = func() {}
+	walWriteSeam           = func(f *os.File, b []byte) (int, error) { return f.Write(b) }
+	walSyncSeam            = func(f *os.File) error { return f.Sync() }
 )
 
 // appendLocked writes one entry and fsyncs it. The caller must hold w.mu.
@@ -1274,27 +1359,32 @@ func (w *writeAheadLog) currentSize() int64 {
 	return w.size
 }
 
-// rewrite atomically replaces the WAL with a fresh generation containing only
-// the supplied live entries (all PUTs), discarding superseded values and
-// tombstones. It writes a temp file, fsyncs it, then renames it over the WAL
-// (atomic on POSIX) and reopens the handle in append mode. A crash before the
-// rename leaves the old WAL intact; a crash after it leaves the complete new
-// WAL — recovery is consistent either way. The caller must ensure no writes
-// are in flight (CobaltDB holds writeMu).
-func (w *writeAheadLog) rewrite(entries []walEntry) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.rewriteLocked(entries)
+// rewriteLocked atomically replaces the WAL with a fresh generation
+// containing only the supplied live entries (all PUTs), discarding superseded
+// values and tombstones. It writes a temp file, fsyncs it, then renames it
+// over the WAL (atomic on POSIX) and reopens the handle in append mode. A
+// crash before the rename leaves the old WAL intact; a crash after it leaves
+// the complete new WAL — recovery is consistent either way. The caller holds
+// w.mu and ensures no writes are in flight; recovery uses it while it owns
+// the WAL and B+Tree locks during replay.
+func (w *writeAheadLog) rewriteLocked(entries []walEntry) error {
+	tmpPath, total, err := w.writeCompact(entries)
+	if err != nil {
+		return err
+	}
+	return w.installCompactLocked(tmpPath, total, w.size)
 }
 
-// rewriteLocked performs rewrite while the caller holds w.mu. Recovery uses
-// this form because it already owns the WAL and B+Tree locks during replay.
-func (w *writeAheadLog) rewriteLocked(entries []walEntry) error {
+// writeCompact writes entries to a fresh, fsynced temp file next to the WAL
+// and returns its path and size. It takes no WAL lock: the live WAL is not
+// touched, and the temp file belongs to the single checkpoint or recovery in
+// progress.
+func (w *writeAheadLog) writeCompact(entries []walEntry) (string, int64, error) {
 	tmpPath := w.path + ".compact"
 	// G302: same 0600 rationale as the primary WAL.
 	tmp, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	if err != nil {
-		return err
+		return "", 0, err
 	}
 
 	var total int64
@@ -1303,18 +1393,35 @@ func (w *writeAheadLog) rewriteLocked(entries []walEntry) error {
 		if werr != nil {
 			tmp.Close()
 			os.Remove(tmpPath)
-			return werr
+			return "", 0, werr
 		}
 		total += int64(n)
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
 		os.Remove(tmpPath)
-		return err
+		return "", 0, err
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpPath)
-		return err
+		return "", 0, err
+	}
+	return tmpPath, total, nil
+}
+
+// installCompactLocked appends the WAL bytes written since offset (complete,
+// self-framed entries) to the compacted file at tmpPath, then renames it over
+// the WAL. The caller holds w.mu, so no append races the tail copy.
+func (w *writeAheadLog) installCompactLocked(tmpPath string, total, offset int64) error {
+	if tail := w.size - offset; tail > 0 {
+		if err := copyWALTail(w.path, tmpPath, offset, tail); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("failed to carry writes made during the checkpoint: %w", err)
+		}
+		total += tail
+	} else if tail < 0 {
+		os.Remove(tmpPath)
+		return fmt.Errorf("WAL shrank during the checkpoint (%d < %d)", w.size, offset)
 	}
 
 	// Close the current handle before replacing it (required on Windows; safe
@@ -1338,6 +1445,7 @@ func (w *writeAheadLog) rewriteLocked(entries []walEntry) error {
 	}
 	w.file = f
 	w.size = total
+	w.gen++
 
 	// Without this the rename can be lost on power failure, bringing back
 	// the old WAL without the writes made since.
@@ -1345,6 +1453,29 @@ func (w *writeAheadLog) rewriteLocked(entries []walEntry) error {
 		return fmt.Errorf("failed to sync WAL directory: %w", err)
 	}
 	return nil
+}
+
+// copyWALTail appends n bytes of the WAL at path, starting at offset, to the
+// file at dst and fsyncs it.
+func copyWALTail(path, dst string, offset, n int64) error {
+	src, err := os.Open(path) // #nosec G304 -- the engine's own WAL path
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_APPEND, 0600) // #nosec G304 -- the engine's own temp file
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, io.NewSectionReader(src, offset, n)); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Sync(); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func (w *writeAheadLog) Close() error {
@@ -1364,6 +1495,7 @@ func (w *writeAheadLog) Truncate() error {
 		return err
 	}
 	w.size = 0
+	w.gen++
 	return nil
 }
 

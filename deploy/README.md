@@ -11,8 +11,10 @@ required for the standalone completion target.
 deploy/
 ├── helm/              # Helm charts for Kubernetes
 │   └── anubiswatch/
-├── k8s/               # Raw Kubernetes manifests
-│   └── base.yaml
+├── k8s/               # Raw Kubernetes manifests (apply the files in order;
+│   │                  #   the Secret is created with kubectl, see below)
+│   ├── namespace.yaml, configmap.yaml, secret.yaml, pvc.yaml
+│   └── service.yaml, deployment.yaml, ingress.yaml
 └── docker/            # Docker Compose configurations
     └── docker-compose.yml
 ```

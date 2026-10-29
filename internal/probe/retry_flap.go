@@ -176,10 +176,16 @@ func (e *Engine) restoreRunnerFlap(ctx context.Context, runner *soulRunner) {
 	soul := runner.getSoul()
 	now := e.now()
 	settings := core.ResolveFlapSettings(soul.FlapDetection, e.config.FlapDetection)
-	// The previous runner judged about one interval ago; looking further
-	// back would make every runner start scan a day of history.
-	since := now.Add(-2*runner.interval - time.Minute)
-	latest, err := store.LatestJudgment(ctx, soul.WorkspaceID, soul.ID, since)
+	// The previous runner usually judged about one interval ago, so a short
+	// scan finds its judgment. After a longer outage (process down, owner
+	// lost) look back over the flap window once more: a soul still flagged
+	// there owes its "stopped" notice. The scan stays bounded by the window
+	// and only runs when flap detection is on and the short scan was empty.
+	short := 2*runner.interval + time.Minute
+	latest, err := store.LatestJudgment(ctx, soul.WorkspaceID, soul.ID, now.Add(-short))
+	if err == nil && latest == nil && settings.Enabled && settings.Window > short {
+		latest, err = store.LatestJudgment(ctx, soul.WorkspaceID, soul.ID, now.Add(-settings.Window))
+	}
 	if err != nil || latest == nil {
 		return
 	}

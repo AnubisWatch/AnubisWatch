@@ -7,6 +7,151 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Shared escalation policies work
+
+- `verdicts.escalation` parsed but did nothing (startup only warned). A rule
+  now uses a shared policy with `escalation: {name: <policy>}`; unknown
+  names, unnamed or duplicate policies and policies without stages fail
+  config validation.
+
+### Restores refuse archives they cannot verify
+
+- `anubis restore` refused a tampered signed archive but restored the same
+  archive once its `signature` field was removed (checksums are unkeyed), and
+  restored signed archives on a node without the backup key, with only a
+  warning the CLI never printed. Both are now refused with
+  `ErrUnauthenticatedBackup`; `--allow-unsigned` restores them deliberately
+  (pre-signature archives, trusted sources). A wrong signature is always
+  refused. Plain archives are also checked against their legacy
+  `<archive>.key` sidecar, like encrypted ones.
+- **Upgrade note:** restoring onto a fresh node needs the original node's
+  backup key (`<data>/backup.key` or `ANUBIS_BACKUP_ENCRYPTION_KEY`).
+
+### HA: restarted nodes rejoin in seconds
+
+- Found by the HA soak: once a snapshot existed, every restart rewrote the
+  node's whole store from it, deleting and re-writing each key with its own
+  fsync — minutes for a real dataset, during which the node did not start
+  its Raft transport. A node whose durable store already applied past the
+  snapshot now skips the rewrite (its persisted `lastApplied` proves the
+  state is there). Installing a snapshot sent by the leader, which must
+  replace the store, now does it in batched frames.
+
+### HA: log compaction no longer stalls the cluster for a minute
+
+- Found by the HA soak: after a snapshot, compaction deleted every compacted
+  log entry with its own fsync while holding the Raft mutex. With ~8000
+  entries that took close to a minute, during which the leader sent no
+  heartbeats and followers answered no AppendEntries; writes waited 35–70 s
+  and the leader finally stepped down. Compacted entries are now deleted
+  after the mutex is released, in batched tombstone frames (replayed exactly
+  like DELETE entries, also by older versions).
+- The size estimate for batched WAL frames now counts keys, the double
+  base64 encoding and encryption overhead; a 5000-entry log append no longer
+  exceeds the frame limit.
+
+### HA: followers catch up 3–4× faster
+
+- Found by the HA soak: a node restarted or paused under load drained its
+  backlog at 12–22 log entries per second, because every log entry, every
+  command of a replicated batch and every replicated judgment was its own
+  fsynced WAL write. Linearizable reads on that node waited for it, so its
+  API stayed slow for a minute or more.
+- Appended log entries, runs of plain writes in a batch, and runs of
+  replicated judgments (with their summaries) are now written as single WAL
+  frames. Judgments and summaries end up exactly as when saved one by one;
+  a replayed batch still counts nothing twice. Measured catch-up: 37–61
+  entries per second on the same disk.
+- The applied index is now persisted once per apply pass (at most every
+  256 entries) instead of after every entry, which was a second fsync per
+  entry. Found by a 2-hour soak: at ~2500 monitors a restarted follower
+  stayed seconds behind the leader, and its API with it. After a crash the
+  entries past the persisted index are applied again, which is safe: plain
+  writes converge, command handlers are idempotent, and the shared
+  authentication compare-and-set is guarded by a growing revision.
+- Authentication on a follower waits only until it applied the last write
+  to the shared auth state, not everything the leader committed. A node
+  catching up on judgments after a restart answered every authenticated
+  request in 5–9 s until it had caught up; it now answers at once. A leader
+  running an older version ignores the narrower request and answers as
+  before.
+
+### HA: Raft snapshots are files, not in-memory records
+
+- Raft snapshots were stored as CobaltDB records, so the in-memory tree (and
+  its WAL) held a second full copy of the state machine. They now live in
+  `<data>/raft-snapshots/` as framed files — encrypted per frame with the
+  storage key when encryption is on, with frame order and completeness
+  authenticated — and `meta.json` is replaced atomically once a snapshot is
+  complete. A snapshot written by an older version stays readable and is
+  removed by the first new snapshot.
+
+### HA: authentication no longer writes to Raft on every request
+
+- Found by the new HA soak (`scripts/hasoak`). In cluster mode every
+  authenticated request ran its quorum barrier as a Raft write (a barrier
+  key, fsynced on a quorum) while holding the authenticator's mutex, and
+  re-imported the whole shared auth state. On a follower that was catching up
+  after a pause, each barrier waited out its 5 s timeout and every other
+  request queued behind it: the node's API, `/api/v1/cluster/status`
+  included, answered after 20–30 s.
+- Followers now get a linearizable read point from the leader with a new
+  `read_index` forward (ReadIndex: the leader confirms its leadership and
+  answers its commit index; nothing is appended), then wait to apply up to
+  it. A leader too old to answer gets the old write barrier, so rolling
+  upgrades keep working.
+- Concurrent requests share one barrier, it runs outside the mutex, and the
+  shared state is imported only when its revision changed.
+
+### Dashboard branding is applied
+
+- `dashboard.branding` parsed but did nothing (a startup warning said so).
+  The title and logo now appear in the sidebar, on the login page and in the
+  browser title, and `theme: dark|light` is the default for viewers who
+  have not chosen one (`auto`, the default, keeps the dashboard's own). It is served publicly by `GET /api/v1/branding`. Config validation
+  rejects a logo that is not an `https://` URL or a `/` path, an unknown
+  theme, and titles over 64 characters.
+
+### Private status pages accept API keys
+
+- `X-API-Key` on a private status page was a stub that refused every key.
+  It now accepts an `anb_` API key of the page's workspace; other values,
+  session tokens included, are refused through that header.
+
+### WAL checkpoints no longer stall writes
+
+- A checkpoint held the write lock while it serialized and fsynced the whole
+  live dataset, so every write — judgments included — waited for the full
+  rewrite. The snapshot is now written without the lock; the lock is retaken
+  only to carry over the writes made meanwhile (copied verbatim from the old
+  log's tail) and to rename the new log into place. A checkpoint that races a
+  rewrite or truncation is abandoned and retried later.
+
+### Flap state after a longer outage
+
+- A new runner looked for the soul's last judgment only two intervals plus a
+  minute back, so after a longer outage a flapping soul lost its flag and its
+  owed `flapping_stopped` notice. When that short lookup finds nothing and flap
+  detection is on, the runner now looks back over the flap window.
+
+### ICMP souls on Kubernetes
+
+- Unprivileged ICMP uses ping sockets, which Linux allows only for groups in
+  `net.ipv4.ping_group_range`. Docker opens that range by default, but many
+  Kubernetes runtimes do not, so every ICMP soul was judged dead with a bare
+  "permission denied". The Helm chart and `deploy/k8s` manifests now set the
+  pod-scoped safe sysctl, and the judgment message names the sysctl.
+
+### WebSocket per-user limit and duplicate session checks
+
+- Concurrent handshakes of one user could exceed `maxConnsPerUser`: the slot
+  was counted only once the connection was registered, after the client had
+  already seen the upgrade succeed. The slot is now reserved before the
+  upgrade.
+- The dashboard checked the session (`/auth/me`) three times per page load
+  (App, Header, Sidebar), spending the per-IP rate budget; concurrent checks
+  now share one request.
+
 ### Dashboard fields the API never sent, and null dashboard widgets
 
 - `POST`/`PUT /api/v1/dashboards` without a `widgets` array stored and

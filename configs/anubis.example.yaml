@@ -85,7 +85,7 @@ dashboard:
   enabled: true
   branding:
     title: "AnubisWatch"
-    logo: ""  # Custom logo URL
+    logo: ""  # https:// URL or a /path; empty keeps the default logo
     theme: "auto"  # auto | dark | light
 
 # Souls (monitored targets)
@@ -293,8 +293,10 @@ verdicts:
         - type: consecutive_failures
           threshold: 3
       severity: critical
-      channels: ["ops-slack", "pagerduty-oncall", "ntfy-push"]
+      channels: ["ops-slack", "ntfy-push"]
       cooldown: 5m
+      escalation:
+        name: "production-escalation"  # a policy from verdicts.escalation below
 
     - name: "Service Degraded"
       scope:
@@ -339,8 +341,6 @@ verdicts:
   escalation:
     - name: "production-escalation"
       stages:
-        - wait: 0s
-          channels: ["ops-slack", "ntfy-push"]
         - wait: 5m
           channels: ["pagerduty-oncall"]
           condition: "not_acknowledged"

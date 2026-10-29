@@ -4,6 +4,7 @@ import { useAuth } from "./api/hooks";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Layout } from "./components/Layout";
 import { WebSocketProvider } from "./hooks/useWebSocket";
+import { useBrandingStore } from "./stores/brandingStore";
 import { applyTheme, useThemeStore } from "./stores/themeStore";
 
 const Dashboard = lazy(() =>
@@ -113,6 +114,12 @@ function ProtectedRoute() {
 
 function ThemeController() {
 	const theme = useThemeStore((state) => state.theme);
+	const loadBranding = useBrandingStore((state) => state.load);
+
+	// dashboard.branding: title, logo and the default theme for new viewers.
+	useEffect(() => {
+		void loadBranding();
+	}, [loadBranding]);
 
 	useEffect(() => {
 		applyTheme(theme);

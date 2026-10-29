@@ -19,9 +19,12 @@ func (a *ClusterAuthenticator) SetMemberQuota(check func(workspace string, curre
 }
 
 func (a *ClusterAuthenticator) read(fn func()) error {
+	if err := a.barrier(); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, err := a.load(); err != nil {
+	if _, err := a.sync(); err != nil {
 		return err
 	}
 	fn()

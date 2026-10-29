@@ -356,4 +356,28 @@ describe('API hooks coverage', () => {
     await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2))
     hook.unmount()
   })
+
+  // The per-IP rate limit counts every request: App checks the session, then
+  // Header and Sidebar mount and check it again. One page load, one /auth/me.
+  it('reuses a fresh session check for consumers that mount after it', async () => {
+    const user = { id: 'u1', email: 'one@example.com' }
+    mocks.get.mockResolvedValue(user)
+    const first = renderHook(() => useAuth())
+    await waitFor(() => expect(first.result.current.loading).toBe(false))
+    const second = renderHook(() => useAuth())
+    await waitFor(() => expect(second.result.current.loading).toBe(false))
+    expect(second.result.current.user).toEqual(user)
+    expect(mocks.get).toHaveBeenCalledTimes(1)
+
+    // A session event drops the cached identity: the next check asks again.
+    act(() => dispatchAuthSessionChanged({ state: 'resync' }))
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2))
+
+    // Once nothing is mounted the cache is gone too.
+    first.unmount()
+    second.unmount()
+    const third = renderHook(() => useAuth())
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(3))
+    third.unmount()
+  })
 })

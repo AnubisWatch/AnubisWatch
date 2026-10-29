@@ -118,41 +118,75 @@ func (s *CobaltDBLogStore) GetLog(index uint64, log *core.RaftLogEntry) error {
 
 // StoreLog stores a single log entry
 func (s *CobaltDBLogStore) StoreLog(log *core.RaftLogEntry) error {
+	key, value, err := encodeLogEntry(log)
+	if err != nil {
+		return err
+	}
+	return s.db.Put(key, value)
+}
+
+func encodeLogEntry(log *core.RaftLogEntry) (string, []byte, error) {
 	entry := map[string]any{
 		"index": log.Index,
 		"term":  log.Term,
 		"type":  log.Type,
 		"data":  log.Data,
 	}
-
 	jsonData, err := json.Marshal(entry)
 	if err != nil {
-		return fmt.Errorf("failed to marshal log entry: %w", err)
+		return "", nil, fmt.Errorf("failed to marshal log entry: %w", err)
 	}
-
-	key := fmt.Sprintf("raft/log/%d", log.Index)
-	return s.db.Put(key, jsonData)
+	return fmt.Sprintf("raft/log/%d", log.Index), jsonData, nil
 }
 
-// StoreLogs stores multiple log entries in batch
+// StoreLogs stores entries in as few WAL frames as fit, each written and
+// fsynced once, instead of one fsync per entry: a follower catching up
+// receives up to MaxAppendEntries entries per AppendEntries.
 func (s *CobaltDBLogStore) StoreLogs(logs []core.RaftLogEntry) error {
-	for _, log := range logs {
-		if err := s.StoreLog(&log); err != nil {
+	batch := make(map[string][]byte)
+	size := 0
+	flush := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		err := s.db.putMany(batch)
+		batch, size = make(map[string][]byte), 0
+		return err
+	}
+	for i := range logs {
+		key, value, err := encodeLogEntry(&logs[i])
+		if err != nil {
 			return err
 		}
+		cost := walBatchCost(key, value)
+		if size > 0 && size+cost > walBatchBudget {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		batch[key] = value
+		size += cost
 	}
-	return nil
+	return flush()
 }
 
 // DeleteRange deletes all log entries in the given range (inclusive)
+//
+// Compaction removes thousands of entries at once; one fsync per key took
+// close to a minute on an ordinary disk. Keys are deleted in batched frames.
 func (s *CobaltDBLogStore) DeleteRange(minIdx, maxIdx uint64) error {
 	if minIdx > maxIdx {
 		return nil
 	}
+	const perFrame = 2048
+	keys := make([]string, 0, min(maxIdx-minIdx+1, perFrame))
 	for i := minIdx; ; i++ {
-		key := fmt.Sprintf("raft/log/%d", i)
-		if err := s.db.Delete(key); err != nil {
-			return err
+		keys = append(keys, fmt.Sprintf("raft/log/%d", i))
+		if len(keys) == perFrame || i == maxIdx {
+			if err := s.db.deleteMany(keys); err != nil {
+				return err
+			}
+			keys = keys[:0]
 		}
 		if i == maxIdx {
 			break

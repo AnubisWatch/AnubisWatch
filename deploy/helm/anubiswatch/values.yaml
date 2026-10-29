@@ -26,6 +26,14 @@ podSecurityContext:
   fsGroup: 1000
   seccompProfile:
     type: RuntimeDefault
+  # ICMP souls use unprivileged ping sockets, which the kernel allows only for
+  # groups in net.ipv4.ping_group_range (it also covers IPv6). Docker sets
+  # this range by default; many Kubernetes runtimes do not. It is a "safe",
+  # pod-scoped sysctl (Kubernetes 1.18+). Remove it if a PodSecurity policy
+  # forbids sysctls and you run no ICMP souls.
+  sysctls:
+    - name: net.ipv4.ping_group_range
+      value: "0 2147483647"
 
 securityContext:
   allowPrivilegeEscalation: false

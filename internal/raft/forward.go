@@ -3,6 +3,7 @@ package raft
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
@@ -66,6 +67,12 @@ func (n *Node) handleForward(req *core.ForwardRequest) *core.ForwardResponse {
 		err = n.AddPeer(*req.Peer)
 	case core.ForwardRemovePeer:
 		err = n.RemovePeer(req.PeerID)
+	case core.ForwardReadIndex:
+		deadline := time.Now().Add(timeout)
+		resp.Index, err = n.readIndex(timeout)
+		if err == nil {
+			resp.Index, err = n.tableReadIndex(resp.Index, req.Table, time.Until(deadline))
+		}
 	default:
 		return &core.ForwardResponse{Error: fmt.Sprintf("unknown forward kind %q", req.Kind)}
 	}
@@ -264,6 +271,55 @@ func (n *Node) ApplyOrForward(cmd core.FSMCommand, timeout time.Duration) (uint6
 				Message: fmt.Sprintf("forwarded entry %d (term %d) was replaced by a term %d entry", resp.Index, resp.Term, term)}
 		}
 		return resp.Index, resp.Term, nil
+	}
+}
+
+// ErrReadIndexUnsupported reports a leader that does not know the read_index
+// forward (an older version during a rolling upgrade). Callers fall back to a
+// write barrier.
+var ErrReadIndexUnsupported = errors.New("leader does not support read_index")
+
+// ReadBarrierOrForward is ReadBarrier from any node: on a follower it asks the
+// leader for its read index (ReadIndex, no log entry) and waits until this
+// node has applied up to it, so the next local read is linearizable.
+func (n *Node) ReadBarrierOrForward(timeout time.Duration) (uint64, error) {
+	return n.TableReadBarrierOrForward("", timeout)
+}
+
+// TableReadBarrierOrForward is ReadBarrierOrForward for a read of only the
+// state that commands of table write: a follower waits until it applied the
+// last such entry, not everything the leader committed (see tableReadIndex).
+func (n *Node) TableReadBarrierOrForward(table string, timeout time.Duration) (uint64, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return 0, &core.RaftError{Code: core.ErrTimeout, Message: "timeout waiting for a read barrier"}
+		}
+		if n.IsLeader() {
+			index, err := n.ReadBarrier(remaining)
+			if isRaftCode(err, core.ErrNotLeader) && !n.IsLeader() {
+				continue // lost leadership meanwhile: ask the new leader
+			}
+			return index, err
+		}
+		resp, err := n.sendForward(core.ForwardRequest{Kind: core.ForwardReadIndex, Table: table}, remaining)
+		if isRaftCode(err, core.ErrNotLeader) && n.IsLeader() {
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		if resp.ErrorCode == "" && strings.HasPrefix(resp.Error, "unknown forward kind") {
+			return 0, ErrReadIndexUnsupported
+		}
+		if err := forwardResponseError(resp); err != nil {
+			return 0, err
+		}
+		if err := n.WaitForApplied(resp.Index, time.Until(deadline)); err != nil {
+			return 0, err
+		}
+		return resp.Index, nil
 	}
 }
 

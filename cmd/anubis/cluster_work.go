@@ -111,6 +111,7 @@ func newClusterWork(mgr *cluster.Manager, cfg *core.Config, store *storage.Cobal
 	}
 	w.batcher = cluster.NewBatcher(mgr.ApplyMutation, 0, logger)
 	mgr.SetCommandHandler(judgmentTable, w.applyJudgment)
+	mgr.SetBatchCommandHandler(judgmentTable, w.applyJudgments)
 	mgr.SetApplyObserver(w.observe)
 	mgr.SetRestoreObserver(func() { w.enqueue(clusterEvent{restore: true}) })
 	mgr.SetMembershipObserver(w.Trigger)
@@ -374,6 +375,40 @@ func (s nodeJudgmentStore) SaveJudgment(ctx context.Context, j *core.Judgment) e
 // forwarded batch is applied twice.
 func (w *clusterWork) applyJudgment(cmd *core.FSMCommand) error {
 	return applyReplicatedJudgment(cmd, nodeJudgmentStore{store: w.store, ts: w.ts})
+}
+
+// applyJudgments is the FSM batch handler for a run of replicated
+// judgments: they are stored together, in one durable write where they fit.
+// An undecodable command is skipped like applyJudgment skips it.
+func (w *clusterWork) applyJudgments(cmds []core.FSMCommand) ([]core.FSMCommand, error) {
+	applied := make([]core.FSMCommand, 0, len(cmds))
+	judgments := make([]*core.Judgment, 0, len(cmds))
+	for i := range cmds {
+		if cmds[i].Op != core.FSMSet {
+			w.logger.Error("skipping replicated judgment with unsupported op", "op", cmds[i].Op)
+			continue
+		}
+		var j core.Judgment
+		if err := json.Unmarshal(cmds[i].Value, &j); err != nil {
+			w.logger.Error("skipping undecodable replicated judgment", "error", err)
+			continue
+		}
+		judgments = append(judgments, &j)
+		applied = append(applied, cmds[i])
+	}
+	if w.ts != nil {
+		if err := w.ts.SaveJudgments(context.Background(), judgments); err != nil {
+			return nil, err
+		}
+		return applied, nil
+	}
+	store := nodeJudgmentStore{store: w.store}
+	for i := range applied {
+		if err := applyReplicatedJudgment(&applied[i], store); err != nil {
+			return applied[:i], err
+		}
+	}
+	return applied, nil
 }
 
 // applyReplicatedJudgment applies one replicated judgment command.

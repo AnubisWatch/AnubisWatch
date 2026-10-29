@@ -785,6 +785,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 
 	restServer := api.NewRESTServer(cfg.Server, cfg.Auth, restStore, probeAPI, alertMgr, authenticator, clusterAdapt, journeyExec, dashboardHandler, statusPageHandler, mcpServer, logger)
 	restServer.SetBuildInfo(Version, Commit, BuildDate)
+	restServer.SetBranding(cfg.Dashboard.Branding)
 	// API keys ("anb_..." bearer tokens for automation) are stored hash-only
 	// under each workspace through restStore, so they replicate in cluster mode.
 	apiKeys := auth.NewAPIKeyService(restStore, logger)
@@ -795,6 +796,10 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		apiKeys.SetOwnerCheck(oc.CheckKeyOwner)
 	}
 	restServer.SetAPIKeys(apiKeys)
+	// Private status pages accept an API key of their workspace in X-API-Key.
+	statusPageHandler.SetSessionValidator(statusPageSessionValidator{
+		auth: &api.KeyAwareAuthenticator{Authenticator: authenticator, Keys: apiKeys},
+	})
 	restServer.SetRuntimeStats(func() api.RuntimeStats {
 		l := probeEngine.Liveness()
 		rs := api.RuntimeStats{
@@ -2006,12 +2011,6 @@ func warnUnimplementedConfig(cfg *core.Config, logger *slog.Logger) {
 	// (see quota.go); isolation is not implemented.
 	if cfg.Tenants.Enabled && cfg.Tenants.Isolation != "" && cfg.Tenants.Isolation != "strict" {
 		logger.Warn("tenants.isolation is not implemented: workspaces are always isolated", "isolation", cfg.Tenants.Isolation)
-	}
-	if cfg.Dashboard.Branding.Logo != "" || (cfg.Dashboard.Branding.Title != "" && cfg.Dashboard.Branding.Title != "AnubisWatch") {
-		logger.Warn("dashboard.branding is not applied to the dashboard yet")
-	}
-	if len(cfg.Verdicts.Escalation) > 0 {
-		logger.Warn("verdicts.escalation is ignored; set escalation on individual alert rules instead")
 	}
 	if cfg.Necropolis.Distribution.Redundancy > 1 {
 		logger.Warn("necropolis.distribution.redundancy is ignored: each soul is probed by exactly one node")
