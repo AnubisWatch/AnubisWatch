@@ -70,7 +70,7 @@ func ownNodeDir(root, dir string, uid uint32) error {
 		if err != nil {
 			return err
 		}
-		return os.Lchown(p, int(uid), int(uid))
+		return os.Lchown(p, int(uid), int(uid)) // #nosec G122 -- the directory was created moments ago by this harness and nothing else writes to it
 	})
 }
 
