@@ -13,9 +13,15 @@
 //   - no soul is probed by more than one node at a time in the quiet phase;
 //   - all nodes agree on one leader.
 //
-// Network partitions between running nodes need root (iptables); SIGSTOP is
-// the unprivileged stand-in. Run it for hours before calling HA production
-// ready: go run ./scripts/hasoak -duration 2h
+// SIGSTOP is the unprivileged stand-in for a partition. With -partition (root
+// only) the soak also cuts a running node's Raft traffic with iptables, in both
+// directions, while its HTTP port stays reachable; every node then runs as its
+// own uid so its outbound loopback traffic can be matched:
+//
+//	sudo go run ./scripts/hasoak -partition -duration 20m
+//
+// Run it for hours before calling HA production ready:
+// go run ./scripts/hasoak -duration 2h
 package main
 
 import (
@@ -35,6 +41,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -56,11 +63,14 @@ type options struct {
 	binary, output  string
 	duration, quiet time.Duration
 	faultEvery      time.Duration
+	partition       bool
 }
 
 type node struct {
 	id, dir, config, base string
 	raftAddr              string
+	raftPort, httpPort    int
+	uid                   uint32 // non-zero only in -partition mode
 	cmd                   *exec.Cmd
 	done                  chan struct{}
 	client                *http.Client
@@ -93,6 +103,7 @@ func main() {
 	flag.DurationVar(&o.duration, "duration", 5*time.Minute, "fault-injection phase")
 	flag.DurationVar(&o.quiet, "quiet", 60*time.Second, "fault-free phase before verification")
 	flag.DurationVar(&o.faultEvery, "fault-every", 20*time.Second, "mean time between faults")
+	flag.BoolVar(&o.partition, "partition", false, "also inject real network partitions with iptables; needs root (each node runs as its own uid)")
 	flag.Parse()
 
 	res, err := run(o)
@@ -139,12 +150,15 @@ func run(o options) (*result, error) {
 	}))
 	defer target.Close()
 
-	nodes, err := setup(out)
+	nodes, err := setup(out, o.partition)
 	if err != nil {
 		return res, err
 	}
 	defer func() {
 		for _, n := range nodes {
+			if n.uid != 0 {
+				n.heal()
+			}
 			n.kill(syscall.SIGCONT)
 			n.kill(syscall.SIGKILL)
 			n.wait(5 * time.Second)
@@ -219,7 +233,23 @@ func run(o options) (*result, error) {
 			role = "leader"
 		}
 		outage := 3*time.Second + time.Duration(rand.Int64N(int64(7*time.Second)))
-		if rand.IntN(2) == 0 {
+		kind := rand.IntN(2)
+		if o.partition {
+			kind = rand.IntN(3)
+		}
+		switch kind {
+		case 2:
+			// A partition outlives several election timeouts so a cut-off
+			// leader is replaced and must step down once healed.
+			outage += 5 * time.Second
+			res.Faults["partition_"+role]++
+			res.FaultLog = append(res.FaultLog, fmt.Sprintf("%s partition %s (%s) for %s", time.Now().Format(time.TimeOnly), victim.id, role, outage.Round(time.Second)))
+			if err := victim.partition(); err != nil {
+				return res, err
+			}
+			time.Sleep(outage)
+			victim.heal()
+		case 0:
 			res.Faults["sigkill_"+role]++
 			res.FaultLog = append(res.FaultLog, fmt.Sprintf("%s kill -9 %s (%s), down %s", time.Now().Format(time.TimeOnly), victim.id, role, outage.Round(time.Second)))
 			victim.kill(syscall.SIGKILL)
@@ -228,7 +258,7 @@ func run(o options) (*result, error) {
 			if err := victim.start(binary); err != nil {
 				return res, err
 			}
-		} else {
+		default:
 			res.Faults["sigstop_"+role]++
 			res.FaultLog = append(res.FaultLog, fmt.Sprintf("%s SIGSTOP %s (%s) for %s", time.Now().Format(time.TimeOnly), victim.id, role, outage.Round(time.Second)))
 			victim.kill(syscall.SIGSTOP)
@@ -306,7 +336,10 @@ func freePort() int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
-func setup(out string) ([]*node, error) {
+func setup(out string, partition bool) ([]*node, error) {
+	if partition && os.Geteuid() != 0 {
+		return nil, errors.New("-partition needs root: it installs iptables rules and runs each node as its own uid")
+	}
 	const count = 3
 	ids := make([]string, count)
 	raft := make([]string, count)
@@ -352,7 +385,15 @@ func setup(out string) ([]*node, error) {
 		if err := os.WriteFile(path, data, 0o600); err != nil {
 			return nil, err
 		}
-		nodes[i] = &node{id: ids[i], raftAddr: raft[i], dir: dir, config: path, base: fmt.Sprintf("http://127.0.0.1:%d", ports[i])}
+		nodes[i] = &node{id: ids[i], raftAddr: raft[i], dir: dir, config: path, base: fmt.Sprintf("http://127.0.0.1:%d", ports[i]), httpPort: ports[i]}
+		_, rp, _ := net.SplitHostPort(raft[i])
+		nodes[i].raftPort, _ = strconv.Atoi(rp)
+		if partition {
+			nodes[i].uid = partitionUID(i)
+			if err := ownNodeDir(out, dir, nodes[i].uid); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return nodes, nil
 }
@@ -371,6 +412,10 @@ func (n *node) start(binary string) error {
 	}
 	cmd.Env = append(env, "ANUBIS_CONFIG="+n.config)
 	cmd.Stdout, cmd.Stderr = logf, logf
+	if n.uid != 0 {
+		cmd.SysProcAttr = credential(n.uid)
+		_ = logf.Chown(int(n.uid), int(n.uid))
+	}
 	if err := cmd.Start(); err != nil {
 		logf.Close()
 		return err
