@@ -7,8 +7,8 @@ The dated checklist below is historical evidence, not an acceptance result for
 the current working tree. Its statement that the chart rejects HA predates the
 opt-in fixed three-voter/local-auth/mTLS chart implementation.
 
-**Date:** 2026-07-24  
-**Status:** Single-node production candidate; requires environment-specific preflight, backup/restore rehearsal, rollout smoke evidence, and capacity validation. Multi-node deployment is not supported by the production chart.
+**Date:** 2026-10-31
+**Status:** Single-node deployments (binary, Docker, Helm) are production-ready: every merge to `main` passes the full CI (race-tested Go suite at about 86% coverage, frontend tests at about 98%, Playwright E2E against the real binary, gosec, govulncheck, CodeQL, Trivy, the Kubernetes drill, chaos and load tests) and `main` is branch-protected on the six core checks. Multi-node (Raft) deployment is **experimental**, see Known Limitations. Environment-specific evidence (preflight, backup/restore rehearsal, rollout smoke, capacity) is still yours to capture before promotion.
 
 ## Build Verification
 
@@ -69,7 +69,7 @@ opt-in fixed three-voter/local-auth/mTLS chart implementation.
 ## Known Limitations
 
 1. **WAL replay scale**: CobaltDB rebuilds its in-memory B+Tree from the WAL at startup. Recovery now checkpoints live state atomically and survives repeated restarts, but startup time and memory still grow with retained data; capacity-test the expected dataset.
-2. **Multi-node deployment**: Raft persistence, snapshots, mutation replication, and method-level gRPC permissions exist, but the production chart intentionally rejects cluster mode because deterministic ordinal formation and Raft mTLS material are not yet packaged or environment-validated.
+2. **Multi-node deployment is experimental.** The Raft path was broken until October 2026; a purpose-built fault-injection soak (`scripts/hasoak`: three real processes, kill -9 and SIGSTOP on leader and followers, a writer creating monitors throughout) found and fixed eleven defects. Current evidence: several 20-minute runs and a 45-minute run pass with zero lost acknowledged writes, one leader and no double probing (also with `necropolis.distribution.redundancy: 2`). Not yet shown: a completed multi-hour run (the two 2-hour reruns were killed by host memory pressure) and a real network partition (`hasoak -partition` exists and needs root; it has not been run). Until both pass, run a single node, or accept that a cluster is a pre-release feature. The Helm chart's cluster mode is opt-in (three static voters, local auth, mTLS).
 3. **Environment evidence**: Repository gates cannot prove DNS, certificates, ingress proxy ranges, storage latency/durability, backup restoration, alert delivery, or SLO capacity. Capture preflight, rollout, smoke, restore, and load evidence in the target environment before promotion.
 
 ## Deployment Instructions
