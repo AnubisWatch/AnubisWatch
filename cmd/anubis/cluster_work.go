@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +65,10 @@ type clusterWork struct {
 
 	ownedMu sync.RWMutex
 	owned   map[string]bool
+	// owners is every probing member of each soul, primary first, as of the
+	// last ownership pass. It only holds more than the primary when
+	// necropolis.distribution.redundancy is above 1.
+	owners map[string][]string
 
 	// journeyCtx parents the journey loops this node runs; cancelled on halt.
 	journeyCtx    context.Context
@@ -193,13 +198,20 @@ func (w *clusterWork) reconcile() {
 		return
 	}
 	souls := collectSouls(context.Background(), w.cfg, w.store, w.logger)
-	plan := w.mgr.PlanSouls(souls)
+	owners := w.mgr.PlanSoulOwners(souls)
+	for _, soul := range souls {
+		// A push monitor is judged from replicated ping state by one node;
+		// extra probers would add nothing.
+		if set := owners[soul.ID]; len(set) > 1 && soul.Type == core.CheckHeartbeat {
+			owners[soul.ID] = set[:1]
+		}
+	}
 	self := w.mgr.NodeID()
 
 	owned := make(map[string]bool)
 	mine := make([]*core.Soul, 0, len(souls))
 	for _, soul := range souls {
-		if plan[soul.ID] != self {
+		if !slices.Contains(owners[soul.ID], self) {
 			continue
 		}
 		owned[soul.ID] = true
@@ -209,9 +221,13 @@ func (w *clusterWork) reconcile() {
 	}
 	w.ownedMu.Lock()
 	changed := len(owned) != len(w.owned)
+	// Alert state is primed for souls this node newly speaks for: a secondary
+	// prober never evaluates rules, so taking over as primary needs the same
+	// seeding as taking over a soul outright.
 	var acquired []*core.Soul
 	for _, soul := range mine {
-		if !w.owned[soul.ID] {
+		wasPrimary := w.owned[soul.ID] && len(w.owners[soul.ID]) > 0 && w.owners[soul.ID][0] == self
+		if owners[soul.ID][0] == self && !wasPrimary {
 			acquired = append(acquired, soul)
 		}
 	}
@@ -222,6 +238,7 @@ func (w *clusterWork) reconcile() {
 		}
 	}
 	w.owned = owned
+	w.owners = owners
 	w.ownedMu.Unlock()
 	// Prime alert state before the engine runs the souls taken over.
 	w.seedAlertState(acquired)

@@ -240,9 +240,10 @@ counters remain per node.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `redundancy` | int | `1` | How many distinct live nodes probe each soul. Above 1, the first node (the primary) speaks for the soul: it stores one judgment whose status is the quorum of its own result and the other probers' latest votes (younger than two intervals). A strict majority dead is `dead`; some dead short of a majority is `degraded` (no default rule alerts on it); otherwise the primary's own status. Probe traffic is `redundancy` times higher. A cluster smaller than `redundancy` runs every soul on all nodes. Heartbeat souls and journeys stay single-owner; manual checks are not consolidated. |
 | `strategy` | string | `"hash"` | `hash` (rendezvous hashing: a membership change moves only the affected node's souls), `round-robin` (exactly even counts, but adding or removing a soul can move others), `region-aware` (prefer nodes in the soul's `region`, balance by count), `load-based` (same as round-robin today). Unrecognised values fall back to `hash` with a warning. A soul's `regions` restriction is always honoured. |
 
-`redundancy` and `rebalance_interval` are parsed but not used.
+`rebalance_interval` is parsed but not used. Design and trade-offs: [ADR-009](adr/adr-009-redundant-probing.md).
 
 Writes may be sent to any node: a follower forwards them to the leader and
 answers once it has applied them itself. When no leader is reachable a write

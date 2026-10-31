@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Redundant probing
+
+- `necropolis.distribution.redundancy` was parsed and ignored. Above 1, each
+  soul is now probed by that many distinct live nodes; the primary stores a
+  single judgment whose status is the quorum of its own result and the other
+  probers' votes, so every reader and alert rule sees one stream. Details and
+  limits: docs/adr/adr-009-redundant-probing.md. `hasoak -redundancy 2`
+  checks that every prober is active.
+
 ### HA soak can inject real network partitions
 
 - `scripts/hasoak -partition` (root only) cuts a running node's Raft traffic

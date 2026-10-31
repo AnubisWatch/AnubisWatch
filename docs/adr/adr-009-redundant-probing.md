@@ -2,8 +2,9 @@
 
 ## Status
 
-Proposed (2026-10-31). Nothing here is implemented: `redundancy` is still
-parsed and ignored, and the node warns at startup when it is above 1.
+Accepted (2026-10-31). Implemented: ownership sets, quorum consolidation on the
+primary, vote records and the `hasoak -redundancy` check. Differences from the
+original proposal are noted under "As built".
 
 ## Context
 
@@ -27,7 +28,7 @@ today.
 
 ### 1. Ownership becomes an ordered set
 
-`PlanOwnership` returns `soul ID -> [node IDs]`, primary first. The primary is
+`PlanOwnerSets` returns `soul ID -> [node IDs]`, primary first (`PlanOwnership` is the single-owner view of it). The primary is
 what the plan returns today, so an N = 1 cluster and the first element of an
 N > 1 plan are identical. The other N-1 probers are chosen under the same
 strategy and the same `Soul.Regions` restriction:
@@ -49,34 +50,53 @@ probers produce evenly spaced probes rather than N simultaneous ones. Probe
 cost is N times higher: workspace quotas and the per-target SSRF policy apply
 per probe as before; the docs must say the effective rate is `N / interval`.
 
-### 3. Judgments already identify their prober
+### 3. Secondaries publish votes, the primary publishes judgments
 
-`Judgment.JackalID` exists and all judgments replicate with unique IDs, so no
-storage change is needed. Time-series summaries keep folding every judgment.
+Making every reader quorum-aware (API, status page, SLA, MCP, WebSocket,
+metrics, uptime) would touch dozens of call sites. Instead only the primary
+writes judgments:
 
-### 4. Status is a quorum over the freshest judgment per prober
+- A secondary's scheduled result is a **vote**: one small replicated record
+  per (soul, prober), `{workspace}/votes/{soul}/{prober}`, overwritten on every
+  probe. It is not stored as a judgment, not pushed to clients and not
+  evaluated by alert rules.
+- The primary, when its own probe finishes, reads the other owners' votes
+  and stores **one judgment** whose status is the quorum. Everything downstream
+  keeps seeing a single judgment stream per soul.
 
-A prober's judgment counts while it is younger than `2 * interval`; an older
-one means that prober is silent and it is dropped from the vote. The soul is:
+### 4. Status is a quorum over the primary's result and fresh votes
 
-- `dead` when a strict majority of voting probers report dead;
-- `alive` when no prober reports dead;
-- `degraded` otherwise (some but not a majority report dead). The per-prober
-  detail is shown in the soul's judgment list.
+A vote counts while it is younger than `2 * interval`; an older one means that
+prober is silent and it is left out. With the primary's own result:
 
-With N = 2 this means a soul is `dead` only when both agree; one dissent is
-`degraded`. That trades slower detection of a partial outage for far fewer
-false pages, which is the point of the feature. A later `distribution.quorum`
-setting (`majority` | `any` | `all`) can change the trade without changing the
-mechanism.
+- a strict majority dead is `dead`;
+- some dead (or degraded) short of a majority is `degraded`;
+- otherwise the primary's own status stands.
 
-### 5. Alerts evaluate the quorum, on the primary only
+With N = 2 a soul is `dead` only when both agree; one dissent is `degraded`.
+That trades slower detection of a partial outage for far fewer false pages.
+The judgment's message records the split ("1 of 2 probers report dead").
+A later `distribution.quorum` setting (`majority` | `any` | `all`) can change
+the trade without changing the mechanism.
 
-Rules see one consolidated stream per soul, evaluated on the live prober with
-the lowest rank. The existing cooldown and streak replication
-(`seedAlertState`) already lets a new evaluator continue where the old one
-stopped, so a primary change does not re-notify. Non-primary probers record
-judgments but never run rules.
+### 5. Alerts run on the primary's consolidated judgment
+
+Only the primary's judgments reach alert rules, so nothing changes in the rules
+engine. Taking over as primary reseeds alert state from replicated judgments
+(`seedAlertState`), as taking over a soul always did; a secondary that becomes
+primary is treated the same way. `degraded` is only as alert-worthy as the
+rules say; none of the default rules fire on it, so a split does not page.
+
+### As built
+
+- Probers are spread by a per-node start offset when several souls start
+  together; a single new soul is first probed by all of its probers at once.
+- Manual checks (`TriggerImmediate`) are not consolidated: they run on the
+  node that received them and store what they find.
+- Vote records are not deleted when a soul is deleted (at most N tiny records
+  per soul).
+- Historical aggregates (uptime percentage, SLA) read the stored judgment
+  stream, which now carries the quorum status.
 
 ### Out of scope for the first cut
 
@@ -97,23 +117,18 @@ judgments but never run rules.
   once per window" to "no soul probed more than N times".
 - A cluster smaller than N silently runs at lower redundancy (logged).
 
-## Plan
+## Verification
 
-1. `PlanOwnership` returns ordered owner sets (N = 1 identical to today);
-   property tests: determinism, distinctness, region restriction, minimal
-   movement under `hash`.
-2. Engine runs a soul at a rank offset; reconcile assigns by membership in the
-   set. No behavior change at N = 1.
-3. Consolidated status function with the freshness and quorum rules; one place
-   all readers (API, status page, SLA, MCP, WebSocket) call.
-4. Alerts evaluated on the lowest-rank live prober over consolidated status.
-5. `hasoak -redundancy 2`: kill and stop probers, assert quorum behaviour, no
-   lost judgments, at most N probes per window.
-6. Docs; the startup warning is removed once step 4 lands.
+- Unit: owner sets (primary equals the single-owner plan, distinct, sized,
+  deterministic, regions honoured, minimal movement under `hash`), quorum
+  table, consolidator (vote vs primary, stale and missing votes, non-owner
+  votes), engine hook.
+- `hasoak -redundancy 2`: every soul must be probed by both probers in the
+  quiet phase (no under-probed souls) and by no more than N, with zero lost
+  acknowledged writes.
 
-## Open questions
+## Resolved questions
 
-- Should `degraded` raise an alert at all? Proposal: no, only a quorum `dead`.
-- Should a soul's `regions` list be allowed to *require* one prober per region
-  (true multi-region checks) rather than "any N"? Natural follow-up, same
-  mechanism.
+- `degraded` does not alert by default.
+- One prober per region (true multi-region checks) is a follow-up that reuses
+  this mechanism.

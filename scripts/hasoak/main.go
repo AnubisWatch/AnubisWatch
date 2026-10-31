@@ -64,6 +64,7 @@ type options struct {
 	duration, quiet time.Duration
 	faultEvery      time.Duration
 	partition       bool
+	redundancy      int
 }
 
 type node struct {
@@ -86,6 +87,7 @@ type result struct {
 	WriteErrors        map[string]int `json:"write_errors"`
 	LostWrites         map[string]int `json:"lost_writes_per_node"`
 	DualProbedSouls    []string       `json:"dual_probed_souls"`
+	UnderProbedSouls   []string       `json:"under_probed_souls,omitempty"`
 	QuietSoulsChecked  int            `json:"quiet_souls_checked"`
 	Leader             string         `json:"leader"`
 	LeaderAgreement    bool           `json:"leader_agreement"`
@@ -104,6 +106,7 @@ func main() {
 	flag.DurationVar(&o.quiet, "quiet", 60*time.Second, "fault-free phase before verification")
 	flag.DurationVar(&o.faultEvery, "fault-every", 20*time.Second, "mean time between faults")
 	flag.BoolVar(&o.partition, "partition", false, "also inject real network partitions with iptables; needs root (each node runs as its own uid)")
+	flag.IntVar(&o.redundancy, "redundancy", 1, "necropolis.distribution.redundancy: probers per soul; the quiet-phase check then allows that many probes per window")
 	flag.Parse()
 
 	res, err := run(o)
@@ -150,7 +153,7 @@ func run(o options) (*result, error) {
 	}))
 	defer target.Close()
 
-	nodes, err := setup(out, o.partition)
+	nodes, err := setup(out, o.partition, o.redundancy)
 	if err != nil {
 		return res, err
 	}
@@ -278,7 +281,8 @@ func run(o options) (*result, error) {
 	window := o.quiet / 2
 	windowStart := quietStart.Add(o.quiet - window)
 	expected := int(window / soulWeight)
-	limit := expected + expected/2 + 1
+	// Each of the soul's probers may probe it once per interval.
+	limit := (expected + expected/2 + 1) * max(o.redundancy, 1)
 
 	ackMu.Lock()
 	defer ackMu.Unlock()
@@ -294,6 +298,11 @@ func run(o options) (*result, error) {
 			continue
 		}
 		res.QuietSoulsChecked++
+		// With redundancy every prober must actually be probing: far fewer
+		// hits than interval*redundancy means a backup is silent.
+		if o.redundancy > 1 && count < expected*(o.redundancy-1) {
+			res.UnderProbedSouls = append(res.UnderProbedSouls, name)
+		}
 		if count > limit {
 			res.DualProbedSouls = append(res.DualProbedSouls, name)
 			res.MaxProbesPerWindow[name] = count
@@ -301,6 +310,7 @@ func run(o options) (*result, error) {
 	}
 	hitsMu.Unlock()
 	sort.Strings(res.DualProbedSouls)
+	sort.Strings(res.UnderProbedSouls)
 
 	leader, err := waitLeader(nodes, 30*time.Second)
 	res.LeaderAgreement = err == nil
@@ -323,7 +333,7 @@ func run(o options) (*result, error) {
 	for _, v := range res.LostWrites {
 		lost += v
 	}
-	res.Passed = lost == 0 && len(res.DualProbedSouls) == 0 && res.LeaderAgreement && res.Acknowledged > 0 && res.ServerErrors500 == 0
+	res.Passed = lost == 0 && len(res.DualProbedSouls) == 0 && len(res.UnderProbedSouls) == 0 && res.LeaderAgreement && res.Acknowledged > 0 && res.ServerErrors500 == 0
 	return res, nil
 }
 
@@ -336,7 +346,7 @@ func freePort() int {
 	return l.Addr().(*net.TCPAddr).Port
 }
 
-func setup(out string, partition bool) ([]*node, error) {
+func setup(out string, partition bool, redundancy int) ([]*node, error) {
 	if partition && os.Geteuid() != 0 {
 		return nil, errors.New("-partition needs root: it installs iptables rules and runs each node as its own uid")
 	}
@@ -373,6 +383,7 @@ func setup(out string, partition bool) ([]*node, error) {
 				"bind_addr": raft[i], "advertise_addr": raft[i],
 				"cluster_secret": "ha-soak-cluster-secret-0123456789", // #nosec G101 -- throwaway local cluster
 				"discovery":      map[string]any{"mode": "manual"},
+				"distribution":   map[string]any{"redundancy": redundancy},
 				"raft": map[string]any{
 					"node_id": ids[i], "bind_addr": raft[i], "advertise_addr": raft[i], "region": "default",
 					"bootstrap": i == 0, "election_timeout": "1s", "heartbeat_timeout": "300ms", "commit_timeout": "50ms",

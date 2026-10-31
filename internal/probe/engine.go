@@ -97,6 +97,8 @@ type Engine struct {
 	// need a mutex round-trip — the callback is set once at startup
 	// and read on every check, which is the natural fit for atomics.
 	onJudgment atomic.Pointer[func(*core.Judgment)]
+	// consolidator is set once at startup, in redundant clusters only.
+	consolidator atomic.Pointer[Consolidator]
 
 	// Concurrency limiting
 	semaphore chan struct{}
@@ -159,6 +161,26 @@ type EngineOptions struct {
 	Logger     *slog.Logger
 	OnJudgment func(*core.Judgment)
 	Config     EngineConfig
+}
+
+// Consolidator turns the scheduled judgments of redundantly probed souls into
+// one authoritative stream. It is called with every scheduled judgment after
+// the engine has enriched it and before it is stored or alerted on. A false
+// return means the judgment was only a vote for another node to consolidate:
+// the engine drops it without storing, publishing or evaluating alert rules.
+// A true return means this node speaks for the soul; Consolidate may have
+// changed the judgment's Status to the quorum's. Manual checks bypass it.
+type Consolidator interface {
+	Consolidate(soul *core.Soul, judgment *core.Judgment) (publish bool)
+}
+
+// SetConsolidator installs the consolidator; nil removes it.
+func (e *Engine) SetConsolidator(c Consolidator) {
+	if c == nil {
+		e.consolidator.Store(nil)
+		return
+	}
+	e.consolidator.Store(&c)
 }
 
 // circuitBreaker tracks failure/success counts for a soul
@@ -377,7 +399,13 @@ func (e *Engine) AssignSouls(souls []*core.Soul) {
 		}
 		var delay time.Duration
 		if jitter {
-			delay = soulStartOffset(soul.ID, soulInterval(soul), e.config.StartJitter)
+			key := soul.ID
+			if e.consolidator.Load() != nil {
+				// Redundant probers must not all fire together: salt the
+				// slot with this node's identity.
+				key += "\x00" + e.nodeID
+			}
+			delay = soulStartOffset(key, soulInterval(soul), e.config.StartJitter)
 		}
 		e.startSoul(soul, delay)
 	}
@@ -679,6 +707,12 @@ func (e *Engine) judgeSoul(ctx context.Context, runner *soulRunner) {
 	}
 	if soul.EffectiveRetries() > 0 && attempts > 0 {
 		judgmentDetails(judgment).Attempts = attempts
+	}
+	// Consolidate before flap detection so flapping follows the status the
+	// soul is actually reported with, and a vote never moves flap state.
+	if c := e.consolidator.Load(); c != nil && !(*c).Consolidate(soul, judgment) {
+		e.markJudgment()
+		return
 	}
 	e.applyFlapState(runner, soul, judgment)
 
