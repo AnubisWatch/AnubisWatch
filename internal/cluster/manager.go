@@ -728,6 +728,25 @@ func (m *Manager) PlanSouls(souls []*core.Soul) map[string]string {
 	return distributor.Rebuild(souls, members)
 }
 
+// Redundancy is how many distinct members probe each soul
+// (necropolis.distribution.redundancy), at least 1.
+func (m *Manager) Redundancy() int {
+	if n := m.necroConfig.Distribution.Redundancy; n > 1 {
+		return n
+	}
+	return 1
+}
+
+// PlanSoulOwners is PlanSouls with redundancy: soul ID -> the members that
+// probe it, primary first. The primary is the owner PlanSouls returns, so the
+// distributor's table (and everything that reads it) is unchanged. At
+// redundancy 1 every set holds just the primary.
+func (m *Manager) PlanSoulOwners(souls []*core.Soul) map[string][]string {
+	members := m.LiveMembers()
+	m.PlanSouls(souls)
+	return PlanOwnerSets(m.strategy, souls, members, m.Redundancy())
+}
+
 // PlanJourneys computes which member runs each journey (journey ID -> node
 // ID). Journeys are planned exactly like souls -- the same strategy over the
 // same replicated LiveMembers, keyed by journey ID -- so every node agrees on
