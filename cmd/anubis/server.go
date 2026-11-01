@@ -718,6 +718,10 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 	if work != nil {
 		work.engine = probeEngine
 		work.alerts = alertMgr
+		if clusterMgr.Redundancy() > 1 {
+			probeEngine.SetConsolidator(newQuorumConsolidator(work))
+			logger.Info("redundant probing enabled", "redundancy", clusterMgr.Redundancy())
+		}
 		probeAPI = &clusterProbe{engine: probeEngine, work: work}
 	}
 
@@ -2012,7 +2016,7 @@ func warnUnimplementedConfig(cfg *core.Config, logger *slog.Logger) {
 	if cfg.Tenants.Enabled && cfg.Tenants.Isolation != "" && cfg.Tenants.Isolation != "strict" {
 		logger.Warn("tenants.isolation is not implemented: workspaces are always isolated", "isolation", cfg.Tenants.Isolation)
 	}
-	if cfg.Necropolis.Distribution.Redundancy > 1 {
-		logger.Warn("necropolis.distribution.redundancy is ignored: each soul is probed by exactly one node")
+	if cfg.Necropolis.Distribution.Redundancy > 1 && !cfg.Necropolis.Enabled {
+		logger.Warn("necropolis.distribution.redundancy has no effect without necropolis.enabled: a single node probes each soul once")
 	}
 }

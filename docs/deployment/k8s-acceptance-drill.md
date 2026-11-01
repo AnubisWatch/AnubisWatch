@@ -50,7 +50,7 @@ Consequences you must plan for:
 
 ```bash
 kind create cluster --name anubis-drill
-kind load docker-image anubiswatch:v0.2.1 --name anubis-drill
+kind load docker-image anubiswatch:v0.3.0 --name anubis-drill
 ```
 
 A kind cluster with a single node cannot satisfy the "three distinct workers"
@@ -68,21 +68,21 @@ by the identity in the kubeconfig.
 scripts/k8s-drill/k8s-drill.sh \
     --kubeconfig ~/.kube/config \
     --context kind-anubis-drill \
-    --image anubiswatch:v0.2.1 \
+    --image anubiswatch:v0.3.0 \
     --output-dir .temp_files/k8s-drill
 
 # One scenario only.
 scripts/k8s-drill/k8s-drill.sh \
     --kubeconfig ~/.kube/config \
     --context kind-anubis-drill \
-    --image anubiswatch:v0.2.1 \
+    --image anubiswatch:v0.3.0 \
     --scenarios quorum-loss
 
 # Keep the drill objects after a failure so they can be inspected in place.
 scripts/k8s-drill/k8s-drill.sh \
     --kubeconfig ~/.kube/config \
     --context kind-anubis-drill \
-    --image anubiswatch:v0.2.1 \
+    --image anubiswatch:v0.3.0 \
     --keep-on-fail
 ```
 
@@ -190,8 +190,8 @@ its already completed checks in a failed scenario result.
     "dirty": false,
     "worktree_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "chart": "anubiswatch",
-    "chart_version": "0.2.1",
-    "image": "ghcr.io/anubiswatch/anubiswatch:v0.2.1"
+    "chart_version": "0.3.0",
+    "image": "ghcr.io/anubiswatch/anubiswatch:v0.3.0"
   },
   "cluster": {
     "kubeconfig": "/home/user/.kube/config",

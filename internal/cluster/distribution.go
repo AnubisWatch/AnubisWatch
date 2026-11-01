@@ -470,19 +470,38 @@ func (d *Distributor) selectHashBased(candidates []*NodeLoad, key string) string
 	return rendezvousOwner(candidates, key)
 }
 
+func rendezvousScore(key, nodeID string) uint64 {
+	h := fnv.New64a()
+	h.Write([]byte(key))
+	h.Write([]byte{0})
+	h.Write([]byte(nodeID))
+	return h.Sum64()
+}
+
 func rendezvousOwner(candidates []*NodeLoad, key string) string {
 	best, bestScore := "", uint64(0)
 	for _, node := range candidates {
-		h := fnv.New64a()
-		h.Write([]byte(key))
-		h.Write([]byte{0})
-		h.Write([]byte(node.NodeID))
-		score := h.Sum64()
+		score := rendezvousScore(key, node.NodeID)
 		if best == "" || score > bestScore || (score == bestScore && node.NodeID < best) {
 			best, bestScore = node.NodeID, score
 		}
 	}
 	return best
+}
+
+// rendezvousRank orders candidates by descending score for key. Its first
+// element is rendezvousOwner's answer, so a redundant plan's primary is the
+// owner a single-owner plan would pick.
+func rendezvousRank(candidates []*NodeLoad, key string) []*NodeLoad {
+	ranked := append([]*NodeLoad(nil), candidates...)
+	sort.Slice(ranked, func(i, j int) bool {
+		si, sj := rendezvousScore(key, ranked[i].NodeID), rendezvousScore(key, ranked[j].NodeID)
+		if si != sj {
+			return si > sj
+		}
+		return ranked[i].NodeID < ranked[j].NodeID
+	})
+	return ranked
 }
 
 // ParseStrategy maps a necropolis.distribution.strategy value onto a strategy.
@@ -543,6 +562,26 @@ func (d *Distributor) Rebuild(souls []*core.Soul, members []NodeLoad) map[string
 // joined or left; region-aware prefers members in the soul's Region and
 // balances by count within that choice.
 func PlanOwnership(strategy DistributionStrategy, souls []*core.Soul, members []NodeLoad) map[string]string {
+	sets := PlanOwnerSets(strategy, souls, members, 1)
+	plan := make(map[string]string, len(sets))
+	for soulID, owners := range sets {
+		plan[soulID] = owners[0]
+	}
+	return plan
+}
+
+// PlanOwnerSets is PlanOwnership with redundancy: each soul gets up to
+// redundancy distinct members, primary first. The primary is exactly what
+// PlanOwnership returns, so redundancy 1 (or less) is the single-owner plan and
+// raising it never moves a primary. The other members follow the strategy:
+// hash takes the next highest rendezvous scores (so a membership change only
+// touches the sets that involved the changed member); the other strategies take
+// the least-loaded remaining members by count of secondary assignments, with
+// region-aware preferring the soul's Region first. A soul with fewer eligible
+// members than redundancy gets all of them, so redundancy degrades instead of
+// leaving a soul unprobed. Like PlanOwnership it is a pure function of its
+// inputs.
+func PlanOwnerSets(strategy DistributionStrategy, souls []*core.Soul, members []NodeLoad, redundancy int) map[string][]string {
 	nodes := make([]*NodeLoad, 0, len(members))
 	seen := make(map[string]bool, len(members))
 	for i := range members {
@@ -574,7 +613,8 @@ func PlanOwnership(strategy DistributionStrategy, souls []*core.Soul, members []
 		return best
 	}
 
-	plan := make(map[string]string, len(ordered))
+	secondaryCounts := make(map[string]int, len(nodes))
+	plan := make(map[string][]string, len(ordered))
 	for _, soul := range ordered {
 		candidates := nodes
 		if len(soul.Regions) > 0 {
@@ -613,10 +653,52 @@ func PlanOwnership(strategy DistributionStrategy, souls []*core.Soul, members []
 		default:
 			owner = leastLoaded(candidates)
 		}
-		plan[soul.ID] = owner
+		owners := []string{owner}
 		counts[owner]++
+
+		if redundancy > 1 && len(candidates) > 1 {
+			rest := make([]*NodeLoad, 0, len(candidates)-1)
+			for _, node := range candidates {
+				if node.NodeID != owner {
+					rest = append(rest, node)
+				}
+			}
+			for _, node := range pickSecondaries(strategy, soul, rest, secondaryCounts, redundancy-1) {
+				owners = append(owners, node)
+				secondaryCounts[node]++
+			}
+		}
+		plan[soul.ID] = owners
 	}
 	return plan
+}
+
+// pickSecondaries chooses up to want members from rest for soul's backup
+// probes. rest is in node-ID order, which makes every tie deterministic.
+func pickSecondaries(strategy DistributionStrategy, soul *core.Soul, rest []*NodeLoad, counts map[string]int, want int) []string {
+	var ranked []*NodeLoad
+	if strategy == StrategyHashBased {
+		ranked = rendezvousRank(rest, soul.ID)
+	} else {
+		ranked = append([]*NodeLoad(nil), rest...)
+		sameRegion := func(n *NodeLoad) bool {
+			return strategy == StrategyRegionAware && soul.Region != "" && n.Region == soul.Region
+		}
+		sort.SliceStable(ranked, func(i, j int) bool {
+			if si, sj := sameRegion(ranked[i]), sameRegion(ranked[j]); si != sj {
+				return si
+			}
+			return counts[ranked[i].NodeID] < counts[ranked[j].NodeID]
+		})
+	}
+	if len(ranked) > want {
+		ranked = ranked[:want]
+	}
+	out := make([]string, len(ranked))
+	for i, n := range ranked {
+		out[i] = n.NodeID
+	}
+	return out
 }
 
 // rebalanceLoop periodically checks and rebalances load.
