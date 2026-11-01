@@ -14,6 +14,7 @@ This directory contains Architecture Decision Records (ADRs) for AnubisWatch. Ea
 | [ADR-006](./adr-006-multi-tenancy.md) | Multi-Tenancy: Workspace-Based Isolation | Accepted | 2026-02-10 |
 | [ADR-007](./adr-007-mcp-integration.md) | MCP Protocol for AI Integration | Accepted | 2026-03-01 |
 | [ADR-008](./adr-008-zero-external-deps.md) | Zero External Dependencies Policy | Accepted | 2026-01-20 |
+| [ADR-009](./adr-009-redundant-probing.md) | Redundant Probing (`distribution.redundancy`) | Accepted | 2026-10-31 |
 
 ---
 
