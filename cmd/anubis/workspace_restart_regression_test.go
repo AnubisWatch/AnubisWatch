@@ -191,15 +191,24 @@ func loginAsAdmin(t *testing.T, baseURL, email, password string) (*http.Client, 
 	client := newCookieClient(t)
 	body := fmt.Sprintf(`{"email":%q,"password":%q}`, email, password)
 
-	resp, err := client.Post(baseURL+"/api/v1/auth/login", "application/json", strings.NewReader(body))
-	if err != nil {
-		t.Fatalf("login request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("login failed with %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	// A freshly booted cluster follower can answer 401 until the replicated
+	// user directory reaches it, so retry that one status for a few seconds.
+	var raw []byte
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		resp, err := client.Post(baseURL+"/api/v1/auth/login", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatalf("login request failed: %v", err)
+		}
+		raw, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusOK {
+			break
+		}
+		if resp.StatusCode != http.StatusUnauthorized || time.Now().After(deadline) {
+			t.Fatalf("login failed with %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
 
 	var out struct {
