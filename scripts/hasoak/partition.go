@@ -77,3 +77,21 @@ func ownNodeDir(root, dir string, uid uint32) error {
 func credential(uid uint32) *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uid, Gid: uid}}
 }
+
+// checkTraversable fails when another uid cannot walk down to dir, which is
+// what the per-node uids need to execute the binary. It names the offending
+// directory so the fix (a different -output) is obvious.
+func checkTraversable(dir string) error {
+	for p := dir; ; p = filepath.Dir(p) {
+		info, err := os.Stat(p)
+		if err != nil {
+			return err
+		}
+		if info.Mode().Perm()&0o001 == 0 {
+			return fmt.Errorf("-partition: %s is not searchable by other users, so the per-node uids cannot reach %s; pass -output under a world-traversable directory such as /var/tmp", p, dir)
+		}
+		if p == filepath.Dir(p) {
+			return nil
+		}
+	}
+}
