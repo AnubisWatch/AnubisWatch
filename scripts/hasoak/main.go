@@ -139,7 +139,9 @@ func run(o options) (*result, error) {
 		return res, err
 	}
 	if o.partition {
-		if err := checkTraversable(out); err != nil {
+		// The run directory itself is opened later (ownNodeDir); only its
+		// ancestors must already let the node uids through.
+		if err := checkTraversable(filepath.Dir(out)); err != nil {
 			return res, err
 		}
 	}
