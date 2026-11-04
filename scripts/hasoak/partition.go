@@ -88,7 +88,7 @@ func checkTraversable(dir string) error {
 			return err
 		}
 		if info.Mode().Perm()&0o001 == 0 {
-			return fmt.Errorf("-partition: %s is not searchable by other users, so the per-node uids cannot reach %s; pass -output under a world-traversable directory such as /var/tmp", p, dir)
+			return fmt.Errorf("-partition: %s is not searchable by other users, so the per-node uids cannot reach the run directory under it; pass -output under a world-traversable directory such as /var/tmp", p)
 		}
 		if p == filepath.Dir(p) {
 			return nil
