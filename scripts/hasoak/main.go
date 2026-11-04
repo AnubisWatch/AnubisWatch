@@ -108,6 +108,13 @@ func main() {
 	flag.BoolVar(&o.partition, "partition", false, "also inject real network partitions with iptables; needs root (each node runs as its own uid)")
 	flag.IntVar(&o.redundancy, "redundancy", 1, "necropolis.distribution.redundancy: probers per soul; the quiet-phase check then allows that many probes per window")
 	flag.Parse()
+	outputSet := false
+	flag.Visit(func(f *flag.Flag) { outputSet = outputSet || f.Name == "output" })
+	if o.partition && !outputSet {
+		// Each node runs as its own uid, which cannot cross a private home
+		// directory, so the run directory defaults to world-traversable space.
+		o.output = filepath.Join("/var/tmp", "hasoak-"+time.Now().UTC().Format("20060102T150405Z"))
+	}
 
 	res, err := run(o)
 	if err != nil {
@@ -130,6 +137,11 @@ func run(o options) (*result, error) {
 	out, err := filepath.Abs(o.output)
 	if err != nil {
 		return res, err
+	}
+	if o.partition {
+		if err := checkTraversable(out); err != nil {
+			return res, err
+		}
 	}
 	binary := o.binary
 	if binary == "" {
