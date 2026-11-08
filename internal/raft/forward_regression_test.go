@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,11 +36,38 @@ func reserveLoopbackAddr(t *testing.T) string {
 // secret (nil means none for every node).
 func startForwardCluster(t *testing.T, n int, secrets []string) []*forwardTestNode {
 	t.Helper()
+	// Ports are reserved by listening and closing, so another test or process
+	// can take one before a transport binds it. Peers need every address up
+	// front, so on a bind failure the whole cluster is rebuilt on new ports.
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		nodes, err := tryStartForwardCluster(t, n, secrets)
+		if err == nil {
+			return nodes
+		}
+		lastErr = err
+		if !strings.Contains(err.Error(), "address already in use") {
+			break
+		}
+	}
+	t.Fatalf("%v", lastErr)
+	return nil
+}
+
+func tryStartForwardCluster(t *testing.T, n int, secrets []string) ([]*forwardTestNode, error) {
+	t.Helper()
 	addrs := make([]string, n)
 	for i := range addrs {
 		addrs[i] = reserveLoopbackAddr(t)
 	}
 	nodes := make([]*forwardTestNode, n)
+	stopStarted := func() {
+		for _, started := range nodes {
+			if started != nil {
+				_ = started.node.Stop()
+			}
+		}
+	}
 	for i := range nodes {
 		cfg := core.RaftConfig{
 			NodeID:           fmt.Sprintf("fwd-%d", i),
@@ -62,15 +90,19 @@ func startForwardCluster(t *testing.T, n int, secrets []string) []*forwardTestNo
 		store := NewInMemoryStorage()
 		node, err := NewNodeWithStableStore(cfg, NewInMemoryLogStore(), NewInMemoryStableStore(), NewInMemorySnapshotStore(), NewStorageFSM(store), newTestRaftLogger())
 		if err != nil {
-			t.Fatalf("NewNode %d: %v", i, err)
+			stopStarted()
+			return nil, fmt.Errorf("NewNode %d: %w", i, err)
 		}
 		transport, err := NewTCPTransport(cfg.BindAddr, cfg.AdvertiseAddr, nil, newTestRaftLogger())
 		if err != nil {
-			t.Fatalf("transport %d: %v", i, err)
+			stopStarted()
+			return nil, fmt.Errorf("transport %d: %w", i, err)
 		}
 		node.SetTransport(transport)
 		if err := node.Start(); err != nil {
-			t.Fatalf("start %d: %v", i, err)
+			stopStarted()
+			_ = transport.Stop()
+			return nil, fmt.Errorf("start %d: %w", i, err)
 		}
 		nodes[i] = &forwardTestNode{node: node, transport: transport, store: store}
 	}
@@ -79,7 +111,7 @@ func startForwardCluster(t *testing.T, n int, secrets []string) []*forwardTestNo
 			_ = n.node.Stop()
 		}
 	})
-	return nodes
+	return nodes, nil
 }
 
 // waitForForwardLeader waits until one node leads and every running node
