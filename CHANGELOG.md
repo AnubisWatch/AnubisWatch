@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `anubis judge` prints the reason under every dead soul (the newest judgment's
+  message). A soul pointed at a private address used to show a bare `dead`; it
+  now names `security.allow_private_targets` and how to allow the target.
+
 ## [0.3.0] - 2026-10-31
 
 ### Redundant probing

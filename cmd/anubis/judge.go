@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -72,6 +73,29 @@ func fetchJudgeSouls(apiURL, token string) ([]judgeSoul, error) {
 		}
 		offset = *page.Pagination.NextOffset
 	}
+}
+
+// latestJudgmentMessage returns the message of a soul's newest judgment, which
+// for a dead soul says why (for example the SSRF setting that blocked it). An
+// empty string means unknown; the table is still useful without it.
+func latestJudgmentMessage(apiURL, token, soulID string) string {
+	resp, err := httpGet(fmt.Sprintf("%s/api/v1/souls/%s/judgments?limit=1", apiURL, url.PathEscape(soulID)), token)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var page struct {
+		Data []struct {
+			Message string `json:"message"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&page); err != nil || len(page.Data) == 0 {
+		return ""
+	}
+	return page.Data[0].Message
 }
 
 func showJudgments() {
@@ -172,6 +196,11 @@ func showJudgments() {
 
 		name := truncate(soul.Name, 22)
 		fmt.Printf("%-24s %s %-8s %-10s %-12s %-20s\n", name, statusIcon, status, latency, region, lastJudged)
+		if status == "dead" && token != "" && store == nil {
+			if msg := latestJudgmentMessage(apiURL, token, soul.ID); msg != "" {
+				fmt.Printf("  ↳ %s\n", msg)
+			}
+		}
 	}
 
 	fmt.Println()

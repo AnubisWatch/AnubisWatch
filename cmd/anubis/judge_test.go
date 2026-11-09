@@ -1052,3 +1052,39 @@ func TestSubprocess_configCommand_temp(t *testing.T) {
 		t.Errorf("Expected config output, got: %s", string(output))
 	}
 }
+
+func TestLatestJudgmentMessage(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{"message of the newest judgment", http.StatusOK, `{"data":[{"message":"SSRF validation failed: set security.allow_private_targets"}]}`, "SSRF validation failed: set security.allow_private_targets"},
+		{"no judgments yet", http.StatusOK, `{"data":[]}`, ""},
+		{"server error", http.StatusInternalServerError, `{"error":"boom"}`, ""},
+		{"not json", http.StatusOK, `not json`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotPath, gotAuth string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotPath, gotAuth = r.URL.RequestURI(), r.Header.Get("Authorization")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+
+			got := latestJudgmentMessage(server.URL, "tok", "soul/1")
+			if got != tt.want {
+				t.Fatalf("message = %q, want %q", got, tt.want)
+			}
+			if gotPath != "/api/v1/souls/soul%2F1/judgments?limit=1" {
+				t.Fatalf("requested %q", gotPath)
+			}
+			if gotAuth != "Bearer tok" {
+				t.Fatalf("Authorization = %q", gotAuth)
+			}
+		})
+	}
+}
