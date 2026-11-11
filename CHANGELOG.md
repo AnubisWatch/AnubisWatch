@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- In a cluster, a request made while the nodes could not prove quorum (a leader
+  change, a member joining or a partition) was answered `401 invalid token`, and
+  a login `401 invalid credentials`, although the session and the password were
+  fine. Clients treat 401 as "logged out", so users were signed out by a passing
+  outage. Such failures now answer `503` with `Retry-After`; `401` is only for
+  credentials that really are invalid. Live WebSocket/SSE streams still close
+  when they cannot re-verify their token, so a partitioned node never keeps a
+  possibly revoked session open.
+
 ### Changed
 
 - `anubis judge` prints the reason under every dead soul (the newest judgment's
