@@ -166,18 +166,17 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: web
-        # --with-deps runs apt against the runner's package mirrors, which now
-        # and then fail DNS ("Temporary failure resolving ...") for minutes.
-        # That says nothing about this repository, so retry before failing.
+        # --with-deps also runs apt against the runner's package mirrors, and
+        # those fail DNS ("Temporary failure resolving ...") for hours at a
+        # time, each attempt hanging ~10 minutes. That says nothing about this
+        # repository, so give apt three minutes and otherwise install only the
+        # browser (it comes from Playwright's CDN, not apt); the runner image
+        # already carries the system libraries Chromium needs.
         run: |
-          for attempt in 1 2 3 4; do
-            if pnpm exec playwright install --with-deps chromium; then
-              exit 0
-            fi
-            echo "Playwright install failed (attempt $attempt of 4); retrying in 45s" >&2
-            sleep 45
-          done
-          exit 1
+          if ! timeout 180 pnpm exec playwright install --with-deps chromium; then
+            echo "apt dependency install failed or timed out; installing the browser only" >&2
+            pnpm exec playwright install chromium
+          fi
 
       - name: Run dashboard smoke E2E
         working-directory: web
