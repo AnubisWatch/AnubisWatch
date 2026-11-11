@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-11
+
 ### Fixed
 
 - In a cluster, a request made while the nodes could not prove quorum (a leader
@@ -23,6 +25,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `anubis judge` prints the reason under every dead soul (the newest judgment's
   message). A soul pointed at a private address used to show a bare `dead`; it
   now names `security.allow_private_targets` and how to allow the target.
+
+### Security
+
+- Go 1.27.4 (toolchain, builder image and CI): `net/http` in Go 1.27.3 has
+  GO-2026-6859, which failed the vulnerability gates. The v0.3.0 image was built
+  with 1.27.3.
+- `golang.org/x/crypto` is pinned to the commit that fixes GO-2026-5932
+  (`x/crypto/openpgp`). AnubisWatch does not import that package; the pin only
+  satisfies the image scan until a tagged release carries the fix.
+
+### Dependencies
+
+- `google.golang.org/grpc` 1.85.0, the dashboard's minor/patch group, and the
+  GitHub Actions group.
+
+### Tooling and tests
+
+- `hasoak -partition` run directories default to `/var/tmp` and are checked for
+  traversal by the per-node uids (the first real runs failed to exec).
+- The dashboard E2E job installs Chromium without apt when the runner's package
+  mirror is unreachable.
+- Flaky tests fixed: a follower's first login in cluster tests retries until
+  the user directory replicates, the cluster POST helper retries the API's own
+  503 "leader unavailable", and the Raft forward-cluster helper rebuilds on
+  fresh ports when a reserved port is taken.
 
 ## [0.3.0] - 2026-10-31
 
