@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.3.1] - 2026-11-11
 
+### Fixed
+
+- In a cluster, a request made while the nodes could not prove quorum (a leader
+  change, a member joining or a partition) was answered `401 invalid token`, and
+  a login `401 invalid credentials`, although the session and the password were
+  fine. Clients treat 401 as "logged out", so users were signed out by a passing
+  outage. Such failures now answer `503` with `Retry-After`; `401` is only for
+  credentials that really are invalid. Live WebSocket/SSE streams still close
+  when they cannot re-verify their token, so a partitioned node never keeps a
+  possibly revoked session open.
+
 ### Changed
 
 - `anubis judge` prints the reason under every dead soul (the newest judgment's
@@ -17,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Go 1.27.4 (toolchain, builder image and CI): `net/http` in Go 1.27.3 has
+  GO-2026-6859, which failed the vulnerability gates. The v0.3.0 image was built
+  with 1.27.3.
 - `golang.org/x/crypto` is pinned to the commit that fixes GO-2026-5932
   (`x/crypto/openpgp`). AnubisWatch does not import that package; the pin only
   satisfies the image scan until a tagged release carries the fix.
@@ -30,8 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `hasoak -partition` run directories default to `/var/tmp` and are checked for
   traversal by the per-node uids (the first real runs failed to exec).
-- Two flaky tests fixed: a follower's first login in cluster tests retries until
-  the user directory replicates, and the Raft forward-cluster helper rebuilds on
+- The dashboard E2E job installs Chromium without apt when the runner's package
+  mirror is unreachable.
+- Flaky tests fixed: a follower's first login in cluster tests retries until
+  the user directory replicates, the cluster POST helper retries the API's own
+  503 "leader unavailable", and the Raft forward-cluster helper rebuilds on
   fresh ports when a reserved port is taken.
 
 ## [0.3.0] - 2026-10-31

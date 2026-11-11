@@ -227,6 +227,14 @@ func (s *WebSocketServer) HandleConnection(w http.ResponseWriter, r *http.Reques
 
 	// Authenticate the token
 	user, err := s.authenticator.Authenticate(token)
+	if err != nil && isAuthUnavailable(err) {
+		s.logger.Warn("WebSocket connection deferred: authentication unavailable",
+			"remote_addr", r.RemoteAddr,
+			"error", err)
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "authentication is temporarily unavailable; retry", http.StatusServiceUnavailable)
+		return
+	}
 	if err != nil {
 		s.logger.Warn("WebSocket connection rejected: invalid token",
 			"remote_addr", r.RemoteAddr,
