@@ -317,9 +317,34 @@ func importClusterAuth(a *LocalAuthenticator, raw []byte) error {
 
 // barrier proves quorum and makes the next local read linearizable. It is
 // shared between concurrent callers and must run without a.mu held.
+// UnavailableError marks an authentication failure that says nothing about the
+// caller's credentials: the cluster could not prove quorum, the shared store
+// failed, or a write's outcome is uncertain. Callers must answer it as a
+// temporary condition (HTTP 503), never as "invalid token" -- a 401 makes a
+// client drop a session that is still valid.
+type UnavailableError struct{ Err error }
+
+func (e *UnavailableError) Error() string { return e.Err.Error() }
+func (e *UnavailableError) Unwrap() error { return e.Err }
+
+// AuthUnavailable lets other packages detect the condition without importing
+// this one.
+func (e *UnavailableError) AuthUnavailable() bool { return true }
+
+func unavailable(err error) error {
+	if err == nil {
+		return nil
+	}
+	var u *UnavailableError
+	if errors.As(err, &u) {
+		return err
+	}
+	return &UnavailableError{Err: err}
+}
+
 func (a *ClusterAuthenticator) barrier() error {
 	if err := a.barriers.do(a.store.Barrier); err != nil {
-		return fmt.Errorf("authentication quorum unavailable: %w", err)
+		return unavailable(fmt.Errorf("authentication quorum unavailable: %w", err))
 	}
 	return nil
 }
@@ -327,6 +352,11 @@ func (a *ClusterAuthenticator) barrier() error {
 // sync brings a.local up to the shared state already made visible by a
 // barrier, importing it only when its revision changed. Caller holds a.mu.
 func (a *ClusterAuthenticator) sync() (*ClusterAuthState, error) {
+	state, err := a.syncShared()
+	return state, unavailable(err)
+}
+
+func (a *ClusterAuthenticator) syncShared() (*ClusterAuthState, error) {
 	if a.stopped {
 		return nil, errors.New("authenticator is stopped")
 	}
@@ -378,7 +408,7 @@ func (a *ClusterAuthenticator) mutate(fn func() error) error {
 		}
 		before, err := snapshotClusterAuth(a.local)
 		if err != nil {
-			return err
+			return unavailable(err)
 		}
 		// fn changes a.local; until a CAS commits that change, a.local no
 		// longer mirrors any shared revision.
@@ -386,24 +416,24 @@ func (a *ClusterAuthenticator) mutate(fn func() error) error {
 		operationErr := fn()
 		after, err := snapshotClusterAuth(a.local)
 		if err != nil {
-			return err
+			return unavailable(err)
 		}
 		if bytes.Equal(before, after) {
 			return operationErr
 		}
 		id, err := generateToken()
 		if err != nil {
-			return err
+			return unavailable(err)
 		}
 		applied, err := a.store.CompareAndSwap(state.Revision, id, after)
 		if err != nil {
-			return err
+			return unavailable(err)
 		}
 		if applied {
 			return operationErr
 		}
 	}
-	return errors.New("authentication state changed concurrently; retry")
+	return unavailable(errors.New("authentication state changed concurrently; retry"))
 }
 func (a *ClusterAuthenticator) Authenticate(token string) (*api.User, error) {
 	if err := a.barrier(); err != nil {

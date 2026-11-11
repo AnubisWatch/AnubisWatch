@@ -981,6 +981,9 @@ func (s *RESTServer) handleLogin(ctx *Context) error {
 		user, token, err = s.auth.Login(req.Email, req.Password)
 	}
 	if err != nil {
+		if isAuthUnavailable(err) {
+			return authTemporarilyUnavailable(ctx)
+		}
 		return ctx.Error(http.StatusUnauthorized, "invalid credentials")
 	}
 
@@ -3259,6 +3262,23 @@ func (s *RESTServer) revokeInvalidLiveSessions() {
 
 // Middleware
 
+// authUnavailable is implemented by authentication errors that say nothing
+// about the credentials (the cluster could not prove quorum, the shared store
+// failed). They are temporary: answer 503 so a client keeps its valid session
+// and retries, instead of 401, which makes it log the user out.
+type authUnavailable interface{ AuthUnavailable() bool }
+
+func isAuthUnavailable(err error) bool {
+	var u authUnavailable
+	return errors.As(err, &u) && u.AuthUnavailable()
+}
+
+// authTemporarilyUnavailable writes the 503 for such an error.
+func authTemporarilyUnavailable(ctx *Context) error {
+	ctx.Response.Header().Set("Retry-After", "1")
+	return ctx.Error(http.StatusServiceUnavailable, "authentication is temporarily unavailable; retry")
+}
+
 func (s *RESTServer) requireAuth(handler Handler) Handler {
 	return func(ctx *Context) error {
 		// When auth is disabled, deny all mutating requests and allow read-only for GET/HEAD
@@ -3302,6 +3322,9 @@ func (s *RESTServer) requireAuth(handler Handler) Handler {
 
 		user, err := s.tokenAuth().Authenticate(token)
 		if err != nil {
+			if isAuthUnavailable(err) {
+				return authTemporarilyUnavailable(ctx)
+			}
 			return ctx.Error(http.StatusUnauthorized, "invalid token")
 		}
 
