@@ -7,11 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-11
+
 ### Changed
 
 - `anubis judge` prints the reason under every dead soul (the newest judgment's
   message). A soul pointed at a private address used to show a bare `dead`; it
   now names `security.allow_private_targets` and how to allow the target.
+
+### Security
+
+- `golang.org/x/crypto` is pinned to the commit that fixes GO-2026-5932
+  (`x/crypto/openpgp`). AnubisWatch does not import that package; the pin only
+  satisfies the image scan until a tagged release carries the fix.
+
+### Dependencies
+
+- `google.golang.org/grpc` 1.85.0, the dashboard's minor/patch group, and the
+  GitHub Actions group.
+
+### Tooling and tests
+
+- `hasoak -partition` run directories default to `/var/tmp` and are checked for
+  traversal by the per-node uids (the first real runs failed to exec).
+- Two flaky tests fixed: a follower's first login in cluster tests retries until
+  the user directory replicates, and the Raft forward-cluster helper rebuilds on
+  fresh ports when a reserved port is taken.
 
 ## [0.3.0] - 2026-10-31
 
