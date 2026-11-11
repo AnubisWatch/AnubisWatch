@@ -492,12 +492,25 @@ func postJSON(t *testing.T, client *http.Client, url string, body any) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := client.Post(url, "application/json", strings.NewReader(string(data)))
-	if err != nil {
-		t.Fatalf("POST %s: %v", url, err)
+	// A node answers 503 "retry shortly" while a leader is still settling
+	// right after election; that is the API's own contract, so retry it.
+	var (
+		resp *http.Response
+		raw  []byte
+	)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		resp, err = client.Post(url, "application/json", strings.NewReader(string(data)))
+		if err != nil {
+			t.Fatalf("POST %s: %v", url, err)
+		}
+		raw, _ = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusServiceUnavailable || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
 	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("POST %s answered %d: %s", url, resp.StatusCode, strings.TrimSpace(string(raw)))
 	}

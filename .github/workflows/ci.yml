@@ -166,7 +166,18 @@ jobs:
 
       - name: Install Playwright browsers
         working-directory: web
-        run: pnpm exec playwright install --with-deps chromium
+        # --with-deps runs apt against the runner's package mirrors, which now
+        # and then fail DNS ("Temporary failure resolving ...") for minutes.
+        # That says nothing about this repository, so retry before failing.
+        run: |
+          for attempt in 1 2 3 4; do
+            if pnpm exec playwright install --with-deps chromium; then
+              exit 0
+            fi
+            echo "Playwright install failed (attempt $attempt of 4); retrying in 45s" >&2
+            sleep 45
+          done
+          exit 1
 
       - name: Run dashboard smoke E2E
         working-directory: web
