@@ -60,7 +60,7 @@ func (g *streamGuard) check() error {
 	}
 	user, err := g.s.auth.Authenticate(token)
 	if err != nil {
-		return status.Error(codes.Unauthenticated, "credentials revoked")
+		return authError(err, "credentials revoked")
 	}
 	ws := user.Workspace
 	if ws == "" {

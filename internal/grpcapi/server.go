@@ -2174,7 +2174,7 @@ func (s *Server) authInterceptor(ctx context.Context, req interface{}, info *grp
 		if s.logger != nil {
 			s.logger.Warn("gRPC authentication failed", "error", err, "method", info.FullMethod)
 		}
-		return nil, status.Error(codes.Unauthenticated, "invalid token")
+		return nil, authError(err, "invalid token")
 	}
 
 	// Add user to context
@@ -2208,7 +2208,7 @@ func (s *Server) authStreamInterceptor(srv interface{}, ss grpc.ServerStream, in
 		if s.logger != nil {
 			s.logger.Warn("gRPC stream authentication failed", "error", err, "method", info.FullMethod)
 		}
-		return status.Error(codes.Unauthenticated, "invalid token")
+		return authError(err, "invalid token")
 	}
 
 	// Add user to context, and the token so the stream can re-check it

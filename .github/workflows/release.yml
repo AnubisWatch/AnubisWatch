@@ -355,6 +355,7 @@ jobs:
           tags: anubiswatch-release-scan:${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            APK_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
             BUILD_DATE=${{ steps.image-stamp.outputs.date }}
@@ -386,6 +387,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
+            APK_REFRESH=${{ github.run_id }}-${{ github.run_attempt }}
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
             BUILD_DATE=${{ steps.image-stamp.outputs.date }}
