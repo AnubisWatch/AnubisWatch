@@ -315,8 +315,6 @@ func importClusterAuth(a *LocalAuthenticator, raw []byte) error {
 	return nil
 }
 
-// barrier proves quorum and makes the next local read linearizable. It is
-// shared between concurrent callers and must run without a.mu held.
 // UnavailableError marks an authentication failure that says nothing about the
 // caller's credentials: the cluster could not prove quorum, the shared store
 // failed, or a write's outcome is uncertain. Callers must answer it as a
@@ -342,6 +340,8 @@ func unavailable(err error) error {
 	return &UnavailableError{Err: err}
 }
 
+// barrier proves quorum and makes the next local read linearizable. It is
+// shared between concurrent callers and must run without a.mu held.
 func (a *ClusterAuthenticator) barrier() error {
 	if err := a.barriers.do(a.store.Barrier); err != nil {
 		return unavailable(fmt.Errorf("authentication quorum unavailable: %w", err))

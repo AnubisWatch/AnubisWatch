@@ -1009,6 +1009,9 @@ func (s *RESTServer) handleLogout(ctx *Context) error {
 	token := requestAuthToken(ctx.Request)
 
 	if err := s.auth.Logout(token); err != nil {
+		if isAuthUnavailable(err) {
+			return authTemporarilyUnavailable(ctx)
+		}
 		return ctx.Error(http.StatusInternalServerError, "logout failed")
 	}
 	// Live streams authenticated with this token only at their handshake;
@@ -1072,6 +1075,9 @@ func (s *RESTServer) handleSwitchWorkspace(ctx *Context) error {
 
 	user, err := switcher.SwitchWorkspace(requestAuthToken(ctx.Request), ws.ID)
 	if err != nil {
+		if isAuthUnavailable(err) {
+			return authTemporarilyUnavailable(ctx)
+		}
 		return s.internalError(ctx, err, "failed to switch workspace")
 	}
 	ctx.User = user
@@ -1098,6 +1104,11 @@ func (s *RESTServer) handleChangePassword(ctx *Context) error {
 	token := requestAuthToken(ctx.Request)
 
 	if err := s.auth.ChangePassword(token, req.CurrentPassword, req.NewPassword); err != nil {
+		// Checked before the substring matching below: an outage message can
+		// contain those words without saying anything about the password.
+		if isAuthUnavailable(err) {
+			return authTemporarilyUnavailable(ctx)
+		}
 		if strings.Contains(err.Error(), "current password") {
 			return ctx.Error(http.StatusUnauthorized, err.Error())
 		}
@@ -1167,6 +1178,11 @@ func (s *RESTServer) handleConfirmPasswordReset(ctx *Context) error {
 	}
 
 	if err := s.auth.ConfirmPasswordReset(req.Token, req.NewPassword); err != nil {
+		// An outage must not read as a bad reset token ("invalid ..."): the
+		// user would discard a token that only needs a retry.
+		if isAuthUnavailable(err) {
+			return authTemporarilyUnavailable(ctx)
+		}
 		if strings.Contains(err.Error(), "expired") || strings.Contains(err.Error(), "invalid") {
 			return ctx.Error(http.StatusBadRequest, err.Error())
 		}

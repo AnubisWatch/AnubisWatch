@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The 503 for an authentication outage (0.3.1) now covers the rest of the
+  surface. gRPC unary and stream calls answer `Unavailable` instead of
+  `Unauthenticated`; password reset confirmation, password change, logout and
+  workspace switching answer 503 + `Retry-After`. Before, a reset during an
+  outage could be reported as an invalid token (400) and a client would drop
+  a session that was still valid.
+
 ## [0.3.1] - 2026-11-11
 
 ### Fixed

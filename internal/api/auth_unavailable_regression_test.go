@@ -83,3 +83,40 @@ func TestAuthOutageIsServiceUnavailableNotUnauthorized(t *testing.T) {
 		})
 	}
 }
+
+// Password-management handlers classify some failures by message text. An
+// outage message must never be mistaken for a bad token or password: it is 503.
+type outagePasswordAuth struct {
+	mockAuthenticator
+	err error
+}
+
+func (a *outagePasswordAuth) ConfirmPasswordReset(string, string) error   { return a.err }
+func (a *outagePasswordAuth) ChangePassword(string, string, string) error { return a.err }
+func (a *outagePasswordAuth) Logout(string) error                         { return a.err }
+
+type textOutage struct{ msg string }
+
+func (e textOutage) Error() string         { return e.msg }
+func (e textOutage) AuthUnavailable() bool { return true }
+
+func TestPasswordHandlersAnswerOutageAs503(t *testing.T) {
+	// Messages chosen to collide with the handlers' substring matching.
+	msgs := []string{"invalid authentication revision", "current password store unavailable", "expired lease, policy engine down"}
+	for _, msg := range msgs {
+		server := outageServer(textOutage{msg})
+		server.auth = &outagePasswordAuth{err: textOutage{msg}}
+		server.router.Handle("POST", "/reset", server.handleConfirmPasswordReset)
+		server.router.Handle("POST", "/change", func(ctx *Context) error { ctx.User = &User{ID: "u"}; return server.handleChangePassword(ctx) })
+		server.router.Handle("POST", "/logout", server.handleLogout)
+		for _, path := range []string{"/reset", "/change", "/logout"} {
+			req := httptest.NewRequest("POST", path, strings.NewReader(`{"token":"t","new_password":"N3w-Passw0rd-ok!","current_password":"x"}`))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			server.router.ServeHTTP(w, req)
+			if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" {
+				t.Fatalf("%s with %q: status %d (%s), want 503 + Retry-After", path, msg, w.Code, w.Body.String())
+			}
+		}
+	}
+}
