@@ -56,7 +56,14 @@ FROM alpine:3.24
 # security updates is the right side of that trade for a security product;
 # the Go binary is statically linked and CGO-free, so this only affects the
 # runtime image's own packages.
-RUN apk --no-cache upgrade
+#
+# This layer must not be served from a build cache. A cached `apk upgrade` keeps
+# the package set of the day it was first built, so a CVE fixed in Alpine's
+# repository afterwards still shows up in the scanned image although a fresh
+# build is clean. CI passes a value that changes on every run, which busts the
+# layer; a plain `docker build` always runs it fresh anyway.
+ARG APK_REFRESH=none
+RUN : "apk refresh: ${APK_REFRESH}" && apk --no-cache upgrade
 
 # Install ca-certificates for HTTPS and create a non-root runtime user.
 RUN apk --no-cache add ca-certificates \
