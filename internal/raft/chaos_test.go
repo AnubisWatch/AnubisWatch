@@ -591,7 +591,7 @@ func TestChaos_RestartRecovery_Real(t *testing.T) {
 
 	preTerm := leader.CurrentTerm()
 	preCommit := leader.CommitIndex()
-	preLogIndex := leader.lastLogIndexLocked()
+	preLogIndex := lastLogIndexSafe(leader)
 	t.Logf("Pre-restart: term=%d commit=%d logIndex=%d", preTerm, preCommit, preLogIndex)
 
 	// Stop all nodes and wait for ports to be released.
@@ -668,12 +668,12 @@ func TestChaos_RestartRecovery_Real(t *testing.T) {
 	// Log the state of every post-restart node for diagnostics.
 	for i, n := range newNodes {
 		t.Logf("Node %d: term=%d commit=%d logIndex=%d leaderID=%q running=%v",
-			i, n.CurrentTerm(), n.CommitIndex(), n.lastLogIndexLocked(),
+			i, n.CurrentTerm(), n.CommitIndex(), lastLogIndexSafe(n),
 			n.LeaderID(), n.running.Load())
 	}
 	t.Logf("Pre-restart: term=%d commit=%d logIndex=%d", preTerm, preCommit, preLogIndex)
 	t.Logf("Post-restart node-0: term=%d commit=%d logIndex=%d leaderID=%q",
-		restored.CurrentTerm(), restored.CommitIndex(), restored.lastLogIndexLocked(),
+		restored.CurrentTerm(), restored.CommitIndex(), lastLogIndexSafe(restored),
 		restored.LeaderID())
 
 	if restored.CurrentTerm() < preTerm {
@@ -682,8 +682,8 @@ func TestChaos_RestartRecovery_Real(t *testing.T) {
 	if restored.CommitIndex() < preCommit {
 		t.Errorf("commit index regressed: was %d, now %d", preCommit, restored.CommitIndex())
 	}
-	if restored.lastLogIndexLocked() < preLogIndex {
-		t.Errorf("log index regressed: was %d, now %d", preLogIndex, restored.lastLogIndexLocked())
+	if lastLogIndexSafe(restored) < preLogIndex {
+		t.Errorf("log index regressed: was %d, now %d", preLogIndex, lastLogIndexSafe(restored))
 	}
 	t.Log("✅ Restart recovery test passed")
 }
@@ -721,3 +721,12 @@ func TestChaos_LeaderFailover_Real(t *testing.T) {
 // transport, so fault injection also exercises signed frames and the replay
 // window on the hot AppendEntries/heartbeat path.
 const chaosClusterSecret = "chaos-cluster-secret"
+
+// lastLogIndexSafe reads the last log index under the node lock. The
+// production helper lastLogIndexLocked requires the caller to hold n.mu, and
+// the nodes in these tests are still running when they are inspected.
+func lastLogIndexSafe(n *Node) uint64 {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.lastLogIndexLocked()
+}
