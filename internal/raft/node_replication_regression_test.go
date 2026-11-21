@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
 )
@@ -87,8 +88,19 @@ func TestNodeReplicationPreservesFollowerLogIndexes(t *testing.T) {
 				repeats = 1
 			}
 			for repeat := 0; repeat < repeats; repeat++ {
+				// replicateLog skips a peer whose previous send is still in
+				// flight, and that marker is cleared only after the transport
+				// call returns -- after the fixture has already published its
+				// result. Wait for it, or the next round sends nothing and the
+				// receive below never completes.
+				waitPeerSendDone(t, leader, peer)
 				leader.replicateLog()
-				actual := <-result
+				var actual regressionReplicationResult
+				select {
+				case actual = <-result:
+				case <-time.After(10 * time.Second):
+					t.Fatal("replicateLog sent no AppendEntries")
+				}
 				previous := tc.base + uint64(tc.prefix)
 				previousTerm := leader.getLogTerm(previous)
 				count := tc.suffix
@@ -123,5 +135,20 @@ func TestNodeReplicationPreservesFollowerLogIndexes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// waitPeerSendDone blocks until the leader has no send in flight to peer.
+func waitPeerSendDone(t *testing.T, leader *Node, peer *Peer) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, busy := leader.replicationInFlight.Load(peer); !busy {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("previous replication never finished")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
