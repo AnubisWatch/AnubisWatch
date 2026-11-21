@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-11-21
+
 ### Fixed
 
 - The 503 for an authentication outage (0.3.1) now covers the rest of the
@@ -15,6 +17,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workspace switching answer 503 + `Retry-After`. Before, a reset during an
   outage could be reported as an invalid token (400) and a client would drop
   a session that was still valid.
+
+### Changed
+
+- Container images are now built with a fresh `apk upgrade`. The layer used to
+  be served from the CI build cache, which kept the Alpine package set of the
+  day it was first built: a CVE fixed in Alpine's repository later still
+  appeared in the scanned image although a clean build was free of it. The
+  images are rebuilt with current security updates on every run.
+
+### Dependencies
+
+- `jsdom` 31.0.0 and the `web-minor-patch` group (dashboard dev dependencies),
+  `golang.org/x/sys` 0.50.0, and the GitHub Actions group.
 
 ## [0.3.1] - 2026-11-11
 
