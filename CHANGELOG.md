@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-11-22
+
+### Fixed
+
+- Deleting a soul now also removes its heartbeat state and the votes of its
+  secondary probers. Before, those records stayed in storage forever, on a
+  single node and across a cluster. Deleting `soul-1` never touches `soul-10`.
+
+### Dependencies
+
+- `golang.org/x/crypto` 0.59.0, `golang.org/x/net` 0.63.0, `golang.org/x/text`
+  0.44.0, `lucide-react` 1.74.0 and the rest of the web minor/patch group,
+  `actions/setup-go` 7.1.0.
+
 ## [0.3.2] - 2026-11-21
 
 ### Fixed
