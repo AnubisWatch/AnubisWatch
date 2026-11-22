@@ -1159,10 +1159,29 @@ func (a *restStorageAdapter) DeleteSoul(ctx context.Context, id string) error {
 	} else {
 		err = a.store.DeleteSoul(ctx, soul.WorkspaceID, id)
 	}
+	if err == nil {
+		a.deleteSoulSideRecords(soul)
+	}
 	if err == nil && a.onSoulChange != nil {
 		a.onSoulChange(soul, "deleted")
 	}
 	return err
+}
+
+// deleteSoulSideRecords drops the records keyed by a deleted soul that live
+// outside {ws}/souls/{id}: the heartbeat state and the secondary probers'
+// votes. Best effort: the soul is already gone, so a failure only leaves an
+// orphan record behind, and the soul delete must not be reported as failed.
+func (a *restStorageAdapter) deleteSoulSideRecords(soul *core.Soul) {
+	hbKey := core.HeartbeatStateKey(soul.WorkspaceID, soul.ID)
+	votePrefix := fmt.Sprintf("%s/votes/%s/", workspaceOrDefault(soul.WorkspaceID), soul.ID)
+	if a.replicator != nil {
+		_ = a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: hbKey})
+		_ = a.applyMutation(core.FSMCommand{Op: core.FSMDeletePrefix, Key: votePrefix})
+		return
+	}
+	_ = a.store.Delete(hbKey)
+	_ = a.store.DeletePrefix(votePrefix)
 }
 
 func (a *restStorageAdapter) DeleteSoulNoCtx(id string) error {
