@@ -112,10 +112,25 @@ func TestUndeliveredAlertDoesNotConsumeDedupWindow(t *testing.T) {
 		t.Fatalf("setup failed: expected one failed attempt, got calls=%d success=%d", calls, success)
 	}
 
-	calls, success = dedupRegressionJudgment(t, manager, dispatcher, 2)
-	if success == 0 {
-		t.Errorf("the channel was never notified although the service is down: the failed delivery consumed "+
-			"the dedup window (calls=%d, successes=%d)", calls, success)
+	// The dispatcher reports the failed call before the manager releases the
+	// dedup window, so a judgment sent in that gap is suppressed. That is the
+	// right behaviour (the next judgment retries), so keep judging until the
+	// alert gets through instead of betting on a single judgment's timing.
+	soul := &core.Soul{ID: dedupRegressionSoulID, WorkspaceID: "default", Name: "Dedup Soul", Type: core.CheckHTTP}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		manager.ProcessJudgment(soul, core.SoulAlive, &core.Judgment{
+			SoulID: dedupRegressionSoulID, Status: core.SoulDead, Message: "down", Duration: time.Second,
+		})
+		time.Sleep(50 * time.Millisecond)
+		calls, success = dispatcher.counts()
+		if success > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the channel was never notified although the service is down: the failed delivery consumed "+
+				"the dedup window (calls=%d, successes=%d)", calls, success)
+		}
 	}
 }
 
