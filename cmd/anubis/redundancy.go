@@ -28,6 +28,11 @@ type vote struct {
 	JackalID  string          `json:"jackal_id"`
 	Status    core.SoulStatus `json:"status"`
 	Timestamp time.Time       `json:"timestamp"`
+	// Latency and Region describe the secondary's own probe, so the location
+	// breakdown can show them. Both are optional: votes written by an older
+	// build lack them and decode with zero values.
+	Latency time.Duration `json:"latency,omitempty"`
+	Region  string        `json:"region,omitempty"`
 }
 
 func voteKey(workspaceID, soulID, jackalID string) string {
@@ -117,7 +122,7 @@ func (c *quorumConsolidator) Consolidate(soul *core.Soul, j *core.Judgment) bool
 }
 
 func (c *quorumConsolidator) publishVote(soul *core.Soul, j *core.Judgment) {
-	v := vote{JackalID: c.board.selfID(), Status: j.Status, Timestamp: j.Timestamp}
+	v := vote{JackalID: c.board.selfID(), Status: j.Status, Timestamp: j.Timestamp, Latency: j.Duration, Region: j.Region}
 	if err := c.board.publishVote(voteKey(soul.WorkspaceID, soul.ID, v.JackalID), v); err != nil {
 		c.logger.Warn("failed to publish probe vote", "soul", soul.ID, "err", err)
 	}

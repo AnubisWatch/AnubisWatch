@@ -91,7 +91,7 @@ func TestConsolidateSecondaryOnlyVotes(t *testing.T) {
 	now := time.Now()
 	b := &fakeBoard{self: "b", owners: []string{"a", "b"}}
 	soul := redundantSoul()
-	j := &core.Judgment{Status: core.SoulDead, Timestamp: now}
+	j := &core.Judgment{Status: core.SoulDead, Timestamp: now, Duration: 250 * time.Millisecond, Region: "fr"}
 
 	if newTestConsolidator(b, now).Consolidate(soul, j) {
 		t.Fatal("a secondary published a judgment")
@@ -99,6 +99,9 @@ func TestConsolidateSecondaryOnlyVotes(t *testing.T) {
 	got, ok := b.published[voteKey("", soul.ID, "b")]
 	if !ok || got.Status != core.SoulDead || got.JackalID != "b" {
 		t.Fatalf("published votes = %+v", b.published)
+	}
+	if got.Latency != 250*time.Millisecond || got.Region != "fr" {
+		t.Fatalf("vote lost its latency/region: %+v", got)
 	}
 	if j.Status != core.SoulDead {
 		t.Fatal("a vote's judgment was rewritten")
@@ -161,5 +164,31 @@ func TestConsolidateSingleOwnerIsUntouched(t *testing.T) {
 	j := &core.Judgment{Status: core.SoulDead}
 	if !newTestConsolidator(b, time.Now()).Consolidate(redundantSoul(), j) || j.Status != core.SoulDead || len(b.published) != 0 {
 		t.Fatal("a single-owner soul was consolidated")
+	}
+}
+
+// A secondary's vote carries its probe latency and region, and a vote written
+// by an older build (without those fields) still decodes.
+func TestVoteCarriesLatencyAndRegionAndReadsOldRecords(t *testing.T) {
+	at := time.Unix(1_700_000_000, 0).UTC()
+	data, err := json.Marshal(vote{JackalID: "jackal-b", Status: core.SoulDead, Timestamp: at, Latency: 120 * time.Millisecond, Region: "fr"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got vote
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Latency != 120*time.Millisecond || got.Region != "fr" {
+		t.Fatalf("latency/region lost in round trip: %+v", got)
+	}
+
+	old := []byte(`{"jackal_id":"jackal-c","status":"alive","timestamp":"2023-11-14T22:13:20Z"}`)
+	var legacy vote
+	if err := json.Unmarshal(old, &legacy); err != nil {
+		t.Fatalf("old vote record no longer decodes: %v", err)
+	}
+	if legacy.JackalID != "jackal-c" || legacy.Status != core.SoulAlive || legacy.Latency != 0 || legacy.Region != "" {
+		t.Fatalf("old vote decoded wrongly: %+v", legacy)
 	}
 }
