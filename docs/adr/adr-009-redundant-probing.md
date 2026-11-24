@@ -93,8 +93,8 @@ rules say; none of the default rules fire on it, so a split does not page.
   together; a single new soul is first probed by all of its probers at once.
 - Manual checks (`TriggerImmediate`) are not consolidated: they run on the
   node that received them and store what they find.
-- Vote records are not deleted when a soul is deleted (at most N tiny records
-  per soul).
+- Vote records are deleted with their soul (since v0.3.3), together with the
+  soul's heartbeat state.
 - Historical aggregates (uptime percentage, SLA) read the stored judgment
   stream, which now carries the quorum status.
 
