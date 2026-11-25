@@ -840,6 +840,7 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		hbRecorder.wake = func(soulID string) { probeEngine.EvaluateSoul(soulID) }
 	}
 	restServer.SetHeartbeat(hbRecorder, heartbeatSoulLister(cfg, store, logger))
+	restServer.SetProbeVotes(probeVoteSource{store: store})
 	alertMgr.SetIncidentHook(incidentHook(restServer.OnIncidentCallback(), statusPageHandler))
 	alertMgr.SetAlertHook(restServer.OnAlertCallback())
 	restStore.onSoulChange = restServer.OnSoulChangeCallback()
@@ -1174,7 +1175,7 @@ func (a *restStorageAdapter) DeleteSoul(ctx context.Context, id string) error {
 // orphan record behind, and the soul delete must not be reported as failed.
 func (a *restStorageAdapter) deleteSoulSideRecords(soul *core.Soul) {
 	hbKey := core.HeartbeatStateKey(soul.WorkspaceID, soul.ID)
-	votePrefix := fmt.Sprintf("%s/votes/%s/", workspaceOrDefault(soul.WorkspaceID), soul.ID)
+	votePrefix := core.ProbeVotePrefix(soul.WorkspaceID, soul.ID)
 	if a.replicator != nil {
 		_ = a.applyMutation(core.FSMCommand{Op: core.FSMDelete, Key: hbKey})
 		_ = a.applyMutation(core.FSMCommand{Op: core.FSMDeletePrefix, Key: votePrefix})

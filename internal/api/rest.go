@@ -186,6 +186,9 @@ type RESTServer struct {
 	// heartbeat serves the push-monitor ping endpoints (nil: every token is
 	// unknown). See heartbeat.go.
 	heartbeat *heartbeatService
+	// probeVotes lists the secondary probers' votes (nil: the locations
+	// answer holds the latest judgment only). See soul_locations.go.
+	probeVotes ProbeVoteSource
 }
 
 // trustedProxyMatcher parses server.trusted_proxies once.
@@ -589,6 +592,7 @@ func (s *RESTServer) setupRoutes() {
 	s.router.Handle("POST", "/api/v1/souls/:id/check", s.requireRole(s.handleForceCheck, "souls:*"))
 	s.router.Handle("GET", "/api/v1/souls/:id/judgments", s.requireAuth(s.handleListJudgments))
 	s.router.Handle("GET", "/api/v1/souls/:id/uptime", s.requireAuth(s.handleSoulUptime))
+	s.router.Handle("GET", "/api/v1/souls/:id/locations", s.requireAuth(s.handleSoulLocations))
 	s.router.Handle("GET", "/api/v1/souls/:id/judgments/export", s.requireRole(s.handleExportJudgments, "judgments:read"))
 	// SLA reports (reports.go)
 	s.router.Handle("GET", "/api/v1/reports/sla", s.requireRole(s.handleSLAReport, "judgments:read"))

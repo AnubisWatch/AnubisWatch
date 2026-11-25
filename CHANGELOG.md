@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `GET /api/v1/souls/:id/locations` lists the latest result of every prober of
+  a soul (status, latency, region, whether it is the primary and whether it is
+  older than two check intervals). With `necropolis.distribution.redundancy`
+  above 1 each prober appears; otherwise the list holds the one prober that
+  stored the latest judgment. Secondary probers' votes now record their probe
+  latency and region (older votes still read). First step of the per-location
+  view requested in #32.
+
 ## [0.3.3] - 2026-11-22
 
 ### Fixed

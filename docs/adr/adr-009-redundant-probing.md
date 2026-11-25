@@ -95,6 +95,10 @@ rules say; none of the default rules fire on it, so a split does not page.
   node that received them and store what they find.
 - Vote records are deleted with their soul (since v0.3.3), together with the
   soul's heartbeat state.
+- `GET /api/v1/souls/:id/locations` shows each prober's latest result: the
+  primary from the stored judgment (its status is the quorum result) and the
+  others from their votes, which record probe latency and region. A vote older
+  than `2 * interval` is marked `stale`, as the quorum ignores it.
 - Historical aggregates (uptime percentage, SLA) read the stored judgment
   stream, which now carries the quorum status.
 
