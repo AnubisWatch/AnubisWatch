@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
+	"github.com/AnubisWatch/anubiswatch/internal/storage"
 )
 
 // With necropolis.distribution.redundancy above 1 several members probe each
@@ -24,19 +26,10 @@ import (
 const voteFreshness = 2
 
 // vote is a secondary prober's latest result for one soul.
-type vote struct {
-	JackalID  string          `json:"jackal_id"`
-	Status    core.SoulStatus `json:"status"`
-	Timestamp time.Time       `json:"timestamp"`
-	// Latency and Region describe the secondary's own probe, so the location
-	// breakdown can show them. Both are optional: votes written by an older
-	// build lack them and decode with zero values.
-	Latency time.Duration `json:"latency,omitempty"`
-	Region  string        `json:"region,omitempty"`
-}
+type vote = core.ProbeVote
 
 func voteKey(workspaceID, soulID, jackalID string) string {
-	return fmt.Sprintf("%s/votes/%s/%s", workspaceOrDefault(workspaceID), soulID, jackalID)
+	return core.ProbeVoteKey(workspaceID, soulID, jackalID)
 }
 
 // quorumStatus combines the primary's own status with the fresh votes of the
@@ -152,4 +145,25 @@ func (w *clusterWork) ownersOf(soulID string) []string {
 	w.ownedMu.RLock()
 	defer w.ownedMu.RUnlock()
 	return slices.Clone(w.owners[soulID])
+}
+
+// probeVoteSource lists a soul's votes from the local store, which Raft keeps
+// current on every node.
+type probeVoteSource struct {
+	store *storage.CobaltDB
+}
+
+func (p probeVoteSource) ListProbeVotes(_ context.Context, workspaceID, soulID string) ([]core.ProbeVote, error) {
+	records, err := p.store.PrefixScan(core.ProbeVotePrefix(workspaceID, soulID))
+	if err != nil {
+		return nil, err
+	}
+	votes := make([]core.ProbeVote, 0, len(records))
+	for _, data := range records {
+		var v core.ProbeVote
+		if json.Unmarshal(data, &v) == nil && v.JackalID != "" {
+			votes = append(votes, v)
+		}
+	}
+	return votes, nil
 }

@@ -3047,6 +3047,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/souls/{id}/locations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Soul results per probing location
+         * @description The latest result of every prober of the soul, the primary first. With necropolis.distribution.redundancy above 1 each prober of the soul contributes one entry (a secondary's result is its vote); otherwise the list holds the one prober that stored the latest judgment, or is empty before the first check. primary marks the prober whose judgment is stored, and its status is the quorum result, which can differ from its own probe. stale marks a result older than two check intervals, which the quorum no longer counts. A soul of another workspace answers 403.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Per-location results */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SoulLocations"];
+                    };
+                };
+                /** @description Soul belongs to another workspace */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Soul not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/souls/{id}/judgments/export": {
         parameters: {
             query?: never;
@@ -6037,6 +6094,22 @@ export interface components {
             /** @description Null when there were no checks in the period. */
             uptime_percent: number | null;
             avg_latency_ms: number;
+        };
+        SoulLocations: {
+            soul_id: string;
+            locations: components["schemas"]["SoulLocation"][];
+        };
+        SoulLocation: {
+            /** @description Probe node that produced the result. */
+            jackal_id: string;
+            region?: string;
+            status: components["schemas"]["SoulStatus"];
+            /** Format: int64 */
+            latency_ms: number;
+            /** Format: date-time */
+            checked_at: string;
+            primary: boolean;
+            stale: boolean;
         };
         SoulUptime: {
             soul_id: string;

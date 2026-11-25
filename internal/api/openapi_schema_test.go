@@ -74,6 +74,8 @@ var specResponseTypes = map[string]reflect.Type{
 	"HeartbeatInfo":      reflect.TypeOf(heartbeatInfo{}),
 	"HeartbeatState":     reflect.TypeOf(core.HeartbeatState{}),
 	"SoulUptime":         reflect.TypeOf(SoulUptimeSummary{}),
+	"SoulLocations":      reflect.TypeOf(SoulLocationsResponse{}),
+	"SoulLocation":       reflect.TypeOf(SoulLocation{}),
 	"UptimeWindow":       reflect.TypeOf(UptimeWindow{}),
 	"UptimePoint":        reflect.TypeOf(UptimePoint{}),
 	"AlertChannel":       reflect.TypeOf(redactedChannelDTO{}),
@@ -154,6 +156,7 @@ var requiredNeverNull = map[string]bool{
 	"JourneyListItem.steps":   true, // as Journey.steps
 	"SLAResponse.souls":       true, // built with make
 	"SoulUptime.windows":      true, // built as a literal map
+	"SoulLocations.locations": true, // handleSoulLocations starts from an empty, non-nil slice
 	"CustomDashboard.widgets": true, // dashboard handlers replace nil with [] (dashboardWithWidgets)
 }
 

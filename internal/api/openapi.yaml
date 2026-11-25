@@ -1732,6 +1732,37 @@ paths:
           description: Soul belongs to another workspace
         '404':
           description: Soul not found
+  /api/v1/souls/{id}/locations:
+    parameters:
+    - name: id
+      in: path
+      required: true
+      schema:
+        type: string
+    get:
+      tags:
+      - Judgments
+      summary: Soul results per probing location
+      description: >-
+        The latest result of every prober of the soul, the primary first. With
+        necropolis.distribution.redundancy above 1 each prober of the soul
+        contributes one entry (a secondary's result is its vote); otherwise the
+        list holds the one prober that stored the latest judgment, or is empty
+        before the first check. primary marks the prober whose judgment is
+        stored, and its status is the quorum result, which can differ from its
+        own probe. stale marks a result older than two check intervals, which
+        the quorum no longer counts. A soul of another workspace answers 403.
+      responses:
+        '200':
+          description: Per-location results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SoulLocations'
+        '403':
+          description: Soul belongs to another workspace
+        '404':
+          description: Soul not found
   /api/v1/souls/{id}/judgments/export:
     parameters:
     - name: id
@@ -3842,6 +3873,37 @@ components:
           description: Null when there were no checks in the period.
         avg_latency_ms:
           type: number
+    SoulLocations:
+      type: object
+      required: [soul_id, locations]
+      properties:
+        soul_id:
+          type: string
+        locations:
+          type: array
+          items:
+            $ref: '#/components/schemas/SoulLocation'
+    SoulLocation:
+      type: object
+      required: [jackal_id, status, latency_ms, checked_at, primary, stale]
+      properties:
+        jackal_id:
+          type: string
+          description: Probe node that produced the result.
+        region:
+          type: string
+        status:
+          $ref: '#/components/schemas/SoulStatus'
+        latency_ms:
+          type: integer
+          format: int64
+        checked_at:
+          type: string
+          format: date-time
+        primary:
+          type: boolean
+        stale:
+          type: boolean
     SoulUptime:
       type: object
       required: [soul_id, windows, series]
