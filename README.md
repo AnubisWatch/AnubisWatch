@@ -169,7 +169,7 @@ docker compose --profile monitoring up -d
 ### Docker Image
 
 Images are published only to GitHub Container Registry, tagged with the
-release (`v0.3.3`, `0.3.3`, `0.3`, `0`) and `latest`:
+release (`v0.3.4`, `0.3.4`, `0.3`, `0`) and `latest`:
 
 ```bash
 docker pull ghcr.io/anubiswatch/anubiswatch:latest
