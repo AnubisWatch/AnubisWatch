@@ -33,7 +33,7 @@ func TestQuorumStatus(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := quorumStatus(tt.own, tt.others); got != tt.want {
+			if got := quorumStatus(tt.own, tt.others, quorumPolicy{}); got != tt.want {
 				t.Fatalf("quorumStatus(%s, %v) = %s, want %s", tt.own, tt.others, got, tt.want)
 			}
 		})
@@ -127,7 +127,7 @@ func TestConsolidatePrimaryUsesFreshVotes(t *testing.T) {
 		if !newTestConsolidator(b, now).Consolidate(soul, j) || j.Status != core.SoulDegraded {
 			t.Fatalf("status = %s, want degraded", j.Status)
 		}
-		if want := "connection refused (1 of 2 probers report dead)"; j.Message != want {
+		if want := "connection refused (1 of 2 probers report dead: a)"; j.Message != want {
 			t.Fatalf("message = %q, want %q", j.Message, want)
 		}
 	})
@@ -190,5 +190,91 @@ func TestVoteCarriesLatencyAndRegionAndReadsOldRecords(t *testing.T) {
 	}
 	if legacy.JackalID != "jackal-c" || legacy.Status != core.SoulAlive || legacy.Latency != 0 || legacy.Region != "" {
 		t.Fatalf("old vote decoded wrongly: %+v", legacy)
+	}
+}
+
+// The default policy is the strict majority it always was; any, all and
+// min_down move only the line between degraded and dead.
+func TestQuorumPolicyThresholds(t *testing.T) {
+	alive, dead, deg := core.SoulAlive, core.SoulDead, core.SoulDegraded
+	five := func(downs int) (core.SoulStatus, []core.SoulStatus) {
+		others := make([]core.SoulStatus, 4)
+		for i := range others {
+			others[i] = alive
+			if i < downs-1 {
+				others[i] = dead
+			}
+		}
+		if downs == 0 {
+			return alive, others
+		}
+		return dead, others
+	}
+	tests := []struct {
+		name   string
+		policy quorumPolicy
+		downs  int // of 5 probers
+		want   core.SoulStatus
+	}{
+		{"default: 2 of 5 is degraded", quorumPolicy{}, 2, deg},
+		{"default: 3 of 5 is dead", quorumPolicy{}, 3, dead},
+		{"explicit majority equals default", quorumPolicy{mode: core.QuorumMajority}, 2, deg},
+		{"any: 1 of 5 is dead", quorumPolicy{mode: core.QuorumAny}, 1, dead},
+		{"any: none is alive", quorumPolicy{mode: core.QuorumAny}, 0, alive},
+		{"all: 4 of 5 is degraded", quorumPolicy{mode: core.QuorumAll}, 4, deg},
+		{"all: 5 of 5 is dead", quorumPolicy{mode: core.QuorumAll}, 5, dead},
+		{"min_down 2: 1 of 5 is degraded", quorumPolicy{minDown: 2}, 1, deg},
+		{"min_down 2: 2 of 5 is dead", quorumPolicy{minDown: 2}, 2, dead},
+		{"min_down beats the mode", quorumPolicy{mode: core.QuorumAll, minDown: 2}, 2, dead},
+		{"min_down 4: 3 of 5 is degraded", quorumPolicy{minDown: 4}, 3, deg},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			own, others := five(tt.downs)
+			if got := quorumStatus(own, others, tt.policy); got != tt.want {
+				t.Fatalf("%d of 5 down under %+v = %s, want %s", tt.downs, tt.policy, got, tt.want)
+			}
+		})
+	}
+
+	// A threshold above the probers still alive never hides an outage: with
+	// only two voters left, min_down 3 behaves like "both".
+	if got := quorumStatus(dead, []core.SoulStatus{dead}, quorumPolicy{minDown: 3}); got != dead {
+		t.Errorf("two silent peers: min_down 3 with both remaining voters dead = %s, want dead", got)
+	}
+	if got := quorumStatus(dead, nil, quorumPolicy{minDown: 3}); got != dead {
+		t.Errorf("lone voter under min_down 3 = %s, want its own dead", got)
+	}
+}
+
+func TestConsolidateNamesTheProbersThatSawItDown(t *testing.T) {
+	now := time.Now()
+	soul := redundantSoul()
+	b := &fakeBoard{self: "tr-1", owners: []string{"tr-1", "fr-1", "us-1", "de-1", "jp-1"}}
+	b.store(t, soul, "fr-1", core.SoulDead, now.Add(-time.Second))
+	b.store(t, soul, "us-1", core.SoulAlive, now.Add(-time.Second))
+	b.store(t, soul, "de-1", core.SoulAlive, now.Add(-time.Second))
+	b.store(t, soul, "jp-1", core.SoulAlive, now.Add(-time.Second))
+
+	// 2 of 5 under "at least 2": dead, and the message names both.
+	c := newTestConsolidator(b, now)
+	c.policy = quorumPolicy{minDown: 2}
+	j := &core.Judgment{Status: core.SoulDead, Message: "timeout"}
+	c.Consolidate(soul, j)
+	// The primary is dead and so is fr-1: that is the status it already had,
+	// so the message is untouched (it only explains a changed verdict).
+	if j.Status != core.SoulDead || j.Message != "timeout" {
+		t.Fatalf("min_down 2: status %s message %q", j.Status, j.Message)
+	}
+
+	// Under "at least 3" the same split is degraded, and the message says who.
+	c.policy = quorumPolicy{minDown: 3}
+	j = &core.Judgment{Status: core.SoulDead, Message: "timeout"}
+	c.Consolidate(soul, j)
+	if j.Status != core.SoulDegraded {
+		t.Fatalf("min_down 3: status %s, want degraded", j.Status)
+	}
+	if want := "timeout (2 of 5 probers report dead: tr-1, fr-1)"; j.Message != want {
+		t.Fatalf("message = %q, want %q", j.Message, want)
 	}
 }

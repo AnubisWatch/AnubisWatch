@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/AnubisWatch/anubiswatch/internal/core"
@@ -32,12 +33,40 @@ func voteKey(workspaceID, soulID, jackalID string) string {
 	return core.ProbeVoteKey(workspaceID, soulID, jackalID)
 }
 
+// quorumPolicy is how many dead probers make a soul dead. The zero value is a
+// strict majority, the behaviour before the policy was configurable.
+type quorumPolicy struct {
+	mode    string // core.QuorumMajority (or ""), QuorumAny, QuorumAll
+	minDown int    // above 0: dead once this many probers report dead
+}
+
+func quorumPolicyFrom(d core.DistributionConfig) quorumPolicy {
+	return quorumPolicy{mode: d.Quorum, minDown: d.MinDown}
+}
+
+// deadNeeded is how many of voters must report dead for the soul to be dead.
+// It never exceeds voters, so a soul whose other probers are silent is judged
+// by whoever remains (a lone voter's status is the result), which keeps a
+// threshold of 3 from hiding an outage when only two probers are alive.
+func (p quorumPolicy) deadNeeded(voters int) int {
+	need := voters/2 + 1
+	switch {
+	case p.minDown > 0:
+		need = p.minDown
+	case p.mode == core.QuorumAny:
+		need = 1
+	case p.mode == core.QuorumAll:
+		need = voters
+	}
+	return min(need, voters)
+}
+
 // quorumStatus combines the primary's own status with the fresh votes of the
-// other probers. A strict majority of dead is dead; some dead (or degraded)
-// short of a majority is degraded; otherwise the soul is alive. With a single
-// voter the result is that voter's status, so a primary whose peers are all
-// silent behaves as it does without redundancy.
-func quorumStatus(own core.SoulStatus, others []core.SoulStatus) core.SoulStatus {
+// other probers. Enough dead (policy.deadNeeded; by default a strict majority)
+// is dead; some dead (or degraded) short of that is degraded; otherwise the
+// soul is alive. With a single voter the result is that voter's status, so a
+// primary whose peers are all silent behaves as it does without redundancy.
+func quorumStatus(own core.SoulStatus, others []core.SoulStatus, policy quorumPolicy) core.SoulStatus {
 	voters := 1 + len(others)
 	dead, degraded := 0, 0
 	for _, status := range append([]core.SoulStatus{own}, others...) {
@@ -49,7 +78,7 @@ func quorumStatus(own core.SoulStatus, others []core.SoulStatus) core.SoulStatus
 		}
 	}
 	switch {
-	case dead*2 > voters:
+	case dead >= policy.deadNeeded(voters):
 		return core.SoulDead
 	case dead > 0 || degraded > 0:
 		return core.SoulDegraded
@@ -73,10 +102,11 @@ type quorumConsolidator struct {
 	board  voteBoard
 	logger *slog.Logger
 	now    func() time.Time
+	policy quorumPolicy
 }
 
-func newQuorumConsolidator(w *clusterWork) *quorumConsolidator {
-	return &quorumConsolidator{board: w, logger: w.logger, now: time.Now}
+func newQuorumConsolidator(w *clusterWork, policy quorumPolicy) *quorumConsolidator {
+	return &quorumConsolidator{board: w, logger: w.logger, now: time.Now, policy: policy}
 }
 
 // Consolidate implements probe.Consolidator.
@@ -93,22 +123,24 @@ func (c *quorumConsolidator) Consolidate(soul *core.Soul, j *core.Judgment) bool
 
 	freshFor := time.Duration(voteFreshness) * soul.Weight.Duration
 	others := make([]core.SoulStatus, 0, len(owners)-1)
+	var deadProbers []string
+	if j.Status == core.SoulDead {
+		deadProbers = append(deadProbers, self)
+	}
 	for _, member := range owners[1:] {
 		if v, ok := c.readVote(soul, member); ok && c.now().Sub(v.Timestamp) <= freshFor {
 			others = append(others, v.Status)
-		}
-	}
-	if status := quorumStatus(j.Status, others); status != j.Status {
-		dead := 0
-		for _, s := range others {
-			if s == core.SoulDead {
-				dead++
+			if v.Status == core.SoulDead {
+				deadProbers = append(deadProbers, member)
 			}
 		}
-		if j.Status == core.SoulDead {
-			dead++
+	}
+	if status := quorumStatus(j.Status, others, c.policy); status != j.Status {
+		j.Message = fmt.Sprintf("%s (%d of %d probers report dead", j.Message, len(deadProbers), 1+len(others))
+		if len(deadProbers) > 0 {
+			j.Message += ": " + strings.Join(deadProbers, ", ")
 		}
-		j.Message = fmt.Sprintf("%s (%d of %d probers report dead)", j.Message, dead, 1+len(others))
+		j.Message += ")"
 		j.Status = status
 	}
 	return true

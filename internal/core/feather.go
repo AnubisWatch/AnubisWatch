@@ -268,8 +268,14 @@ type RaftPeer struct {
 
 // DistributionConfig defines check distribution settings
 type DistributionConfig struct {
-	Strategy          string   `json:"strategy" yaml:"strategy"` // hash (default), round-robin, region-aware, load-based
-	Redundancy        int      `json:"redundancy" yaml:"redundancy"`
+	Strategy   string `json:"strategy" yaml:"strategy"` // hash (default), round-robin, region-aware, load-based
+	Redundancy int    `json:"redundancy" yaml:"redundancy"`
+	// Quorum decides when redundant probers (redundancy > 1) call a soul dead:
+	// majority (default), any (one prober is enough) or all (they must agree).
+	Quorum string `json:"quorum" yaml:"quorum"`
+	// MinDown, when above 0, overrides Quorum: a soul is dead once at least
+	// this many probers report it dead (e.g. 3 of 5 locations).
+	MinDown           int      `json:"min_down" yaml:"min_down"`
 	RebalanceInterval Duration `json:"rebalance_interval" yaml:"rebalance_interval"`
 }
 

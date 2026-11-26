@@ -76,8 +76,12 @@ prober is silent and it is left out. With the primary's own result:
 With N = 2 a soul is `dead` only when both agree; one dissent is `degraded`.
 That trades slower detection of a partial outage for far fewer false pages.
 The judgment's message records the split ("1 of 2 probers report dead").
-A later `distribution.quorum` setting (`majority` | `any` | `all`) can change
-the trade without changing the mechanism.
+`distribution.quorum` (`majority` | `any` | `all`) and `distribution.min_down`
+change the trade without changing the mechanism: the threshold only decides how
+many dead probers make the soul `dead`, and "some dead short of it" stays
+`degraded`. The threshold never exceeds the probers that answered, so silent
+peers cannot hide an outage. The judgment's message names the probers that saw
+the soul down. The default stays the strict majority.
 
 ### 5. Alerts run on the primary's consolidated judgment
 

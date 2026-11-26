@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `necropolis.distribution.quorum` (`majority` default, `any`, `all`) and
+  `necropolis.distribution.min_down` set how many redundant probers must report
+  a soul dead before it is `dead`, e.g. `redundancy: 5` with `min_down: 3`
+  pages only when three locations agree. The default is the strict majority it
+  has always been. Short of the threshold the soul stays `degraded`, and the
+  threshold never exceeds the probers that answered, so silent peers cannot
+  hide an outage. The judgment's message now names the probers that saw the
+  soul down. Unknown values and a `min_down` above `redundancy` are rejected at
+  startup. Part of the location quorum requested in #32.
 - `GET /api/v1/souls/:id/locations` lists the latest result of every prober of
   a soul (status, latency, region, whether it is the primary and whether it is
   older than two check intervals). With `necropolis.distribution.redundancy`

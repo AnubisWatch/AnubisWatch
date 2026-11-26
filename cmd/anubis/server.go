@@ -719,8 +719,9 @@ func BuildServerDependencies(opts ServerOptions) (*ServerDependencies, error) {
 		work.engine = probeEngine
 		work.alerts = alertMgr
 		if clusterMgr.Redundancy() > 1 {
-			probeEngine.SetConsolidator(newQuorumConsolidator(work))
-			logger.Info("redundant probing enabled", "redundancy", clusterMgr.Redundancy())
+			probeEngine.SetConsolidator(newQuorumConsolidator(work, quorumPolicyFrom(cfg.Necropolis.Distribution)))
+			logger.Info("redundant probing enabled", "redundancy", clusterMgr.Redundancy(),
+				"quorum", cfg.Necropolis.Distribution.Quorum, "min_down", cfg.Necropolis.Distribution.MinDown)
 		}
 		probeAPI = &clusterProbe{engine: probeEngine, work: work}
 	}

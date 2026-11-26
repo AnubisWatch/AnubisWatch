@@ -321,6 +321,9 @@ func (c *Config) setDefaults() {
 	if c.Necropolis.Distribution.Redundancy == 0 {
 		c.Necropolis.Distribution.Redundancy = 1
 	}
+	if c.Necropolis.Distribution.Quorum == "" {
+		c.Necropolis.Distribution.Quorum = QuorumMajority
+	}
 	if c.Necropolis.Distribution.RebalanceInterval.Duration == 0 {
 		c.Necropolis.Distribution.RebalanceInterval.Duration = 60 * 1e9 // 60s
 	}
@@ -457,6 +460,10 @@ func (c *Config) validate() error {
 		return err
 	}
 
+	if err := c.Necropolis.Distribution.validate(); err != nil {
+		return err
+	}
+
 	if err := c.validateMail(); err != nil {
 		return err
 	}
@@ -558,4 +565,27 @@ func GenerateDefaultConfig() *Config {
 			Output: "stdout",
 		},
 	}
+}
+
+// Quorum modes of necropolis.distribution.quorum.
+const (
+	QuorumMajority = "majority"
+	QuorumAny      = "any"
+	QuorumAll      = "all"
+)
+
+func (d DistributionConfig) validate() error {
+	switch d.Quorum {
+	case "", QuorumMajority, QuorumAny, QuorumAll:
+	default:
+		return fmt.Errorf("necropolis.distribution.quorum %q is not one of majority, any, all", d.Quorum)
+	}
+	if d.MinDown < 0 {
+		return fmt.Errorf("necropolis.distribution.min_down must not be negative, got %d", d.MinDown)
+	}
+	if d.MinDown > 1 && d.MinDown > d.Redundancy {
+		return fmt.Errorf("necropolis.distribution.min_down (%d) exceeds necropolis.distribution.redundancy (%d): that many probers never exist, so the soul could never be dead",
+			d.MinDown, d.Redundancy)
+	}
+	return nil
 }
