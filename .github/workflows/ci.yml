@@ -280,7 +280,7 @@ jobs:
           fi
 
       - name: Upload SARIF to GitHub
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4
         # always(), so a gosec finding still gets reported — but only if the
         # file exists. When an earlier step fails, gosec is skipped and never
         # writes gosec.sarif; uploading unconditionally then adds a second,
@@ -748,7 +748,7 @@ jobs:
           exit-code: '1'
 
       - name: Upload SARIF to GitHub
-        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        uses: github/codeql-action/upload-sarif@915412ff23e8b7659517e607487dbeae018f2934 # v4
         if: always()
         with:
           sarif_file: trivy-results.sarif
